@@ -1,0 +1,138 @@
+/**
+ * Stable error contract (specification §4.10).
+ * Every error carries a stable code, a safe message, a correlation reference, and the permitted next action.
+ * Protected-record errors must not reveal that another household's record exists.
+ */
+export const ErrorCodes = {
+  AUTHENTICATION_REQUIRED: { httpStatus: 401, nextAction: 'authenticate' },
+  ACCESS_DENIED: { httpStatus: 403, nextAction: 'contact_support_or_request_access' },
+  PARTICIPANT_AUTHORITY_REQUIRED: { httpStatus: 403, nextAction: 'request_participant_authority' },
+  NOT_FOUND: { httpStatus: 404, nextAction: 'verify_reference' },
+  VALIDATION_FAILED: { httpStatus: 400, nextAction: 'correct_input' },
+  ELIGIBILITY_FAILED: { httpStatus: 422, nextAction: 'review_eligibility_reasons' },
+  MISSING_ACKNOWLEDGMENT: { httpStatus: 422, nextAction: 'complete_acknowledgment' },
+  CAPACITY_UNAVAILABLE: { httpStatus: 409, nextAction: 'join_waitlist_or_choose_alternative' },
+  DUPLICATE_ENTITLEMENT: { httpStatus: 409, nextAction: 'review_existing_participation' },
+  RESOURCE_CONFLICT: { httpStatus: 409, nextAction: 'resolve_conflict' },
+  STALE_REVISION: { httpStatus: 409, nextAction: 'reload_and_retry' },
+  INVALID_TRANSITION: { httpStatus: 409, nextAction: 'reload_current_state' },
+  QUOTE_EXPIRED: { httpStatus: 409, nextAction: 'request_new_quote' },
+  IDEMPOTENCY_CONFLICT: { httpStatus: 409, nextAction: 'use_new_idempotency_key' },
+  IDEMPOTENCY_IN_PROGRESS: { httpStatus: 409, nextAction: 'retry_later_with_same_key' },
+  PAYMENT_OUTCOME_UNKNOWN: { httpStatus: 409, nextAction: 'await_reconciliation' },
+  REFUND_PENDING: { httpStatus: 409, nextAction: 'await_refund_resolution' },
+  INTEGRATION_UNAVAILABLE: { httpStatus: 503, nextAction: 'retry_later' },
+  RATE_LIMITED: { httpStatus: 429, nextAction: 'retry_later' },
+  INTERNAL_ERROR: { httpStatus: 500, nextAction: 'retry_or_contact_support' },
+} as const;
+
+export type ErrorCode = keyof typeof ErrorCodes;
+
+export interface ErrorResponseBody {
+  code: ErrorCode;
+  message: string;
+  correlationId: string;
+  nextAction: string;
+  details?: unknown;
+}
+
+export interface DomainErrorOptions {
+  details?: unknown;
+  nextAction?: string;
+  cause?: unknown;
+}
+
+export class DomainError extends Error {
+  override readonly name: string = 'DomainError';
+  readonly code: ErrorCode;
+  readonly httpStatus: number;
+  readonly nextAction: string;
+  readonly details: unknown;
+
+  constructor(code: ErrorCode, message: string, options: DomainErrorOptions = {}) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.code = code;
+    this.httpStatus = ErrorCodes[code].httpStatus;
+    this.nextAction = options.nextAction ?? ErrorCodes[code].nextAction;
+    this.details = options.details;
+  }
+
+  toResponseBody(correlationId: string): ErrorResponseBody {
+    const body: ErrorResponseBody = {
+      code: this.code,
+      message: this.message,
+      correlationId,
+      nextAction: this.nextAction,
+    };
+    if (this.details !== undefined) body.details = this.details;
+    return body;
+  }
+
+  static is(value: unknown): value is DomainError {
+    return value instanceof DomainError;
+  }
+}
+
+/** Convenience constructors so modules raise consistent errors. */
+export const errors = {
+  authenticationRequired: (message = 'Authentication is required.') =>
+    new DomainError('AUTHENTICATION_REQUIRED', message),
+  accessDenied: (message = 'You are not permitted to perform this action.', details?: unknown) =>
+    new DomainError('ACCESS_DENIED', message, { details }),
+  participantAuthorityRequired: (message = 'Authority over this participant is required.') =>
+    new DomainError('PARTICIPANT_AUTHORITY_REQUIRED', message),
+  /**
+   * Use for protected records when the caller may not learn whether the record exists
+   * (specification §4.10: errors must not reveal another household's protected record existence).
+   */
+  protectedNotFound: (recordType = 'record') =>
+    new DomainError('NOT_FOUND', `The requested ${recordType} was not found.`),
+  notFound: (recordType: string, id?: string) =>
+    new DomainError(
+      'NOT_FOUND',
+      id ? `${recordType} ${id} was not found.` : `${recordType} was not found.`,
+    ),
+  validation: (message: string, details?: unknown) =>
+    new DomainError('VALIDATION_FAILED', message, { details }),
+  eligibility: (message: string, details?: unknown) =>
+    new DomainError('ELIGIBILITY_FAILED', message, { details }),
+  missingAcknowledgment: (message: string, details?: unknown) =>
+    new DomainError('MISSING_ACKNOWLEDGMENT', message, { details }),
+  capacityUnavailable: (message = 'No capacity is available.', details?: unknown) =>
+    new DomainError('CAPACITY_UNAVAILABLE', message, { details }),
+  duplicateEntitlement: (message: string, details?: unknown) =>
+    new DomainError('DUPLICATE_ENTITLEMENT', message, { details }),
+  resourceConflict: (message: string, details?: unknown) =>
+    new DomainError('RESOURCE_CONFLICT', message, { details }),
+  staleRevision: (expected: number, actual: number) =>
+    new DomainError('STALE_REVISION', 'The record changed since it was loaded.', {
+      details: { expectedRevision: expected, currentRevision: actual },
+    }),
+  invalidTransition: (machine: string, from: string, event: string) =>
+    new DomainError('INVALID_TRANSITION', `${machine} cannot ${event} from ${from}.`, {
+      details: { machine, from, event },
+    }),
+  quoteExpired: () => new DomainError('QUOTE_EXPIRED', 'The quote has expired.'),
+  idempotencyConflict: () =>
+    new DomainError(
+      'IDEMPOTENCY_CONFLICT',
+      'This idempotency key was used with a different request.',
+    ),
+  idempotencyInProgress: () =>
+    new DomainError(
+      'IDEMPOTENCY_IN_PROGRESS',
+      'A request with this idempotency key is still in progress.',
+    ),
+  paymentOutcomeUnknown: (details?: unknown) =>
+    new DomainError('PAYMENT_OUTCOME_UNKNOWN', 'The payment outcome is not yet known.', {
+      details,
+    }),
+  refundPending: (details?: unknown) =>
+    new DomainError('REFUND_PENDING', 'A refund is pending on these funds.', { details }),
+  integrationUnavailable: (integration: string, cause?: unknown) =>
+    new DomainError('INTEGRATION_UNAVAILABLE', `${integration} is currently unavailable.`, {
+      cause,
+    }),
+  internal: (message = 'An unexpected error occurred.', cause?: unknown) =>
+    new DomainError('INTERNAL_ERROR', message, { cause }),
+};
