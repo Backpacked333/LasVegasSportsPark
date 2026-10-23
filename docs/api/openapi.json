@@ -147,6 +147,2540 @@
           "version",
           "database"
         ]
+      },
+      "Resource": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pitch",
+              "subdivision",
+              "room",
+              "other"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "parentResourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "compatibleFormats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defaultSetupMinutes": {
+            "type": "integer"
+          },
+          "defaultCleanupMinutes": {
+            "type": "integer"
+          },
+          "requiredEquipment": {
+            "type": "array",
+            "items": {}
+          },
+          "staffingConstraints": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "restricted",
+              "closed"
+            ]
+          },
+          "conflictUnitIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "kind",
+          "name",
+          "parentResourceId",
+          "dimensions",
+          "compatibleFormats",
+          "defaultSetupMinutes",
+          "defaultCleanupMinutes",
+          "requiredEquipment",
+          "staffingConstraints",
+          "status",
+          "conflictUnitIds",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "CreateResourceBody": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pitch",
+              "subdivision",
+              "room",
+              "other"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "parentResourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "compatibleFormats": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 50
+            },
+            "maxItems": 50
+          },
+          "defaultSetupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "defaultCleanupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "requiredEquipment": {
+            "type": "array",
+            "items": {},
+            "maxItems": 100
+          },
+          "staffingConstraints": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "conflictUnitIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 100
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "kind",
+          "name"
+        ]
+      },
+      "UpdateResourceBody": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "compatibleFormats": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 50
+            },
+            "maxItems": 50
+          },
+          "defaultSetupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "defaultCleanupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "requiredEquipment": {
+            "type": "array",
+            "items": {},
+            "maxItems": 100
+          },
+          "staffingConstraints": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "restricted",
+              "closed"
+            ]
+          },
+          "conflictUnitIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "Availability": {
+        "type": "object",
+        "properties": {
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "end": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          }
+        },
+        "required": [
+          "resourceId",
+          "slots"
+        ]
+      },
+      "ResourceConfiguration": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "memberResourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "name",
+          "description",
+          "active",
+          "memberResourceIds",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "CreateResourceConfigurationBody": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "memberResourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "name",
+          "memberResourceIds"
+        ]
+      },
+      "UpdateResourceConfigurationBody": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "memberResourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "ConflictUnit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "resourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "name",
+          "resourceIds",
+          "createdAt"
+        ]
+      },
+      "CreateConflictUnitBody": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "name"
+        ]
+      },
+      "OperatingHours": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "weekday": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "opensAt": {
+            "type": "string",
+            "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d|24:00)$"
+          },
+          "closesAt": {
+            "type": "string",
+            "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d|24:00)$"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "resourceId",
+          "weekday",
+          "opensAt",
+          "closesAt"
+        ]
+      },
+      "CreateOperatingHoursBody": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekday": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          },
+          "opensAt": {
+            "type": "string",
+            "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d|24:00)$"
+          },
+          "closesAt": {
+            "type": "string",
+            "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d|24:00)$"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "weekday",
+          "opensAt",
+          "closesAt"
+        ]
+      },
+      "Closure": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "interval": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "maintenance",
+              "holiday"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active",
+              "lifted",
+              "withdrawn"
+            ]
+          },
+          "impact": {
+            "$ref": "#/components/schemas/ClosureImpact"
+          },
+          "resolution": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "cancel_affected",
+                  "leave_for_resolution"
+                ]
+              },
+              "canceledEventIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "unresolvedEventIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "required": [
+              "mode",
+              "canceledEventIds",
+              "unresolvedEventIds"
+            ]
+          },
+          "appliedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "liftedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "resourceId",
+          "interval",
+          "reason",
+          "source",
+          "status",
+          "impact",
+          "resolution",
+          "appliedAt",
+          "liftedAt",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ClosureImpact": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "interval": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "affectedEvents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "game",
+                    "practice",
+                    "session",
+                    "rental",
+                    "party",
+                    "pickup",
+                    "maintenance",
+                    "block"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "published",
+                    "canceled"
+                  ]
+                },
+                "scheduledStart": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "scheduledEnd": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "sourceType": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sourceId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "resourceIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "reservationIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "commitments": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PartyCommitment"
+                  }
+                }
+              },
+              "required": [
+                "eventId",
+                "title",
+                "kind",
+                "status",
+                "scheduledStart",
+                "scheduledEnd",
+                "sourceType",
+                "sourceId",
+                "resourceIds",
+                "reservationIds",
+                "commitments"
+              ]
+            }
+          },
+          "sourceRecords": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sourceType": {
+                  "type": "string"
+                },
+                "sourceId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "eventIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "required": [
+                "sourceType",
+                "sourceId",
+                "eventIds"
+              ]
+            }
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "games": {
+                "type": "integer"
+              },
+              "programs": {
+                "type": "integer"
+              },
+              "rentals": {
+                "type": "integer"
+              },
+              "other": {
+                "type": "integer"
+              },
+              "teams": {
+                "type": "integer"
+              },
+              "people": {
+                "type": "integer"
+              },
+              "equipment": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "games",
+              "programs",
+              "rentals",
+              "other",
+              "teams",
+              "people",
+              "equipment"
+            ]
+          }
+        },
+        "required": [
+          "interval",
+          "affectedEvents",
+          "sourceRecords",
+          "summary"
+        ]
+      },
+      "PartyCommitment": {
+        "type": "object",
+        "properties": {
+          "partyType": {
+            "type": "string",
+            "enum": [
+              "team",
+              "person",
+              "equipment"
+            ]
+          },
+          "partyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50,
+            "default": "participant"
+          }
+        },
+        "required": [
+          "partyType",
+          "partyId"
+        ]
+      },
+      "CreateClosureBody": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "interval": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "maintenance",
+              "holiday"
+            ],
+            "default": "manual"
+          }
+        },
+        "required": [
+          "reason",
+          "facilityId",
+          "interval"
+        ]
+      },
+      "ApplyClosureBody": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "cancel_affected",
+              "leave_for_resolution"
+            ]
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "LiftClosureBody": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "game",
+              "practice",
+              "session",
+              "rental",
+              "party",
+              "pickup",
+              "maintenance",
+              "block"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seriesId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "occurrenceIndex": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scheduledStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduledEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "setupMinutes": {
+            "type": "integer"
+          },
+          "cleanupMinutes": {
+            "type": "integer"
+          },
+          "dstResolution": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "shifted_forward",
+              "first",
+              "second"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "canceled"
+            ]
+          },
+          "publishedRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sourceType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "resourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "commitments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartyCommitment"
+            }
+          },
+          "canceledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "cancelReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "kind",
+          "title",
+          "format",
+          "seriesId",
+          "occurrenceIndex",
+          "scheduledStart",
+          "scheduledEnd",
+          "timezone",
+          "setupMinutes",
+          "cleanupMinutes",
+          "dstResolution",
+          "status",
+          "publishedRevision",
+          "revision",
+          "sourceType",
+          "sourceId",
+          "resourceIds",
+          "commitments",
+          "canceledAt",
+          "cancelReason",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "Reservation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occupied": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "released"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "eventId",
+          "resourceId",
+          "occupied",
+          "status"
+        ]
+      },
+      "EventSeries": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "game",
+              "practice",
+              "session",
+              "rental",
+              "party",
+              "pickup",
+              "maintenance",
+              "block"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "recurrence": {
+            "$ref": "#/components/schemas/RecurrenceRule"
+          },
+          "localStartTime": {
+            "type": "string",
+            "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d|24:00)$"
+          },
+          "durationMinutes": {
+            "type": "integer"
+          },
+          "setupMinutes": {
+            "type": "integer"
+          },
+          "cleanupMinutes": {
+            "type": "integer"
+          },
+          "nonexistentPolicy": {
+            "type": "string",
+            "enum": [
+              "shift_forward",
+              "skip"
+            ]
+          },
+          "ambiguousPolicy": {
+            "type": "string",
+            "enum": [
+              "first",
+              "second"
+            ]
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          "resourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "commitments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartyCommitment"
+            }
+          },
+          "sourceType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "ended"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "eventIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "kind",
+          "title",
+          "timezone",
+          "recurrence",
+          "localStartTime",
+          "durationMinutes",
+          "setupMinutes",
+          "cleanupMinutes",
+          "nonexistentPolicy",
+          "ambiguousPolicy",
+          "exceptions",
+          "resourceIds",
+          "commitments",
+          "sourceType",
+          "sourceId",
+          "status",
+          "revision",
+          "eventIds",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "RecurrenceRule": {
+        "type": "object",
+        "properties": {
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "weekly"
+            ]
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 52,
+            "default": 1
+          },
+          "byWeekday": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            },
+            "minItems": 1,
+            "maxItems": 7
+          },
+          "startDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "until": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 366
+          }
+        },
+        "required": [
+          "frequency",
+          "startDate"
+        ]
+      },
+      "CreateEventSeriesBody": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "game",
+              "practice",
+              "session",
+              "rental",
+              "party",
+              "pickup",
+              "maintenance",
+              "block"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "recurrence": {
+            "$ref": "#/components/schemas/RecurrenceRule"
+          },
+          "localStartTime": {
+            "type": "string",
+            "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d|24:00)$"
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 1440
+          },
+          "setupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "cleanupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "nonexistentPolicy": {
+            "type": "string",
+            "enum": [
+              "shift_forward",
+              "skip"
+            ]
+          },
+          "ambiguousPolicy": {
+            "type": "string",
+            "enum": [
+              "first",
+              "second"
+            ]
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "maxItems": 366
+          },
+          "resourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 20
+          },
+          "commitments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartyCommitment"
+            },
+            "maxItems": 100
+          },
+          "sourceType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "kind",
+          "title",
+          "recurrence",
+          "localStartTime",
+          "durationMinutes",
+          "resourceIds"
+        ]
+      },
+      "SeriesEditPreview": {
+        "type": "object",
+        "properties": {
+          "seriesId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "one",
+              "this_and_future",
+              "entire_series"
+            ]
+          },
+          "committed": {
+            "type": "boolean"
+          },
+          "affected": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "occurrenceIndex": {
+                  "type": "integer"
+                },
+                "before": {
+                  "$ref": "#/components/schemas/EventDetails"
+                },
+                "after": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EventDetails"
+                    },
+                    {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  ]
+                },
+                "dstResolution": {
+                  "type": "string",
+                  "enum": [
+                    "exact",
+                    "shifted_forward",
+                    "first",
+                    "second"
+                  ]
+                }
+              },
+              "required": [
+                "eventId",
+                "occurrenceIndex",
+                "before",
+                "after",
+                "dstResolution"
+              ]
+            }
+          },
+          "unchangedEventIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "seriesId",
+          "scope",
+          "committed",
+          "affected",
+          "unchangedEventIds"
+        ]
+      },
+      "EventDetails": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "game",
+              "practice",
+              "session",
+              "rental",
+              "party",
+              "pickup",
+              "maintenance",
+              "block"
+            ]
+          },
+          "scheduledStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduledEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ]
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "canceled"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "kind",
+          "scheduledStart",
+          "scheduledEnd",
+          "timezone",
+          "facilityId",
+          "resources",
+          "status"
+        ]
+      },
+      "EditEventSeriesBody": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "one",
+              "this_and_future",
+              "entire_series"
+            ]
+          },
+          "occurrenceIndex": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preview": {
+            "type": "boolean",
+            "default": false
+          },
+          "changes": {
+            "$ref": "#/components/schemas/SeriesEditChanges"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "scope",
+          "changes"
+        ]
+      },
+      "SeriesEditChanges": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "localStartTime": {
+            "type": "string",
+            "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d|24:00)$"
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 1440
+          },
+          "setupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "cleanupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "resourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 20
+          },
+          "cancel": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ScheduleDraft": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "editing",
+              "validated",
+              "publishing",
+              "published",
+              "failed",
+              "discarded"
+            ]
+          },
+          "author": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "accountId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "actorLabel": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "accountId",
+              "actorLabel"
+            ]
+          },
+          "baseRevision": {
+            "type": "object",
+            "properties": {
+              "capturedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "eventRevisions": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              }
+            },
+            "required": [
+              "capturedAt",
+              "eventRevisions"
+            ]
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftChange"
+            }
+          },
+          "validationResults": {
+            "$ref": "#/components/schemas/ValidationResult"
+          },
+          "lastSavedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "publishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "publicationGroupId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "name",
+          "status",
+          "author",
+          "baseRevision",
+          "changes",
+          "validationResults",
+          "lastSavedAt",
+          "validatedAt",
+          "publishedAt",
+          "publicationGroupId",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "DraftChange": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "create",
+              "move",
+              "cancel",
+              "resize",
+              "resource_change"
+            ]
+          },
+          "targetEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "baseEventRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/ProposedEventFields"
+          },
+          "resourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "sequence",
+          "kind",
+          "targetEventId",
+          "baseEventRevision",
+          "proposed",
+          "resourceIds"
+        ]
+      },
+      "ProposedEventFields": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "game",
+              "practice",
+              "session",
+              "rental",
+              "party",
+              "pickup",
+              "maintenance",
+              "block"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "scheduledStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduledEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "setupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "cleanupMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "sourceType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "commitments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartyCommitment"
+            },
+            "maxItems": 100
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
+      },
+      "ValidationResult": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "validatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "validatedAt",
+          "issues"
+        ]
+      },
+      "ValidationIssue": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "changeSequence": {
+            "type": "integer"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/ConflictDetail"
+          }
+        },
+        "required": [
+          "severity",
+          "code",
+          "message"
+        ]
+      },
+      "ConflictDetail": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "physical_overlap",
+              "party_overlap",
+              "insufficient_rest",
+              "closure",
+              "outside_operating_hours",
+              "resource_unavailable",
+              "incompatible_format",
+              "configuration_not_permitted",
+              "intra_draft_overlap"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conflictUnitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conflictingEventIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "default": []
+          },
+          "closureId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "party": {
+            "type": "object",
+            "properties": {
+              "partyType": {
+                "type": "string",
+                "enum": [
+                  "team",
+                  "person",
+                  "equipment"
+                ]
+              },
+              "partyId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "partyType",
+              "partyId"
+            ]
+          },
+          "changeSequences": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "CreateScheduleDraftBody": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftChangeInput"
+            },
+            "maxItems": 500
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "name"
+        ]
+      },
+      "DraftChangeInput": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "create",
+              "move",
+              "cancel",
+              "resize",
+              "resource_change"
+            ]
+          },
+          "targetEventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/ProposedEventFields"
+          },
+          "resourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "AutosaveScheduleDraftBody": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftChangeInput"
+            },
+            "maxItems": 500
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "changes"
+        ]
+      },
+      "ValidateScheduleDraftBody": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "Publication": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "draftId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "operationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "committedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "eventIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "noticeEventIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "sequence": {
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "create",
+                        "move",
+                        "cancel",
+                        "resize",
+                        "resource_change"
+                      ]
+                    },
+                    "eventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "sequence",
+                    "kind",
+                    "eventId"
+                  ]
+                }
+              },
+              "remainingObligations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "type": "string"
+                    },
+                    "deadline": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "owner",
+                    "deadline"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "changes",
+              "remainingObligations"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "draftId",
+          "facilityId",
+          "operationId",
+          "committedAt",
+          "eventIds",
+          "noticeEventIds",
+          "summary"
+        ]
+      },
+      "PublishScheduleDraftBody": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "DiscardScheduleDraftBody": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
       }
     },
     "parameters": {}
@@ -207,6 +2741,2418 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resources": {
+      "post": {
+        "summary": "Create a resource (SPK-SCHED-001)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResourceBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List facility resources",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Resource"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resources/{id}": {
+      "get": {
+        "summary": "Read a resource",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a resource",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateResourceBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resources/{id}/availability": {
+      "get": {
+        "summary": "Find available slots for a resource (SPK-SCHED-003)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "start",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "end",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            "required": true,
+            "name": "durationMinutes",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1440
+            },
+            "required": false,
+            "name": "setupMinutes",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1440
+            },
+            "required": false,
+            "name": "cleanupMinutes",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 240
+            },
+            "required": false,
+            "name": "stepMinutes",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Availability"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resource-configurations": {
+      "post": {
+        "summary": "Create a physical arrangement (SPK-SCHED-002)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResourceConfigurationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceConfiguration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List facility configurations",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceConfiguration"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resource-configurations/{id}": {
+      "patch": {
+        "summary": "Update a configuration",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateResourceConfigurationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceConfiguration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conflict-units": {
+      "post": {
+        "summary": "Create a conflict unit (SPK-SCHED-002)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConflictUnitBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictUnit"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List facility conflict units",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConflictUnit"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operating-hours": {
+      "post": {
+        "summary": "Add an operating window (SPK-SCHED-001)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOperatingHoursBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatingHours"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List operating windows",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "resourceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperatingHours"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operating-hours/{id}": {
+      "delete": {
+        "summary": "Remove an operating window",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/closures": {
+      "post": {
+        "summary": "Create a closure with its impact preview (SPK-SCHED-009)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClosureBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Closure"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List closures",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "active",
+                "lifted",
+                "withdrawn"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Closure"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/closures/{id}": {
+      "get": {
+        "summary": "Read a closure and its impact",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Closure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/closures/{id}/apply": {
+      "post": {
+        "summary": "Apply a closure (SPK-SCHED-009, SPK-FAC-003)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyClosureBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Closure"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/closures/{id}/lift": {
+      "post": {
+        "summary": "Lift a closure: authorized return to service (SPK-FAC-004)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiftClosureBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Closure"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "summary": "List events in a facility window",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "start",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "end",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "resourceId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "published",
+                "canceled"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "required": false,
+            "name": "sourceType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "sourceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Event"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/{id}": {
+      "get": {
+        "summary": "Read an event",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reservations": {
+      "get": {
+        "summary": "List reservations by resource or facility and interval",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "resourceId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "start",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "end",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Reservation"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/event-series": {
+      "post": {
+        "summary": "Create a recurring series and materialize its occurrences (SPK-SCHED-007/008)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEventSeriesBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSeries"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/event-series/{id}": {
+      "get": {
+        "summary": "Read a series",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSeries"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/event-series/{id}/edits": {
+      "post": {
+        "summary": "Edit one occurrence, this and future, or the entire series (SPK-SCHED-007)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditEventSeriesBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeriesEditPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schedule-drafts": {
+      "post": {
+        "summary": "Open a schedule draft (SPK-SCHED-005)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScheduleDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List drafts",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "editing",
+                "validated",
+                "publishing",
+                "published",
+                "failed",
+                "discarded"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleDraft"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schedule-drafts/{id}": {
+      "get": {
+        "summary": "Read a draft",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDraft"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Autosave draft changes",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutosaveScheduleDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schedule-drafts/{id}/validate": {
+      "post": {
+        "summary": "Validate a draft against current records (SPK-SCHED-004)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateScheduleDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schedule-drafts/{id}/publish": {
+      "post": {
+        "summary": "Validate and commit a schedule revision (SPK-SCHED-006)",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishScheduleDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Publication"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schedule-drafts/{id}/discard": {
+      "post": {
+        "summary": "Discard a draft",
+        "tags": [
+          "Scheduling"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscardScheduleDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
