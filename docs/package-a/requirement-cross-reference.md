@@ -1,0 +1,573 @@
+# Requirement cross-reference and requirement-to-test matrix
+
+Status legend: **Verified** = implemented and tested in this repository today (file cited); **Proposed** = engineering proposal from the specification or from this document, awaiting operator approval; **Pending decision** = needs an operator answer (owner named from spec §6.6). "No answer yet" never becomes "not applicable" (§6.6).
+
+Last derived from specification v2.0 (2026-10-22). Source: `docs/spec/master-specification.md` (repository copy supplied 2026-10-23).
+
+Package A deliverable "Requirement cross-reference" (§6.5) and handoff artifact "Requirement-to-test matrix" (§6.7). Requirement conventions and lifecycle: §1.5.
+
+## 1. What this document is
+
+- One row for every requirement identifier in the specification: 139 `SPK-<DOMAIN>-###` requirements, the 12 numbered integrity invariants of §4.7, and the 28 `SPK-AT-###` acceptance journeys of §6.1. Total: 179 rows. (**Verified**: counted with `grep -oE 'SPK-[A-Z]+-[0-9]{3}' docs/spec/master-specification.md | sort -u` on the repository copy; the §4.7 list was counted by hand.)
+- For each row: the owning module, the lifecycle stage reached today, the evidence for that stage, the delivery package, the decision status, and the legacy identifier column required by §1.5.
+- A requirement-to-test matrix organised by test file (section 6), and the maintenance rules (section 10).
+
+The "original platform specification" (`.docx`, §1.3 item 1) and the "existing local demonstration" (§1.4) are **not** in this repository. No legacy requirement identifier and no demo behaviour is cited anywhere in this document; see section 8.
+
+## 2. How to read the columns
+
+**Id** and **Spec §**: exactly as the specification numbers them. The §4.7 invariants have no `SPK` identifier; they are referenced as "§4.7 (n)".
+
+**Title / short statement**: a compression of the requirement text. The specification remains the authoritative wording.
+
+**Owning module** (§4.2 and `apps/api/src/modules/<module>/README.md`):
+
+- Where a module README names the section or identifier, the owner is as written in that README (**Verified** as a statement of what the README says; the module itself is a scaffold, see section 3).
+- Where no README names it, the owner is marked "(proposed)" and is this document's **Proposed** assignment.
+- Customer app and staff dashboard surfaces (§2) have no module owner in §4.2; they are Package E surfaces that do not exist in this repository.
+
+**Lifecycle stage** (§1.5: Specified, Implemented, Verified, Operator accepted, Released). Values used today:
+
+| Value | Meaning |
+| --- | --- |
+| Specified | The requirement exists only in the specification. No module code in this repository implements any of it. |
+| Implemented (kernel slice) | A shared-kernel or shared-package artefact implements one named clause of the requirement and is exercised only by a generic test (not a test named after the requirement). The clause is named in the evidence column. Everything else in the requirement is Specified. |
+| Verified (kernel slice) | A test that names the requirement id, or tests its exact clause, passes today. The test file is cited. Everything else in the requirement is Specified. |
+| Implemented, Verified (whole requirement), Operator accepted, Released | No row has reached these stages. |
+
+**Evidence**: the test file(s) and test title(s) that justify the stage. "none yet" means no code or test exists for the row.
+
+**Package** (§6.5, A to G): the package whose deliverable list names the capability. Where §6.5 does not name the capability, the cell carries `*` and the assignment is this document's **Proposed** reading; section 9 lists each such case. The delivery sequence as a whole is the specification's proposal.
+
+**Status**: **Verified** where the evidence column cites a passing test (the marker applies to that slice only; the remainder of the row is **Proposed**). **Proposed** where the row is Specified and depends on no open operator decision. **Pending decision (owner)** where the row's behaviour depends on a §6.6 decision; the owner is the "Required owner" from the §6.6 table.
+
+**Legacy id**: "pending: original specification not in repository" on every row (section 8).
+
+## 3. Evidence base for every "Verified" statement in this document
+
+**Verified**: `pnpm test` was run in this repository on 2026-10-23: 13 test files, 63 tests, all passing, in the in-process PGlite mode (`vitest run`). The CI definition `.github/workflows/ci.yml` contains a second job, `test-postgres`, that runs the same suite against PostgreSQL 18 with `TEST_DATABASE_URL`; this document does not claim a CI result because none is recorded in the repository.
+
+**Verified**: code present today is limited to the shared kernel (`apps/api/src/kernel/`), the shared contracts package (`packages/contracts/src/`), the database package with one migration (`packages/db/migrations/0001_core_schema.sql`, `packages/db/src/schema/core.ts`), and fourteen module directories that each contain only a README, an empty NestJS module class and an index (`apps/api/src/modules/*/README.md` each state "Status: scaffold"). No module table, no module command, no provider adapter, no customer app and no staff dashboard exists.
+
+| Test file | Tests (count) | Requirement ids named in the file | Sections named in the file |
+| --- | --- | --- | --- |
+| `apps/api/src/kernel/__tests__/auth-and-operations.spec.ts` | 5 | none | none in titles; exercises §4.8 `GET /v1/operations/{id}`, §4.10 error contract |
+| `apps/api/src/kernel/__tests__/authorization.spec.ts` | 9 | SPK-IAM-003 | §4.14 |
+| `apps/api/src/kernel/__tests__/config.spec.ts` | 4 | none | none in titles; exercises §5.2 gate, §4.14 |
+| `apps/api/src/kernel/__tests__/idempotency.spec.ts` | 6 | none | §4.9 |
+| `apps/api/src/kernel/__tests__/inbox.spec.ts` | 2 | none | §4.11, §4.12 |
+| `apps/api/src/kernel/__tests__/outbox.spec.ts` | 6 | SPK-AT-023 | §4.12 |
+| `apps/api/src/kernel/__tests__/unit-of-work.spec.ts` | 3 | none | none in titles; exercises SPK-UX-006 (cited in `apps/api/src/kernel/exceptions/operational-exceptions.service.ts`), §4.9, §4.14 |
+| `packages/contracts/src/ids.spec.ts` | 2 | none | none; exercises §4.4 stable identity |
+| `packages/contracts/src/money.spec.ts` | 6 | none in titles; `packages/contracts/src/money.ts` cites SPK-PAY-001 and SPK-PAY-003 | none |
+| `packages/contracts/src/state-machines.spec.ts` | 6 | SPK-REG-006, SPK-PAY-007, SPK-RESULT-001 | §4.6, §4.11 |
+| `packages/contracts/src/time.spec.ts` | 2 | SPK-SCHED-003 | none; `packages/contracts/src/time.ts` cites SPK-SCHED-008 |
+| `packages/db/src/core-schema.spec.ts` | 7 | none | none in titles; exercises §4.3, §4.7 (1), §4.7 (4) mechanism, §4.9, §4.12, §4.14 |
+| `packages/db/src/migrate.spec.ts` | 4 | none | none; exercises the repository's own schema migration runner (Package B "Versioned migrations"), not data migration (§5.4) |
+
+Requirement ids that a passing test names or tests by exact clause today (**Verified**, kernel slice only): SPK-UX-006, SPK-IAM-003, SPK-REG-006, SPK-SCHED-003, SPK-SCHED-008, SPK-PAY-001, SPK-PAY-003, SPK-PAY-007, SPK-RESULT-001, SPK-AT-023, §4.7 (1), §4.7 (5), §4.7 (9), §4.7 (12). Ten `SPK` ids and four invariants out of 179 rows. Every other row is Specified.
+
+## 4. Requirement cross-reference
+
+### 4.1 SPK-UX, users, experiences and interface contract (§2)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-UX-001 | Native customer experience: installable iOS and Android apps; Expo web build for development only; native navigation, secure session storage, push registration, verified links, sharing, camera scanning, accessibility, foreground refresh, connectivity states | §2.2 | Customer app surface; no API module (proposed) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-UX-002 | Primary navigation: Home, Discover, Schedule, Teams, Account; facility pass and inbox reachable without a permanent tab | §2.2 | Customer app surface (proposed) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-UX-003 | Home prioritisation order (urgent changes, next activity, required actions, invitations, results, renewals); marketing must not obscure today's activity; each action names participant and team or program | §2.2 | Customer app surface (proposed) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-UX-004 | Next-activity card contents; "payment processing", "awaiting placement" and "confirmed" must not look interchangeable | §2.2 | Customer app surface; data from scheduling, competition, enrollment (proposed) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-UX-005 | Staff dashboard navigation: fourteen areas from Today to Administration; visibility depends on permissions | §2.3 | Staff dashboard surface (proposed) | Specified | none yet | E* | **Proposed** | pending: original specification not in repository |
+| SPK-UX-006 | Today workspace: operating issues each with title, severity, affected record, owner or queue, age and deadline, next permitted action, resolution history; closing an issue never marks an underlying payment, booking or delivery problem resolved | §2.3 | support (README cites §2.3 SPK-UX-006); issue records in kernel `OperationalExceptions` | Verified (kernel slice) | `apps/api/src/kernel/__tests__/unit-of-work.spec.ts` "exceptions deduplicate while open, transition with authorization and revision checks, and are audited"; `packages/db/src/core-schema.spec.ts` "open exceptions deduplicate by key while allowing re-raise after closure"; `apps/api/src/kernel/__tests__/outbox.spec.ts` "dead-letters after max attempts and raises an owned operational exception"; `apps/api/src/kernel/__tests__/inbox.spec.ts` "retries failed events and dead-letters with an exception after repeated failure". Table `operational_exceptions` (severity, owner_queue, affected_type/id, deadline_at, resolution, dedupe_key) in `packages/db/migrations/0001_core_schema.sql`. Workspace screen and the "closing never resolves the underlying record" rule: Specified | E* | **Verified** (slice); **Proposed** (rest) | pending: original specification not in repository |
+| SPK-UX-007 | Coach and referee assignment-focused workspace inside the responsive staff app, usable on a phone; exposes only assigned activities, relevant participants, acceptance, reporting, permitted communication, approved hours or fees | §2.4 | Staff dashboard surface; data from workforce (proposed) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-UX-008 | Every consequential screen defines loading, empty, ready, validation failure, permission restriction, stale version, offline, processing, success, partial completion, recovery required; recoverable failures preserve input | §2.5 | All surfaces (proposed) | Specified | none yet (the §4.10 error codes that back these states exist in `packages/contracts/src/errors.ts`; no screen exists) | E | **Proposed** | pending: original specification not in repository |
+| SPK-UX-009 | Keyboard alternatives to drag; VoiceOver, TalkBack, text scaling, focus order, non-colour status; journey-level accessibility acceptance | §2.5 | All surfaces (proposed) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-UX-010 | Design direction: soccer identity, hierarchy, readability in busy facilities, restrained animation, dense staff views, simple customer choices, consistent terminology; decoration must not delay common tasks | §2.5 | All surfaces (proposed) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+
+### 4.2 SPK-IAM, identity, families and permissions (§3.1)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-IAM-001 | Separate identities: person, login account, household, guardian relationship, participant, payer, pickup delegate, staff assignment, team role; shared address, email, surname or household establishes no authority | §3.1 | identity | Specified | none yet (`packages/contracts/src/principal.ts` separates account id from person id; no identity table exists) | B | **Proposed** | pending: original specification not in repository |
+| SPK-IAM-002 | Verified access: private records visible only after verified account access and relationship checks; staff-entered registration claimable by the verified customer without a duplicate participant | §3.1 | identity | Specified | none yet | B | **Pending decision** (Operator/privacy owner: guardian verification and child-account policy) | pending: original specification not in repository |
+| SPK-IAM-003 | Action-specific grants: viewing, registering, paying, receiving operational messages, completing forms, collecting a child; one permission never implies another | §3.1 | identity (relationship authority); evaluation in kernel `AuthorizationService` | Verified (kernel slice) | `apps/api/src/kernel/__tests__/authorization.spec.ts` "one permission never implies another: view does not allow collect", "requires authority over every subject in a multi-participant target", "allows self when the action permits it", "grants team-role actions only to the role holder on that team entry". The six grants are the `GrantPermissions` list in `apps/api/src/kernel/authorization/actions.ts`. The relationship authority that supplies grants (identity module) is a scaffold: Specified | B | **Verified** (slice); **Pending decision** (Operator/privacy owner) | pending: original specification not in repository |
+| SPK-IAM-004 | Invitations record inviting actor, recipient, scope, requested permissions, expiry, acceptance, revocation; acceptance grants only the authorised scope | §3.1 | identity | Specified | none yet | B | **Proposed** | pending: original specification not in repository |
+| SPK-IAM-005 | Disputed access: restricted review workflow with temporary restrictions, evidence references, review ownership, decision history, effective dates, escalation; no inference from family membership | §3.1 | identity | Specified | none yet | B* | **Pending decision** (Operator/privacy owner) | pending: original specification not in repository |
+| SPK-IAM-006 | Revocation affects new protected requests, exports, private feed retrieval and protected messages awaiting dispatch; delivered information cannot be recalled | §3.1 | identity; dispatch recheck in communications | Specified | none yet (`apps/api/src/kernel/authorization/authorization.port.ts` states the port must evaluate effective dates and revocations; no implementation) | B (identity), E (dispatch recheck) | **Proposed** | pending: original specification not in repository |
+| SPK-IAM-007 | Duplicates produce review candidates; merge preserves participation, financial ownership, source identifiers and history without importing unverified permissions | §3.1 | identity | Specified | none yet | B* | **Pending decision** (Operator/privacy owner) | pending: original specification not in repository |
+
+### 4.3 SPK-CAT, catalog, offerings and publication (§3.2)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-CAT-001 | Separate reusable program definitions from dated offerings and sessions; offering attributes (name, type, format, location, dates and window, eligibility, entitlement, capacity units, price and obligations, forms, cancellation policy, manager, publication state) | §3.2 | catalog | Specified | none yet | D | **Pending decision** (Finance: prices, taxes, discounts, rounding, for the price attribute) | pending: original specification not in repository |
+| SPK-CAT-002 | Supported offering kinds: season participation, term programs, camps, individual sessions, trials, makeups, pickup sessions, private or small-group coaching, rentals, packages and memberships when applicable | §3.2 | catalog | Specified | none yet | D | **Pending decision** (Product owner: conditional capability applicability, for rentals, packages, memberships) | pending: original specification not in repository |
+| SPK-CAT-003 | Copying an offering or season creates a draft; never copies payments, attendance, accepted enrollments, results or permissions | §3.2 | catalog | Specified | none yet | D | **Proposed** | pending: original specification not in repository |
+| SPK-CAT-004 | Publication validates required configuration; registration opening and schedule publication are distinct; pausing registration preserves participation | §3.2 | catalog | Specified | none yet | D | **Proposed** | pending: original specification not in repository |
+
+### 4.4 SPK-REG, registration, baskets and capacity (§3.3)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-REG-001 | Distinct registration intents: individual league entry, join known team, create team entry, youth enrollment, trial, makeup, pickup, rental request | §3.3 | enrollment | Specified | none yet | D | **Proposed** | pending: original specification not in repository |
+| SPK-REG-002 | Eligibility from versioned policies and the configured reference date; understandable reasons and alternatives; overrides need authority, reason, audit | §3.3 | enrollment (evaluation); catalog (policy versions) | Specified | none yet (`ELIGIBILITY_FAILED` error code exists in `packages/contracts/src/errors.ts`) | D | **Pending decision** (Program manager: youth eligibility; League manager: competition eligibility rules) | pending: original specification not in repository |
+| SPK-REG-003 | Independent records for application approval, enrollment, placement, financial obligation, event participation eligibility; a future installment does not make an enrollment unconfirmed | §3.3 | enrollment; finance (obligation) | Implemented (kernel slice) | Separate `ApplicationMachine`, `EnrollmentMachine` and `PlacementMachine` in `packages/contracts/src/state-machines.ts`, structurally checked by `packages/contracts/src/state-machines.spec.ts` "every machine has an initial state, terminal states with no exits, and reachable states". No table or command exists | D | **Proposed** | pending: original specification not in repository |
+| SPK-REG-004 | Household basket: several authorised participants and offerings in one purchase; each line keeps participant, entitlement, eligibility result, price, policy, outcome. Proposed default: all-or-nothing fulfilment; partial fulfilment only when configured and explicitly accepted | §3.3 | enrollment; finance (quote and order) | Specified | none yet | D | **Pending decision** (Product and operations: basket behaviour). The all-or-nothing default is **Proposed** | pending: original specification not in repository |
+| SPK-REG-005 | Capacity in team entries, roster places, offering seats, session seats, camp-group places, rental resources, or several constraints at once; includes active holds and accepted commitments | §3.3 | enrollment | Specified | none yet | D | **Proposed** | pending: original specification not in repository |
+| SPK-REG-006 | Server-owned expiring hold; proposed starting duration ten minutes subject to operator confirmation and payment-method testing; exactly one terminal outcome (committed, released, expired); client countdown informational | §3.3 | enrollment | Verified (kernel slice) | `packages/contracts/src/state-machines.spec.ts` "holds have exactly one terminal outcome (SPK-REG-006)" (`HoldMachine`: active to committed, released or expired; terminal states have no exits). Server-owned hold record, expiry job and capacity accounting: Specified | D | **Verified** (slice); **Pending decision** (Product and operations: hold duration). The ten-minute default is **Proposed** | pending: original specification not in repository |
+| SPK-REG-007 | Approval: proposed default is required human approval before capturing a new payment; approval does not promise capacity unless policy reserves it; deposit-before-approval needs separate consent, rejection handling and refund rules | §3.3 | enrollment (approval); finance (capture) | Specified | none yet | D | **Pending decision** (Product and operations: approvals). The approval-before-capture default is **Proposed** | pending: original specification not in repository |
+| SPK-REG-008 | Waitlist record (participant, offering, priority basis, preferences, status, offer history); an offer reserves a defined place until expiry; acceptance consumes once; late payments must not displace a valid offer | §3.3 | enrollment | Specified | none yet | D | **Pending decision** (Product and operations: waitlist) | pending: original specification not in repository |
+| SPK-REG-009 | Assisted registration uses the same eligibility, pricing, capacity and financial commands; staff actor recorded separately from participant, payer and signer; staff never sign a guardian acknowledgement | §3.3 | enrollment; kernel `AuditWriter` for the actor snapshot | Specified | none yet for registration (the audit actor snapshot mechanism is tested by `apps/api/src/kernel/__tests__/unit-of-work.spec.ts` "writes audit records with a principal snapshot inside the transaction", but no registration command exists) | D | **Proposed** | pending: original specification not in repository |
+| SPK-REG-010 | Cancellation and transfer: preview existing and proposed participation, affected dates, capacity, refund or credit or charge, required approval; transfers preserve attendance and link old and new enrollments | §3.3 | enrollment; finance (financial change) | Specified | none yet | D | **Pending decision** (Finance: refunds, credits, transfers) | pending: original specification not in repository |
+
+### 4.5 SPK-COMP, soccer competition model (§3.4)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-COMP-001 | Separate competition, season, division, continuing team identity, season team entry, effective roster membership, fixture, official result, standings revision, bracket progression; renewal creates new season records | §3.4 | competition | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-COMP-002 | Configurable formats (outdoor, boarded indoor, futsal, other small-sided); rule set defines players, roster limits, match length, minimum players, substitutions, reference dates, multi-team restrictions, scoring, draws, overtime, cards, forfeits, abandonment, tiebreakers, protest deadlines, result approval; no hard-coded universal indoor rule set | §3.4 | competition | Specified | none yet | C | **Pending decision** (League manager: soccer formats and competition rules) | pending: original specification not in repository |
+| SPK-COMP-003 | Divisions by approved combinations of age, level, category, season, location, format; placement and eligibility use documented criteria | §3.4 | competition | Specified | none yet | C | **Pending decision** (League manager) | pending: original specification not in repository |
+| SPK-COMP-004 | Team-entry approval, financial status, roster completion and competition eligibility remain distinct; staff see what is missing and who can resolve it | §3.4 | competition; finance (financial status) | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-COMP-005 | Roster changes preserve effective dates; a removed player stays in last week's match record; joining, transfer, guest and substitute rules respect competition restrictions | §3.4 | competition | Specified | none yet | C | **Pending decision** (League manager) | pending: original specification not in repository |
+
+### 4.6 SPK-CAP, captain workspace (§3.5)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-CAP-001 | Captains create or renew an entry, invite players, review join requests, view roster readiness, request availability, see games, request permitted contributions, initiate approved roster changes, contact the operating team | §3.5 | competition (README: captain workspace) | Specified | none yet (`TeamRoles` captain, co_captain, member declared in `apps/api/src/kernel/authorization/actions.ts`; team authority port only) | E | **Proposed** | pending: original specification not in repository |
+| SPK-CAP-002 | Privacy: captains see actionable readiness without private family details, payment instruments, sensitive notes or unrelated purchases; a contribution request grants no authority over the payer's account | §3.5 | competition; identity (grants) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-CAP-003 | RSVP states: available, unavailable, tentative (if enabled), no response; RSVP is neither attendance nor eligibility | §3.5 | competition | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-CAP-004 | Substitute requests check eligibility, effective roster rules, conflicting participation, suspension status, approvals, capacity; "guest" labels cannot bypass eligibility | §3.5 | competition; enrollment (eligibility evaluation) | Specified | none yet | E | **Pending decision** (League manager: competition rules; League manager/operator: discipline) | pending: original specification not in repository |
+| SPK-CAP-005 | Renewal may prefill approved details and suggest prior players; re-evaluates prices, eligibility, permissions and roster acceptance; no automatic charge | §3.5 | competition; finance (prices) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+
+### 4.7 SPK-PLACE, free agents, pickup and placement (§3.6)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-PLACE-001 | Individual registrants provide approved placement information: availability, preferred competition, age eligibility, declared level, position preferences, requested teammates where permitted | §3.6 | enrollment (README: §3.6) | Specified | none yet | D* | **Proposed** | pending: original specification not in repository |
+| SPK-PLACE-002 | Staff receive eligible candidate teams with explainable reasons; placement is staff-reviewed by default | §3.6 | enrollment; competition (candidate teams, README: "§3.6 placement inputs") | Specified | none yet | D* | **Proposed** | pending: original specification not in repository |
+| SPK-PLACE-003 | A placement checks capacity and current eligibility at commitment; a recommendation reserves nothing | §3.6 | enrollment | Specified | none yet | D* | **Proposed** | pending: original specification not in repository |
+| SPK-PLACE-004 | Pickup sessions have their own capacity, entry requirements, payment rules, waitlist, cancellation rules, attendance, organiser assignment; pickup attendance creates no league membership | §3.6 | enrollment (README owns pickup sessions) | Specified | none yet | G* (see section 9, item 2) | **Pending decision** (Product owner: conditional capability applicability) | pending: original specification not in repository |
+| SPK-PLACE-005 | Free-agent discovery exposes no contact details or profiles publicly without an explicit product and consent decision; initial model is operator-mediated placement | §3.6 | enrollment | Specified | none yet | D* | **Pending decision** (Operator/privacy owner: public information policy) | pending: original specification not in repository |
+
+### 4.8 SPK-SCHED, scheduling and shared spaces (§3.7)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-SCHED-001 | Physical inventory: facility, pitch or space, dimensions or configurations, whole-space and subdivision relationships, compatible formats, operating hours, closures, setup and cleanup, equipment, staffing constraints | §3.7 | scheduling (resources, configurations); `facilities` table in core | Specified | none yet beyond the `facilities` table (`packages/db/migrations/0001_core_schema.sql`: id, slug, name, timezone, address, status); no resource table | C | **Pending decision** (Operations: actual facilities, spaces, subdivisions, hours) | pending: original specification not in repository |
+| SPK-SCHED-002 | Overlap model: physical conflict units; a whole-field reservation conflicts with every overlapping subdivision; compatible subdivisions coexist only when the configured arrangement permits | §3.7 | scheduling | Specified | none yet (the exclusion-constraint mechanism is proven available by `packages/db/src/core-schema.spec.ts` "btree_gist exclusion constraints are available for reservation integrity" on a probe table; no conflict-unit or reservation table exists) | C | **Pending decision** (Operations) | pending: original specification not in repository |
+| SPK-SCHED-003 | Occupied interval: conflict checks include preparation and cleanup buffers; a game ending at 19:00 with a ten-minute turnover is not free at 19:00 | §3.7 | scheduling | Verified (kernel slice) | `packages/contracts/src/time.spec.ts` "extends the occupied interval by setup and cleanup buffers (SPK-SCHED-003)" (`occupiedInterval`, `intervalsOverlap`); `packages/db/src/core-schema.spec.ts` rejects a 19:00 to 20:00 probe reservation against an 18:00 to 19:10 occupied interval. Reservation conflict checks in a scheduling command: Specified | C | **Verified** (slice); **Proposed** (rest) | pending: original specification not in repository |
+| SPK-SCHED-004 | Other constraints: team overlap, coach overlap, official overlap, required rest, closures, equipment, staffing, approved participant conflicts | §3.7 | scheduling; workforce (coach and official overlap); facilities (closures) | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-SCHED-005 | Autosaved drafts keep base revisions, proposed changes, validation results, author, last save, publication status; drafts send no final customer notices | §3.7 | scheduling | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-SCHED-006 | Publication rechecks authorisation, revalidates records, rechecks physical conflicts, verifies fixture obligations, commits the revision, records durable follow-up, updates views; a stale or conflicting draft fails without partial publication of the group | §3.7 | scheduling | Specified | none yet (`STALE_REVISION` and `RESOURCE_CONFLICT` codes exist in `packages/contracts/src/errors.ts`; outbox for durable follow-up exists, section 5) | C | **Proposed** | pending: original specification not in repository |
+| SPK-SCHED-007 | Recurrence edits: one occurrence, this and future, entire series; show exactly which events change; past attendance and played games keep stable identities | §3.7 | scheduling | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-SCHED-008 | Time: store instants in UTC, keep the facility IANA timezone; explicit recurring-time behaviour across daylight-saving changes; ambiguous or nonexistent times need resolution | §3.7 | scheduling; `facilities.timezone` in core | Verified (kernel slice) | `packages/contracts/src/time.spec.ts` "validates IANA timezones" (`isIanaTimezone`, `Instant` as ISO-8601 UTC); `facilities.timezone text not null` and `timestamptz` columns in `packages/db/migrations/0001_core_schema.sql`. Daylight-saving and ambiguous-time resolution: Specified | C | **Verified** (slice); **Proposed** (rest) | pending: original specification not in repository |
+| SPK-SCHED-009 | Closure response identifies affected games, programs, rentals, staff, customers, obligations, messages; staff build a resolution (relocation, rescheduling, cancellation, policy-governed adjustment) | §3.7 | scheduling; facilities (restrictions); finance (adjustments); communications | Specified | none yet | C | **Pending decision** (Finance: refunds, credits, for the financial adjustment part) | pending: original specification not in repository |
+
+### 4.9 SPK-FIX, fixture generation and scheduling fairness (§3.8)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-FIX-001 | Fixture specification: teams, games per team, opponent frequency, dates, blackouts, byes, minimum rest, allowed start times, resources, playoff structure | §3.8 | scheduling (README: "§3.8 fixture generation inputs"); fixture records in competition | Specified | none yet | C | **Pending decision** (League manager: competition rules) | pending: original specification not in repository |
+| SPK-FIX-002 | Completeness validation: missing, duplicate, excess, unscheduled games; opponent frequency; invalid byes; unfulfilled playoff requirements; partial publication records remaining obligations, owner, deadline | §3.8 | scheduling; competition | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-FIX-003 | Fairness preferences: start distribution, rest, consecutive games, repeated opponents, availability, home and away balance, approved convenience; hard constraints visibly distinct from preferences | §3.8 | scheduling | Specified | none yet | C (basic), G ("Advanced fairness") | **Proposed** | pending: original specification not in repository |
+| SPK-FIX-004 | Solver outcomes: feasible, proven optimal only when established, proven infeasible only when established, none found within limit; a timeout is never "impossible"; preserve input snapshot, rule version, settings, outcome | §3.8 | scheduling | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-FIX-005 | Suggestions remain drafts; publication uses the normal scheduling command and current conflict validation | §3.8 | scheduling | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+
+### 4.10 SPK-READY, match readiness (§3.9)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-READY-001 | Explainable readiness assessment per fixture: published time and field, field status, officials, team acceptance, minimum eligible roster, forms, financial conditions, suspensions, disputes, change notifications | §3.9 | competition (README: §3.9); workforce `AssignmentCoveragePort` | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-READY-002 | Separate blocking, warning, informational, unknown or stale evidence; a missing RSVP alone is not an eligibility block | §3.9 | competition | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-READY-003 | Every readiness issue identifies reason, source record, responsible role, required action, last evaluation, deadline | §3.9 | competition | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-READY-004 | Readiness is derived from authoritative records, never an editable "ready" checkbox | §3.9 | competition (README: "Readiness is derived, never stored as an editable flag") | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+
+### 4.11 SPK-STAFF, officials, coaches and assignments (§3.10)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-STAFF-001 | Availability, permitted assignments, qualification evidence where required, assignment scope | §3.10 | workforce | Specified | none yet | C | **Pending decision** (Operations/finance: official qualifications and fees) | pending: original specification not in repository |
+| SPK-STAFF-002 | Assignment states proposed, offered, accepted, declined, withdrawn, completed; a proposed assignment does not satisfy a required accepted-official check | §3.10 | workforce | Implemented (kernel slice) | `AssignmentMachine` in `packages/contracts/src/state-machines.ts` with exactly these six states, structurally checked by `packages/contracts/src/state-machines.spec.ts` "every machine has an initial state, terminal states with no exits, and reachable states". The accepted-official check: Specified | C | **Proposed** | pending: original specification not in repository |
+| SPK-STAFF-003 | Changes check overlapping commitments and turnaround; an absent official triggers replacement and escalation | §3.10 | workforce; scheduling (overlap) | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-STAFF-004 | Temporary or substitute assignments grant time-bounded access; expiry keeps historical work records | §3.10 | workforce; identity (grants) | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-STAFF-005 | Officials submit scores, result classification, cards, incidents, abandonment, confirmation; publication authority separately configured | §3.10 | workforce (submission); competition (result revision) | Specified | none yet | C | **Pending decision** (League manager: result approval in the rule set) | pending: original specification not in repository |
+| SPK-STAFF-006 | Approved hours or fees with assignment, rate basis, amount, approver, adjustment history, export status; no payroll execution without separate integration | §3.10 | workforce | Specified | none yet | C | **Pending decision** (Operations/finance) | pending: original specification not in repository |
+
+### 4.12 SPK-RESULT, results, standings and disputes (§3.11)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-RESULT-001 | Result revisions draft, submitted, official, superseded; official standings derive only from official results | §3.11 | competition | Verified (kernel slice) | `packages/contracts/src/state-machines.spec.ts` "results never go backwards from official (SPK-RESULT-001)" (`ResultMachine`: official can only be superseded; superseded cannot be published). Standings derivation: Specified | C | **Verified** (slice); **Proposed** (rest) | pending: original specification not in repository |
+| SPK-RESULT-002 | Distinguish ordinary completion, forfeit, cancellation, abandonment, postponement, disputed result | §3.11 | competition | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-RESULT-003 | Standings use a versioned rule set and explain tiebreak outcomes | §3.11 | competition | Specified | none yet | C | **Pending decision** (League manager) | pending: original specification not in repository |
+| SPK-RESULT-004 | Corrections preserve prior result, actor, reason, publication time; recalculate standings; a correction affecting a published bracket or a played downstream game creates a management review task | §3.11 | competition; support (review task) | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-RESULT-005 | Disputes require eligible role, fixture, window, reason, evidence, reviewer, decision, publication consequences, appeal handling | §3.11 | competition | Specified | none yet | C | **Pending decision** (League manager/operator: discipline and appeals) | pending: original specification not in repository |
+
+### 4.13 SPK-DISC, discipline and incident management (§3.12)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-DISC-001 | Restricted records for cards, misconduct reports, suspensions, complaints, appeals, operational incidents | §3.12 | competition (README: discipline) | Specified | none yet | C* | **Pending decision** (League manager/operator: discipline and appeals) | pending: original specification not in repository |
+| SPK-DISC-002 | A suspension states subject, basis, scope, period or match count, competitions, approval, appeal status, completion criteria; no assumption that it spans every program | §3.12 | competition | Specified | none yet | C* | **Pending decision** (League manager/operator) | pending: original specification not in repository |
+| SPK-DISC-003 | Discipline affects eligibility only through the approved rule set; overrides need authorised review and history | §3.12 | competition; enrollment (eligibility) | Specified | none yet | C* | **Pending decision** (League manager/operator) | pending: original specification not in repository |
+| SPK-DISC-004 | Sensitive incident narratives never appear in public results, ordinary team views or general exports | §3.12 | competition; reporting (exports) | Specified | none yet | C* | **Pending decision** (Operator/privacy owner: public information policy) | pending: original specification not in repository |
+| SPK-DISC-005 | Operational injury or incident recording stays distinct from diagnosis or medical advice; the facility defines reporting and escalation | §3.12 | competition; support | Specified | none yet | C* | **Pending decision** (League manager/operator; procedure is the facility's) | pending: original specification not in repository |
+
+### 4.14 SPK-YOUTH, youth programs and progression (§3.13)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-YOUTH-001 | Age-banded programs, academies, camps, clinics, trials, makeups, approved private coaching | §3.13 | enrollment (README: §3.13); catalog (offering kinds) | Specified | none yet | D* | **Pending decision** (Program manager: youth eligibility, capacity, staffing, progression) | pending: original specification not in repository |
+| SPK-YOUTH-002 | Capacity respects configured group size, space and staffing; raising commercial capacity never bypasses a staffing requirement | §3.13 | enrollment; workforce (staffing) | Specified | none yet | D* | **Pending decision** (Program manager) | pending: original specification not in repository |
+| SPK-YOUTH-003 | Trial participation distinct from paid enrollment; a follow-up offer reuses permitted information without charging or enrolling | §3.13 | enrollment | Specified | none yet | D* | **Proposed** | pending: original specification not in repository |
+| SPK-YOUTH-004 | Makeup entitlements reference originating session or policy event, eligible replacements, expiry, redemption limit, history; a monetary credit and a makeup entitlement are different assets | §3.13 | enrollment (makeups); finance (credits) | Specified | none yet | D* | **Pending decision** (Finance: credits) | pending: original specification not in repository |
+| SPK-YOUTH-005 | Development records: approved assessment templates with skill area, date, scale, author, comments, visibility, review status; private coaching notes separate from parent-visible feedback | §3.13 | enrollment per README (see section 9, item 7) | Specified | none yet | G ("Youth progression") | **Pending decision** (Program manager) | pending: original specification not in repository |
+| SPK-YOUTH-006 | Progression recommendation explains eligibility and suitability; guarantees no acceptance, availability or purchase | §3.13 | enrollment | Specified | none yet | G ("Youth progression") | **Pending decision** (Program manager) | pending: original specification not in repository |
+| SPK-YOUTH-007 | Family coordination: all authorised children in one calendar; overlaps highlighted, not blocked by default; physical resource and staff conflicts enforced separately | §3.13 | enrollment; scheduling (events); customer app surface | Specified | none yet | E ("Family calendar") | **Proposed** | pending: original specification not in repository |
+
+### 4.15 SPK-ENTRY, arrival, attendance, departure and pickup (§3.14)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-ENTRY-001 | Separate records for facility arrival, session check-in, observed attendance, departure, supervised release | §3.14 | entry | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-ENTRY-002 | A pass carries an opaque reference, not child or household details; scanning opens selection and validation | §3.14 | entry | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-ENTRY-003 | A household scan never marks every child present; staff select the people and sessions attending | §3.14 | entry | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-ENTRY-004 | Arrival checks show actionable issues; an unrelated balance blocks participation only when approved policy requires it | §3.14 | entry; finance (balance) | Specified | none yet | E | **Pending decision** (Finance and league manager: team liability; Product and operations) | pending: original specification not in repository |
+| SPK-ENTRY-005 | Attendance corrections preserve actor, time, reason | §3.14 | entry | Specified | none yet (the append-only `forbid_mutation` trigger mechanism exists in `packages/db/migrations/0001_core_schema.sql` and is tested on `audit_records`; no attendance table) | E | **Proposed** | pending: original specification not in repository |
+| SPK-ENTRY-006 | Visitor categories including guardians and spectators without fabricated enrollments | §3.14 | entry | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-ENTRY-007 | Supervised pickup verifies current authority and records child, collector, verification outcome, staff actor, time, restriction or escalation, release outcome; schedule visibility and payment permission establish no pickup authority | §3.14 | entry (README: pickup authority verified live through identity) | Specified | none yet (the `collect` grant and "view does not allow collect" rule are kernel-verified under SPK-IAM-003; no release command exists) | E ("Pickup when applicable"; see section 9, item 2) | **Pending decision** (Operations: pickup and outage procedure) | pending: original specification not in repository |
+| SPK-ENTRY-008 | An arrivals count is not verified occupancy unless departure capture and reconciliation support it | §3.14 | entry; reporting | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+
+### 4.16 SPK-PAY, prices, obligations and payments (§3.15)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-PAY-001 | Money as integer minor units with explicit currency; never accept a client-submitted price as authoritative | §3.15 | finance; catalog (price rules, README cites SPK-PAY-001..003); shared `Money` in contracts | Verified (kernel slice) | `packages/contracts/src/money.spec.ts` "rejects non-integer minor units", "rejects invalid currencies", "adds and subtracts same-currency amounts only" (`packages/contracts/src/money.ts` cites SPK-PAY-001); `packages/db/src/core-schema.spec.ts` "parses bigint, timestamptz, and jsonb columns to usable JavaScript values". The client-price rule and all money tables: Specified | D | **Verified** (slice); **Proposed** (rest) | pending: original specification not in repository |
+| SPK-PAY-002 | Quote shows each participant and item, base price, discounts, taxes and fees, credits, due now, future obligations, expiry, policies; historical purchases keep price and policy basis | §3.15 | finance (quotes); catalog (price rules) | Specified | none yet (`QUOTE_EXPIRED` code exists in `packages/contracts/src/errors.ts`) | D | **Pending decision** (Finance: prices, taxes, discounts, rounding) | pending: original specification not in repository |
+| SPK-PAY-003 | Discount definition: eligibility, stacking, caps, redemption limits, rounding, allocation across lines, effective dates | §3.15 | catalog (price rules); finance (allocation) | Verified (kernel slice) | `packages/contracts/src/money.spec.ts` "allocates without losing or inventing minor units", "allocates negative totals symmetrically", "allocates deterministically across many lines", "computes basis-point percentages with half-away-from-zero rounding" (`allocate` in `packages/contracts/src/money.ts` cites SPK-PAY-003). The half-away-from-zero rounding is an engineering default, not an approved policy. Discount records: Specified | D | **Verified** (slice); **Pending decision** (Finance: rounding) | pending: original specification not in repository |
+| SPK-PAY-004 | Team obligations: individual billing, one responsible payer, team obligation with contributions; contribution requests create no duplicate debt; total, received, allocated and remaining shown consistently | §3.15 | finance | Specified | none yet | D | **Pending decision** (Finance and league manager: team liability) | pending: original specification not in repository |
+| SPK-PAY-005 | Concurrent payments against the final balance follow an approved overpayment policy; excess stays visible and traceable | §3.15 | finance | Specified | none yet | D | **Pending decision** (Finance and league manager: overpayments) | pending: original specification not in repository |
+| SPK-PAY-006 | Installment plans record amounts, due dates, authorisation, retry policy, notices, extensions, outstanding obligations; a failed installment creates a financial state and queue; participation consequences evaluated separately | §3.15 | finance | Specified | none yet | D ("Applicable installments") | **Pending decision** (Finance and league manager: installments; Product owner: applicability) | pending: original specification not in repository |
+| SPK-PAY-007 | Payment uncertainty: a timeout is not failure; unknown outcomes reconciled before any operation risks charging again | §3.15 | finance | Verified (kernel slice) | `packages/contracts/src/state-machines.spec.ts` "unknown payment outcomes resolve only to authoritative terminal states (SPK-PAY-007)" (`PaymentAttemptMachine`: `unknown` exits only to succeeded, failed, canceled); `PAYMENT_OUTCOME_UNKNOWN` code in `packages/contracts/src/errors.ts`; `apps/api/src/kernel/__tests__/inbox.spec.ts` for duplicate provider events. Reconciliation command and provider adapter: Specified | D | **Verified** (slice); **Pending decision** (Technical lead/account owners: payment processor) | pending: original specification not in repository |
+| SPK-PAY-008 | Refunds reserve the refundable amount before execution; concurrent requests cannot reserve the same funds; an unknown external result keeps its reservation | §3.15 | finance | Implemented (kernel slice) | `RefundMachine` in `packages/contracts/src/state-machines.ts` (source comment cites SPK-PAY-008; `unknown` exits only to succeeded or failed) structurally checked by the generic §4.6 test; `REFUND_PENDING` code in `packages/contracts/src/errors.ts`. Reservation logic: Specified | D | **Pending decision** (Finance: refunds) | pending: original specification not in repository |
+| SPK-PAY-009 | Credits have owner, currency, permitted uses, expiry, remaining balance, source, redemption history; no double redemption | §3.15 | finance | Specified | none yet | D | **Pending decision** (Finance: credits) | pending: original specification not in repository |
+| SPK-PAY-010 | Append-only operational subledger; corrections are reversing or adjusting entries; staff cannot overwrite balances | §3.15 | finance | Specified | none yet (the `forbid_mutation` trigger mechanism is tested on `audit_records` by `packages/db/src/core-schema.spec.ts` "audit records are append-only"; no journal table exists) | D | **Proposed** | pending: original specification not in repository |
+| SPK-PAY-011 | Reconciliation distinguishes orders, obligations, receipts, refunds, credits, processor fees, disputes, settlements, cash; payment volume is not revenue | §3.15 | finance | Specified | none yet | D | **Proposed** | pending: original specification not in repository |
+| SPK-PAY-012 | Cash and external tenders require approved procedures, permissions, evidence, reconciliation; they bypass no registration or capacity check | §3.15 | finance | Specified | none yet | D | **Pending decision** (Finance: cash) | pending: original specification not in repository |
+
+### 4.17 SPK-COND, rentals, parties, memberships, packages and POS (§3.16)
+
+No module README claims §3.16. Owners below are **Proposed**.
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-COND-001 | Membership does not imply unlimited attendance unless its entitlement says so | §3.16 | catalog (entitlement definitions) and enrollment (proposed) | Specified | none yet | G | **Pending decision** (Product owner: conditional capability applicability) | pending: original specification not in repository |
+| SPK-COND-002 | Package redemption is transactional and reversible per cancellation policy | §3.16 | enrollment (session bookings) and finance (reversal) (proposed) | Specified | none yet | G | **Pending decision** (Product owner) | pending: original specification not in repository |
+| SPK-COND-003 | A party or rental reserves all required resources together; a field without mandatory staff is not a complete booking | §3.16 | scheduling (reservations), workforce (staff), facilities (equipment) (proposed) | Specified | none yet | G | **Pending decision** (Product owner) | pending: original specification not in repository |
+| SPK-COND-004 | Hardware access establishes neither session attendance nor pickup authorisation | §3.16 | entry (proposed) | Specified | none yet | G | **Pending decision** (Product owner; Technical lead/account owners: hardware interfaces) | pending: original specification not in repository |
+
+### 4.18 SPK-FAC, facilities and maintenance (§3.17)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-FAC-001 | Track maintainable assets: turf areas, goals, nets, boards, dividers, lighting, scoreboards, relevant equipment | §3.17 | facilities | Specified | none yet | E ("Maintenance") | **Pending decision** (Operations: actual facilities and spaces) | pending: original specification not in repository |
+| SPK-FAC-002 | Maintenance records: asset or space, issue, severity, reporter, evidence, owner, due date, operating restriction, resolution and inspection | §3.17 | facilities | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-FAC-003 | An approved restriction affects scheduling availability; the physical area decides whether a whole pitch or a compatible subdivision is blocked | §3.17 | facilities; scheduling (README: restrictions create closures through the scheduling authority) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-FAC-004 | Return to service needs an authorised release; closing a task never silently reopens a field when an inspection remains | §3.17 | facilities | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-FAC-005 | Preventive maintenance creates future reservations or closures through the same scheduling authority | §3.17 | facilities; scheduling | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+
+### 4.19 SPK-COMMS, communications (§3.18)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-COMMS-001 | In-app notices, push, configured email or SMS; the operating team approves channel use and policies | §3.18 | communications | Specified | none yet | E | **Pending decision** (Operator/privacy owner: communication policy; Technical lead/account owners: messaging providers) | pending: original specification not in repository |
+| SPK-COMMS-002 | Triggers: registration outcome, invitation, placement, waitlist offer, schedule publication or change, cancellation, payment attention, assignment offer, result publication, renewal, approved youth feedback | §3.18 | communications (outbox handlers for notices) | Specified | none yet (the outbox that will carry these triggers exists, section 5) | E | **Proposed** | pending: original specification not in repository |
+| SPK-COMMS-003 | Resolve recipients from current permissions; recheck protected recipients before handing an unsent notice to a provider | §3.18 | communications (README: rechecks recipient authority before external dispatch); identity | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-COMMS-004 | Delivery states queued, provider accepted, delivered where confirmed, failed, unknown, read, acknowledged; push is not guaranteed delivery | §3.18 | communications | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-COMMS-005 | Schedule messages show old and new practical details; obsolete unsent reminders suppressed | §3.18 | communications; scheduling | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-COMMS-006 | Staff compose to an authorised audience, preview recipients, confirm; no shared recipient list exposing contacts | §3.18 | communications | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-COMMS-007 | Essential operational communications and promotional preferences separately represented | §3.18 | communications | Specified | none yet | E | **Pending decision** (Operator/privacy owner) | pending: original specification not in repository |
+| SPK-COMMS-008 | Private calendar feeds use stable event identities and revocable authorisation; revocation cannot erase external copies | §3.18 | communications (calendar feed authorisations); scheduling (stable identities) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+
+### 4.20 SPK-SUPPORT, customer service (§3.19)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-SUPPORT-001 | Scoped customer timeline: registration, participation, orders, payments, changes, messages, support requests | §3.19 | support | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-SUPPORT-002 | Cases record owner, category, related records, history, resolution; staff never need customer credentials | §3.19 | support | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-SUPPORT-003 | Support actions use normal authorised commands; a note is not a refund, permission change or transfer | §3.19 | support (README: calls the normal authorised commands of other modules) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+
+### 4.21 SPK-REPORT, reporting, field economics and retention (§3.20)
+
+§6.5 names only "Retention tools" (Package G) and the Package A "Metric dictionary" (§6.7) for this domain; other package cells are marked `*`.
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-REPORT-001 | Every metric defines business question, grain, numerator and denominator, time basis, exclusions, dimensions, currency, freshness, access scope | §3.20 | reporting (metric definitions) | Specified | none yet | A (metric dictionary document), E* (implementation) | **Proposed** | pending: original specification not in repository |
+| SPK-REPORT-002 | Required operating reports: daily schedule, expected arrivals, attendance, readiness, uncovered assignments, waitlist demand, registration funnel, enrollment and roster completeness, outstanding obligations, payment and refund reconciliation, maintenance restrictions, communication failures | §3.20 | reporting | Specified | none yet | E* | **Proposed** | pending: original specification not in repository |
+| SPK-REPORT-003 | Field utilisation: reserved, available, occupied observations, closures reported separately; no double-counting of whole-field and subdivision time; disclosed weighting | §3.20 | reporting | Specified | none yet | G* | **Pending decision** (Operations: spaces and subdivisions, for the weighting) | pending: original specification not in repository |
+| SPK-REPORT-004 | Revenue per field hour only with an explicit allocation method; margin needs agreed cost inputs | §3.20 | reporting | Specified | none yet | G* | **Pending decision** (Finance) | pending: original specification not in repository |
+| SPK-REPORT-005 | Retention by cohorts: adult teams, individual players, youth participants, households, rental customers; household purchase and returning individual are different metrics | §3.20 | reporting | Specified | none yet | G ("Retention tools") | **Proposed** | pending: original specification not in repository |
+| SPK-REPORT-006 | Demand by day, time, age band, format, program; observed demand separate from forecasts | §3.20 | reporting | Specified | none yet | G* | **Proposed** | pending: original specification not in repository |
+| SPK-REPORT-007 | Exports need independent permission checks and audit; reports reproducible after corrections | §3.20 | reporting (README: exports with independent permission checks) | Specified | none yet | E* | **Pending decision** (Operator/privacy owner: public information policy, for export content) | pending: original specification not in repository |
+
+### 4.22 SPK-AUTO, advanced operational assistance (§3.21)
+
+| Id | Title / short statement | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-AUTO-001 | Optional assistant may summarise issues, explain readiness blockers, find policies, draft communications, propose schedule repairs, summarise demand and renewals, explain financial exceptions | §3.21 | automation | Specified | none yet | G ("Reviewable operational assistance") | **Proposed** | pending: original specification not in repository |
+| SPK-AUTO-002 | Responses identify supporting records and freshness; missing evidence stays visible | §3.21 | automation | Specified | none yet | G | **Proposed** | pending: original specification not in repository |
+| SPK-AUTO-003 | Consequential actions remain reviewable: publishing schedules, external communications, charging or refunding, roster changes, permission changes, discipline | §3.21 | automation | Specified | none yet | G | **Proposed** | pending: original specification not in repository |
+| SPK-AUTO-004 | The assistant uses the same commands and permissions as other clients; imported text, attachments and messages are data, not authority | §3.21 | automation (README: same commands and permissions) | Specified | none yet (the single authorisation path it must use is kernel-verified, section 5) | G | **Proposed** | pending: original specification not in repository |
+| SPK-AUTO-005 | Core operations remain usable when the assistant is unavailable | §3.21 | automation (README cites SPK-AUTO-005) | Specified | none yet | G | **Proposed** | pending: original specification not in repository |
+
+### 4.23 §4.7 integrity invariants
+
+The specification numbers these 1 to 12 without `SPK` identifiers. CLAUDE.md requires that "every integrity invariant gets a test that proves the database rejects the violation, not only the service".
+
+| Id | Invariant | Spec § | Owning module | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| §4.7 (1) | No unauthorised cross-household or cross-organisation access | §4.7 | kernel `AuthorizationService`; identity (household relationships) | Verified (kernel slice) | `apps/api/src/kernel/__tests__/authorization.spec.ts` "never crosses organization scope, even for staff and system actions", "allows staff by role and enforces facility scope", "reports protected denials as not-found and unprotected denials as access denied", "system principals are allowed within their organization only"; `apps/api/src/kernel/__tests__/auth-and-operations.spec.ts` "shows an operation to its requester and to staff, and hides it across accounts and organizations"; `packages/db/src/core-schema.spec.ts` "facility references cannot cross organizations (composite foreign key)". Cross-household: the kernel enforces it given a relationship authority; the identity module that supplies one is a scaffold, so that half is Specified | B | **Verified** (organisation scope); **Proposed** (household scope) | pending: original specification not in repository |
+| §4.7 (2) | No equivalent duplicate active entitlement where prohibited | §4.7 | enrollment (README cites invariants 2, 3, 7) | Specified | none yet (`DUPLICATE_ENTITLEMENT` code exists in `packages/contracts/src/errors.ts`; no entitlement table or partial unique index) | D | **Proposed** | pending: original specification not in repository |
+| §4.7 (3) | No overcommitted capacity | §4.7 | enrollment | Specified | none yet (`CAPACITY_UNAVAILABLE` code exists; no capacity table or check constraint) | D | **Proposed** | pending: original specification not in repository |
+| §4.7 (4) | No overlapping exclusive physical reservation | §4.7 | scheduling (README cites invariant 4) | Specified (mechanism proven) | `packages/db/src/core-schema.spec.ts` "btree_gist exclusion constraints are available for reservation integrity" proves the `btree_gist` extension and a `tstzrange` exclusion constraint reject an overlap on a probe table created by the test; no reservation table exists, so the invariant is not yet enforced | C | **Proposed** (the mechanism availability is **Verified**) | pending: original specification not in repository |
+| §4.7 (5) | No duplicate financial effect from replay | §4.7 | finance (README cites invariants 5, 6, 7); kernel idempotency, outbox, inbox | Verified (kernel slice) | `apps/api/src/kernel/__tests__/idempotency.spec.ts` "replays the same key + payload without re-executing, and conflicts on a different payload", "stores domain (4xx) failures so a replay returns the same outcome without re-executing", "keys are scoped per account: another account may reuse the same key"; `apps/api/src/kernel/__tests__/outbox.spec.ts` "dispatches each event to every handler exactly once, even when redelivered"; `apps/api/src/kernel/__tests__/inbox.spec.ts` "records duplicates once and processes each event once"; `packages/db/src/core-schema.spec.ts` "idempotency keys are unique per organization and scope". No financial table exists, so the financial half is Specified | B (replay mechanisms), D (financial facts) | **Verified** (replay mechanisms); **Proposed** (financial facts) | pending: original specification not in repository |
+| §4.7 (6) | No refund beyond available refundable funds | §4.7 | finance | Specified | none yet | D | **Pending decision** (Finance: refunds) | pending: original specification not in repository |
+| §4.7 (7) | No double credit or package redemption | §4.7 | finance (credits); enrollment (package and makeup redemption) | Specified | none yet | D (credits, makeups), G (packages) | **Proposed** | pending: original specification not in repository |
+| §4.7 (8) | No official result without publication authority | §4.7 | competition | Specified | none yet (`ResultMachine` publish event exists; no authority check) | C | **Pending decision** (League manager: result approval) | pending: original specification not in repository |
+| §4.7 (9) | No silent rewriting of published history | §4.7 | competition (results), scheduling (published revisions); kernel append-only mechanism | Verified (kernel slice) | `packages/db/src/core-schema.spec.ts` "audit records are append-only" (`forbid_mutation` trigger rejects update and delete); `packages/contracts/src/state-machines.spec.ts` "results never go backwards from official (SPK-RESULT-001)"; `packages/db/src/migrate.spec.ts` "refuses to run when an applied migration changed on disk" (schema history). Published schedule and result records: Specified | B (mechanism), C (published records) | **Verified** (mechanism); **Proposed** (published records) | pending: original specification not in repository |
+| §4.7 (10) | No protected message dispatched using revoked authority | §4.7 | communications (README cites invariant 10); identity | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| §4.7 (11) | No duplicated authority during migration | §4.7 | migration (README cites invariant 11) | Specified | none yet | F | **Pending decision** (Migration owner/operator: writer authority) | pending: original specification not in repository |
+| §4.7 (12) | No lost required follow-up after a committed operation | §4.7 | kernel `Outbox`, `OutboxDispatcher`, `UnitOfWork` | Verified (kernel slice) | `apps/api/src/kernel/__tests__/outbox.spec.ts` "validates payloads against the event definition and rolls back with the transaction", "retries a failing handler with backoff without re-running handlers that succeeded", "dead-letters after max attempts and raises an owned operational exception", "reclaims events whose worker died (expired lease)", "events without handlers are dispatched (facts are recorded even before consumers exist)"; `apps/api/src/kernel/__tests__/unit-of-work.spec.ts` "runs after-commit hooks only after a successful commit"; `packages/db/src/core-schema.spec.ts` "outbox claim with FOR UPDATE SKIP LOCKED returns each pending event once". Business follow-ups (notices, fulfilment) that use the mechanism: Specified | B | **Verified** (mechanism); **Proposed** (business follow-ups) | pending: original specification not in repository |
+
+### 4.24 SPK-AT, end-to-end acceptance journeys (§6.1)
+
+Journeys are cross-module. "Modules involved" lists the modules the scenario touches; the first listed is the proposed coordinator. The package is the earliest package in which the journey can be executed end to end (**Proposed** reading of §6.5). A journey reaches "Verified" only when an end-to-end test named after its id passes (section 10).
+
+| Id | Scenario | Required outcome | Spec § | Modules involved | Lifecycle stage | Evidence | Package | Status | Legacy id |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPK-AT-001 | Returning parent registers two children | Correct permissions, prices, basket behaviour, enrollments, schedules | §6.1 | enrollment, identity, catalog, finance, scheduling | Specified | none yet | D | **Pending decision** (Product and operations: basket behaviour; Finance: prices) | pending: original specification not in repository |
+| SPK-AT-002 | New adult joins a team | Verification, approval, payment, roster, placement remain understandable | §6.1 | enrollment, identity, competition, finance | Specified | none yet | D | **Pending decision** (Product and operations: approvals) | pending: original specification not in repository |
+| SPK-AT-003 | Captain renews a team | New season records without changing historical participation | §6.1 | competition, enrollment, finance | Specified | none yet | D | **Proposed** | pending: original specification not in repository |
+| SPK-AT-004 | Two guardians register the same child | One equivalent entitlement; payer privacy preserved | §6.1 | enrollment, identity, finance | Specified | none yet | D | **Pending decision** (Operator/privacy owner: guardian verification) | pending: original specification not in repository |
+| SPK-AT-005 | Final-place contention | At most one valid commitment | §6.1 | enrollment, finance | Specified | none yet (must pass under `TEST_DATABASE_URL` for true concurrency, CLAUDE.md) | D | **Pending decision** (Product and operations: holds) | pending: original specification not in repository |
+| SPK-AT-006 | Payment succeeds after hold expiry | No displaced waitlist offer; tracked valid fulfilment or compensation | §6.1 | finance, enrollment | Specified | none yet (`CheckoutMachine` recovery states exist, section 5) | D | **Pending decision** (Product and operations: holds, waitlist) | pending: original specification not in repository |
+| SPK-AT-007 | Concurrent partial refunds | No over-refund; uncertain execution retains reservation | §6.1 | finance | Specified | none yet | D | **Pending decision** (Finance: refunds) | pending: original specification not in repository |
+| SPK-AT-008 | Whole pitch and subdivision publish concurrently | At most one conflicting reservation commits | §6.1 | scheduling | Specified | none yet (exclusion mechanism proven, §4.7 (4)) | C | **Pending decision** (Operations: spaces and subdivisions) | pending: original specification not in repository |
+| SPK-AT-009 | Field closure affects youth and adult activities | Complete impact preview, approved resolution, consistent publication | §6.1 | scheduling, facilities, enrollment, competition, finance, communications | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-AT-010 | Odd-team season generation | Correct byes and complete fixture obligations | §6.1 | scheduling, competition | Specified | none yet | C | **Pending decision** (League manager: competition rules) | pending: original specification not in repository |
+| SPK-AT-011 | Fairness constraints conflict | Explain limitations; no false optimality or feasibility claim | §6.1 | scheduling | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-AT-012 | Referee declines shortly before kickoff | Uncovered assignment, replacement workflow, readiness update | §6.1 | workforce, competition, support | Specified | none yet | C | **Proposed** | pending: original specification not in repository |
+| SPK-AT-013 | Suspended player is added as a substitute | Applicable restrictions enforced | §6.1 | competition, enrollment | Specified | none yet | C* (discipline, section 9 item 1) | **Pending decision** (League manager/operator: discipline) | pending: original specification not in repository |
+| SPK-AT-014 | Official result changes after playoff publication | History retained; downstream review required | §6.1 | competition, support | Specified | none yet (`ResultMachine` supersede path verified under SPK-RESULT-001) | C | **Proposed** | pending: original specification not in repository |
+| SPK-AT-015 | Parent arrives with one of two children | Only the actual child and selected session recorded | §6.1 | entry, identity | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-AT-016 | Adult may pay but may not collect | Pickup denied or escalated under approved procedure | §6.1 | entry, identity | Specified | none yet for the journey (the grant rule "pay" versus "collect" is kernel-verified under SPK-IAM-003 with a fake relationship authority) | E | **Pending decision** (Operations: pickup and outage procedure) | pending: original specification not in repository |
+| SPK-AT-017 | Coach loses access while messages are queued | New protected access and unsent dispatch re-evaluated | §6.1 | identity, communications | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-AT-018 | Device works offline then reconnects | Observations synchronise once; stale authority is not asserted | §6.1 | entry | Specified | none yet | E | **Pending decision** (Operations: outage procedure; the two-hour roster age of §4.15 is **Proposed**) | pending: original specification not in repository |
+| SPK-AT-019 | Trial converts to term participation | Separate trial history and paid entitlement | §6.1 | enrollment, finance | Specified | none yet | D* | **Pending decision** (Program manager) | pending: original specification not in repository |
+| SPK-AT-020 | Makeup or package redeemed concurrently | At most one permitted redemption | §6.1 | enrollment, finance | Specified | none yet | D (makeup), G (package) | **Pending decision** (Product owner: package applicability) | pending: original specification not in repository |
+| SPK-AT-021 | Turf restriction closes a subdivision | Correct booking impact; authorised reopening | §6.1 | facilities, scheduling | Specified | none yet | E (maintenance) with C (closures) | **Pending decision** (Operations: subdivisions) | pending: original specification not in repository |
+| SPK-AT-022 | Team contributions exceed remaining amount | Approved overpayment handling with reconciled allocation | §6.1 | finance | Specified | none yet (`allocate` helper verified under SPK-PAY-003) | D | **Pending decision** (Finance and league manager: overpayments) | pending: original specification not in repository |
+| SPK-AT-023 | Worker stops after registration commit | Durable follow-up resumes without duplicate effects | §6.1 | kernel outbox; enrollment (registration commit) | Verified (kernel slice) | `apps/api/src/kernel/__tests__/outbox.spec.ts` (describe title names SPK-AT-023): "reclaims events whose worker died (expired lease)", "dispatches each event to every handler exactly once, even when redelivered", "retries a failing handler with backoff without re-running handlers that succeeded". The registration commit itself: Specified | B (mechanism), D (journey) | **Verified** (mechanism); **Proposed** (journey) | pending: original specification not in repository |
+| SPK-AT-024 | Migration snapshot imported twice | Stable identities, no repeated charges or messages | §6.1 | migration, identity, finance, communications | Specified | none yet (`packages/db/src/migrate.spec.ts` covers only schema migrations, not data import) | F | **Pending decision** (Migration owner/operator) | pending: original specification not in repository |
+| SPK-AT-025 | Customer account recovered | Only verified prior access restored | §6.1 | identity | Specified | none yet | B | **Pending decision** (Operator/privacy owner; Technical lead/account owners: identity provider) | pending: original specification not in repository |
+| SPK-AT-026 | Assistant receives an unauthorised request | No protected disclosure or privileged action | §6.1 | automation, kernel authorisation | Specified | none yet | G | **Proposed** | pending: original specification not in repository |
+| SPK-AT-027 | Old mobile app contacts updated API | Supported behaviour or clear update requirement | §6.1 | customer app, API versioning (§4.13) | Specified | none yet | E | **Proposed** | pending: original specification not in repository |
+| SPK-AT-028 | Backup restored after external transactions | External facts reconciled before normal operations resume | §6.1 | migration (recovery), finance | Specified | none yet | F | **Pending decision** (Technical lead/operator: service objectives; Migration owner/operator) | pending: original specification not in repository |
+
+## 5. Engineering-contract sections without requirement ids
+
+The kernel tests mostly prove §4 and §5 engineering rules that carry no `SPK` identifier. They are listed here so the test matrix is complete and so later module work can cite them.
+
+| Section | Rule | Lifecycle stage | Evidence | Status |
+| --- | --- | --- | --- | --- |
+| §4.1 | Modular application; no microservices; explicit migrations | Verified (kernel) | Monorepo layout `apps/api`, `packages/contracts`, `packages/db`; `packages/db/src/migrate.spec.ts` "applies the repository migrations once and is idempotent on re-run", "refuses to run when an applied migration changed on disk", "rejects malformed file names and duplicate versions", "rolls back a failing migration file as a unit" | **Verified** (repository structure and migration runner); parity tests against the demo (§4.1) **Proposed**, demo not in repository |
+| §4.3 | Organisation scope on every operational record; composite references | Verified (kernel) | `packages/db/src/core-schema.spec.ts` "facility references cannot cross organizations (composite foreign key)"; `apps/api/src/kernel/__tests__/authorization.spec.ts` "never crosses organization scope, even for staff and system actions" | **Verified** (core tables); module tables **Proposed** |
+| §4.4 | Stable identity, revision, timestamps, provenance | Verified (kernel) | `packages/contracts/src/ids.spec.ts` "generates RFC 9562 version 7 uuids that sort by time", "generates unique values"; `revision` columns in `packages/db/migrations/0001_core_schema.sql` | **Verified** (core); module entities **Proposed** |
+| §4.5 | Replacement of demo shortcuts | Specified | none; the demo is not in the repository | **Proposed** |
+| §4.6 | Ten canonical lifecycles (Application, Enrollment, Placement, Hold, Session booking, Payment attempt, Refund, Checkout, Result, Assignment) | Verified (contracts) | `packages/contracts/src/state-machines.spec.ts` "every machine has an initial state, terminal states with no exits, and reachable states" over `ALL_STATE_MACHINES` (ten machines in `packages/contracts/src/state-machines.ts`), plus the named tests for Hold, Payment attempt, Checkout, Result; "rejects definitions with unknown states" | **Verified** (definitions); use by commands **Proposed** |
+| §4.8 | Versioned command APIs; `GET /v1/operations/{id}`; organisation context from authorisation, not the request | Verified (kernel) | `apps/api/src/kernel/__tests__/auth-and-operations.spec.ts` "shows an operation to its requester and to staff, and hides it across accounts and organizations", "operation transitions follow the lifecycle and terminal states are final", "validates path parameters with the error contract"; OpenAPI registration in `packages/contracts/src/api/operations.ts`; `docs/api/openapi.json` | **Verified** (operations endpoint only); the fifteen other representative interfaces **Proposed** |
+| §4.9 | Idempotency key replay and conflict; expected revision; reason and policy references | Verified (kernel) | `apps/api/src/kernel/__tests__/idempotency.spec.ts` (six tests, all named in section 6); `apps/api/src/kernel/__tests__/unit-of-work.spec.ts` "exceptions deduplicate while open, transition with authorization and revision checks, and are audited" (`STALE_REVISION`); `CommandMetaSchema` in `packages/contracts/src/commands.ts` | **Verified** |
+| §4.10 | Stable code, safe message, correlation reference, next action; no leak of protected record existence; twelve required categories | Verified (kernel) | `apps/api/src/kernel/__tests__/auth-and-operations.spec.ts` "serves health publicly and echoes correlation ids", "rejects missing, malformed, expired and unknown tokens with the error contract"; `apps/api/src/kernel/__tests__/authorization.spec.ts` "reports protected denials as not-found and unprotected denials as access denied"; `apps/api/src/kernel/__tests__/idempotency.spec.ts` "releases the key after an unexpected (5xx) failure so the client can retry" (no internal details leaked). All twelve §4.10 categories have codes in `packages/contracts/src/errors.ts` | **Verified** |
+| §4.11 | Checkout coordinator; provider success with local failure stays visible; no transaction across a provider call; webhook authentication, durable recording, duplicate tolerance | Verified (kernel slice) | `packages/contracts/src/state-machines.spec.ts` "checkout keeps provider success with local failure visible as recovery_required (§4.11)"; `apps/api/src/kernel/__tests__/inbox.spec.ts` "records duplicates once and processes each event once", "retries failed events and dead-letters with an exception after repeated failure". The coordinator itself and any provider adapter: Specified | **Verified** (lifecycle and inbox); coordinator **Proposed**; processor **Pending decision** (Technical lead/account owners) |
+| §4.12 | Transactional outbox, inbox, job attributes, interruption and replay tolerance, one logical effect | Verified (kernel) | `apps/api/src/kernel/__tests__/outbox.spec.ts` (six tests), `apps/api/src/kernel/__tests__/inbox.spec.ts` (two tests), `packages/db/src/core-schema.spec.ts` "outbox claim with FOR UPDATE SKIP LOCKED returns each pending event once"; tables `outbox_events`, `inbox_events`, `event_consumptions`, `job_attempts` | **Verified** |
+| §4.13 | Native security and compatibility | Specified | none | **Proposed** |
+| §4.14 | Least privilege, object-level authorisation, audited privileged actions, protected secrets | Verified (kernel slice) | `apps/api/src/kernel/__tests__/authorization.spec.ts` (nine tests); `apps/api/src/kernel/__tests__/unit-of-work.spec.ts` "writes audit records with a principal snapshot inside the transaction"; `apps/api/src/kernel/__tests__/config.spec.ts` "refuses the local identity provider in production", "requires a long local secret", "requires DATABASE_URL in production". Multifactor authentication, rate-limited recovery, upload restrictions, expiring exports, scanning, incident response: Specified | **Verified** (slice); rest **Proposed**; retention and legal wording **Pending decision** (Operator/privacy owner) |
+| §4.15 | Offline queueing of arrival and attendance; proposed two-hour maximum roster age | Specified | none | **Pending decision** (Operations: outage procedure); two-hour default **Proposed** |
+| §5.1, §5.2 | Integration register; provider-selection gates; no silent provider choice | Verified (kernel slice) | `apps/api/src/kernel/__tests__/config.spec.ts` "refuses the local identity provider in production"; `apps/api/src/kernel/kernel.module.ts` refuses `AUTH_MODE=oidc` until a managed identity provider is selected. No vendor SDK is present | **Verified** (gate); providers **Pending decision** (Technical lead/account owners) |
+| §5.3 to §5.8 | Migration inventory, import behaviour, reconciliation, single authority, cutover, recovery | Specified | none (`packages/db/src/migrate.spec.ts` concerns schema migrations only) | **Pending decision** (Migration owner/operator) |
+| §5.9, §5.10, §5.11 | Reliability targets, workload envelope, observability | Specified | none; the targets are planning targets per the specification, not measurements | **Pending decision** (Technical lead/operator: service objectives) |
+| §5.12 | Production ownership | Specified | none | **Pending decision** (Sponsor; Technical lead/account owners) |
+
+## 6. Requirement-to-test matrix (by test file)
+
+Every test present in the repository, with the rows it serves. Test titles are quoted verbatim from the files.
+
+| Test file | Test title | Rows served |
+| --- | --- | --- |
+| `apps/api/src/kernel/__tests__/auth-and-operations.spec.ts` | serves health publicly and echoes correlation ids | §4.10 |
+| same | rejects missing, malformed, expired and unknown tokens with the error contract | §4.10, §4.14 |
+| same | shows an operation to its requester and to staff, and hides it across accounts and organizations | §4.8, §4.7 (1) |
+| same | operation transitions follow the lifecycle and terminal states are final | §4.8, §4.9 |
+| same | validates path parameters with the error contract | §4.10 |
+| `apps/api/src/kernel/__tests__/authorization.spec.ts` | denies anonymous principals | §4.14 |
+| same | never crosses organization scope, even for staff and system actions | §4.7 (1), §4.3 |
+| same | allows staff by role and enforces facility scope | §4.7 (1), §4.14 |
+| same | one permission never implies another: view does not allow collect | SPK-IAM-003 |
+| same | requires authority over every subject in a multi-participant target | SPK-IAM-003 |
+| same | allows self when the action permits it | SPK-IAM-003 |
+| same | grants team-role actions only to the role holder on that team entry | SPK-IAM-003 (team role as a separate identity, SPK-IAM-001 clause, not claimed as verified) |
+| same | reports protected denials as not-found and unprotected denials as access denied | §4.10, §4.7 (1) |
+| same | system principals are allowed within their organization only | §4.7 (1) |
+| `apps/api/src/kernel/__tests__/config.spec.ts` | refuses the local identity provider in production | §5.2, §4.14 |
+| same | requires a long local secret | §4.14 |
+| same | requires DATABASE_URL in production | §4.14 |
+| same | accepts a development configuration with defaults | none (developer convenience) |
+| `apps/api/src/kernel/__tests__/idempotency.spec.ts` | requires an Idempotency-Key header | §4.9 |
+| same | replays the same key + payload without re-executing, and conflicts on a different payload | §4.9, §4.7 (5) |
+| same | keys are scoped per account: another account may reuse the same key | §4.9, §4.7 (5) |
+| same | stores domain (4xx) failures so a replay returns the same outcome without re-executing | §4.9, §4.7 (5) |
+| same | releases the key after an unexpected (5xx) failure so the client can retry | §4.9, §4.10 |
+| same | expired keys can be reused | §4.9 |
+| `apps/api/src/kernel/__tests__/inbox.spec.ts` | records duplicates once and processes each event once | §4.11, §4.12, §4.7 (5), SPK-PAY-007 (duplicate provider evidence) |
+| same | retries failed events and dead-letters with an exception after repeated failure | §4.12, SPK-UX-006 |
+| `apps/api/src/kernel/__tests__/outbox.spec.ts` | validates payloads against the event definition and rolls back with the transaction | §4.12, §4.7 (12) |
+| same | dispatches each event to every handler exactly once, even when redelivered | §4.12, §4.7 (5), §4.7 (12), SPK-AT-023 |
+| same | retries a failing handler with backoff without re-running handlers that succeeded | §4.12, §4.7 (12), SPK-AT-023 |
+| same | dead-letters after max attempts and raises an owned operational exception | §4.12, §4.7 (12), SPK-UX-006 |
+| same | reclaims events whose worker died (expired lease) | §4.12, §4.7 (12), SPK-AT-023 |
+| same | events without handlers are dispatched (facts are recorded even before consumers exist) | §4.12, §4.7 (12) |
+| `apps/api/src/kernel/__tests__/unit-of-work.spec.ts` | runs after-commit hooks only after a successful commit | §4.7 (12), §4.11 (no provider call inside the transaction, as a hook point) |
+| same | writes audit records with a principal snapshot inside the transaction | §4.14, §4.9 (reason), SPK-REG-009 (actor snapshot mechanism only) |
+| same | exceptions deduplicate while open, transition with authorization and revision checks, and are audited | SPK-UX-006, §4.9, §4.14 |
+| `packages/contracts/src/ids.spec.ts` | generates RFC 9562 version 7 uuids that sort by time | §4.4 |
+| same | generates unique values | §4.4 |
+| `packages/contracts/src/money.spec.ts` | rejects non-integer minor units | SPK-PAY-001 |
+| same | rejects invalid currencies | SPK-PAY-001 |
+| same | adds and subtracts same-currency amounts only | SPK-PAY-001 |
+| same | allocates without losing or inventing minor units | SPK-PAY-003 |
+| same | allocates negative totals symmetrically | SPK-PAY-003 |
+| same | allocates deterministically across many lines | SPK-PAY-003 |
+| same | computes basis-point percentages with half-away-from-zero rounding | SPK-PAY-003 (rounding rule is an engineering default; Finance decides) |
+| `packages/contracts/src/state-machines.spec.ts` | every machine has an initial state, terminal states with no exits, and reachable states | §4.6; SPK-REG-003, SPK-STAFF-002, SPK-PAY-008 (Implemented, kernel slice) |
+| same | holds have exactly one terminal outcome (SPK-REG-006) | SPK-REG-006 |
+| same | unknown payment outcomes resolve only to authoritative terminal states (SPK-PAY-007) | SPK-PAY-007 |
+| same | checkout keeps provider success with local failure visible as recovery_required (§4.11) | §4.11 |
+| same | results never go backwards from official (SPK-RESULT-001) | SPK-RESULT-001, §4.7 (9) |
+| same | rejects definitions with unknown states | §4.6 |
+| `packages/contracts/src/time.spec.ts` | validates IANA timezones | SPK-SCHED-008 |
+| same | extends the occupied interval by setup and cleanup buffers (SPK-SCHED-003) | SPK-SCHED-003 |
+| `packages/db/src/core-schema.spec.ts` | parses bigint, timestamptz, and jsonb columns to usable JavaScript values | SPK-PAY-001 (bigint), SPK-SCHED-008 (timestamptz) |
+| same | audit records are append-only | §4.7 (9), §4.14 |
+| same | facility references cannot cross organizations (composite foreign key) | §4.3, §4.7 (1) |
+| same | open exceptions deduplicate by key while allowing re-raise after closure | SPK-UX-006 |
+| same | idempotency keys are unique per organization and scope | §4.9, §4.7 (5) |
+| same | btree_gist exclusion constraints are available for reservation integrity | §4.7 (4) mechanism, SPK-SCHED-003 |
+| same | outbox claim with FOR UPDATE SKIP LOCKED returns each pending event once | §4.12, §4.7 (12) |
+| `packages/db/src/migrate.spec.ts` | applies the repository migrations once and is idempotent on re-run | §4.1 (Package B versioned migrations) |
+| same | refuses to run when an applied migration changed on disk | §4.1, §4.7 (9) (schema history) |
+| same | rejects malformed file names and duplicate versions | §4.1 |
+| same | rolls back a failing migration file as a unit | §4.1 |
+
+## 7. Counts
+
+| Group | Rows | Specified | Implemented (kernel slice) | Verified (kernel slice) | Operator accepted | Released |
+| --- | --- | --- | --- | --- | --- | --- |
+| SPK-UX | 10 | 9 | 0 | 1 (SPK-UX-006) | 0 | 0 |
+| SPK-IAM | 7 | 6 | 0 | 1 (SPK-IAM-003) | 0 | 0 |
+| SPK-CAT | 4 | 4 | 0 | 0 | 0 | 0 |
+| SPK-REG | 10 | 8 | 1 (SPK-REG-003) | 1 (SPK-REG-006) | 0 | 0 |
+| SPK-COMP | 5 | 5 | 0 | 0 | 0 | 0 |
+| SPK-CAP | 5 | 5 | 0 | 0 | 0 | 0 |
+| SPK-PLACE | 5 | 5 | 0 | 0 | 0 | 0 |
+| SPK-SCHED | 9 | 7 | 0 | 2 (SPK-SCHED-003, SPK-SCHED-008) | 0 | 0 |
+| SPK-FIX | 5 | 5 | 0 | 0 | 0 | 0 |
+| SPK-READY | 4 | 4 | 0 | 0 | 0 | 0 |
+| SPK-STAFF | 6 | 5 | 1 (SPK-STAFF-002) | 0 | 0 | 0 |
+| SPK-RESULT | 5 | 4 | 0 | 1 (SPK-RESULT-001) | 0 | 0 |
+| SPK-DISC | 5 | 5 | 0 | 0 | 0 | 0 |
+| SPK-YOUTH | 7 | 7 | 0 | 0 | 0 | 0 |
+| SPK-ENTRY | 8 | 8 | 0 | 0 | 0 | 0 |
+| SPK-PAY | 12 | 8 | 1 (SPK-PAY-008) | 3 (SPK-PAY-001, SPK-PAY-003, SPK-PAY-007) | 0 | 0 |
+| SPK-COND | 4 | 4 | 0 | 0 | 0 | 0 |
+| SPK-FAC | 5 | 5 | 0 | 0 | 0 | 0 |
+| SPK-COMMS | 8 | 8 | 0 | 0 | 0 | 0 |
+| SPK-SUPPORT | 3 | 3 | 0 | 0 | 0 | 0 |
+| SPK-REPORT | 7 | 7 | 0 | 0 | 0 | 0 |
+| SPK-AUTO | 5 | 5 | 0 | 0 | 0 | 0 |
+| §4.7 invariants | 12 | 8 | 0 | 4 (1, 5, 9, 12) | 0 | 0 |
+| SPK-AT | 28 | 27 | 0 | 1 (SPK-AT-023) | 0 | 0 |
+| **Total** | **179** | **162** | **3** | **14** | **0** | **0** |
+
+No row has reached "Implemented" or "Verified" for the whole requirement. No row has reached "Operator accepted" or "Released".
+
+## 8. Legacy identifiers
+
+§1.5: "Existing requirement identifiers from the original specification remain valid. Implementation work must maintain a cross-reference between those requirements and this expanded specification rather than renumbering or silently dropping them."
+
+**Verified**: the original platform specification (`.docx`, §1.3 item 1, which the specification links at a path on its author's machine) is not in this repository, and no file in the repository contains its identifiers. The repository note at the top of `docs/spec/master-specification.md` says the same.
+
+Consequently every "Legacy id" cell reads "pending: original specification not in repository". The legacy identifier scheme itself is unknown here: this document does not guess its prefix, numbering or count.
+
+**Pending decision** (Sponsor, as holder of "Budget, dates, acceptance authority" in §6.6, or whoever the sponsor names as document owner): supply the original specification to the repository. When it arrives, section 8 gains a two-column mapping (legacy id to `SPK` id or "no successor, reason") and every row's legacy column is filled from it; the `SPK` ids are never renumbered.
+
+The "existing local demonstration" (§1.4) is likewise absent, so the §4.1 parity tests and the §4.5 shortcut replacements cannot be assessed; `docs/architecture/overview.md` records the same gap.
+
+## 9. Interpretation notes and spec ambiguities affecting this matrix
+
+Each item is **Proposed** unless marked otherwise. Package cells carrying `*` in section 4 trace to items 1 to 4.
+
+1. **Capabilities §6.5 does not place in a package.** Discipline (SPK-DISC-001..005, SPK-AT-013), placement (SPK-PLACE-001..003, 005), staff dashboard navigation and Today workspace (SPK-UX-005, SPK-UX-006), youth trials and makeups (SPK-YOUTH-001..004, SPK-AT-019), disputed access and duplicates (SPK-IAM-005, SPK-IAM-007), and all of reporting except retention (SPK-REPORT-001..004, 006, 007). Assigned to the package whose gate first needs them. **Pending decision** (Sponsor: delivery commitment; Product owner for conditional items) to confirm.
+2. **"Pickup" has two meanings.** Package E lists "Pickup when applicable" beside "Arrival and attendance"; Package G lists "Pickup" among conditional capabilities; §1.6 names "supervised pickup" as conditional; §2.2 Discover and SPK-PLACE-004 use "pickup" for pickup sessions. This document reads E as supervised pickup (SPK-ENTRY-007) and G as pickup sessions (SPK-PLACE-004). **Pending decision** (Product owner: conditional capability applicability).
+3. **Fixture generation ownership.** The scheduling README claims §3.8 (SPK-FIX-001..005) as "fixture generation inputs" while §4.4 lists Fixture under "Matches" and the competition README owns fixtures. Rows follow the scheduling README and name competition as co-owner.
+4. **Price rules are claimed twice.** The catalog README cites SPK-PAY-001..003 (price rules) and the finance README cites SPK-PAY-001..012. Rows name finance as primary and catalog for price-rule definition.
+5. **§3.16 has no module owner** in any README. Owners for SPK-COND-001..004 are this document's proposal.
+6. **Customer and staff surfaces have no module owner.** §4.2 has no interface module; SPK-UX rows name the surface and the data-owning modules.
+7. **SPK-YOUTH-005 development records** are coach-authored assessments; the enrollment README claims all of §3.13. The row follows the README. An alternative owner (workforce, as the module owning coach assignments) is noted for the operator's module-ownership review.
+8. **SPK-AT-020 spans two packages** (makeups in D, packages in G).
+9. **§6.5 Package C does not name SPK-UX-007** (coach and referee workspace); Package E does. Row placed in E.
+10. **Rounding** in `packages/contracts/src/money.ts` (half away from zero) is an engineering default that a test exercises; §6.6 reserves rounding to Finance. The SPK-PAY-003 row marks this.
+11. **Test evidence in PGlite mode only** was produced for this document; the PostgreSQL concurrency job exists in CI but no run is recorded here. Rows whose invariant is concurrency-sensitive (§4.7 (3), (4), (5), (6), (7); SPK-AT-005, 007, 008, 020) must pass under `TEST_DATABASE_URL` before they can be marked Verified (CLAUDE.md "Tests").
+
+## 10. How this matrix is maintained
+
+### 10.1 Rules
+
+1. **One row per requirement id, forever.** The row inventory is the set of ids in `docs/spec/master-specification.md` plus the numbered §4.7 list plus the §6.1 table. Rows are never deleted or renumbered (§1.5). A requirement withdrawn by a later specification version keeps its row with lifecycle "Specified" and a note naming the version that withdrew it. (**Proposed** rule; consistent with §1.5.)
+2. **Tests are named after requirement ids** (CLAUDE.md, "Tests": "Every requirement you implement gets a test named after it; every integrity invariant gets a test that proves the database rejects the violation, not only the service."). The practice in force today (**Verified**): the id appears in the `describe` or `it` title, for example `it('holds have exactly one terminal outcome (SPK-REG-006)')` in `packages/contracts/src/state-machines.spec.ts`, and `describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)')` in `apps/api/src/kernel/__tests__/outbox.spec.ts`.
+3. **File placement** (**Proposed**, extending CLAUDE.md): module tests live in `apps/api/src/modules/<module>/__tests__/<topic>.spec.ts` with each `it` title ending in the id it proves; invariant tests use a `describe` titled `'§4.7 (n) <invariant>'` and must show the database rejecting the violation (`isUniqueViolation`, `isExclusionViolation`, or a check-constraint error from `@sportspark/db`); acceptance journeys live in `apps/api/src/__tests__/journeys/spk-at-###-<slug>.spec.ts` with one `describe` per journey titled with the id.
+4. **Evidence must be a passing test, cited by file and title.** A screen, a README, a comment or a type alone never moves a row past Specified (§1.5: "A visible screen is not evidence that its underlying workflow is complete").
+5. **Stage transitions** (**Proposed**):
+   - Specified to Implemented: code merged under the owning module with the id cited in comments and the commit message (CLAUDE.md), but no test named after the id yet, or only generic tests.
+   - Implemented to Verified: a test named after the id passes in `pnpm test` and, for concurrency-sensitive rows, in the `test-postgres` CI job.
+   - Verified to Operator accepted: the §6.3 or §6.2 acceptance task is completed by the named operator and recorded in the release evidence ledger (§6.7) with build and environment (§6.8 item 11).
+   - Operator accepted to Released: the release owner (§6.8 item 12) records the release in the ledger.
+   - "Kernel slice" qualifiers are removed only when the whole requirement, not a clause, meets the stage.
+6. **Status column discipline**: a row stays **Pending decision** until the decision register records the answer as "answered" with an owner and effective date (§6.6); "unknown" is never rewritten as "not applicable".
+7. **Package column** changes only when the sponsor approves a change to the §6.5 sequence; the `*` marker is removed when §6.5 itself names the capability.
+8. **Legacy column** is filled only from the original specification once it is in the repository (section 8).
+9. **Review trigger**: every pull request that cites an `SPK` id or a `§4.7` invariant (CLAUDE.md requires the citation) updates the affected rows in the same pull request.
+
+### 10.2 Regeneration procedure (**Proposed**, commands are the ones used to build this version)
+
+```
+# 1. Ids the specification defines (must equal the rows in section 4, plus §4.7 (1)..(12))
+grep -oE 'SPK-[A-Z]+-[0-9]{3}' docs/spec/master-specification.md | sort -u
+
+# 2. Ids and sections that tests name (must equal the evidence column and section 6)
+grep -rnoE 'SPK-[A-Z]+-[0-9]{3}|§4\.7 \([0-9]+\)|§[0-9]+(\.[0-9]+)?' \
+  --include='*.spec.ts' apps packages
+
+# 3. Ids that source code cites but no test names (candidates for "Implemented", never "Verified")
+grep -rnoE 'SPK-[A-Z]+-[0-9]{3}' --include='*.ts' --exclude='*.spec.ts' apps packages
+
+# 4. Confirm the evidence still passes before publishing an update
+pnpm test
+```
+
+Differences between step 1 and section 4 mean a specification change: add rows. Differences between step 2 and the evidence column mean a stale matrix: fix the rows, never the tests. Any test in step 2 that names an id but fails removes "Verified" from that row until it passes again.
+
+### 10.3 Related Package A documents
+
+`docs/README.md` names the companion artifacts (role and permission matrix, decision register, integration register, authority matrix, journeys, acceptance fixtures, metric dictionary, native acceptance matrix, release evidence ledger). The §6.6 owners cited in this document's Status column are the ones the decision register must carry. This document does not assert which companion files exist at the time of writing.
