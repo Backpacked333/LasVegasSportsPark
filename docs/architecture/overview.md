@@ -74,7 +74,7 @@ modes agree.
 | -------------- | ------------------------------------------ | ------------------------------------------ |
 | identity       | —                                          | principal resolver, relationship authority |
 | catalog        | identity                                   | —                                          |
-| scheduling     | — (facilities table in core)               | —                                          |
+| scheduling     | — (facilities table in core)               | — (offers FIXTURE_OBLIGATION_IMPL hook)    |
 | competition    | identity, scheduling                       | team authority                             |
 | workforce      | identity, scheduling, competition          | —                                          |
 | facilities     | scheduling                                 | —                                          |
