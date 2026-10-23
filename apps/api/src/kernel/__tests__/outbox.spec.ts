@@ -52,7 +52,7 @@ describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)', () =>
     });
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close();
   });
 
   it('validates payloads against the event definition and rolls back with the transaction', async () => {

@@ -11,7 +11,7 @@ describe('authentication guard and operations endpoint', () => {
     t = await createTestApp();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close();
   });
 
   it('serves health publicly and echoes correlation ids', async () => {

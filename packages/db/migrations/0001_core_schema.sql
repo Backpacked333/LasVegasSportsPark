@@ -11,7 +11,8 @@
 --   * timestamps are timestamptz; facility-local times are derived from facilities.timezone.
 --   * money is bigint minor units next to a currency text column.
 
-create extension if not exists btree_gist;
+-- Installed into public so its operator classes are visible from every schema on the search path.
+create extension if not exists btree_gist with schema public;
 
 create or replace function touch_updated_at() returns trigger
 language plpgsql as $$

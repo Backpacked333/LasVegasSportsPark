@@ -35,7 +35,7 @@ describe('idempotent commands (§4.9)', () => {
     auth = await t.authHeader(customerPrincipal(t.organizationId));
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close();
   });
 
   it('requires an Idempotency-Key header', async () => {

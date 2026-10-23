@@ -1,5 +1,6 @@
-import { newId } from '@sportspark/contracts';
 import type { PGlite } from '@electric-sql/pglite';
+import { newId } from '@sportspark/contracts';
+import { sql } from 'kysely';
 import { createPgDatabase, createPgliteDatabase, type Db } from './client';
 import { migrateToLatest } from './migrate';
 
@@ -27,10 +28,18 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   return { db, pglite, concurrent: false, close };
 }
 
+/** Advisory lock key serializing extension installation across parallel test files. */
+const EXTENSION_LOCK_KEY = 727_262;
+
 async function createIsolatedPgSchema(url: string): Promise<TestDatabase> {
   const schema = `test_${newId().replaceAll('-', '')}`;
   const admin = createPgDatabase({ connectionString: url, max: 2 });
-  const { sql } = await import('kysely');
+  // Extensions are database-wide. Install btree_gist into `public` (on every test schema's search
+  // path) exactly once; without the lock, parallel test files race on pg_extension_name_index.
+  await admin.db.transaction().execute(async (trx) => {
+    await sql`select pg_advisory_xact_lock(${EXTENSION_LOCK_KEY})`.execute(trx);
+    await sql`create extension if not exists btree_gist with schema public`.execute(trx);
+  });
   await sql.raw(`create schema "${schema}"`).execute(admin.db);
   await admin.close();
   const search = new URL(url);

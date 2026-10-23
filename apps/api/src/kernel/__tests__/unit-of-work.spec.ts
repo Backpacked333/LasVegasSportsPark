@@ -13,7 +13,7 @@ describe('unit of work, audit, and operational exceptions', () => {
     t = await createTestApp();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close();
   });
 
   it('runs after-commit hooks only after a successful commit', async () => {

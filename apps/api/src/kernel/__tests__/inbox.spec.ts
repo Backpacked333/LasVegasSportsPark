@@ -17,7 +17,7 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
     });
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close();
   });
 
   it('records duplicates once and processes each event once', async () => {
