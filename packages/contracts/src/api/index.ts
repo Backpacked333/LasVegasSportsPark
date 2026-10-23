@@ -2,3 +2,4 @@
 // Modules append their own export line here (one line per module keeps merges conflict-free).
 export * from './operations';
 export * from './scheduling';
+export * from './facilities';

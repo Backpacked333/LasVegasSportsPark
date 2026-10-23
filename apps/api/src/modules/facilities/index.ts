@@ -1,1 +1,12 @@
 export * from './facilities.module';
+export * from './facilities.actions';
+export * from './facilities.events';
+export * from './facilities.policy';
+export * from './facilities.state-machines';
+export * from './ports';
+export * from './services/assets.service';
+export * from './services/maintenance-tasks.service';
+export * from './services/restrictions.service';
+export * from './services/preventive-schedules.service';
+export { FacilitiesReader } from './services/facilities-reader';
+export * from './testing/facilities-fixtures';
