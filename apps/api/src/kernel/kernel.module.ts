@@ -1,4 +1,4 @@
-import { Global, Logger, Module, type DynamicModule, type Provider } from '@nestjs/common';
+import { Global, Module, type DynamicModule, type Provider } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, ModuleRef } from '@nestjs/core';
 import type { Db } from '@sportspark/db';
 import { AuditWriter } from './audit/audit.writer';
@@ -22,6 +22,7 @@ import { HealthController } from './health/health.controller';
 import { DomainExceptionFilter } from './http/domain-exception.filter';
 import { IdempotencyInterceptor } from './http/idempotency.interceptor';
 import { Inbox } from './inbox/inbox';
+import { lazyPort } from './lazy-port';
 import { OperationsController } from './operations/operations.controller';
 import { OperationsService } from './operations/operations.service';
 import { EventHandlerRegistry } from './outbox/event-handler.registry';
@@ -53,31 +54,6 @@ export interface KernelModuleOptions {
   identityProvider?: IdentityProviderPort;
 }
 
-function lazy<T extends object>(moduleRef: ModuleRef, token: symbol, fallback: T, warn: string): T {
-  const logger = new Logger('Kernel');
-  let warned = false;
-  const resolveImpl = (): T => {
-    try {
-      return moduleRef.get<T>(token, { strict: false });
-    } catch {
-      if (!warned) {
-        warned = true;
-        logger.warn(warn);
-      }
-      return fallback;
-    }
-  };
-  return new Proxy(fallback, {
-    get(_target, prop) {
-      const impl = resolveImpl();
-      const value = (impl as Record<PropertyKey, unknown>)[prop];
-      return typeof value === 'function'
-        ? (value as (...a: unknown[]) => unknown).bind(impl)
-        : value;
-    },
-  });
-}
-
 @Global()
 @Module({})
 export class KernelModule {
@@ -102,7 +78,7 @@ export class KernelModule {
         provide: PRINCIPAL_RESOLVER_PORT,
         inject: [ModuleRef],
         useFactory: (moduleRef: ModuleRef): PrincipalResolverPort =>
-          lazy<PrincipalResolverPort>(
+          lazyPort<PrincipalResolverPort>(
             moduleRef,
             PRINCIPAL_RESOLVER_IMPL,
             { resolve: async (_identity: VerifiedIdentity) => null },
@@ -113,7 +89,7 @@ export class KernelModule {
         provide: RELATIONSHIP_AUTHORITY_PORT,
         inject: [ModuleRef],
         useFactory: (moduleRef: ModuleRef): RelationshipAuthorityPort =>
-          lazy(
+          lazyPort(
             moduleRef,
             RELATIONSHIP_AUTHORITY_IMPL,
             denyAllRelationshipAuthority,
@@ -124,7 +100,7 @@ export class KernelModule {
         provide: TEAM_AUTHORITY_PORT,
         inject: [ModuleRef],
         useFactory: (moduleRef: ModuleRef): TeamAuthorityPort =>
-          lazy(
+          lazyPort(
             moduleRef,
             TEAM_AUTHORITY_IMPL,
             denyAllTeamAuthority,

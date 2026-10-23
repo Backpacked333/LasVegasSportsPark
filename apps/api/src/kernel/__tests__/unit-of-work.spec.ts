@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { staffPrincipal } from '../../testing/principals';
 import { createTestApp, type TestApp } from '../../testing/test-app';
 import { AuditWriter } from '../audit/audit.writer';
+import { currentTransaction } from '../database/transaction-context';
 import { UnitOfWork } from '../database/unit-of-work';
 import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
 
@@ -35,6 +36,41 @@ describe('unit of work, audit, and operational exceptions', () => {
       }),
     ).rejects.toThrow('fail');
     expect(calls).toEqual(['inside', 'committed']);
+  });
+
+  it('exposes the active transaction through async context so ports read the command snapshot', async () => {
+    const uow = t.app.get(UnitOfWork);
+    expect(currentTransaction()).toBeUndefined();
+    expect(uow.reader()).toBe(t.db);
+    await uow
+      .run(async (ctx) => {
+        expect(currentTransaction()).toBe(ctx.trx);
+        expect(uow.current()).toBe(ctx.trx);
+        expect(uow.reader()).toBe(ctx.trx);
+        // a nested async call (what a port does) still sees the transaction
+        await Promise.resolve().then(() => expect(currentTransaction()).toBe(ctx.trx));
+        // reading through the context sees this transaction's uncommitted write without a second connection
+        await ctx.trx
+          .insertInto('organizations')
+          .values({ id: '00000000-0000-7000-8000-00000000c0de', slug: 'ctx-visible', name: 'ctx' })
+          .execute();
+        const seen = await uow
+          .reader()
+          .selectFrom('organizations')
+          .select('id')
+          .where('slug', '=', 'ctx-visible')
+          .executeTakeFirst();
+        expect(seen).toBeDefined();
+        throw new Error('rollback');
+      })
+      .catch((e: Error) => expect(e.message).toBe('rollback'));
+    expect(currentTransaction()).toBeUndefined();
+    const after = await t.db
+      .selectFrom('organizations')
+      .select('id')
+      .where('slug', '=', 'ctx-visible')
+      .executeTakeFirst();
+    expect(after).toBeUndefined();
   });
 
   it('writes audit records with a principal snapshot inside the transaction', async () => {

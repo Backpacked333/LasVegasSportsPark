@@ -33,10 +33,17 @@ const Actions = defineActions({
 function service(
   grants: Array<[actor: string, subject: string, permission: string]> = [],
   captains: Array<[person: string, team: string]> = [],
+  children: string[] = [],
 ) {
+  // Mirrors the identity module's contract: an adult holds every permission over themselves;
+  // a child never holds pay or collect over themselves.
   const relationships: RelationshipAuthorityPort = {
-    hasPermission: async (_org, actor, subject, permission) =>
-      grants.some(([a, s, p]) => a === actor && s === subject && p === permission),
+    hasPermission: async (_org, actor, subject, permission) => {
+      if (actor === subject) {
+        return !(children.includes(actor) && (permission === 'pay' || permission === 'collect'));
+      }
+      return grants.some(([a, s, p]) => a === actor && s === subject && p === permission);
+    },
   };
   const teams: TeamAuthorityPort = {
     hasTeamRole: async (_org, person, team, role) =>
@@ -170,7 +177,33 @@ describe('AuthorizationService (§4.14, SPK-IAM-003)', () => {
     ).toBe(true);
   });
 
-  it('allows self when the action permits it', async () => {
+  it('never lets a child principal pay or collect for themselves, even on an allowSelf action', async () => {
+    const childPrincipal = customerPrincipal(org);
+    const svc = service([], [], [childPrincipal.personId!]);
+    const PayActions = defineActions({
+      pay: {
+        id: 'test.pay',
+        description: 'pay for a participant',
+        staffRoles: ['front_desk'],
+        allowSelf: true,
+        subjectPermission: 'pay',
+      },
+    });
+    const pay = await svc.decide(childPrincipal, PayActions.pay, {
+      type: 'order',
+      organizationId: org,
+      subjectPersonIds: [childPrincipal.personId!],
+    });
+    expect(pay.allowed).toBe(false);
+    const view = await svc.decide(childPrincipal, Actions.viewSchedule, {
+      type: 'schedule',
+      organizationId: org,
+      subjectPersonIds: [childPrincipal.personId!],
+    });
+    expect(view.allowed).toBe(true);
+  });
+
+  it('allows self when the action permits it and the relationship authority agrees', async () => {
     const adult = customerPrincipal(org);
     expect(
       (
