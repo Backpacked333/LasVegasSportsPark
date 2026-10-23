@@ -1,0 +1,266 @@
+# Cutover runbook
+
+Status legend: **Verified** = implemented and tested in this repository today (file cited). **Proposed** = engineering proposal from the specification or from this document, awaiting operator approval. **Pending decision** = needs an operator answer; the owner is named from specification §6.6. "No answer yet" never becomes "not applicable" (§6.6).
+
+Last derived from specification v2.0 (2026-10-22). Source: `docs/spec/master-specification.md` (repository copy supplied 2026-10-23).
+
+This is the cutover half of the "Cutover and recovery runbooks" deliverable of Package F (§6.5) and one of the "Operational runbooks" handoff artifacts (§6.7). It implements §5.7 (Cutover), takes its import steps from §5.4, its reconciliation steps from §5.5, and its authority rules from §5.6 through [`../package-a/authority-matrix.md`](../package-a/authority-matrix.md) (section 5 of that document maps every §5.7 element to authority rows). The recovery half is [`recovery.md`](recovery.md); the device and outage procedures are in [`outage-and-offline.md`](outage-and-offline.md). Evidence produced by executing this runbook is recorded in [`../package-a/release-evidence-ledger.md`](../package-a/release-evidence-ledger.md).
+
+## 1. Status of this runbook
+
+| Statement                                                                                                                                                                                                                                                                                                                                      | Status                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Every step in this runbook is a skeleton to be completed, rehearsed and approved before Package F. No cutover has taken place and nothing here has been rehearsed.                                                                                                                                                                             | **Proposed**                                                                                           |
+| The runbook becomes executable only at the Package F gate: "named owners accept the operating evidence and explicitly authorize launch" (§6.5).                                                                                                                                                                                                | **Proposed**                                                                                           |
+| The named decision owner is a person to be named. §6.6 fixes the role (Migration owner/operator, "Migration scope and writer authority", must be resolved before cutover); §5.7 requires a named person.                                                                                                                                       | **Pending decision** (DEC-068, Migration owner/operator)                                               |
+| The legacy system is DaySmart (§1.2). Nothing about its data model, export mechanism or contract is in this repository (`../package-a/integration-register.md`, entry 4.12). Every step that touches it is written against the §5.3 and §5.4 requirements, not against known legacy behaviour.                                                 | **Pending decision** (DEC-014, Migration owner/operator; DEC-013 for access)                           |
+| The "original platform specification" (`.docx`, §1.3 item 1) and the "existing local demonstration" (§1.4) are not in this repository. No legacy requirement identifier and no demo behaviour is cited here.                                                                                                                                   | Statement of fact about the repository                                                                 |
+| The migration module that would execute imports, external mappings, authority assignments and reconciliation reports is a scaffold (`apps/api/src/modules/migration/README.md`). The finance module (payment routing) and the entry module (arrival) are scaffolds. The tables and commands those steps name below are therefore **Proposed**. | **Verified** by reading the README files; the named tables are **Proposed**                            |
+| The scheduling module is implemented, so the schedule-authority steps name real tables and endpoints.                                                                                                                                                                                                                                          | **Verified**: `apps/api/src/modules/scheduling/README.md`, `apps/api/src/modules/scheduling/__tests__` |
+| The staff dashboard and the native customer applications are not in this repository (`docs/architecture/overview.md`, "Not in this repository"). Steps that need a screen describe the API-observable part and mark the screen part Pending.                                                                                                   | **Verified** by listing; the screens are Package E                                                     |
+
+## 2. Roles and owner placeholders
+
+Fill every `[ ]` before the rehearsal. A role without a named person is an abort condition (section 12, A8).
+
+| Role in this runbook   | Basis in the specification                                                                                  | Named person | Contact during the window | Deputy | Status                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- | ------------ | ------------------------- | ------ | --------------------------------------- |
+| Cutover decision owner | §5.7 "Named decision owner"; §6.6 Migration owner/operator; orders the switch, the abort and any handback   | [name]       | [contact]                 | [name] | **Pending decision** (DEC-068)          |
+| Finance approver       | §5.5 "Finance approves opening balances"; §6.6 Finance                                                      | [name]       | [contact]                 | [name] | **Pending decision** (DEC-067)          |
+| Program owner approver | §5.5 "Program ... owners approve active participation"; §6.6 Program manager                                | [name]       | [contact]                 | [name] | **Pending decision** (DEC-067)          |
+| League owner approver  | §5.5 "league owners approve active participation"; §6.6 League manager                                      | [name]       | [contact]                 | [name] | **Pending decision** (DEC-067)          |
+| Operations approver    | §5.5 "Operations approves the schedule"; §6.6 Operations ("Actual facilities, spaces, subdivisions, hours") | [name]       | [contact]                 | [name] | **Pending decision** (DEC-067, DEC-001) |
+| Technical lead         | §5.2 provider gates; §6.6 "Support, workload, service objectives" and "Providers and production accounts"   | [name]       | [contact]                 | [name] | **Pending decision** (DEC-015, DEC-013) |
+| Communications owner   | §6.6 "Public information and communication policy" (Operator/privacy owner); SPK-COMMS-001 channel approval | [name]       | [contact]                 | [name] | **Pending decision** (DEC-012, DEC-062) |
+| Support lead           | §6.5 Package F "Support coverage"; §5.12 "Support contacts"                                                 | [name]       | [contact]                 | [name] | **Pending decision** (DEC-015)          |
+| Legacy account holder  | §5.12 documented access; integration register entry 4.12 "Account owner"                                    | [name]       | [contact]                 | [name] | **Pending decision** (DEC-014)          |
+| Sponsor                | §6.6 "Budget, dates, acceptance authority"; holds acceptance authority for the Package F gate               | [name]       | [contact]                 | [name] | **Pending decision** (DEC-017)          |
+
+Staff role identifiers used by the kernel (`front_desk`, `league_manager`, `program_manager`, `scheduler`, `finance_operator`, `facilities_operator`, `general_manager`, `system_administrator`, `support_operator`, `coach`, `official`) are **Verified** in `packages/contracts/src/principal.ts`. The runbook roles above are people, not kernel roles; the mapping from a person to kernel roles is a staff membership (`staff_memberships`, identity module, **Verified**).
+
+## 3. Entry gates (before the cutover window opens)
+
+All items **Proposed** unless marked otherwise. Owner of the whole gate: Cutover decision owner.
+
+- [ ] Authority matrix approved: every record category and scope in `../package-a/authority-matrix.md` has an assignment with an effective instant, and the approved version is recorded in the decision log (section 13). Owner: [Migration owner/operator]. **Pending decision** (DEC-014).
+- [ ] Reconciliation approvers named for all four levels (section 7). Owner: [Sponsor]. **Pending decision** (DEC-067).
+- [ ] Provider selections approved and production accounts owned by the complex: identity (DEC-018), payments and merchant arrangement (DEC-019), messaging (DEC-020), hosting and recovery environment (DEC-021), production ownership evidence (DEC-069, §5.12). **Pending decision** (Technical lead/account owners). **Verified** guard: `AUTH_MODE=local` refuses to boot in production and `DATABASE_URL` is required in production (`apps/api/src/kernel/config.ts`; `apps/api/src/kernel/__tests__/config.spec.ts`).
+- [ ] Facility inventory accepted by Operations and loaded (`../package-a/facility-inventory.md`). **Pending decision** (DEC-001, Operations).
+- [ ] Pilot scope confirmed: which adult-league workflow and which youth-program workflow (§6.5 Package F "subject to operator confirmation"). **Pending decision** (DEC-046).
+- [ ] Rehearsed import completed on a sample extract: the same snapshot imported twice yields stable identities, no charges and no messages (SPK-AT-024; fixture in `../package-a/acceptance-fixtures.md`). Owner: [Migration owner/operator]. Pending: the migration module is a scaffold.
+- [ ] Backup restoration rehearsed, including restore after external transactions (SPK-AT-028; [`recovery.md`](recovery.md) section 5). Owner: [Technical lead]. **Pending decision** (DEC-021).
+- [ ] Staff acceptance tasks of §6.3 completed on actual workstation, tablet and scanner configurations, including "Financial reconciliation", "Export" and "Outage procedure". Owner: [Operations approver]. Pending: the staff application is Package E.
+- [ ] Support coverage rostered for the window and the following operating days. Owner: [Support lead]. **Pending decision** (DEC-015).
+- [ ] Monitoring owners assigned for every §5.11 signal ([`recovery.md`](recovery.md) section 8). **Pending decision** (DEC-015).
+- [ ] Release evidence ledger row for the cutover build is complete and accepted, with build identifier and environment (§6.8 items 11 and 12). Owner: [Technical lead], [Sponsor].
+- [ ] Conditional capabilities applicable to the migrated scope identified; any applicable capability omitted from the migrated operation has an explicit, approved operating arrangement (§1.6). **Pending decision** (DEC-016, DEC-047, Product owner).
+- [ ] Abort conditions (section 12) read and accepted by every role in section 2; decision owner and deputies available for the whole window.
+- [ ] Decision log (section 13) opened outside the Sportspark database (recovery depends on it: [`recovery.md`](recovery.md) section 5).
+
+## 4. Final snapshot (§5.7; §5.3; §5.4)
+
+Owner: [Migration owner/operator]. Evidence to retain: batch identifiers, checksums, row-outcome counts, review decisions.
+
+- [ ] Extraction window agreed with the legacy account holder; extraction credentials held by the migration owner, never in an engineer's personal account (integration register entry 4.12 "Authorized access"). Unknown export limits make the window length **Pending decision** (DEC-014).
+- [ ] Every §5.3 category extracted with external identifiers and extraction provenance: people, households, relationship evidence, accounts, programs, seasons, teams, rosters, future schedules, attendance history, results, orders, open obligations, credits, refunds, documents, communication preferences. Categories the source cannot export are listed by name with the operating arrangement that replaces them (§1.6). Names and emails are not migration keys (§5.3).
+- [ ] The snapshot is recorded as one import batch keeping source, timestamp, checksum, transformation version, row outcomes, validation errors and review decisions (§5.4). **Proposed** storage: `import_batches`, `import_rows`, `import_exceptions`, `external_mappings` (migration module scaffold).
+- [ ] The snapshot files are retained outside the Sportspark database next to the decision log, so a restore can be checked against them ([`recovery.md`](recovery.md)).
+- [ ] Import executed. Ambiguous relationships and balances enter review queues; nothing ambiguous is auto-applied (§5.4).
+- [ ] Legacy relationships are imported as evidence, never as grants (SPK-IAM-007). **Verified** rule the import must respect: a relationship permission exists only as an unrevoked, unsuspended, currently effective `access_grants` row on an active relationship (`apps/api/src/modules/identity/README.md`; `docs/architecture/overview.md`).
+- [ ] Reimport check passed: importing the same snapshot a second time changes no row, creates no payment attempt and sends no notification (SPK-AT-024). **Proposed** check: zero `payment_attempts`, zero notifications and zero `communications.*` outbox events attributable to the batch.
+- [ ] Child information extracted and stored under the privacy policy (§4.14); never written to logs or audit details (**Verified** constraint on audit records: `apps/api/src/kernel/audit/audit.writer.ts` comment and `audit_records` design, migration `0001_core_schema.sql`). Retention and wording **Pending decision** (DEC-060, Operator/privacy owner).
+
+## 5. Delta capture (§5.7; §5.4)
+
+Owner: [Migration owner/operator].
+
+- [ ] The authority matrix states which categories remain legacy-written between the final snapshot and the write freeze; only those produce deltas.
+- [ ] Deltas are captured at agreed intervals and applied through the same repeatable import with the same review queues (§5.4).
+- [ ] Rule: a delta that touches a household already activated in Sportspark, or a balance already approved by Finance, goes to review and is never auto-applied (authority matrix section 5, rule 2).
+- [ ] The final delta is captured after the write freeze (section 6) and before reconciliation sign-off (section 7).
+- [ ] Each delta batch keeps the §5.4 fields and references the snapshot batch it follows.
+- [ ] Deltas never execute charges or send historical notifications (§5.4).
+
+## 6. Write freeze (§5.7; §5.6)
+
+Owner: Cutover decision owner, executed by [Legacy account holder] and [Technical lead].
+
+- [ ] For every category and scope whose assignment moves to Sportspark at this cutover, legacy writes are disabled. How this is done in the legacy product is **Pending decision** (DEC-014).
+- [ ] Order of operations (§5.7 "Disable conflicting execution before enabling the new authoritative workflow"): registration, booking and payment collection for the scope are switched off in legacy before Sportspark enables them. A window in which neither system accepts writes is acceptable; a window in which both do is not (§5.6). Section 7 of `../package-a/authority-matrix.md` explains why periodic imports cannot close that window.
+- [ ] Freeze start instant recorded in the decision log in UTC and in facility-local time. **Verified** source of the facility zone: `facilities.timezone` (migration `0001_core_schema.sql`).
+- [ ] Legacy stays read-only for a defined retention period for reconciliation and for recovery after a restore (SPK-AT-028). Retention period **Pending decision** (DEC-014).
+- [ ] Staff told that the legacy system is read-only for those scopes (section 11).
+- [ ] A synchronized copy does not become an independent writer (§5.6): no scope is written in both systems after this instant.
+
+## 7. Reconciliation (§5.5)
+
+Owner: Cutover decision owner. Nothing becomes effective before its approver signs (authority matrix rule 9). Do not net unrelated discrepancies to make totals appear correct (§5.5): every discrepancy is listed with its own resolution.
+
+### 7.1 The four verification levels
+
+| Level | What is verified (§5.5)                                                                                               | Compared sets (§5.5)                                                      | Method                                                                                                                                                                                                                                                                                 | Approver (§5.5)                                                                                      | Status                                                 |
+| ----- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| 1     | Control totals: counts per category and scope, money sums per currency                                                | Obligations, credits, results, active rosters, future schedules, capacity | Counts from the final snapshot plus deltas versus Sportspark; money as integer minor units per currency (SPK-PAY-001; **Verified** helpers in `packages/contracts/src/money.ts`)                                                                                                       | Finance for money totals; [Migration owner/operator] for counts                                      | **Proposed**; approver **Pending decision** (DEC-067)  |
+| 2     | Record identity: each external identifier maps to exactly one internal record and each internal record has provenance | Every category                                                            | One mapping per (organization, source, external id, category); duplicates in review, never merged automatically (SPK-IAM-007 duplicate review, **Verified** `duplicate_candidates` and `person_merges` in the identity module)                                                         | [Migration owner/operator]                                                                           | **Proposed**                                           |
+| 3     | Relationships: guardians, delegates, captains and rosters exist as evidence; grants exist only where verified         | People, households, relationship evidence, rosters                        | No unverified permission (SPK-IAM-007); ambiguous relationships in review queues (§5.4); guardian verification policy applied                                                                                                                                                          | Program and league owners (active participation); Operator/privacy owner for the verification policy | **Proposed**; policy **Pending decision** (DEC-004)    |
+| 4     | Operational outcomes: the system would behave the same on day one                                                     | Active rosters, future schedules, capacity, obligations, credits, results | Owner walk-throughs of representative records; schedule conflicts checked by the scheduling module's exclusion constraints (**Verified**: `reservation_units_no_overlap`, migration `0300_scheduling_core.sql`; `apps/api/src/modules/scheduling/__tests__/schema-invariants.spec.ts`) | Finance (opening balances); Program and league owners (active participation); Operations (schedule)  | **Proposed**; approvers **Pending decision** (DEC-067) |
+
+### 7.2 Sign-off checklist
+
+- [ ] Level 1 signed for money totals by [Finance approver] at [instant].
+- [ ] Level 1 signed for counts by [Migration owner/operator] at [instant].
+- [ ] Level 2 signed by [Migration owner/operator] at [instant]; open duplicate reviews listed with owners.
+- [ ] Level 3 signed by [Program owner approver] and [League owner approver] at [instant]; open relationship reviews listed with owners.
+- [ ] Level 4: opening balances approved by [Finance approver]; active participation approved by [Program owner approver] and [League owner approver]; schedule approved by [Operations approver]; each at [instant].
+- [ ] Every unresolved discrepancy has an owner, a target date and a stated effect on scope (which household, pitch or obligation stays legacy-written until resolved).
+- [ ] Reconciliation report retained with the decision log. **Proposed** storage: `reconciliation_reports` (migration module scaffold).
+
+## 8. Payment routing (§5.7; §3.15; §4.11)
+
+Owner: [Finance approver] with [Technical lead]. The finance module is a scaffold; the payment processor is not selected.
+
+- [ ] Payment processor selected and the merchant account owned by the complex (**Pending decision**: DEC-019, DEC-069; §5.12 "Merchant accounts").
+- [ ] The instant from which new orders in the migrated scope are paid through Sportspark is recorded in the decision log.
+- [ ] Open obligations are imported as obligations with no payment attempt, and approved by Finance as opening balances (level 4). Imported credits carry source "import" (SPK-PAY-009 "Source").
+- [ ] Refunds of payments taken in legacy follow the original payment (authority matrix row 15). The procedure for historical refunds is **Pending decision** (DEC-009, Finance).
+- [ ] Legacy payment collection for the scope is disabled before Sportspark checkout is enabled (section 6 order of operations).
+- [ ] Webhook endpoint live in production and signature verification tested in the sandbox before the switch. **Verified** mechanism: `Inbox.record` is idempotent on (provider, provider event id) and handlers run once per event (`apps/api/src/kernel/inbox/inbox.ts`; `apps/api/src/kernel/__tests__/inbox.spec.ts`). **Proposed**: no HTTP endpoint receives webhooks and no adapter verifies a signature yet (integration register section 3.2).
+- [ ] Unknown payment outcomes are reconciled before any operation risks charging the customer again (SPK-PAY-007). **Verified** contract: `PaymentAttemptMachine` leaves `unknown` only on provider evidence (`packages/contracts/src/state-machines.ts`); customers see `PAYMENT_OUTCOME_UNKNOWN` with next action `await_reconciliation` (`packages/contracts/src/errors.ts`).
+- [ ] Approval before capturing a new payment (SPK-REG-007, **Proposed** default) is configured as decided (**Pending decision** DEC-028, DEC-029, DEC-030). All-or-nothing household fulfilment (SPK-REG-004, **Proposed** default) and the ten-minute hold (SPK-REG-006, **Proposed** starting duration) are configured as decided (**Pending decision** DEC-026, DEC-027).
+- [ ] Installments, where applicable (**Pending decision** DEC-073): imported plans are not retried automatically until Finance approves their authorization records (SPK-PAY-006).
+- [ ] Reconciliation owner for payment events during and after the window is named (`finance_operator` per §2.1, **Proposed**).
+- [ ] Cash and other external tenders follow the approved procedure (SPK-PAY-012; **Pending decision** DEC-009).
+
+## 9. Schedule authority switch (§5.7; §5.6; §3.7)
+
+Owner: [Operations approver] with [Technical lead]. The scheduling module is implemented; the inventory content is not in the repository.
+
+- [ ] Facility inventory loaded from `../package-a/facility-inventory.md`: facilities with their IANA timezone, resources (pitches, subdivisions with parents, rooms), conflict units, configurations, operating hours. **Verified** tables (migration `0300_scheduling_core.sql`) and endpoints (`POST /v1/resources`, `/v1/resource-configurations`, `/v1/conflict-units`, `/v1/operating-hours`; `apps/api/src/modules/scheduling/README.md`; `apps/api/src/modules/scheduling/__tests__/resources.spec.ts`).
+- [ ] Future schedules imported as events and reservations through the scheduling commands so that every physical conflict is caught at import. **Verified** guarantee: the GiST exclusion constraint on `(organization_id, conflict_unit_id, occupied)` for active reservation units; buffers are part of the occupied interval (SPK-SCHED-003; `schema-invariants.spec.ts` "buffers make 19:00 to 20:00 conflict with a game ending 19:00 that has a ten-minute cleanup").
+- [ ] Every conflict surfaced by import is resolved by Operations before publication. None is resolved automatically.
+- [ ] Non-migrated activities on a pitch that becomes Sportspark-authoritative are entered as `block` events so that the space is occupied (§5.6 "one effective scheduling authority across migrated and non-migrated activities"). **Verified** event kind `block` (`events.kind` check constraint, migration 0300). Whether this is the chosen arrangement is **Pending decision** (DEC-014, Operations).
+- [ ] Per pitch: the authority assignment's effective instant (authority matrix row 18) is recorded, and legacy booking for that pitch is disabled at the same instant.
+- [ ] Operations approves the schedule (level 4) before anything is published to customers.
+- [ ] Publication runs through `POST /v1/schedule-drafts/{id}/publish` so follow-up notices are durable and a stale or conflicting draft fails without partial publication (SPK-SCHED-006; **Verified**: `ScheduleDraftsService.publish`, `apps/api/src/modules/scheduling/__tests__/schedule-drafts.spec.ts`).
+- [ ] Whether the first publication sends notices to customers, or is marked as migrated and suppressed, is **Pending decision** (DEC-012, Operator/privacy owner). §5.4 forbids historical notifications on reimport; §5.7 is silent on first publication (section 17).
+- [ ] Known closures and maintenance restrictions loaded (**Verified** `closures` table and `POST /v1/closures`, `/apply`, `/lift`; `closures.spec.ts`). Approved restrictions affect availability (SPK-FAC-003); the facilities module that would create them from maintenance tasks is a scaffold.
+- [ ] Required rest and availability step defaults (scheduling README "Known gaps", **Proposed**) confirmed by Operations and the league manager (**Pending decision** DEC-001, DEC-002).
+
+## 10. Customer activation (§5.7; §3.1)
+
+Owner: Cutover decision owner with [Communications owner] and [Support lead].
+
+- [ ] Activation order follows the pilot scope (**Pending decision** DEC-046): one adult-league workflow and one youth-program workflow first.
+- [ ] Activation is per household: once a household activates, Sportspark is the writer for that household's categories (authority matrix rows 1, 2, 4, 17); before activation the household stays legacy-written.
+- [ ] Accounts are created through the managed identity provider (**Pending decision** DEC-018). No passwords are migrated.
+- [ ] Staff-created participants are linked through claims, not by importing access: `POST /v1/people/{id}/claims` and `POST /v1/claims/{token}/accept` (**Verified**, identity module README and `apps/api/src/modules/identity/__tests__/claims-and-accounts.spec.ts`). Account recovery never grants new family access (SPK-AT-025).
+- [ ] Guardian relationships are imported as evidence; grants are created only on verification under the approved policy (**Pending decision** DEC-004, Operator/privacy owner).
+- [ ] Activation message approved by the communications owner; channels approved (SPK-COMMS-001, **Pending decision** DEC-062); essential and promotional preferences separately represented (SPK-COMMS-007).
+- [ ] Support path for customers who cannot activate: staff assist through normal authorized commands and never need customer credentials (SPK-SUPPORT-002, SPK-SUPPORT-003).
+- [ ] Store listings under accounts controlled by the complex (**Pending decision** DEC-069); minimum supported app version and update behaviour defined (**Pending decision** DEC-061). The native applications are Package E and not in this repository.
+
+## 11. Staff communications (§5.7; SPK-UX-006)
+
+Owner: [Operations approver] with [Support lead].
+
+- [ ] Per category and scope, staff are told which system they write in and that the other is read-only (authority matrix).
+- [ ] The Today workspace shows legacy-written scopes as non-actionable in Sportspark, with "Next permitted action" naming the legacy system (SPK-UX-006). **Proposed**: the staff dashboard is Package E; the operational exception model behind the Today workspace is **Verified** (`operational_exceptions`, `apps/api/src/kernel/exceptions/operational-exceptions.service.ts`).
+- [ ] Briefings: before the freeze (what changes and when), at the switch (what is live), after the first operating day (what was observed).
+- [ ] Escalation contacts for the window printed on every staff workstation: decision owner, technical lead, support lead.
+- [ ] [`outage-and-offline.md`](outage-and-offline.md) available on every staff device. If any supervised program is in scope, the supervised-pickup outage procedure is approved first (**Pending decision** DEC-005, DEC-034, Operations).
+- [ ] Training completed through the §6.3 staff acceptance tasks on actual device configurations.
+- [ ] Officials and coaches told how assignment and attendance reporting change (SPK-UX-007), and that their access is scoped to assigned activities only.
+
+## 12. Abort conditions (§5.7)
+
+All rows **Proposed**; the set of conditions and the named owner are **Pending decision** (DEC-068). An abort before any real transaction in Sportspark is a prelaunch abort ([`recovery.md`](recovery.md) section 3). An abort after real transactions follows recovery after real transactions ([`recovery.md`](recovery.md) section 6).
+
+| Id  | Condition                                                                                                                           | How it is detected                                                                                                                              | Who decides                                            | Immediate action                                                                                                        | Recovery path                                                                                  |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| A1  | A reconciliation level is not signed for a category or scope                                                                        | Approver declines in section 7.2                                                                                                                | Cutover decision owner                                 | That category or scope does not switch; independent scopes may proceed only if the authority matrix shows no dependency | Prelaunch abort for the scope                                                                  |
+| A2  | Control totals disagree and the difference cannot be explained without netting                                                      | [Finance approver]                                                                                                                              | Cutover decision owner with Finance                    | Payment routing switch stops                                                                                            | Prelaunch abort for money categories                                                           |
+| A3  | Physical conflicts remain unresolved for a pitch                                                                                    | Import conflicts (`RESOURCE_CONFLICT`, **Verified** error code) not cleared by Operations                                                       | Cutover decision owner with Operations                 | Legacy keeps scheduling authority for that pitch                                                                        | Prelaunch abort for the pitch                                                                  |
+| A4  | Both systems accepted writes for the same scope (freeze failed)                                                                     | Staff report; duplicate records in review queues                                                                                                | Cutover decision owner                                 | Disable one side immediately; freeze both until reconciled                                                              | Prelaunch abort if no real transaction occurred; otherwise recovery after real transactions    |
+| A5  | Payment events are not verified in production, or unknown outcomes accumulate                                                       | `PAYMENT_OUTCOME_UNKNOWN` responses; `reliability.inbox_dead_letter` exceptions (**Verified** category in `inbox.ts`); provider dashboard       | Cutover decision owner with Technical lead and Finance | Stop checkout; keep or restore legacy collection                                                                        | Before the first real payment: prelaunch abort; after: recovery after real transactions        |
+| A6  | A critical defect involving protected data, financial execution, capacity, physical resource conflicts or supervised release (§6.8) | Any staff member; exception queue; support                                                                                                      | Cutover decision owner                                 | Block the affected launch scope                                                                                         | Software rollback, data restoration or recovery after real transactions as the defect requires |
+| A7  | Readiness checks fail                                                                                                               | `GET /ready` returns 503 (**Verified**: `apps/api/src/kernel/health/health.controller.ts`); outbox age growing with no dispatch; workers absent | Cutover decision owner with Technical lead             | Hold the switch                                                                                                         | Software rollback or data restoration                                                          |
+| A8  | The decision owner, a deputy or a required approver is unavailable                                                                  | Roll call at each gate                                                                                                                          | [Sponsor]                                              | Hold                                                                                                                    | None needed                                                                                    |
+| A9  | A pending decision that gates the scope is unresolved at switch time (section 15)                                                   | Section 3 checklist                                                                                                                             | Cutover decision owner                                 | Hold the affected scope; "no answer yet" is not "not applicable" (§6.6)                                                 | None needed                                                                                    |
+| A10 | Staff cannot complete a §6.3 acceptance task on the real devices during the window                                                  | [Operations approver]                                                                                                                           | Cutover decision owner                                 | Hold the workflow that task covers                                                                                      | Prelaunch abort for the workflow                                                               |
+
+## 13. Named decision owner and decision log
+
+**Proposed**. The log is kept outside the Sportspark database (a restore must not lose it; [`recovery.md`](recovery.md) section 5 re-records authority assignments from it). The named owner is **Pending decision** (DEC-068).
+
+| Decision                                     | Instant (UTC) | Facility-local instant | Decided by | Basis and evidence                 | Affected categories and scopes | Outcome       |
+| -------------------------------------------- | ------------- | ---------------------- | ---------- | ---------------------------------- | ------------------------------ | ------------- |
+| Open the cutover window                      | [ ]           | [ ]                    | [name]     | Section 3 complete                 | [ ]                            | [go/hold]     |
+| Final snapshot accepted                      | [ ]           | [ ]                    | [name]     | Batch id, checksum, reimport check | [ ]                            | [go/hold]     |
+| Write freeze                                 | [ ]           | [ ]                    | [name]     | Legacy confirmation                | [ ]                            | [done]        |
+| Reconciliation signed (per level, per scope) | [ ]           | [ ]                    | [name]     | Section 7.2                        | [ ]                            | [signed/open] |
+| Payment routing switched                     | [ ]           | [ ]                    | [name]     | Section 8                          | [ ]                            | [done/held]   |
+| Schedule authority switched (per pitch)      | [ ]           | [ ]                    | [name]     | Section 9                          | [ ]                            | [done/held]   |
+| Customer activation started                  | [ ]           | [ ]                    | [name]     | Section 10                         | [ ]                            | [done/held]   |
+| Abort or handback                            | [ ]           | [ ]                    | [name]     | Section 12 condition id            | [ ]                            | [kind]        |
+
+## 14. Sequence summary
+
+**Proposed** order. No durations are stated because none are known; the window length is set at rehearsal.
+
+1. Section 3 entry gates complete. Do not proceed unless every gate is ticked or explicitly waived in the decision log by the decision owner with the sponsor's agreement.
+2. Final snapshot extracted, imported, reimport-checked (section 4).
+3. Delta capture running for legacy-written categories (section 5).
+4. Write freeze (section 6). Do not proceed unless legacy confirms writes are disabled for the scope.
+5. Final delta captured and imported (section 5).
+6. Reconciliation at all four levels (section 7). Do not proceed for any scope whose approvers have not signed.
+7. Schedule authority switched per pitch (section 9), then payment routing switched (section 8). Do not enable a Sportspark workflow before the conflicting legacy execution is disabled.
+8. Customer activation in pilot order (section 10) with staff communications (section 11).
+9. First operating day review: open exceptions, unknown outcomes, offline synchronization age, import discrepancies (§5.11 signals, [`recovery.md`](recovery.md) section 8).
+10. Evidence filed in `../package-a/release-evidence-ledger.md` with the build identifier and environment.
+
+## 15. Pending decisions this runbook waits on
+
+| Decision (from `../package-a/decision-register.md`)                           | Owner (§6.6)                                         | Blocks              |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------- |
+| DEC-068 named cutover decision owner and abort conditions                     | Migration owner/operator                             | Sections 2, 12, 13  |
+| DEC-014 migration scope and writer authority                                  | Migration owner/operator                             | Sections 4, 5, 6, 9 |
+| DEC-067 reconciliation sign-offs                                              | Finance; Program manager; League manager; Operations | Section 7           |
+| DEC-001 actual facilities, spaces, subdivisions, hours                        | Operations                                           | Section 9           |
+| DEC-046 Package F pilot scope                                                 | Sponsor; Product owner                               | Sections 3, 10      |
+| DEC-013, DEC-018, DEC-019, DEC-020, DEC-021 providers and production accounts | Technical lead/account owners                        | Sections 3, 8, 10   |
+| DEC-069 production ownership                                                  | Technical lead/account owners; Sponsor               | Sections 3, 8, 10   |
+| DEC-004 guardian verification and child-account policy                        | Operator/privacy owner                               | Sections 7, 10      |
+| DEC-012, DEC-062 communication policy and channels                            | Operator/privacy owner                               | Sections 9, 10, 11  |
+| DEC-026, DEC-027, DEC-028, DEC-029, DEC-030 basket, hold, approval defaults   | Product and operations                               | Section 8           |
+| DEC-009 refunds, credits, transfers, cash (historical refunds)                | Finance                                              | Section 8           |
+| DEC-073 installments applicability                                            | Product owner                                        | Section 8           |
+| DEC-005, DEC-034 pickup and outage procedure                                  | Operations                                           | Section 11          |
+| DEC-015 support, workload, service objectives                                 | Technical lead/operator                              | Sections 3, 11      |
+| DEC-016, DEC-047 conditional capability applicability and omissions           | Product owner                                        | Section 3           |
+| DEC-017 budget, dates, acceptance authority                                   | Sponsor                                              | Sections 2, 3       |
+| DEC-060 retention periods and legal wording                                   | Operator/privacy owner                               | Section 4           |
+| DEC-061 mobile release definitions                                            | Technical lead/operator                              | Section 10          |
+
+## 16. What exists in code today
+
+| Capability the runbook relies on                                                                                             | Status                                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Organization scope on every table; composite foreign keys; facility timezone                                                 | **Verified**: `packages/db/migrations/0001_core_schema.sql`; `packages/db/src/core-schema.spec.ts` "facility references cannot cross organizations"                                                            |
+| Physical inventory, conflict units, operating hours, closures, events, reservations, drafts, publication                     | **Verified**: `packages/db/migrations/0300_scheduling_core.sql`; `apps/api/src/modules/scheduling/__tests__` (`resources.spec.ts`, `closures.spec.ts`, `schedule-drafts.spec.ts`, `schema-invariants.spec.ts`) |
+| Identity: persons, accounts, relationships, grants, claims, staff memberships, duplicate review                              | **Verified**: `packages/db/migrations/0100_identity_core.sql`; `apps/api/src/modules/identity/__tests__`                                                                                                       |
+| Idempotent commands (`Idempotency-Key`), stale-revision protection, audit, outbox, inbox, operations, operational exceptions | **Verified**: `apps/api/src/kernel`; `apps/api/src/kernel/__tests__`                                                                                                                                           |
+| Health and readiness endpoints                                                                                               | **Verified**: `apps/api/src/kernel/health/health.controller.ts`; `auth-and-operations.spec.ts` "serves health publicly and echoes correlation ids"                                                             |
+| Import batches, external mappings, authority assignments, reconciliation reports                                             | **Proposed**: migration module scaffold (`apps/api/src/modules/migration/README.md`)                                                                                                                           |
+| Quotes, orders, obligations, payment attempts, checkout coordinator, webhook endpoint                                        | **Proposed**: finance module scaffold (`apps/api/src/modules/finance/README.md`); no webhook endpoint or adapter exists                                                                                        |
+| Staff dashboard, Today workspace, native applications                                                                        | **Proposed**: Package E (`docs/architecture/overview.md`)                                                                                                                                                      |
+| Legacy extractor                                                                                                             | None exists; the legacy source is not accessible from this repository                                                                                                                                          |
+
+## 17. Specification ambiguities encountered
+
+| #   | Ambiguity                                                                                                                                                                                                                           | Treatment in this runbook                                                                                             |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 1   | §5.7 lists "Reconciliation" as a runbook element and §5.5 names approvers for three of the four verification levels (opening balances, active participation, schedule); no approver is named for control totals or record identity. | Finance signs money totals and the migration owner signs counts and identities; **Proposed**, recorded under DEC-067. |
+| 2   | §5.4 forbids historical notifications on reimport; §5.7 does not say whether the first publication of a migrated schedule sends customer notices.                                                                                   | Left as **Pending decision** (DEC-012) in section 9.                                                                  |
+| 3   | §5.6 requires one scheduling authority for shared pitches "across migrated and non-migrated activities" but does not say how non-migrated activities are represented in Sportspark.                                                 | `block` events proposed in section 9; arrangement **Pending decision** (DEC-014).                                     |
+| 4   | §5.7 "Delta capture" and §5.4 do not say whether a delta may change a record already approved at reconciliation.                                                                                                                    | Routed to review, never auto-applied (authority matrix rule 2); **Proposed**.                                         |
+| 5   | §5.7 requires abort conditions but names none.                                                                                                                                                                                      | Section 12 proposes ten; the approved set is **Pending decision** (DEC-068).                                          |
