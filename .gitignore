@@ -9,3 +9,6 @@ coverage/
 *.log
 .pglite/
 .vitest-result.json
+
+# Claude Code workflow worktrees and local session state
+.claude/worktrees/
