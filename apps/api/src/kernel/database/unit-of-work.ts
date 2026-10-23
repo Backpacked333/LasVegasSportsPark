@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { isSerializationFailure, type Database, type Db } from '@sportspark/db';
 import type { IsolationLevel, Transaction } from 'kysely';
 import { DATABASE } from '../tokens';
+import { currentTransaction, runWithTransaction } from './transaction-context';
 
 export type Trx = Transaction<Database>;
 
@@ -30,6 +31,16 @@ export class UnitOfWork {
 
   constructor(@Inject(DATABASE) private readonly db: Db) {}
 
+  /** The transaction of the enclosing `run` call, if any (see transaction-context.ts). */
+  current(): Trx | undefined {
+    return currentTransaction();
+  }
+
+  /** Executor for reads: the enclosing transaction when inside a command, otherwise the root database. */
+  reader(): Db | Trx {
+    return currentTransaction() ?? this.db;
+  }
+
   async run<T>(fn: (ctx: TxContext) => Promise<T>, options: UnitOfWorkOptions = {}): Promise<T> {
     const retries = options.retries ?? 3;
     let attempt = 0;
@@ -39,12 +50,14 @@ export class UnitOfWork {
         let builder = this.db.transaction();
         if (options.isolationLevel) builder = builder.setIsolationLevel(options.isolationLevel);
         const result = await builder.execute((trx) =>
-          fn({
-            trx,
-            afterCommit: (hook) => {
-              hooks.push(hook);
-            },
-          }),
+          runWithTransaction(trx, () =>
+            fn({
+              trx,
+              afterCommit: (hook) => {
+                hooks.push(hook);
+              },
+            }),
+          ),
         );
         for (const hook of hooks) {
           try {

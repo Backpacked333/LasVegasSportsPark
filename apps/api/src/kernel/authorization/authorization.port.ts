@@ -3,6 +3,9 @@ import type { GrantPermission, TeamRole } from './actions';
 /**
  * Relationship authority (identity module): does `actorPersonId` currently hold `permission`
  * over `subjectPersonId`? Must evaluate effective dates and revocations (SPK-IAM-003/006).
+ * The implementation also decides self (actor === subject): an active adult holds every
+ * permission over themselves; a child never holds pay or collect over themselves. It must read
+ * through the active transaction (`currentTransaction()`), never a second connection.
  */
 export interface RelationshipAuthorityPort {
   hasPermission(
@@ -23,8 +26,13 @@ export interface TeamAuthorityPort {
   ): Promise<boolean>;
 }
 
+/**
+ * Fallback when no identity module is registered: a person holds every permission over
+ * themselves and nothing over anyone else. The identity module refines self for children.
+ */
 export const denyAllRelationshipAuthority: RelationshipAuthorityPort = {
-  hasPermission: async () => false,
+  hasPermission: async (_organizationId, actorPersonId, subjectPersonId) =>
+    actorPersonId === subjectPersonId,
 };
 
 export const denyAllTeamAuthority: TeamAuthorityPort = {

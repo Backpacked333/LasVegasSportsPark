@@ -62,24 +62,29 @@ export class AuthorizationService {
     }
     const subjects = target.subjectPersonIds ?? [];
     if (principal.personId) {
-      if (
-        definition.allowSelf &&
-        subjects.length > 0 &&
-        subjects.every((s) => s === principal.personId)
-      ) {
-        return { allowed: true, basis: 'self' };
+      const personId = principal.personId;
+      const allSelf = subjects.length > 0 && subjects.every((s) => s === personId);
+      if (definition.allowSelf && allSelf) {
+        // Self authority is decided by the relationship port when the action names a permission:
+        // an adult holds it, a child does not hold pay/collect over themselves (SPK-IAM-003).
+        if (!definition.subjectPermission) return { allowed: true, basis: 'self' };
+        const selfOk = await this.relationships.hasPermission(
+          target.organizationId,
+          personId,
+          personId,
+          definition.subjectPermission,
+        );
+        if (selfOk) return { allowed: true, basis: 'self' };
       }
       if (definition.subjectPermission && subjects.length > 0) {
         let all = true;
         for (const subject of subjects) {
-          const ok =
-            subject === principal.personId ||
-            (await this.relationships.hasPermission(
-              target.organizationId,
-              principal.personId,
-              subject,
-              definition.subjectPermission,
-            ));
+          const ok = await this.relationships.hasPermission(
+            target.organizationId,
+            personId,
+            subject,
+            definition.subjectPermission,
+          );
           if (!ok) {
             all = false;
             break;
