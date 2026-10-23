@@ -46,13 +46,21 @@ No microservices. Module ownership is explicit (§4.2); a module never writes an
 - `operations` exposes the readable outcome of multi-step commands (`GET /v1/operations/{id}`),
   visible to the requester and to staff of the organization.
 
-## Identity and authorization — verified kernel, module pending
+## Identity and authorization — verified
 
 The kernel ships a local HS256 JWT provider for development and tests that refuses to run in
 production. The managed identity provider is a provider-selection gate (§5.2). The identity module
 registers the principal resolver and relationship authority (`PRINCIPAL_RESOLVER_IMPL`,
-`RELATIONSHIP_AUTHORITY_IMPL`); the competition module registers team authority. Until they do, the
-kernel falls back to deny-all.
+`RELATIONSHIP_AUTHORITY_IMPL`): a verified `(issuer, subject)` maps to an active account, its
+person and the staff memberships in effect at the clock; a relationship permission is exactly an
+unrevoked, unsuspended, currently effective `access_grants` row on an active relationship (see
+`apps/api/src/modules/identity/README.md`). The competition module registers team authority. Where
+a registration is absent the kernel falls back to deny-all.
+
+Two kernel limitations are worked around inside the identity module and documented in its README:
+`*_IMPL` tokens must be `useValue` providers (Nest probes the kernel's lazy proxy during
+instantiation), and the relationship-authority port is called without a transaction handle, so
+identity commands run in an AsyncLocalStorage transaction context the port falls back to.
 
 ## Data conventions — verified
 
