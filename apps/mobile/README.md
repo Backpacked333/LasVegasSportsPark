@@ -210,3 +210,9 @@ features (drawer, `@expo/ui`); pnpm installs them (4.7.1 and 0.13.0, not the SDK
 the app does not import them. Whether native autolinking would include them has not been checked:
 there is no native build here. A screen that needs them must add the SDK 57 versions (4.5.1 and
 0.10.1) as direct dependencies.
+
+## Team screens
+
+Teams, captain workspace, roster, availability, contributions, roster changes, team entries,
+standings and disputes (SCR-C-21 to SCR-C-29) are described, with their status, pending decisions
+and API gaps, in [`src/screens/teams/README.md`](src/screens/teams/README.md).
