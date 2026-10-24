@@ -61,7 +61,9 @@ export function InviteAdultForm({
   // DEC-075 (Product owner): whether supervised pickup is used at all. While pending (null) the
   // pickup wording is not presented as decided; when decided "not used", pickup is not offered.
   const pickup = useApp().services.config.supervisedPickup ?? null;
-  const permissions = GRANT_PERMISSIONS.filter((g) => pickup !== false || g.permission !== 'collect');
+  const permissions = GRANT_PERMISSIONS.filter(
+    (g) => pickup !== false || g.permission !== 'collect',
+  );
   const [kind, setKind] = useState<RelationshipKind>('guardian');
   const [contactKind, setContactKind] = useState<ContactKind>('email');
   const [contactValue, setContactValue] = useState('');
@@ -282,8 +284,8 @@ function IssuedInvitation({
       ) : closed && revoke.error ? (
         <>
           <Paragraph>
-            This invitation changed since you created it: it may have been accepted, or withdrawn
-            on another device. It can no longer be withdrawn here.
+            This invitation changed since you created it: it may have been accepted, or withdrawn on
+            another device. It can no longer be withdrawn here.
           </Paragraph>
           <Paragraph muted>
             {`Error code: ${revoke.error.code}${revoke.error.correlationId ? `. Reference: ${revoke.error.correlationId}` : ''}`}

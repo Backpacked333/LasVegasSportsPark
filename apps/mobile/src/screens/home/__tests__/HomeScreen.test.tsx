@@ -21,8 +21,6 @@ import {
   ok,
   OFFERING_TWO,
   offering,
-  OPERATION,
-  operation,
   person,
   PLACEMENT,
   scheduleChange,

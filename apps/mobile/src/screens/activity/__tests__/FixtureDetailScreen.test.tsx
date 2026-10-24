@@ -108,7 +108,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     ).toBeOnTheScreen();
   });
 
-  it('SPK-CAP-002: a player who is not captain sees no readiness detail, and only their own side\'s availability', async () => {
+  it("SPK-CAP-002: a player who is not captain sees no readiness detail, and only their own side's availability", async () => {
     renderFixture({
       'GET /team-entries/{id}': (req) =>
         req.params.id === HOME_ENTRY
@@ -122,7 +122,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(screen.queryByText(/3 available/)).toBeNull();
   });
 
-  it('SPK-CAP-002: a captain sees only their side and issues about it, never the opponent\'s roster issues', async () => {
+  it("SPK-CAP-002: a captain sees only their side and issues about it, never the opponent's roster issues", async () => {
     renderFixture({
       'GET /fixtures/{id}/readiness': ok(
         readiness({

@@ -59,10 +59,7 @@ function WaitlistList() {
           const entry = record.data;
           // Only a protected NOT_FOUND or a permission restriction reads as not available; a
           // temporary failure keeps its code and "Try again" (SPK-UX-008).
-          if (
-            !entry ||
-            (record.error && presentationForError(record.error) === 'unavailable')
-          ) {
+          if (!entry || (record.error && presentationForError(record.error) === 'unavailable')) {
             if (record.error && presentationForError(record.error) !== 'unavailable') {
               return (
                 <View key={id} testID={`waitlist-row-${id}`}>

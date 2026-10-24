@@ -66,8 +66,11 @@ describe('SCR-C-28 StandingsScreen', () => {
   });
 
   it('SPK-UX-009: at large text sizes each row is stacked text instead of fixed-width cells', async () => {
+    // The component reads useWindowDimensions from this same module object.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reactNative = require('react-native') as { useWindowDimensions: () => unknown };
     const dimensions = jest
-      .spyOn(require('react-native'), 'useWindowDimensions')
+      .spyOn(reactNative, 'useWindowDimensions')
       .mockReturnValue({ width: 390, height: 844, scale: 3, fontScale: 1.6 });
     const app = createTeamsTestApp({ routes: routes() });
     render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });

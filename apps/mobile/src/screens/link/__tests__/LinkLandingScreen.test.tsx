@@ -144,7 +144,9 @@ describe('SCR-C-39 LinkLanding', () => {
       { wrapper: app.wrapper },
     );
     expect(await screen.findByText('The last place was taken.')).toBeOnTheScreen();
-    expect(screen.getByText('Error code: CAPACITY_UNAVAILABLE. Reference: corr-1')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Error code: CAPACITY_UNAVAILABLE. Reference: corr-1'),
+    ).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Contact support' }));
     expect(navigate).toHaveBeenCalledWith('/support');
   });

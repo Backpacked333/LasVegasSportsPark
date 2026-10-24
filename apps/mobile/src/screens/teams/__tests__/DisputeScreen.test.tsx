@@ -100,15 +100,19 @@ describe('SCR-C-29 DisputeScreen', () => {
       ),
     ).toBeOnTheScreen();
     expect(app.requestsTo('POST', '/fixtures/{id}/disputes')).toHaveLength(0);
-    expect(
-      screen.getByLabelText(/^Evidence 1: reference/),
-    ).toHaveProp('value', 'https://video.example.test/clip-7');
+    expect(screen.getByLabelText(/^Evidence 1: reference/)).toHaveProp(
+      'value',
+      'https://video.example.test/clip-7',
+    );
   });
 
   it('SPK-UX-008: a failed read of the existing disputes shows its code, never "no disputes"', async () => {
     renderDispute({
       'GET /fixtures/{id}/disputes': () =>
-        fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' })),
+        fakeResponse(
+          500,
+          apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+        ),
     });
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.queryByText('No disputes for this game yet.')).toBeNull();

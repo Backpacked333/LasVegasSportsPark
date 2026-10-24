@@ -80,7 +80,9 @@ describe('SCR-C-23 RosterScreen', () => {
   it('SPK-UX-009: roster completeness is stated in words, not by colour or glyph alone', async () => {
     renderRoster();
     expect(
-      await screen.findByLabelText(/^Roster (not )?complete: \d+ on the roster \(minimum \d+, maximum \d+\)$/),
+      await screen.findByLabelText(
+        /^Roster (not )?complete: \d+ on the roster \(minimum \d+, maximum \d+\)$/,
+      ),
     ).toBeOnTheScreen();
   });
 
@@ -283,7 +285,10 @@ describe('SCR-C-23 RosterScreen', () => {
     renderRoster({
       routes: routes({
         'GET /me': () =>
-          fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' })),
+          fakeResponse(
+            500,
+            apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+          ),
       }),
     });
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();

@@ -213,7 +213,9 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
   });
 
   it('SPK-REG-010: "No money changes" that became a charge on the re-preview is never committed unseen', async () => {
-    let current = transferPreview({ financialConsequence: consequence({ kind: 'none', amountMinor: 0 }) });
+    let current = transferPreview({
+      financialConsequence: consequence({ kind: 'none', amountMinor: 0 }),
+    });
     const app = renderTransfer({
       'POST /enrollments/{id}/transfer': transferHandler(() => current),
     });

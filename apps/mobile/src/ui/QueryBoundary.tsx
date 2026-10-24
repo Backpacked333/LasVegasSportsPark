@@ -51,7 +51,11 @@ export function QueryBoundary<T>({
   if (query.data === undefined) {
     if (query.error) {
       return (
-        <QueryErrorView error={query.error} onRetry={retry} unavailableOffline={unavailableOffline} />
+        <QueryErrorView
+          error={query.error}
+          onRetry={retry}
+          unavailableOffline={unavailableOffline}
+        />
       );
     }
     if (query.fetchStatus === 'paused' || offline) {

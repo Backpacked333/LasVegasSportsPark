@@ -69,9 +69,9 @@ export function usePendingRegistrations(me: Schema<'Me'> | undefined): PendingRe
   for (const o of ops) if (o.data) byId.set(o.data.id, o.data);
 
   // The checkout's state comes from the records the API links: basket, then its order.
-  const basketKey = [
-    ...new Set(enrollments.flatMap((e) => (e.basketId ? [e.basketId] : []))),
-  ].join(',');
+  const basketKey = [...new Set(enrollments.flatMap((e) => (e.basketId ? [e.basketId] : [])))].join(
+    ',',
+  );
   const basketRequests = useMemo(
     () =>
       basketKey

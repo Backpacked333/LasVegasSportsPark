@@ -16,8 +16,6 @@ import {
   OFFERING_TWO,
   offering,
   ok,
-  operation,
-  OPERATION,
   person,
   scheduleChange,
   SELF,
@@ -26,7 +24,6 @@ import {
   session,
   BASKET,
   checkoutBasket,
-  checkoutOrder,
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { SessionDetailScreen } from '../SessionDetailScreen';

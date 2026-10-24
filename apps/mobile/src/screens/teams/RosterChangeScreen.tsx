@@ -299,8 +299,8 @@ function RemovePlayer({
         />
       ) : change.data && submitted ? (
         <Body muted>
-          The roster the facility returned does not show this removal yet. Reload to see the
-          current roster.
+          The roster the facility returned does not show this removal yet. Reload to see the current
+          roster.
         </Body>
       ) : null}
       {change.error ? (

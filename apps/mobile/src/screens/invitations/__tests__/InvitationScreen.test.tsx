@@ -151,7 +151,10 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
   it('SPK-IAM-004: a household invitation says, per child, what was left out (only one child lost a permission)', async () => {
     holdLinkSecret('invitation', TOKEN, INVITATION);
     const household = familyAccepted();
-    household.invitation.scope = { type: 'household', householdId: '0192f1a0-0000-7000-8000-00000000f001' } as never;
+    household.invitation.scope = {
+      type: 'household',
+      householdId: '0192f1a0-0000-7000-8000-00000000f001',
+    } as never;
     household.invitation.requestedPermissions = ['view', 'pay'];
     household.grants = [grant('view', CHILD), grant('pay', CHILD), grant('view', CHILD_TWO)];
     household.droppedPermissions = ['pay'];

@@ -246,7 +246,9 @@ describe('SCR-C-11 BasketScreen', () => {
   it('a checkout whose answer never arrived (app closed mid-payment) is found again from the basket', async () => {
     renderBasket({
       progress: { basketId: IDS.basket, quoteId: IDS.quote, pendingCheckoutQuoteId: IDS.quote },
-      routes: routes({ 'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) } }),
+      routes: routes({
+        'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) },
+      }),
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Check your payment' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/checkout/${IDS.quote}`);

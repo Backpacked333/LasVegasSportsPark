@@ -222,7 +222,9 @@ function IntentChooser({ offering }: { offering: Offering }) {
             }
             onPress={() => void submit()}
             disabled={pending.length === 0 || offline || (basketUnknown && !current.error)}
-            busy={working || (basketUnknown && !current.error && current.fetchStatus === 'fetching')}
+            busy={
+              working || (basketUnknown && !current.error && current.fetchStatus === 'fetching')
+            }
           />
           {offline ? (
             <Body muted>Adding to your basket needs a connection. Your choices are kept.</Body>

@@ -74,7 +74,10 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
   it('SPK-UX-008: a failed order read shows its code, not "not available to this account"', async () => {
     renderDetail(enrollment({ orderRef: IDS.order }), {
       'GET /orders/{id}': () =>
-        fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' })),
+        fakeResponse(
+          500,
+          apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+        ),
     });
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.queryByText(/not available to this account/)).toBeNull();

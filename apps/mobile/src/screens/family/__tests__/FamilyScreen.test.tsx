@@ -156,7 +156,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
     expect(within(form).getByText(/in the form name@example.com/)).toBeOnTheScreen();
     // SPK-UX-009: the refusal is announced, like a field error.
-    expect(within(form).getByRole('alert', { name: /Choose at least one permission to pass on/ })).toBeOnTheScreen();
+    expect(
+      within(form).getByRole('alert', { name: /Choose at least one permission to pass on/ }),
+    ).toBeOnTheScreen();
     expect(within(form).getByLabelText('Their email address')).toHaveProp('value', 'jo-example');
     expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
   });
@@ -206,10 +208,14 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(within(form).getByRole('radio', { name: /^Delegate/ })).toBeOnTheScreen();
     expect(within(form).queryByText(/supervised sessions \(pickup\)/)).toBeNull();
     expect(
-      within(form).getByText(/Supervised pickup is not available yet: it depends on DEC-075, DEC-005/),
+      within(form).getByText(
+        /Supervised pickup is not available yet: it depends on DEC-075, DEC-005/,
+      ),
     ).toBeOnTheScreen();
     expect(
-      within(form).getByText(/Choosing how long an invitation stays open is not available yet: it depends on POL-044/),
+      within(form).getByText(
+        /Choosing how long an invitation stays open is not available yet: it depends on POL-044/,
+      ),
     ).toBeOnTheScreen();
     expect(within(form).queryByText(/invitation policy sets how long/)).toBeNull();
   });
