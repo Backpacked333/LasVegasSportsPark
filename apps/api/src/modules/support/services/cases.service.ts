@@ -42,6 +42,7 @@ import {
   type ActionDefinition,
   type Clock,
   type Trx,
+  listFacilityScope,
 } from '../../../kernel';
 import {
   AccessReviewsService,
@@ -377,11 +378,15 @@ export class CasesService implements SupportCasesPort {
     if (query.ownerQueue) q = q.where('owner_queue', '=', query.ownerQueue);
     if (query.subjectPersonId) q = q.where('subject_person_id', '=', query.subjectPersonId);
     if (query.facilityId) q = q.where('facility_id', '=', query.facilityId);
-    // Facility-scoped staff see cases of their facilities and organization-wide cases (§4.3).
-    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      const facilityIds = principal.facilityIds;
+    // Facility-scoped staff see cases of their facilities and organization-wide cases (§4.3),
+    // through the roles that hold the read action (§4.14, identity-05).
+    const scope = listFacilityScope(principal, SupportActions.readCase);
+    if (scope) {
+      const facilityIds = [...scope];
       q = q.where((eb) =>
-        eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)]),
+        facilityIds.length > 0
+          ? eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)])
+          : eb('facility_id', 'is', null),
       );
     }
     if (cursor) {

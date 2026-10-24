@@ -43,6 +43,7 @@ import {
   type Clock,
   type HandlerContext,
   type Trx,
+  listFacilityScope,
 } from '../../../kernel';
 import type { CatalogEvents } from '../../catalog';
 import type { CompetitionEvents } from '../../competition';
@@ -481,10 +482,13 @@ export class AssignmentsService {
     if (query.status) q = q.where('status', '=', query.status);
     if (query.from) q = q.where('scheduled_end', '>', new Date(query.from));
     if (query.to) q = q.where('scheduled_start', '<', new Date(query.to));
-    // Staff limited to some facilities see those facilities' assignments only (§4.3).
+    // Staff limited to some facilities see those facilities' assignments only (§4.3), through the
+    // roles that hold the view action (§4.14, identity-05).
     const selfOnly = query.personId !== undefined && query.personId === principal.personId;
-    if (!selfOnly && principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      q = q.where('facility_id', 'in', principal.facilityIds);
+    const scope = selfOnly ? null : listFacilityScope(principal, WorkforceActions.viewAssignments);
+    if (scope) {
+      q =
+        scope.length > 0 ? q.where('facility_id', 'in', [...scope]) : q.where(sql<boolean>`false`);
     }
     if (cursor) {
       q = q.where(

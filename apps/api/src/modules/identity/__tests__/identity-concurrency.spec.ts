@@ -109,14 +109,29 @@ describe('identity commands under concurrency (§4.9, SPK-IAM-002, SPK-IAM-004)'
   it('SPK-IAM-002: one guardian claim token makes one guardian when two accounts claim at once', async () => {
     const staff = await createStaffMemberFixture(t, { roles: ['front_desk'] });
     const child = await createPersonFixture(t, { kind: 'child' });
+    const email = `claim-${newId()}@example.test`;
     const issued = await t.http
       .post(`/v1/people/${child}/claims`)
       .set(await authHeaderForPerson(t, staff.personId))
       .set('Idempotency-Key', key())
-      .send({ kind: 'guardian', requestedPermissions: ['view', 'collect'] });
+      .send({
+        kind: 'guardian',
+        requestedPermissions: ['view', 'collect'],
+        recipientContact: { kind: 'email', value: email },
+      });
     expect(issued.status).toBe(201);
     const a = await adultWithAccount();
     const b = await adultWithAccount();
+    // both claimants hold the claim's contact point, so both pass the recipient check (SPK-IAM-002)
+    for (const holder of [a, b]) {
+      await createContactPointFixture(t, {
+        personId: holder.personId,
+        kind: 'email',
+        value: email,
+        verified: true,
+        isPrimary: false,
+      });
+    }
     const claim = (header: Record<string, string>) =>
       t.http
         .post(`/v1/claims/${issued.body.token}/accept`)

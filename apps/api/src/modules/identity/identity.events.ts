@@ -92,6 +92,10 @@ export const IdentityEvents = {
     'identity.claim_issued',
     z.object({ claimId: z.uuid(), subjectPersonId: z.uuid(), kind: z.string() }),
   ),
+  claimRevoked: defineEvent(
+    'identity.claim_revoked',
+    z.object({ claimId: z.uuid(), subjectPersonId: z.uuid(), reason: z.string() }),
+  ),
   claimAccepted: defineEvent(
     'identity.claim_accepted',
     z.object({

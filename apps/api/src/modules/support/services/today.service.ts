@@ -10,12 +10,14 @@ import {
   type TodaySource,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
+import { sql, type SqlBool } from 'kysely';
 import {
   AuthorizationService,
   CLOCK,
   DATABASE,
   OperationalExceptions,
   type Clock,
+  listFacilityScope,
 } from '../../../kernel';
 import { MatchActions, ReadinessService } from '../../competition';
 import { FacilitiesActions, RestrictionsService } from '../../facilities';
@@ -492,8 +494,10 @@ export class TodayService {
       q = q.where('id', '=', facilityId);
     } else {
       q = q.where('status', '=', 'active');
-      if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-        q = q.where('id', 'in', principal.facilityIds);
+      // §4.3, §4.14: the facilities of the roles that hold the Today read action (identity-05).
+      const scope = listFacilityScope(principal, SupportActions.readToday);
+      if (scope) {
+        q = scope.length > 0 ? q.where('id', 'in', [...scope]) : q.where(sql<SqlBool>`false`);
       }
     }
     const rows = await q.execute();

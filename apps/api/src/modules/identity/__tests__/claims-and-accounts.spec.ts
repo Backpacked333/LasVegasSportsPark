@@ -224,8 +224,174 @@ describe('claims and accounts (SPK-IAM-002, SPK-AT-025)', () => {
       .post(`/v1/people/${people.child.personId}/claims`)
       .set(await authHeaderForPerson(t, people.adult.personId))
       .set('Idempotency-Key', key())
-      .send({ kind: 'guardian', requestedPermissions: ['view'] });
+      .send({
+        kind: 'guardian',
+        requestedPermissions: ['view'],
+        recipientContact: { kind: 'email', value: 'stranger@example.test' },
+      });
     expect(res.status).toBe(404);
+  });
+
+  it('SPK-IAM-002: a self claim cannot carry an unverifiable recipient', async () => {
+    const people = await createOrganizationPeople(t);
+    const staff = await authHeaderForPerson(t, people.staff.personId);
+    const parent = await createPersonFixture(t, { kind: 'adult' });
+    const child = await createPersonFixture(t, { kind: 'child' });
+    await createContactPointFixture(t, {
+      personId: parent,
+      kind: 'email',
+      value: `parent-${newId()}@example.test`,
+      verified: true,
+    });
+    const bound = await t.http
+      .post(`/v1/people/${parent}/claims`)
+      .set(staff)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self', recipientContact: { kind: 'email', value: 'parent@example.test' } });
+    expect(bound.status).toBe(400);
+    expect(bound.body.code).toBe('VALIDATION_FAILED');
+
+    // A self claim stored with a recipient (issued before this rule) fails closed: an account
+    // without a person holds no verified contact point, so it can never take over the person.
+    const issued = await t.http
+      .post(`/v1/people/${parent}/claims`)
+      .set(staff)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self' });
+    expect(issued.status).toBe(201);
+    expect(issued.body.recipientContact).toBeNull();
+    await t.db
+      .updateTable('claims')
+      .set({ recipient_contact_kind: 'email', recipient_contact_value: 'parent@example.test' })
+      .where('id', '=', issued.body.id)
+      .execute();
+    const stranger = await createAccountFixture(t, { personId: null });
+    const takeover = await t.http
+      .post('/v1/claims/accept')
+      .set(await authHeaderForAccount(t, stranger.id))
+      .set('Idempotency-Key', key())
+      .send({ token: issued.body.token });
+    expect(takeover.status).toBe(403);
+    const account = await t.db
+      .selectFrom('accounts')
+      .select('person_id')
+      .where('id', '=', stranger.id)
+      .executeTakeFirstOrThrow();
+    expect(account.person_id).toBeNull();
+    expect(await authority.hasPermission(t.organizationId, parent, child, 'view')).toBe(false);
+  });
+
+  it('SPK-IAM-002: a guardian claim requires a recipient and refuses other accounts', async () => {
+    const people = await createOrganizationPeople(t);
+    const staff = await authHeaderForPerson(t, people.staff.personId);
+    const child = await createPersonFixture(t, { kind: 'child' });
+    const unbound = await t.http
+      .post(`/v1/people/${child}/claims`)
+      .set(staff)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'guardian', requestedPermissions: ['view', 'collect'] });
+    expect(unbound.status).toBe(400);
+    expect(unbound.body.code).toBe('VALIDATION_FAILED');
+    const email = `guardian-${newId()}@example.test`;
+    const issued = await t.http
+      .post(`/v1/people/${child}/claims`)
+      .set(staff)
+      .set('Idempotency-Key', key())
+      .send({
+        kind: 'guardian',
+        requestedPermissions: ['view', 'collect'],
+        recipientContact: { kind: 'email', value: email },
+      });
+    expect(issued.status).toBe(201);
+    expect(issued.body.recipientContact).toEqual({ kind: 'email', value: email });
+    const strangerPerson = await createPersonFixture(t, { kind: 'adult' });
+    const stranger = await createAccountFixture(t, { personId: strangerPerson });
+    const denied = await t.http
+      .post('/v1/claims/accept')
+      .set(await authHeaderForAccount(t, stranger.id))
+      .set('Idempotency-Key', key())
+      .send({ token: issued.body.token });
+    expect(denied.status).toBe(403);
+    expect(await authority.hasPermission(t.organizationId, strangerPerson, child, 'collect')).toBe(
+      false,
+    );
+    const guardian = await createPersonFixture(t, { kind: 'adult' });
+    const guardianAccount = await createAccountFixture(t, { personId: guardian });
+    await createContactPointFixture(t, {
+      personId: guardian,
+      kind: 'email',
+      value: email,
+      verified: true,
+    });
+    const accepted = await t.http
+      .post('/v1/claims/accept')
+      .set(await authHeaderForAccount(t, guardianAccount.id))
+      .set('Idempotency-Key', key())
+      .send({ token: issued.body.token });
+    expect(accepted.status).toBe(200);
+    expect(await authority.hasPermission(t.organizationId, guardian, child, 'collect')).toBe(true);
+  });
+
+  it('SPK-IAM-002: a revoked claim cannot be accepted', async () => {
+    const people = await createOrganizationPeople(t);
+    const staff = await authHeaderForPerson(t, people.staff.personId);
+    const adult = await createPersonFixture(t, { kind: 'adult' });
+    const issued = await t.http
+      .post(`/v1/people/${adult}/claims`)
+      .set(staff)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self' });
+    expect(issued.status).toBe(201);
+    const revoke = (header: Record<string, string>, body: Record<string, unknown>) =>
+      t.http
+        .post(`/v1/claims/${issued.body.id}/revoke`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send(body);
+    // a customer may not revoke, and a denial reads like a missing claim (§4.10)
+    const byCustomer = await revoke(await authHeaderForPerson(t, people.adult.personId), {
+      reason: 'not mine',
+    });
+    expect(byCustomer.status).toBe(404);
+    expect((await revoke(staff, {})).status).toBe(400);
+    const stale = await revoke(staff, {
+      reason: 'token sent to the wrong family',
+      expectedRevision: 2,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    const revoked = await revoke(staff, {
+      reason: 'token sent to the wrong family',
+      expectedRevision: 1,
+    });
+    expect(revoked.status).toBe(200);
+    expect(revoked.body).toMatchObject({ id: issued.body.id, status: 'revoked', revision: 2 });
+    expect(revoked.body.revokedAt).not.toBeNull();
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'reason'])
+      .where('target_id', '=', issued.body.id)
+      .where('action', '=', 'identity.revoke_claim')
+      .executeTakeFirstOrThrow();
+    expect(audit.reason).toBe('token sent to the wrong family');
+    const event = await t.db
+      .selectFrom('outbox_events')
+      .select('payload')
+      .where('event_type', '=', 'identity.claim_revoked')
+      .where('aggregate_id', '=', issued.body.id)
+      .executeTakeFirstOrThrow();
+    expect(event.payload).toMatchObject({ claimId: issued.body.id, subjectPersonId: adult });
+
+    const account = await createAccountFixture(t, { personId: null });
+    const accepted = await t.http
+      .post('/v1/claims/accept')
+      .set(await authHeaderForAccount(t, account.id))
+      .set('Idempotency-Key', key())
+      .send({ token: issued.body.token });
+    expect(accepted.status).toBe(409);
+    expect(accepted.body.code).toBe('INVALID_TRANSITION');
+    // a second revoke is an invalid transition, never a second audit entry
+    expect((await revoke(staff, { reason: 'again' })).status).toBe(409);
   });
 
   it('SPK-AT-025: account recovery re-links the account and restores only verified prior access', async () => {

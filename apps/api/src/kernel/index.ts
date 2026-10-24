@@ -15,6 +15,7 @@ export * from './auth/auth.guard';
 export * from './authorization/actions';
 export * from './authorization/authorization.port';
 export * from './authorization/authorization.service';
+export * from './authorization/facility-scope';
 export * from './http/request-context';
 export * from './http/correlation.middleware';
 export * from './http/domain-exception.filter';

@@ -105,7 +105,7 @@ describe('PRINCIPAL_RESOLVER_IMPL (SPK-IAM-001, §4.8, §4.14)', () => {
     expect(await resolver.resolve(identity(account.subject))).toBeNull();
   });
 
-  it('a membership without facility scope widens a scoped one to the whole organization', async () => {
+  it('identity-05 (§2.1, §4.14): a membership without facility scope widens only its own roles, never a scoped role', async () => {
     const person = await createPersonFixture(t, { kind: 'adult' });
     const scoped = await createStaffMemberFixture(t, {
       personId: person,
@@ -116,7 +116,13 @@ describe('PRINCIPAL_RESOLVER_IMPL (SPK-IAM-001, §4.8, §4.14)', () => {
       t.facilityId,
     ]);
     await createStaffMemberFixture(t, { personId: person, roles: ['general_manager'] });
-    expect((await resolver.resolve(identity(scoped.accountId)))?.facilityIds).toEqual([]);
+    const principal = await resolver.resolve(identity(scoped.accountId));
+    // the union (display) is the whole organization, but front_desk keeps its facility
+    expect(principal?.facilityIds).toEqual([]);
+    expect(principal?.staffScopes).toEqual([
+      { role: 'front_desk', facilityIds: [t.facilityId] },
+      { role: 'general_manager', facilityIds: [] },
+    ]);
   });
 
   it('GET /v1/me reports the principal, person, memberships and current authorities', async () => {

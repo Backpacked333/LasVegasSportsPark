@@ -148,7 +148,15 @@ export class AccessReviewsService {
     const opener = row.opened_by as { accountId?: string | null };
     const isOpener = principal.accountId !== null && opener.accountId === principal.accountId;
     if (!decision.allowed && !isOpener) throw errors.protectedNotFound('access_review');
-    return this.detail(this.db, organizationId, id);
+    const review = await this.detail(this.db, organizationId, id);
+    if (decision.allowed) return review;
+    // SPK-IAM-005 (restricted review workflow), §4.14 field-level authorization, §4.7 invariant 1:
+    // an opener who is not a review decider (a customer, or desk staff without the read action)
+    // sees their own submission (reason, parties, evidence) and the review's progress (status and
+    // dates), never staff decision notes, affected grants (which can belong to another household),
+    // the owning staff member or the recorded outcome. How parties learn the outcome is a pending
+    // operator decision and goes through communications, not this read.
+    return { ...review, ownerPersonId: null, outcome: null, decisions: [] };
   }
 
   async decide(

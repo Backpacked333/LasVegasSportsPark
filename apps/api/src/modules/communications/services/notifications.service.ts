@@ -31,6 +31,7 @@ import {
   type ActionDefinition,
   type Clock,
   type Trx,
+  listFacilityScope,
 } from '../../../kernel';
 import { PERSON_DIRECTORY_PORT, PeopleService, type PersonDirectoryPort } from '../../identity';
 import { CommunicationsActions } from '../communications.actions';
@@ -729,10 +730,14 @@ export class NotificationsService {
     if (query.facilityId) q = q.where('facility_id', '=', query.facilityId);
     // §4.14 object-level authorization: a facility-scoped staff reader lists only organization-wide
     // notices and notices of their own facilities, the same rows get()/deliveries() would allow.
-    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      const facilityIds = [...principal.facilityIds];
+    // The scope is that of the roles holding the read action (identity-05).
+    const scope = listFacilityScope(principal, CommunicationsActions.readNotification);
+    if (scope) {
+      const facilityIds = [...scope];
       q = q.where((eb) =>
-        eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)]),
+        facilityIds.length > 0
+          ? eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)])
+          : eb('facility_id', 'is', null),
       );
     }
     if (cursor) {
@@ -835,8 +840,7 @@ export class NotificationsService {
       });
     }
     if (
-      principal.kind === 'staff' &&
-      principal.facilityIds.length > 0 &&
+      listFacilityScope(principal, action) !== null &&
       audience.staffRoles.length > 0 &&
       audience.facilityId === null
     ) {

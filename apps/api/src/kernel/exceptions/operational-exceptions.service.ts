@@ -5,6 +5,7 @@ import { sql, type SqlBool } from 'kysely';
 import { AuditWriter } from '../audit/audit.writer';
 import { defineActions } from '../authorization/actions';
 import { AuthorizationService } from '../authorization/authorization.service';
+import { listFacilityScope } from '../authorization/facility-scope';
 import type { Clock } from '../clock';
 import { ensureUpdated } from '../database/revision';
 import type { Trx } from '../database/unit-of-work';
@@ -197,14 +198,19 @@ export class OperationalExceptions {
       .orderBy('opened_at');
     if (filter.facilityId) {
       query = query.where('facility_id', '=', filter.facilityId);
-    } else if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
+    } else {
       // §4.3, §4.14, SPK-UX-006 ("within the viewer's scope"): facility-scoped staff see their
       // facilities' exceptions plus organization-wide ones (facility_id null), the same scope
       // AuthorizationService.decide grants them for a single exception.
-      const facilityIds = principal.facilityIds;
-      query = query.where((eb) =>
-        eb.or([eb('facility_id', 'in', facilityIds), eb('facility_id', 'is', null)]),
-      );
+      const scope = listFacilityScope(principal, ExceptionActions.read);
+      if (scope) {
+        const facilityIds = [...scope];
+        query = query.where((eb) =>
+          facilityIds.length > 0
+            ? eb.or([eb('facility_id', 'in', facilityIds), eb('facility_id', 'is', null)])
+            : eb('facility_id', 'is', null),
+        );
+      }
     }
     if (filter.ownerQueue) query = query.where('owner_queue', '=', filter.ownerQueue);
     return query.execute();
