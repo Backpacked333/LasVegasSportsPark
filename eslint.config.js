@@ -4,10 +4,20 @@ const tseslint = require('typescript-eslint');
 
 module.exports = tseslint.config(
   {
-    ignores: ['**/node_modules/**', '**/dist/**', '**/coverage/**', 'docs/api/openapi.json'],
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/coverage/**',
+      '.claude/**',
+      'docs/api/openapi.json',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ['**/*.ts', '**/*.mjs'],
+    languageOptions: { parserOptions: { tsconfigRootDir: __dirname } },
+  },
   {
     files: ['**/*.ts'],
     rules: {
