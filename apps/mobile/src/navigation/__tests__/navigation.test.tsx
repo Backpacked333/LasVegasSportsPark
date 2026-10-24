@@ -71,7 +71,7 @@ describe('primary navigation (SPK-UX-002)', () => {
   });
 
   it('resolves an unknown link to "Link not available" instead of following it (SCR-C-39)', async () => {
-    renderApp('/payments/somewhere-unknown');
+    renderApp('/no-such-screen/somewhere-unknown');
     expect(await screen.findByLabelText('Link not available')).toBeOnTheScreen();
   });
 });

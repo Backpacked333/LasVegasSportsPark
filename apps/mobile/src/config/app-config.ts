@@ -26,6 +26,18 @@ export interface AppConfig {
    * the pending state instead of inventing a field list.
    */
   placementFields?: readonly string[] | null;
+  /**
+   * How customers reach the facility for help (SCR-C-38). Facility facts, not app defaults:
+   * unset until the operator configures them (support coverage is DEC-015).
+   */
+  supportContact?: SupportContact | null;
+}
+
+export interface SupportContact {
+  phone: string | null;
+  email: string | null;
+  /** Free text, e.g. the desk's opening hours, exactly as configured. */
+  hours: string | null;
 }
 
 interface Extra {
@@ -33,6 +45,19 @@ interface Extra {
   staleDataThresholdMinutes?: unknown;
   organizationSlug?: unknown;
   placementFields?: unknown;
+  supportContact?: unknown;
+}
+
+function text(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+/** The configured support contact, or null when nothing is configured. */
+export function readSupportContact(value: unknown): SupportContact | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const contact = { phone: text(v.phone), email: text(v.email), hours: text(v.hours) };
+  return contact.phone || contact.email ? contact : null;
 }
 
 export function readAppConfig(): AppConfig {
@@ -55,5 +80,6 @@ export function readAppConfig(): AppConfig {
     placementFields: Array.isArray(extra.placementFields)
       ? extra.placementFields.filter((f): f is string => typeof f === 'string')
       : null,
+    supportContact: readSupportContact(extra.supportContact),
   };
 }
