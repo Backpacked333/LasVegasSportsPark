@@ -4,7 +4,7 @@ import {
   type ActorSnapshot,
   type Assignment,
   type AssignmentStatus,
-  type AvailabilityWindow,
+  type StaffAvailability,
   type FeeAdjustment,
   type FeeExportBatch,
   type FeeExportLine,
@@ -141,7 +141,7 @@ export function toAssignment(row: AssignmentRow, now: Date): Assignment {
   };
 }
 
-export function toAvailability(row: AvailabilityRow): AvailabilityWindow {
+export function toAvailability(row: AvailabilityRow): StaffAvailability {
   return {
     id: row.id,
     personId: row.person_id,

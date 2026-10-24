@@ -4,7 +4,7 @@ import {
   ListAvailabilityQuery,
   WithdrawAvailabilityBody,
   z,
-  type AvailabilityWindow,
+  type StaffAvailability,
   type Principal,
 } from '@sportspark/contracts';
 import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
@@ -24,7 +24,7 @@ export class AvailabilityController {
     @CurrentPrincipal() principal: Principal,
     @ZodBody(CreateAvailabilityBody) body: CreateAvailabilityBody,
     @CorrelationId() correlationId: string,
-  ): Promise<AvailabilityWindow> {
+  ): Promise<StaffAvailability> {
     return this.availability.create(principal, body, correlationId);
   }
 
@@ -32,7 +32,7 @@ export class AvailabilityController {
   list(
     @CurrentPrincipal() principal: Principal,
     @ZodQuery(ListAvailabilityQuery) query: ListAvailabilityQuery,
-  ): Promise<AvailabilityWindow[]> {
+  ): Promise<StaffAvailability[]> {
     return this.availability.list(principal, query);
   }
 
@@ -44,7 +44,7 @@ export class AvailabilityController {
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
     @ZodBody(WithdrawAvailabilityBody) body: WithdrawAvailabilityBody,
     @CorrelationId() correlationId: string,
-  ): Promise<AvailabilityWindow> {
+  ): Promise<StaffAvailability> {
     return this.availability.withdraw(principal, params.id, body, correlationId);
   }
 }

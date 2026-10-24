@@ -70,7 +70,7 @@ const BooleanQuery = z
 // Availability (SPK-STAFF-001)
 // ---------------------------------------------------------------------------------------------
 
-export const AvailabilityWindowSchema = z
+export const StaffAvailabilitySchema = z
   .object({
     id: z.uuid(),
     personId: z.uuid(),
@@ -83,8 +83,8 @@ export const AvailabilityWindowSchema = z
     revision: Revision,
     createdAt: Instant,
   })
-  .openapi('AvailabilityWindow');
-export type AvailabilityWindow = z.infer<typeof AvailabilityWindowSchema>;
+  .openapi('StaffAvailability');
+export type StaffAvailability = z.infer<typeof StaffAvailabilitySchema>;
 
 export const CreateAvailabilityBody = withCommandMeta({
   /** Defaults to the caller's own person; staff with availability management may name another. */
@@ -659,20 +659,20 @@ command(
   '/availability',
   'Record an availability or unavailability window (SPK-STAFF-001)',
   CreateAvailabilityBody,
-  AvailabilityWindowSchema,
+  StaffAvailabilitySchema,
 );
 query(
   '/availability',
   'List availability windows (own, or staff with workforce read)',
   ListAvailabilityQuery,
-  z.array(AvailabilityWindowSchema),
+  z.array(StaffAvailabilitySchema),
 );
 command(
   'post',
   '/availability/{id}/withdraw',
   'Withdraw an availability window (kept for history)',
   WithdrawAvailabilityBody,
-  AvailabilityWindowSchema,
+  StaffAvailabilitySchema,
   200,
 );
 

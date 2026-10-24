@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
-  type AvailabilityWindow,
+  type StaffAvailability,
   type CreateAvailabilityBody,
   type ListAvailabilityQuery,
   type Principal,
@@ -49,7 +49,7 @@ export class AvailabilityService {
     principal: Principal,
     body: CreateAvailabilityBody,
     correlationId: string | null,
-  ): Promise<AvailabilityWindow> {
+  ): Promise<StaffAvailability> {
     const organizationId = organizationOf(principal);
     const personId = body.personId ?? principal.personId;
     if (!personId) throw errors.validation('personId is required.');
@@ -121,7 +121,7 @@ export class AvailabilityService {
     });
   }
 
-  async list(principal: Principal, query: ListAvailabilityQuery): Promise<AvailabilityWindow[]> {
+  async list(principal: Principal, query: ListAvailabilityQuery): Promise<StaffAvailability[]> {
     const organizationId = organizationOf(principal);
     const personId = query.personId ?? principal.personId;
     if (!personId) throw errors.validation('personId is required.');
@@ -149,7 +149,7 @@ export class AvailabilityService {
     id: string,
     body: WithdrawAvailabilityBody,
     correlationId: string | null,
-  ): Promise<AvailabilityWindow> {
+  ): Promise<StaffAvailability> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const current = await this.load(trx, organizationId, id, true);
