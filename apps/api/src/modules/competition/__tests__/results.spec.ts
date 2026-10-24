@@ -404,15 +404,8 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
 
   it('SPK-AT-014: a correction that feeds a published bracket node is not rewritten; a management review exception owned by the league manager is raised and history is retained', async () => {
     const f3 = await scheduleFixture(c, d, '2027-01-30', '18:00', '19:00');
-    const submitted = await post(`/fixtures/${f3}/results`, leagueManager, {
-      classification: 'completed',
-      homeScore: 1,
-      awayScore: 0,
-    });
-    const published = await post(`/results/${submitted.body.id}/publish`, leagueManager, {
-      expectedRevision: submitted.body.revision,
-    });
-    expect(published.status).toBe(200);
+    // the playoff game is linked to its node before it is played (a published league result
+    // cannot be linked, SPK-RESULT-004)
     const node = await post(`/seasons/${season.seasonId}/bracket-nodes`, leagueManager, {
       divisionId,
       name: 'Semi-final 1',
@@ -425,6 +418,18 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
       fixtureId: f3,
     });
     expect(node.status).toBe(201);
+    const submitted = await post(`/fixtures/${f3}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 1,
+      awayScore: 0,
+    });
+    const published = await post(`/results/${submitted.body.id}/publish`, leagueManager, {
+      expectedRevision: submitted.body.revision,
+    });
+    expect(published.status).toBe(200);
+    // a playoff game never counts in the league table; its winner progresses the bracket
+    expect(published.body.standings).toBeNull();
+    expect(published.body.progressedBracketNodeIds).toEqual([node.body.id]);
     const final = await post(`/seasons/${season.seasonId}/bracket-nodes`, leagueManager, {
       divisionId,
       name: 'Final',

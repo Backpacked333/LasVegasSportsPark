@@ -218,11 +218,13 @@ export class DisciplineService implements SuspensionCheckPort {
    * rule-set version prescribes. A sending-off (red, or a second yellow when the rule set treats it
    * as red) proposes `redCardSuspensionMatches`; reaching a multiple of
    * `yellowAccumulationThreshold` yellow cards in the season proposes
-   * `yellowAccumulationSuspensionMatches`. Each proposal names the fixture and result revision it
-   * came from and exists at most once per person, fixture and rule (partial unique index), so a
-   * replay or a re-published correction never duplicates it. A league manager approves or
-   * overturns it with history (authorized review). Scope: the competition the card was shown in
-   * (proposed default, DEC-010 pending).
+   * `yellowAccumulationSuspensionMatches`, once per threshold crossing in the season (the
+   * crossings reached are compared with the accumulation proposals the season already holds, so a
+   * correction of an earlier fixture never proposes a crossing again). Each proposal names the
+   * fixture and result revision it came from and exists at most once per person, fixture and rule
+   * (partial unique index), so a replay or a re-published correction never duplicates it. A league
+   * manager approves or overturns it with history (authorized review). Scope: the competition the
+   * card was shown in (proposed default, DEC-010 pending).
    */
   async proposeFromRuleSet(
     trx: Trx,
@@ -293,10 +295,31 @@ export class DisciplineService implements SuspensionCheckPort {
           totals.set(card.personId, (totals.get(card.personId) ?? 0) + 1);
         }
       }
+      // One proposal per threshold crossing in the season: a correction re-runs this with the
+      // fixture's whole card list, so the crossings the season's official results reach are
+      // compared with the accumulation proposals the season already holds for the person, from
+      // whichever fixture (overturned ones included: a crossing already decided on is not
+      // proposed again) (SPK-DISC-003, SPK-RESULT-004).
+      const proposedBefore = await trx
+        .selectFrom('suspensions as s')
+        .innerJoin('fixtures as sf', (join) =>
+          join
+            .onRef('sf.organization_id', '=', 's.organization_id')
+            .onRef('sf.id', '=', 's.source_fixture_id'),
+        )
+        .select((eb) => ['s.subject_person_id', eb.fn.countAll<string>().as('n')])
+        .where('s.organization_id', '=', input.organizationId)
+        .where('sf.season_id', '=', input.seasonId)
+        .where('s.source_kind', '=', 'yellow_accumulation')
+        .where('s.subject_person_id', 'in', [...here.keys()])
+        .groupBy('s.subject_person_id')
+        .execute();
+      const alreadyProposed = new Map(
+        proposedBefore.map((row) => [row.subject_person_id, Number(row.n)]),
+      );
       for (const [personId, count] of here) {
         const total = totals.get(personId) ?? count;
-        const before = total - count;
-        if (Math.floor(total / threshold) > Math.floor(before / threshold)) {
+        if (Math.floor(total / threshold) > (alreadyProposed.get(personId) ?? 0)) {
           proposals.push({
             personId,
             kind: 'yellow_accumulation',

@@ -458,12 +458,37 @@ export class ResultsService {
         organizationId,
         revision.fixture_id,
       );
+      // A bracket game's outcome (winner and loser) before and after this publication.
+      const previousSides = official ? sidesOf(official, context.fixture) : null;
+      const nextSides = sidesOf(revision, context.fixture);
+      const outcomeChanged =
+        previousSides !== null &&
+        (previousSides.winnerEntryId !== nextSides.winnerEntryId ||
+          previousSides.loserEntryId !== nextSides.loserEntryId);
+      // The bracket already progressed on the previous outcome: a change has to revise it.
+      const revisesProgression =
+        isBracketGame && outcomeChanged && previousSides?.winnerEntryId !== null;
       let reviewed: { exceptionId: string; impact: CorrectionImpact } | null = null;
       if (official) {
         if (!(revision.reason ?? input.reason)) {
           throw errors.validation('A correction of an official result requires a reason.');
         }
-        const impact = await this.correctionImpact(trx, context, revision.id, isBracketGame);
+        let impact = await this.correctionImpact(trx, context, revision.id, isBracketGame);
+        if (revisesProgression) {
+          // SPK-RESULT-004: downstream nodes that already act on the old outcome are not rewritten
+          // silently; with any of them the correction waits for management review.
+          const blockers = await this.brackets.revisionBlockers(
+            trx,
+            organizationId,
+            revision.fixture_id,
+          );
+          impact = {
+            bracketNodeIds: [
+              ...new Set([...impact.bracketNodeIds, ...blockers.bracketNodeIds]),
+            ].sort(),
+            fixtureIds: [...new Set([...impact.fixtureIds, ...blockers.fixtureIds])].sort(),
+          };
+        }
         if (input.reviewExceptionId) {
           // The named task must be this correction's open review task (it is resolved below).
           await this.assertReviewTask(trx, principal, input.reviewExceptionId, revisionId);
@@ -570,17 +595,29 @@ export class ResultsService {
         correlationId,
         operationId,
       });
-      // Bracket progression for a first official result of a playoff game (never for corrections).
-      const progressedBracketNodeIds =
-        isBracketGame && !official
-          ? await this.brackets.recordOutcome(trx, principal, {
-              organizationId,
-              fixtureId: revision.fixture_id,
-              ...sidesOf(updated, context.fixture),
-              correlationId,
-              operationId,
-            })
-          : [];
+      // Bracket progression of a playoff game (SPK-COMP-001, SPK-RESULT-004): the first result
+      // with a winner fills the empty slots it feeds; a correction that changes a recorded
+      // outcome revises the progression when nothing downstream acts on it yet (otherwise it was
+      // reviewed above, and the published bracket stays as history).
+      let progressedBracketNodeIds: string[] = [];
+      if (isBracketGame && (!previousSides || previousSides.winnerEntryId === null)) {
+        progressedBracketNodeIds = await this.brackets.recordOutcome(trx, principal, {
+          organizationId,
+          fixtureId: revision.fixture_id,
+          ...sidesOf(updated, context.fixture),
+          correlationId,
+          operationId,
+        });
+      } else if (revisesProgression && !reviewed && previousSides) {
+        progressedBracketNodeIds = await this.brackets.reviseOutcome(trx, principal, {
+          organizationId,
+          fixtureId: revision.fixture_id,
+          previous: previousSides,
+          next: sidesOf(updated, context.fixture),
+          correlationId,
+          operationId,
+        });
+      }
       // League standings derive from league-phase official results only (SPK-RESULT-001).
       const standings = isBracketGame
         ? null

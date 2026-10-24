@@ -417,7 +417,7 @@ describe('fixture generation (SPK-FIX-001..005, SPK-AT-010, SPK-AT-011)', () => 
     });
   });
 
-  it('SPK-AT-011: conflicting hard fairness preferences give no_proposal_within_limit with the conflict explained; infeasibility and optimality are never claimed falsely; nothing is materialized', async () => {
+  it('SPK-AT-011: conflicting hard fairness preferences give no_proposal_within_limit with the conflict explained; infeasibility and optimality are never claimed falsely; a dry run materializes nothing', async () => {
     const division2 = await createDivisionFixture(t, {
       seasonId: season.seasonId,
       name: 'Division 2',
@@ -511,5 +511,172 @@ describe('fixture generation (SPK-FIX-001..005, SPK-AT-010, SPK-AT-011)', () => 
     expect(infeasible.body.outcome).toBe('proven_infeasible');
     expect(infeasible.body.proposal).toBeNull();
     expect(infeasible.body.explanation.stoppedBy).toBe('proof');
+  });
+
+  async function divisionWithTeams(name: string, count: number): Promise<string> {
+    const id = await createDivisionFixture(t, { seasonId: season.seasonId, name });
+    for (let i = 0; i < count; i += 1) {
+      const captain = await adultCustomer(t);
+      await createTeamEntryFixture(t, {
+        seasonId: season.seasonId,
+        captainPersonId: captain.personId,
+        teamName: `${name} team ${i + 1}`,
+        divisionId: id,
+      });
+    }
+    return id;
+  }
+
+  it('SPK-FIX-003 / SPK-FIX-004 / SPK-AT-011: a real run whose best proposal breaks a hard constraint creates no fixtures and opens no scheduling draft', async () => {
+    const division = await divisionWithTeams('Division hard rest', 6);
+    const spec = await post(
+      `/divisions/${division}/fixture-specifications`,
+      leagueManager,
+      specification({
+        name: 'Hard rest distribution',
+        gamesPerTeam: 10,
+        opponentFrequency: 2,
+        startsOn: '2027-01-16',
+        endsOn: '2027-04-30',
+        blackouts: [],
+        minimumRestMinutes: 0,
+        fairnessPreferences: [{ kind: 'rest_distribution', hard: true, weight: 1 }],
+      }),
+    );
+    expect(spec.status).toBe(201);
+    const draftsBefore = await t.db
+      .selectFrom('schedule_drafts')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    const run = await post(`/fixture-specifications/${spec.body.id}/generate`, leagueManager, {
+      searchSettings: { maxCandidates: 10, timeLimitMs: 5000, seed: 1 },
+    });
+    expect(run.status).toBe(201);
+    expect(run.body.dryRun).toBe(false);
+    expect(run.body.outcome).toBe('no_proposal_within_limit');
+    expect(
+      run.body.explanation.hardViolations.map((v: { constraint: string }) => v.constraint),
+    ).toContain('rest_distribution');
+    // the proposal is kept for explanation only
+    expect(run.body.proposal.games.length).toBeGreaterThan(0);
+    expect(run.body.fixtureIds).toEqual([]);
+    expect(run.body.scheduleDraftId).toBeNull();
+    const fixtures = await t.db
+      .selectFrom('fixtures')
+      .select('id')
+      .where('division_id', '=', division)
+      .execute();
+    expect(fixtures).toHaveLength(0);
+    const draftsAfter = await t.db
+      .selectFrom('schedule_drafts')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    expect(Number(draftsAfter.n)).toBe(Number(draftsBefore.n));
+    // relaxing the constraint and generating again is not blocked by leftover obligations
+    const relaxed = await post(
+      `/divisions/${division}/fixture-specifications`,
+      leagueManager,
+      specification({
+        name: 'Relaxed rest distribution',
+        gamesPerTeam: 10,
+        opponentFrequency: 2,
+        startsOn: '2027-01-16',
+        endsOn: '2027-04-30',
+        blackouts: [],
+        minimumRestMinutes: 0,
+        fairnessPreferences: [{ kind: 'rest_distribution', hard: false, weight: 1 }],
+      }),
+    );
+    const again = await post(`/fixture-specifications/${relaxed.body.id}/generate`, leagueManager, {
+      dryRun: true,
+    });
+    expect(again.status).toBe(201);
+  });
+
+  it('SPK-FIX-004 / SPK-AT-011: hourly start times with the pitch’s cleanup turnover never double-book it: the run that claims optimality publishes without an overlap', async () => {
+    const pitch3 = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch 3',
+    });
+    const division = await divisionWithTeams('Division hourly', 4);
+    const spec = await post(
+      `/divisions/${division}/fixture-specifications`,
+      leagueManager,
+      specification({
+        name: 'Hourly Sundays',
+        gamesPerTeam: 3,
+        opponentFrequency: 1,
+        startsOn: '2027-01-17',
+        endsOn: '2027-02-28',
+        blackouts: [],
+        minimumRestMinutes: 0,
+        allowedStartTimes: [
+          { weekday: 0, time: '09:00' },
+          { weekday: 0, time: '10:00' },
+          { weekday: 0, time: '11:00' },
+        ],
+        matchDurationMinutes: 60,
+        requiredResourceIds: [pitch3.pitchId],
+        fairnessPreferences: [],
+      }),
+    );
+    expect(spec.status).toBe(201);
+    const run = await post(`/fixture-specifications/${spec.body.id}/generate`, leagueManager, {
+      searchSettings: { maxCandidates: 4, timeLimitMs: 5000, seed: 5 },
+    });
+    expect(run.status).toBe(201);
+    expect(run.body.outcome).toBe('proven_optimal');
+    expect(run.body.completenessReport.complete).toBe(true);
+    const drafts = t.app.get(ScheduleDraftsService);
+    const schedulerPrincipal = staffPrincipal(t.organizationId, ['scheduler'], {
+      personId: scheduler.personId,
+    });
+    const draft = await drafts.get(schedulerPrincipal, run.body.scheduleDraftId);
+    expect(draft.changes).toHaveLength(6);
+    const publication = await drafts.publish(schedulerPrincipal, draft.id, {
+      expectedRevision: draft.revision,
+    });
+    expect(publication.eventIds).toHaveLength(6);
+  });
+
+  it('SPK-FIX-002 / §4.7: two specifications of one division generated at once create one fixture set; the other run is refused', async () => {
+    // Several attempts: on PostgreSQL (TEST_DATABASE_URL) the two runs truly overlap.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const division = await divisionWithTeams(`Division race ${attempt}`, 4);
+      const specs: string[] = [];
+      for (const name of ['Race A', 'Race B']) {
+        const created = await post(
+          `/divisions/${division}/fixture-specifications`,
+          leagueManager,
+          specification({
+            name,
+            gamesPerTeam: 3,
+            opponentFrequency: 1,
+            blackouts: [],
+            fairnessPreferences: [],
+          }),
+        );
+        expect(created.status).toBe(201);
+        specs.push(created.body.id);
+      }
+      const runs = await Promise.all(
+        specs.map((id) =>
+          post(`/fixture-specifications/${id}/generate`, leagueManager, {
+            searchSettings: { maxCandidates: 2, timeLimitMs: 5000, seed: 1 },
+          }),
+        ),
+      );
+      expect(runs.map((r) => r.status).sort()).toEqual([201, 409]);
+      expect(runs.find((r) => r.status === 409)?.body.code).toBe('RESOURCE_CONFLICT');
+      const fixtures = await t.db
+        .selectFrom('fixtures')
+        .select(['home_entry_id', 'away_entry_id'])
+        .where('division_id', '=', division)
+        .execute();
+      expect(fixtures).toHaveLength(6);
+      const pairings = fixtures.map((f) => [f.home_entry_id, f.away_entry_id].sort().join('|'));
+      expect(new Set(pairings).size).toBe(6);
+    }
   });
 });

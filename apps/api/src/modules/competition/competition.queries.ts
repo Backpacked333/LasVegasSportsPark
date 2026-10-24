@@ -13,6 +13,7 @@ import type { Selectable } from 'kysely';
 import type { Trx } from '../../kernel';
 import {
   ROSTER_LIMIT_STATUSES,
+  isEffectiveAt,
   ruleSetContentOf,
   seasonColumns,
   type SeasonRow,
@@ -130,6 +131,29 @@ export async function rosterRowsEffectiveAt(
     .execute();
 }
 
+/**
+ * Roster rows that are effective at any instant from `from` on (SPK-COMP-005, SPK-COMP-002 roster
+ * limits): rows already effective then, and rows that start later (future-dated additions). An
+ * addition holds its place from its effective instant onwards, so it is checked against all of them.
+ */
+export async function rosterRowsOverlapping(
+  db: Reader,
+  organizationId: string,
+  teamEntryId: string,
+  from: Date,
+): Promise<RosterRow[]> {
+  return db
+    .selectFrom('roster_memberships')
+    .selectAll()
+    .where('organization_id', '=', organizationId)
+    .where('team_entry_id', '=', teamEntryId)
+    .where('status', 'in', ['active', 'guest', 'substitute', 'removed'])
+    .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', from)]))
+    .orderBy('effective_from')
+    .orderBy('id')
+    .execute();
+}
+
 /** The person's open row on the entry (pending or playing), if any. */
 export async function openRosterRow(
   db: Reader,
@@ -154,7 +178,11 @@ export interface SeasonMembership {
   statusAt: RosterPlayingStatus;
 }
 
-/** Other live entries of the same season the person is effectively on at the instant (multi-team rules). */
+/**
+ * Other live entries of the same season the person is effectively on at the instant (multi-team
+ * rules). With `overlapping`, every membership effective at any instant from `at` on counts, so an
+ * addition is checked against memberships that start later as well (SPK-COMP-005).
+ */
 export async function personSeasonMemberships(
   db: Reader,
   organizationId: string,
@@ -162,8 +190,9 @@ export async function personSeasonMemberships(
   seasonId: string,
   at: Date,
   excludeEntryId: string,
+  options: { overlapping?: boolean } = {},
 ): Promise<SeasonMembership[]> {
-  const rows = await db
+  let query = db
     .selectFrom('roster_memberships as rm')
     .innerJoin('team_entries as te', (join) =>
       join
@@ -177,12 +206,14 @@ export async function personSeasonMemberships(
     .where('te.status', 'in', ['applied', 'approved'])
     .where('rm.team_entry_id', '<>', excludeEntryId)
     .where('rm.status', 'in', ['active', 'guest', 'substitute', 'removed'])
-    .where('rm.effective_from', '<=', at)
-    .where((eb) => eb.or([eb('rm.effective_to', 'is', null), eb('rm.effective_to', '>', at)]))
-    .execute();
+    .where((eb) => eb.or([eb('rm.effective_to', 'is', null), eb('rm.effective_to', '>', at)]));
+  if (!options.overlapping) query = query.where('rm.effective_from', '<=', at);
+  const rows = await query.execute();
   const out: SeasonMembership[] = [];
   for (const row of rows) {
     const status = row.status === 'removed' ? row.status_before_removal : row.status;
+    // One entry counts once, however many of its rows the window covers.
+    if (out.some((o) => o.teamEntryId === row.team_entry_id)) continue;
     if (status === 'active' || status === 'guest' || status === 'substitute') {
       out.push({ teamEntryId: row.team_entry_id, divisionId: row.division_id, statusAt: status });
     }
@@ -237,6 +268,25 @@ export function countRoster(rows: RosterRow[]): RosterCounts {
     if (status === 'guest') guests += 1;
   }
   return { limited, guests, total };
+}
+
+/**
+ * The largest roster counts at any instant from `from` on. Counts only rise when a row starts, so
+ * the instants to check are `from` and every later start.
+ */
+export function peakRosterCounts(rows: RosterRow[], from: Date): RosterCounts {
+  const instants = [
+    from,
+    ...rows.map((r) => new Date(r.effective_from)).filter((t) => t.getTime() > from.getTime()),
+  ];
+  const peak: RosterCounts = { limited: 0, guests: 0, total: 0 };
+  for (const instant of instants) {
+    const counts = countRoster(rows.filter((r) => isEffectiveAt(r, instant)));
+    peak.limited = Math.max(peak.limited, counts.limited);
+    peak.guests = Math.max(peak.guests, counts.guests);
+    peak.total = Math.max(peak.total, counts.total);
+  }
+  return peak;
 }
 
 /** Live entries (applied or approved) consuming a division's capacity. */

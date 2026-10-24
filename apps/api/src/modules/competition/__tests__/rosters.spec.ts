@@ -15,6 +15,7 @@ import {
 import {
   addRosterMemberFixture,
   createDivisionFixture,
+  createFixtureFixture,
   createSeasonFixture,
   createTeamEntryFixture,
   type SeasonFixture,
@@ -28,12 +29,24 @@ describe('rosters, eligibility, invitations and join requests (SPK-COMP-005, SPK
   let leagueManager: Actor;
   let season: SeasonFixture;
   const suspended = new Set<string>();
+  /** Period suspensions [from, to) that restrict only at instants inside the period. */
+  const periods = new Map<string, { from: string; to: string }>();
   /** Stands in for the discipline module (part 2): suspensions are authoritative facts from the port. */
   const suspensions: SuspensionCheckPort = {
-    activeSuspensions: async (_organizationId, personId) =>
-      suspended.has(personId)
-        ? [{ id: 'suspension-1', reason: 'card accumulation', scope: 'competition', until: null }]
-        : [],
+    activeSuspensions: async (_organizationId, personId, at) => {
+      if (suspended.has(personId)) {
+        return [
+          { id: 'suspension-1', reason: 'card accumulation', scope: 'competition', until: null },
+        ];
+      }
+      const period = periods.get(personId);
+      if (period && new Date(period.from) <= at && at < new Date(period.to)) {
+        return [
+          { id: 'suspension-period', reason: 'dissent', scope: 'organization', until: period.to },
+        ];
+      }
+      return [];
+    },
   };
 
   beforeAll(async () => {
@@ -678,6 +691,314 @@ describe('rosters, eligibility, invitations and join requests (SPK-COMP-005, SPK
     const refused = await post(`/team-entries/${b.teamEntryId}/join-requests`, y, {});
     expect(refused.status).toBe(422);
     suspended.delete(y.personId);
+  });
+
+  it('SPK-COMP-005 / §4.7 invariant 9: a captain cannot date a roster change before now, so a player removed today stays on last week’s match roster; league staff correct a past roster only with a reason, audited as retroactive; a completed season’s roster takes no change (SPK-AT-003)', async () => {
+    const team = await teamOf(season.seasonId);
+    const opponent = await teamOf(season.seasonId);
+    const p1 = await adultCustomer(t);
+    await addRosterMemberFixture(t, {
+      teamEntryId: team.teamEntryId,
+      personId: p1.personId,
+      effectiveFrom: new Date('2026-10-01T00:00:00Z'),
+    });
+    const kickoff = '2026-10-16T18:00:00.000Z';
+    const played = await createFixtureFixture(t, {
+      seasonId: season.seasonId,
+      homeEntryId: team.teamEntryId,
+      awayEntryId: opponent.teamEntryId,
+      status: 'played',
+      scheduledStart: kickoff,
+      scheduledEnd: '2026-10-16T19:00:00.000Z',
+    });
+    const rosterAtKickoff = async () =>
+      (
+        await t.http
+          .get(`/v1/team-entries/${team.teamEntryId}/roster`)
+          .set(team.captain.header)
+          .query({ at: kickoff })
+      ).body.members.map((m: { personId: string }) => m.personId);
+    expect(await rosterAtKickoff()).toEqual([p1.personId]);
+    expect((await t.http.get(`/v1/fixtures/${played}`).set(p1.header)).status).toBe(200);
+
+    // the captain cannot backdate a removal or an addition
+    const backdatedRemoval = await post(`/team-entries/${team.teamEntryId}/roster`, team.captain, {
+      changes: [
+        {
+          action: 'remove',
+          personId: p1.personId,
+          effectiveTo: '2026-10-05T00:00:00.000Z',
+          reason: 'left',
+        },
+      ],
+    });
+    expect(backdatedRemoval.status).toBe(400);
+    expect(backdatedRemoval.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'retroactive_roster_change', field: 'effectiveTo' },
+    });
+    expect(await rosterAtKickoff()).toEqual([p1.personId]);
+    expect((await t.http.get(`/v1/fixtures/${played}`).set(p1.header)).status).toBe(200);
+    const p2 = await createPersonFixture(t, { kind: 'adult' });
+    const backdatedAddition = await add(team.teamEntryId, team.captain, p2, {
+      effectiveFrom: '2026-09-01T00:00:00.000Z',
+    });
+    expect(backdatedAddition.status).toBe(400);
+    expect(backdatedAddition.body.details).toMatchObject({
+      code: 'retroactive_roster_change',
+      field: 'effectiveFrom',
+    });
+    expect(await rosterAtKickoff()).toEqual([p1.personId]);
+
+    // league staff correct a past roster only with a reason, recorded as a retroactive correction
+    const removal = {
+      action: 'remove',
+      personId: p1.personId,
+      effectiveTo: '2026-10-10T00:00:00.000Z',
+      reason: 'never played for the team',
+    };
+    const noReason = await post(`/team-entries/${team.teamEntryId}/roster`, leagueManager, {
+      changes: [removal],
+    });
+    expect(noReason.status).toBe(400);
+    expect(noReason.body.details.code).toBe('correction_reason_required');
+    expect(await rosterAtKickoff()).toEqual([p1.personId]);
+    const corrected = await post(`/team-entries/${team.teamEntryId}/roster`, leagueManager, {
+      changes: [removal],
+      reason: 'Registration error found by the league office.',
+    });
+    expect(corrected.status).toBe(200);
+    expect(await rosterAtKickoff()).toEqual([]);
+    const membership = await t.db
+      .selectFrom('roster_memberships')
+      .select('id')
+      .where('team_entry_id', '=', team.teamEntryId)
+      .where('person_id', '=', p1.personId)
+      .executeTakeFirstOrThrow();
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['reason', 'details'])
+      .where('action', '=', 'competition.manage_roster')
+      .where('target_type', '=', 'roster_membership')
+      .where('target_id', '=', membership.id)
+      .execute();
+    expect(audit).toEqual([
+      expect.objectContaining({
+        reason: 'never played for the team',
+        details: expect.objectContaining({
+          retroactive: true,
+          recordedAt: NOW,
+          correctionReason: 'Registration error found by the league office.',
+          effectiveTo: '2026-10-10T00:00:00.000Z',
+        }),
+      }),
+    ]);
+    // a change effective now or later is not a correction and needs no reason
+    expect(
+      (
+        await add(team.teamEntryId, team.captain, p2, {
+          effectiveFrom: '2026-11-01T00:00:00.000Z',
+        })
+      ).status,
+    ).toBe(200);
+
+    // a completed season's roster is history: no removal and no addition, by anyone
+    const completed = await createSeasonFixture(t, {
+      status: 'completed',
+      startsOn: '2026-01-10',
+      endsOn: '2026-04-10',
+    });
+    const last = await teamOf(completed.seasonId);
+    const veteran = await createPersonFixture(t, { kind: 'adult' });
+    await addRosterMemberFixture(t, {
+      teamEntryId: last.teamEntryId,
+      personId: veteran,
+      effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+    });
+    for (const [actor, body] of [
+      [last.captain, { changes: [{ action: 'remove', personId: veteran, reason: 'renewal' }] }],
+      [
+        leagueManager,
+        {
+          changes: [
+            {
+              action: 'remove',
+              personId: veteran,
+              effectiveTo: '2026-03-01T00:00:00.000Z',
+              reason: 'renewal',
+            },
+          ],
+          reason: 'tidy up',
+        },
+      ],
+      [leagueManager, { changes: [{ action: 'add', personId: p2 }] }],
+    ] as const) {
+      const refused = await post(`/team-entries/${last.teamEntryId}/roster`, actor, body);
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('INVALID_TRANSITION');
+    }
+    const march = await t.http
+      .get(`/v1/team-entries/${last.teamEntryId}/roster`)
+      .set(leagueManager.header)
+      .query({ at: '2026-03-15T00:00:00.000Z' });
+    expect(march.body.members.map((m: { personId: string }) => m.personId)).toEqual([veteran]);
+  });
+
+  it('SPK-COMP-002 roster limits / SPK-CAP-004 / SPK-AT-013: an addition is checked over the whole interval it covers; future-dated rows count toward the limit, and a backdated addition can neither exceed it, place a currently suspended player nor break the multi-team limit', async () => {
+    const small = await createSeasonFixture(t, {
+      ruleSet: { rosterMin: 1, rosterMax: 3, minimumPlayers: 1 },
+    });
+    const correction = { reason: 'League office correction.' };
+    const team = await teamOf(small.seasonId);
+    for (let i = 0; i < 3; i += 1) {
+      expect(
+        (await add(team.teamEntryId, team.captain, await createPersonFixture(t, { kind: 'adult' })))
+          .status,
+      ).toBe(200);
+    }
+    const fourth = await createPersonFixture(t, { kind: 'adult' });
+    expect(reasonCodes((await add(team.teamEntryId, team.captain, fourth)).body)).toEqual([
+      'roster_full',
+    ]);
+    const backdated = await post(`/team-entries/${team.teamEntryId}/roster`, leagueManager, {
+      changes: [{ action: 'add', personId: fourth, effectiveFrom: '2026-09-01T00:00:00.000Z' }],
+      ...correction,
+    });
+    expect(backdated.status).toBe(422);
+    expect(reasonCodes(backdated.body)).toEqual(['roster_full']);
+
+    // a future-dated addition holds its place: later additions effective now count it
+    const later = await teamOf(small.seasonId);
+    expect(
+      (
+        await add(
+          later.teamEntryId,
+          later.captain,
+          await createPersonFixture(t, { kind: 'adult' }),
+          {
+            effectiveFrom: '2026-11-15T00:00:00.000Z',
+          },
+        )
+      ).status,
+    ).toBe(200);
+    for (let i = 0; i < 2; i += 1) {
+      expect(
+        (
+          await add(
+            later.teamEntryId,
+            later.captain,
+            await createPersonFixture(t, { kind: 'adult' }),
+          )
+        ).status,
+      ).toBe(200);
+    }
+    const overflow = await add(
+      later.teamEntryId,
+      later.captain,
+      await createPersonFixture(t, { kind: 'adult' }),
+    );
+    expect(overflow.status).toBe(422);
+    expect(reasonCodes(overflow.body)).toEqual(['roster_full']);
+    const port = t.app.get<RosterPort>(ROSTER_PORT);
+    expect(
+      await port.effectiveRoster(
+        t.organizationId,
+        later.teamEntryId,
+        new Date('2026-11-20T00:00:00Z'),
+      ),
+    ).toHaveLength(3);
+
+    // a period suspension that began yesterday blocks a substitute, backdated or not
+    const subs = await teamOf(season.seasonId);
+    const banned = await createPersonFixture(t, { kind: 'adult' });
+    periods.set(banned, { from: '2026-10-22T00:00:00.000Z', to: '2026-12-31T00:00:00.000Z' });
+    for (const [actor, extra] of [
+      [subs.captain, {}],
+      [leagueManager, { effectiveFrom: '2026-10-20T00:00:00.000Z' }],
+    ] as const) {
+      const res = await post(`/team-entries/${subs.teamEntryId}/roster`, actor, {
+        changes: [{ action: 'add', personId: banned, status: 'substitute', ...extra }],
+        ...correction,
+      });
+      expect(res.status).toBe(422);
+      expect(reasonCodes(res.body)).toEqual(['suspended']);
+    }
+    // a suspension that only starts next week does not block an addition today
+    const nextWeek = await createPersonFixture(t, { kind: 'adult' });
+    periods.set(nextWeek, { from: '2026-10-30T00:00:00.000Z', to: '2026-12-31T00:00:00.000Z' });
+    expect(
+      (await add(subs.teamEntryId, subs.captain, nextWeek, { status: 'substitute' })).status,
+    ).toBe(200);
+    periods.clear();
+
+    // multi-team limit: a backdated or a later membership on another team counts
+    const strict = await createSeasonFixture(t, {
+      ruleSet: {
+        multiTeamRestrictions: {
+          maxEntriesPerSeason: 1,
+          allowSameDivision: false,
+          allowCrossDivision: true,
+        },
+      },
+    });
+    const d = await teamOf(strict.seasonId);
+    const e = await teamOf(strict.seasonId);
+    const x = await createPersonFixture(t, { kind: 'adult' });
+    expect((await add(d.teamEntryId, d.captain, x)).status).toBe(200);
+    const backdatedSecond = await post(`/team-entries/${e.teamEntryId}/roster`, leagueManager, {
+      changes: [{ action: 'add', personId: x, effectiveFrom: '2026-10-01T00:00:00.000Z' }],
+      ...correction,
+    });
+    expect(reasonCodes(backdatedSecond.body)).toEqual(['multi_team_limit']);
+    const y = await createPersonFixture(t, { kind: 'adult' });
+    expect(
+      (await add(d.teamEntryId, d.captain, y, { effectiveFrom: '2026-11-15T00:00:00.000Z' }))
+        .status,
+    ).toBe(200);
+    expect(reasonCodes((await add(e.teamEntryId, e.captain, y)).body)).toEqual([
+      'multi_team_limit',
+    ]);
+  });
+
+  it('SPK-COMP-005 / SPK-COMP-002 multi-team restrictions hold under concurrency: two captains adding one person to two entries of a division at once, or approving two join requests at once, leave exactly one membership', async () => {
+    const division = await createDivisionFixture(t, { seasonId: season.seasonId });
+    const playingRows = async (personId: string, entryIds: string[]) =>
+      t.db
+        .selectFrom('roster_memberships')
+        .select('team_entry_id')
+        .where('person_id', '=', personId)
+        .where('team_entry_id', 'in', entryIds)
+        .where('status', 'in', ['active', 'guest', 'substitute'])
+        .where('effective_to', 'is', null)
+        .execute();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const a = await teamOf(season.seasonId, { divisionId: division });
+      const b = await teamOf(season.seasonId, { divisionId: division });
+      const x = await createPersonFixture(t, { kind: 'adult' });
+      const results = await Promise.all([
+        add(a.teamEntryId, a.captain, x),
+        add(b.teamEntryId, b.captain, x),
+      ]);
+      expect(results.map((r) => r.status).sort()).toEqual([200, 422]);
+      const refused = results.find((r) => r.status === 422);
+      expect(reasonCodes(refused?.body ?? {})).toEqual(['already_in_division']);
+      expect(await playingRows(x, [a.teamEntryId, b.teamEntryId])).toHaveLength(1);
+
+      const y = await adultCustomer(t);
+      const requests = [];
+      for (const team of [a, b]) {
+        const requested = await post(`/team-entries/${team.teamEntryId}/join-requests`, y, {});
+        expect(requested.status).toBe(201);
+        requests.push({ team, id: requested.body.id as string });
+      }
+      const decisions = await Promise.all(
+        requests.map(({ team, id }) =>
+          post(`/join-requests/${id}/decide`, team.captain, { decision: 'approve' }),
+        ),
+      );
+      expect(decisions.map((r) => r.status).sort()).toEqual([200, 422]);
+      expect(await playingRows(y.personId, [a.teamEntryId, b.teamEntryId])).toHaveLength(1);
+    }
   });
 
   it('entries that are not live take no players; a captain whose entry is withdrawn loses nothing from history', async () => {
