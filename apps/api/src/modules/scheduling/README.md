@@ -105,7 +105,9 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   `facilities.settings.scheduling.requiredRestMinutes`.
 - Equipment conflicts are modelled as `equipment` party commitments; `required_equipment` on a
   resource is descriptive until the facilities module owns equipment assets.
-- Staffing constraints are stored but not validated (workforce assignments are a later package).
+- Staffing constraints are stored but not validated here; workforce assignments are checked by
+  the workforce module and are not written back as scheduling commitments (workforce README,
+  "Known gaps").
 - SPK-SCHED-009 financial obligations and messages are resolved by finance and communications from
   the `source_records` in the closure impact; this module names the affected events and parties only.
 - Operating-hours overlap between windows is not constrained (only duplicate start times are).

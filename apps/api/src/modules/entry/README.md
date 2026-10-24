@@ -99,9 +99,9 @@ enforced by the kernel for every command.
 
 - Provided: `ATTENDANCE_PORT` (`effectiveAttendance`, `openVisitOf`) for reporting, trials and the
   Today workspace.
-- Consumed, filled later: `FINANCIAL_STANDING_PORT` — finance registers `FINANCIAL_STANDING_IMPL`
-  (`standingOf(person, {offeringId, at})`); until then every standing is `unknown`, shown as an
-  `info` issue that never blocks.
+- Consumed, filled later: `FINANCIAL_STANDING_PORT` — finance is the intended owner of
+  `FINANCIAL_STANDING_IMPL` (`standingOf(person, {offeringId, at})`) but no module registers it
+  yet, so every standing is `unknown`, shown as an `info` issue that never blocks.
 - Provider port (§5.2): `FakeAccessControlProvider` is the deterministic hardware adapter —
   `granted` (success), `denied` (failure), `unknown` (timeout), duplicate deliveries; HMAC-signed.
 - Fixtures for downstream tests: `testing/entry-fixtures.ts` (`createPassFixture`,
