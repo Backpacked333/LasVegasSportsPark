@@ -68,6 +68,7 @@ export class FacilitiesModule implements OnModuleInit {
       async (event, ctx) => {
         await this.tasks.escalateIfOverdue(ctx.trx, event.organizationId, event.payload.taskId);
       },
+      { failureOwner: 'facilities_operator' },
     );
     // A closure lifted in scheduling outside a facilities release never reopens silently (SPK-FAC-004).
     this.registry.on<EventPayload<typeof ClosureLifted>>(
@@ -80,6 +81,7 @@ export class FacilitiesModule implements OnModuleInit {
           event.payload.closureId,
         );
       },
+      { failureOwner: 'facilities_operator' },
     );
   }
 }

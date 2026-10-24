@@ -176,6 +176,7 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
             event.correlationId,
           );
         }),
+      { failureOwner: 'finance_operator' },
     );
     // An awaiting checkout whose hold expired and that holds no live payment is aborted.
     this.registry.on<EventPayload<typeof CheckoutExpiryDue>>(
@@ -190,6 +191,7 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
             event.correlationId,
           ),
         ),
+      { failureOwner: 'finance_operator' },
     );
     // A compensation refund that settled completes (or re-opens) its checkout's recovery.
     this.registry.on<EventPayload<typeof RefundSettled>>(
@@ -204,6 +206,7 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
             event.correlationId,
           ),
         ),
+      { failureOwner: 'finance_operator' },
     );
     // SPK-PAY-006 notices before an installment falls due.
     this.registry.on<EventPayload<typeof InstallmentNoticeDue>>(
@@ -218,6 +221,7 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
             event.correlationId,
           ),
         ),
+      { failureOwner: 'finance_operator' },
     );
     // Provider evidence through the kernel inbox: duplicates consumed once, reordering tolerated.
     this.inbox.on(FAKE_PAYMENTS_PROVIDER, 'finance.apply_payment_event', (event, ctx) =>

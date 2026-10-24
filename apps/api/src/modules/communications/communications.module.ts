@@ -127,17 +127,20 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
         );
         this.worker.kick();
       },
+      { failureOwner: 'front_desk' },
     );
     // Schedule publication, change and cancellation notices with old and new details (SPK-COMMS-005).
     this.registry.on<EventPayload<typeof EventChanged>>(
       EventChanged.type,
       'communications.schedule_change_notice',
       (event, ctx) => this.scheduleNotices.onEventChanged(ctx.trx, event),
+      { failureOwner: 'front_desk' },
     );
     this.registry.on<EventPayload<typeof SchedulePublished>>(
       SchedulePublished.type,
       'communications.schedule_published_summary',
       (event, ctx) => this.scheduleNotices.onSchedulePublished(ctx.trx, event),
+      { failureOwner: 'front_desk' },
     );
     // SPK-IAM-006 / SPK-AT-017: a lost grant re-evaluates protected notices still awaiting dispatch.
     this.registry.on<EventPayload<typeof IdentityEvents.accessGrantRevoked>>(
@@ -153,6 +156,7 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
           event.correlationId,
         );
       },
+      { failureOwner: 'front_desk' },
     );
     this.registry.on<EventPayload<typeof IdentityEvents.accessRestricted>>(
       IdentityEvents.accessRestricted.type,
@@ -168,6 +172,7 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
           );
         }
       },
+      { failureOwner: 'front_desk' },
     );
     // Provider receipts resolve accepted/unknown attempts; duplicates are ignored (SPK-COMMS-004).
     this.inbox.on(

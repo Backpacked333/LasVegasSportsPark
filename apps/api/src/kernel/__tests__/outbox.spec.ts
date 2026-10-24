@@ -199,6 +199,87 @@ describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)', () =>
     failuresLeft = 0;
   });
 
+  describe('failure owner (§4.12, SPK-UX-006)', () => {
+    const Owned = defineEvent('test.owned_followup_requested', z.object({ n: z.number() }));
+    let ownedFailing = false;
+    let producerFailing = false;
+    beforeAll(() => {
+      registry.on(Owned.type, 'owned_ok', async () => undefined, {
+        failureOwner: 'front_desk',
+      });
+      registry.on(
+        Owned.type,
+        'owned_failing',
+        async () => {
+          if (ownedFailing) throw new Error('owned handler failed');
+        },
+        { failureOwner: 'program_manager' },
+      );
+      registry.on(Owned.type, 'unowned_failing', async () => {
+        if (producerFailing) throw new Error('unowned handler failed');
+      });
+    });
+    const deadLetter = async (failureOwner?: string) => {
+      const event = await uow.run((ctx) =>
+        outbox.enqueue(ctx.trx, Owned, {
+          organizationId: t.organizationId,
+          aggregateType: 'owned',
+          aggregateId: 'o1',
+          payload: { n: 1 },
+          maxAttempts: 1,
+          ...(failureOwner ? { failureOwner } : {}),
+        }),
+      );
+      const pending = await t.db
+        .selectFrom('outbox_events')
+        .select('failure_owner')
+        .where('id', '=', event.id)
+        .executeTakeFirstOrThrow();
+      expect(pending.failure_owner).toBe(failureOwner ?? null);
+      expect(await dispatcher.runOnce()).toMatchObject({ dead: 1 });
+      const row = await t.db
+        .selectFrom('outbox_events')
+        .select(['status', 'failure_owner'])
+        .where('id', '=', event.id)
+        .executeTakeFirstOrThrow();
+      const exception = await t.db
+        .selectFrom('operational_exceptions')
+        .select(['owner_queue', 'details'])
+        .where('dedupe_key', '=', `outbox:${event.id}`)
+        .executeTakeFirstOrThrow();
+      return { row, exception };
+    };
+
+    it('dead-letters to the failing handler failure owner (§4.12, SPK-UX-006)', async () => {
+      ownedFailing = true;
+      producerFailing = false;
+      const { row, exception } = await deadLetter('finance_operator');
+      expect(row).toEqual({ status: 'dead', failure_owner: 'program_manager' });
+      expect(exception.owner_queue).toBe('program_manager');
+      expect(exception.details).toMatchObject({
+        failingHandlers: [{ handler: 'owned_failing', failureOwner: 'program_manager' }],
+      });
+      ownedFailing = false;
+    });
+
+    it('uses the producer failure owner when the failing handler declares none', async () => {
+      ownedFailing = false;
+      producerFailing = true;
+      const { row, exception } = await deadLetter('finance_operator');
+      expect(row).toEqual({ status: 'dead', failure_owner: 'finance_operator' });
+      expect(exception.owner_queue).toBe('finance_operator');
+      producerFailing = false;
+    });
+
+    it('falls back to system_administrator when nobody declares an owner', async () => {
+      producerFailing = true;
+      const { row, exception } = await deadLetter();
+      expect(row).toEqual({ status: 'dead', failure_owner: 'system_administrator' });
+      expect(exception.owner_queue).toBe('system_administrator');
+      producerFailing = false;
+    });
+  });
+
   it('reclaims events whose worker died (expired lease)', async () => {
     const event = await uow.run((ctx) =>
       outbox.enqueue(ctx.trx, Pinged, {

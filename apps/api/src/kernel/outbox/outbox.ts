@@ -21,6 +21,11 @@ export interface EnqueueInput<TPayload> {
   operationId?: string | null;
   availableAt?: Date;
   maxAttempts?: number;
+  /**
+   * The producer's owner queue for a dead letter (§4.12). A failing handler's own
+   * `failureOwner` wins, because one event fans out to handlers in several modules.
+   */
+  failureOwner?: string | null;
 }
 
 /** Transactional outbox writer (§4.12): events are stored in the same transaction as the business change. */
@@ -79,7 +84,7 @@ export class Outbox {
         locked_by: null,
         locked_until: null,
         dispatched_at: null,
-        failure_owner: null,
+        failure_owner: input.failureOwner ?? null,
       })
       .execute();
     return event;

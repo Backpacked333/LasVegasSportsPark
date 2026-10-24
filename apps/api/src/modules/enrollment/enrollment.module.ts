@@ -178,6 +178,7 @@ export class EnrollmentModule implements OnModuleInit {
               break; // placement and staff holds simply lapse
           }
         }),
+      { failureOwner: 'program_manager' },
     );
     // SPK-REG-008: freed capacity is offered to the waitlist by priority, each offer holding its place.
     this.registry.on<EventPayload<typeof CapacityReleased>>(
@@ -192,6 +193,7 @@ export class EnrollmentModule implements OnModuleInit {
             event.correlationId,
           );
         }),
+      { failureOwner: 'program_manager' },
     );
     // SPK-YOUTH-004: an unused makeup lapses at its expiry.
     this.registry.on<EventPayload<typeof MakeupExpiryDue>>(
@@ -206,6 +208,7 @@ export class EnrollmentModule implements OnModuleInit {
             event.correlationId,
           ),
         ),
+      { failureOwner: 'program_manager' },
     );
     // SPK-REG-005 / SPK-YOUTH-002: commercial pools follow the catalog limits; staffing pools keep
     // their staff count so a raised commercial limit never bypasses the staffing requirement.
@@ -224,6 +227,7 @@ export class EnrollmentModule implements OnModuleInit {
             event.correlationId,
           );
         }),
+      { failureOwner: 'program_manager' },
     );
   }
 }

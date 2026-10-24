@@ -194,4 +194,55 @@ describe('unit of work, audit, and operational exceptions', () => {
       'exceptions.closed',
     ]);
   });
+
+  it('SPK-UX-006 listOpen limits facility-scoped staff to their facilities and organization-wide exceptions', async () => {
+    const uow = t.app.get(UnitOfWork);
+    const exceptions = t.app.get(OperationalExceptions);
+    const other = await t.db
+      .insertInto('facilities')
+      .values({
+        id: newId(),
+        organization_id: t.organizationId,
+        slug: `scope-${newId().slice(-8)}`,
+        name: 'Other facility',
+        timezone: 'America/Los_Angeles',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    const raise = (facilityId: string | null, title: string) =>
+      uow.run((ctx) =>
+        exceptions.raise(ctx.trx, {
+          organizationId: t.organizationId,
+          facilityId,
+          category: 'scope.check',
+          severity: 'warning',
+          title,
+          ownerQueue: 'front_desk',
+        }),
+      );
+    const own = await raise(t.facilityId, 'OWN');
+    const elsewhere = await raise(other.id, 'OTHER');
+    const orgWide = await raise(null, 'ORGWIDE');
+    const mine = [own.id, elsewhere.id, orgWide.id];
+    const idsOf = (rows: { id: string }[]) =>
+      rows
+        .map((r) => r.id)
+        .filter((id) => mine.includes(id))
+        .sort();
+
+    const scoped = staffPrincipal(t.organizationId, ['front_desk'], {
+      facilityIds: [t.facilityId],
+    });
+    expect(idsOf(await exceptions.listOpen(scoped, t.organizationId))).toEqual(
+      [own.id, orgWide.id].sort(),
+    );
+    const gm = staffPrincipal(t.organizationId, ['general_manager']);
+    expect(idsOf(await exceptions.listOpen(gm, t.organizationId))).toEqual([...mine].sort());
+    expect(
+      idsOf(await exceptions.listOpen(scoped, t.organizationId, { facilityId: t.facilityId })),
+    ).toEqual([own.id]);
+    await expect(
+      exceptions.listOpen(scoped, t.organizationId, { facilityId: other.id }),
+    ).rejects.toMatchObject({ code: 'ACCESS_DENIED' });
+  });
 });

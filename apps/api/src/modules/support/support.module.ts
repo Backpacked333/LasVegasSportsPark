@@ -90,6 +90,7 @@ export class SupportModule implements OnModuleInit {
         definition.type,
         'support.index_payment',
         (event, ctx) => runWithTransaction(ctx.trx, () => this.indexer.onPayment(event, ctx)),
+        { failureOwner: 'support_operator' },
       );
     }
     for (const definition of [RefundRequested, RefundSettled]) {
@@ -97,23 +98,27 @@ export class SupportModule implements OnModuleInit {
         definition.type,
         'support.index_refund',
         (event, ctx) => runWithTransaction(ctx.trx, () => this.indexer.onRefund(event, ctx)),
+        { failureOwner: 'support_operator' },
       );
     }
     this.registry.on<EventPayload<typeof OrderPaid>>(
       OrderPaid.type,
       'support.index_order',
       (event, ctx) => runWithTransaction(ctx.trx, () => this.indexer.onOrderPaid(event, ctx)),
+      { failureOwner: 'support_operator' },
     );
     this.registry.on<EventPayload<typeof NotificationDispatched>>(
       NotificationDispatched.type,
       'support.index_message',
       (event, ctx) =>
         runWithTransaction(ctx.trx, () => this.indexer.onNotificationDispatched(event, ctx)),
+      { failureOwner: 'support_operator' },
     );
     this.registry.on<EventPayload<typeof EventChanged>>(
       EventChanged.type,
       'support.index_schedule_change',
       (event, ctx) => runWithTransaction(ctx.trx, () => this.indexer.onEventChanged(event, ctx)),
+      { failureOwner: 'support_operator' },
     );
     // SPK-IAM-007: a merge keeps the merged person's support history with the survivor.
     this.registry.on<EventPayload<typeof IdentityEvents.personsMerged>>(
@@ -124,6 +129,7 @@ export class SupportModule implements OnModuleInit {
           await this.indexer.onPersonsMerged(event, ctx);
           await this.cases.onPersonsMerged(ctx.trx, event);
         }),
+      { failureOwner: 'support_operator' },
     );
     // SPK-IAM-005: an escalated disputed-access review becomes an owned support case.
     this.registry.on<EventPayload<typeof IdentityEvents.accessReviewDecided>>(
@@ -131,6 +137,7 @@ export class SupportModule implements OnModuleInit {
       'support.access_review_escalation',
       (event, ctx) =>
         runWithTransaction(ctx.trx, () => this.cases.onAccessReviewDecided(ctx.trx, event)),
+      { failureOwner: 'support_operator' },
     );
   }
 }

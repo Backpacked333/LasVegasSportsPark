@@ -110,6 +110,7 @@ export class WorkforceModule implements OnModuleInit {
       async (event, ctx) => {
         await this.assignments.onFixtureChanged(event, ctx);
       },
+      { failureOwner: 'league_manager' },
     );
     this.registry.on<EventPayload<typeof EventChanged>>(
       EventChanged.type,
@@ -117,6 +118,7 @@ export class WorkforceModule implements OnModuleInit {
       async (event, ctx) => {
         await this.assignments.onSchedulingEventChanged(event, ctx);
       },
+      { failureOwner: 'scheduler' },
     );
     this.registry.on<EventPayload<typeof CatalogEvents.sessionCanceled>>(
       CatalogEvents.sessionCanceled.type,
@@ -124,6 +126,7 @@ export class WorkforceModule implements OnModuleInit {
       async (event, ctx) => {
         await this.assignments.onSessionCanceled(event, ctx);
       },
+      { failureOwner: 'program_manager' },
     );
   }
 }

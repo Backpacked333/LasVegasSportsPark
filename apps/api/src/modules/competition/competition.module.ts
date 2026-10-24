@@ -240,6 +240,7 @@ export class CompetitionModule implements OnModuleInit {
       async (event, ctx) => {
         await this.fixtures.onSchedulingEventChanged(event, ctx);
       },
+      { failureOwner: 'league_manager' },
     );
   }
 }

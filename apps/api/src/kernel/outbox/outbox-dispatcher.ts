@@ -133,7 +133,8 @@ export class OutboxDispatcher {
         from claimed
         where o.id = claimed.id
         returning o.id, o.organization_id, o.event_type, o.aggregate_type, o.aggregate_id, o.payload,
-                  o.occurred_at, o.correlation_id, o.causation_id, o.operation_id, o.attempts, o.max_attempts
+                  o.occurred_at, o.correlation_id, o.causation_id, o.operation_id, o.attempts, o.max_attempts,
+                  o.failure_owner
       `.execute(trx);
       return result.rows;
     });
@@ -158,9 +159,13 @@ export class OutboxDispatcher {
     const attempt = row.attempts + 1;
     const handlers = this.registry.handlersFor(event.type);
     const failures: string[] = [];
+    const failing: RegisteredHandler[] = [];
     for (const handler of handlers) {
       const error = await this.runHandler(event, handler, attempt);
-      if (error) failures.push(`${handler.name}: ${error}`);
+      if (error) {
+        failures.push(`${handler.name}: ${error}`);
+        failing.push(handler);
+      }
     }
 
     const now = this.clock.now();
@@ -182,6 +187,12 @@ export class OutboxDispatcher {
     }
     const lastError = failures.join(' | ').slice(0, 4000);
     if (attempt >= row.max_attempts) {
+      // §4.12, SPK-UX-006: the module whose handler failed owns the follow-up; then the
+      // producer's owner; system administration only when neither declared one.
+      const owner =
+        failing.find((h) => h.failureOwner)?.failureOwner ??
+        row.failure_owner ??
+        'system_administrator';
       const deadLettered = await this.db.transaction().execute(async (trx) => {
         const updated = await trx
           .updateTable('outbox_events')
@@ -191,7 +202,7 @@ export class OutboxDispatcher {
             last_error: lastError,
             locked_by: null,
             locked_until: null,
-            failure_owner: 'system_administrator',
+            failure_owner: owner,
           })
           .where('id', '=', row.id)
           .where('locked_by', '=', lease)
@@ -205,11 +216,15 @@ export class OutboxDispatcher {
           title: `Follow-up for ${event.type} could not be delivered after ${attempt} attempts`,
           affectedType: row.aggregate_type,
           affectedId: row.aggregate_id,
-          ownerQueue: 'system_administrator',
+          ownerQueue: owner,
           dedupeKey: `outbox:${row.id}`,
           details: {
             eventId: row.id,
             eventType: event.type,
+            failingHandlers: failing.map((h) => ({
+              handler: h.name,
+              failureOwner: h.failureOwner ?? null,
+            })),
             lastError,
             correlationId: row.correlation_id,
           },
@@ -311,4 +326,5 @@ interface ClaimedRow {
   operation_id: string | null;
   attempts: number;
   max_attempts: number;
+  failure_owner: string | null;
 }
