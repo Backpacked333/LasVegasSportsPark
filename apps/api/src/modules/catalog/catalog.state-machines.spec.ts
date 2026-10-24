@@ -72,7 +72,7 @@ describe('SPK-YOUTH-002 staffing requirement', () => {
     ).toBe(3);
   });
 
-  it('a capacity increase that raises the requirement needs a reason; a decrease never does', () => {
+  it('SPK-YOUTH-002: a capacity increase that raises the requirement, or removes or relaxes a ratio, needs a reason; a plain decrease never does', () => {
     const before = [
       {
         unit: 'camp_group_places' as const,
@@ -83,13 +83,38 @@ describe('SPK-YOUTH-002 staffing requirement', () => {
     expect(staffingIncreaseNeedsReason(before, [{ ...before[0]!, limit: 36 }])).toEqual({
       requiredStaffBefore: 2,
       requiredStaffAfter: 3,
+      ratiosRelaxed: [],
       needsReason: true,
     });
     expect(staffingIncreaseNeedsReason(before, [{ ...before[0]!, limit: 12 }]).needsReason).toBe(
       false,
     );
-    expect(staffingIncreaseNeedsReason(before, [{ unit: 'seats', limit: 100 }]).needsReason).toBe(
-      false,
+    // swapping the staffed unit for an unstaffed one lowers the computed requirement, but it
+    // removes the staffing requirement and is never silent
+    expect(staffingIncreaseNeedsReason(before, [{ unit: 'seats', limit: 100 }])).toEqual({
+      requiredStaffBefore: 2,
+      requiredStaffAfter: 0,
+      ratiosRelaxed: ['camp_group_places'],
+      needsReason: true,
+    });
+    const { staffingRatio: _dropped, ...unrated } = before[0]!;
+    expect(staffingIncreaseNeedsReason(before, [{ ...unrated, limit: 200 }]).ratiosRelaxed).toEqual(
+      ['camp_group_places'],
     );
+    expect(
+      staffingIncreaseNeedsReason(before, [
+        { ...before[0]!, limit: 24, staffingRatio: { participantsPerStaff: 24 } },
+      ]),
+    ).toMatchObject({
+      requiredStaffAfter: 1,
+      ratiosRelaxed: ['camp_group_places'],
+      needsReason: true,
+    });
+    // a tighter ratio is not a relaxation
+    expect(
+      staffingIncreaseNeedsReason(before, [
+        { ...before[0]!, limit: 12, staffingRatio: { participantsPerStaff: 6 } },
+      ]).needsReason,
+    ).toBe(false);
   });
 });

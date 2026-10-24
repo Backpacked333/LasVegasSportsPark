@@ -461,7 +461,10 @@ export class DiscountsService {
       .where('id', '=', input.discountDefinitionId)
       .executeTakeFirst();
     if (!definition) throw errors.notFound('discount', input.discountDefinitionId);
-    const counterBefore = await this.counter(trx, organizationId, definition.id);
+    // Lock the counter row before anything is counted (SPK-PAY-003 per-person limit): concurrent
+    // redemptions of one discount serialize here, so the replay check and the participant's
+    // ledger count below see every redemption committed before the lock was granted.
+    const counterBefore = await this.counter(trx, organizationId, definition.id, true);
     const existing = await this.entry(trx, organizationId, input, 'redeem');
     if (existing) {
       return {
@@ -549,11 +552,30 @@ export class DiscountsService {
     organizationId: string,
     input: RedeemDiscountInput,
   ): Promise<RedemptionOutcome> {
-    const redeemed = await this.entry(trx, organizationId, input, 'redeem');
+    const redeemed = await trx
+      .selectFrom('discount_redemption_entries')
+      .select(['id', 'person_id', 'amount_minor', 'currency'])
+      .where('organization_id', '=', organizationId)
+      .where('discount_definition_id', '=', input.discountDefinitionId)
+      .where('reference_type', '=', input.referenceType)
+      .where('reference_id', '=', input.referenceId)
+      .where('kind', '=', 'redeem')
+      .executeTakeFirst();
     if (!redeemed) {
       throw errors.notFound('discount redemption', `${input.referenceType}:${input.referenceId}`);
     }
-    const counterBefore = await this.counter(trx, organizationId, input.discountDefinitionId);
+    // SPK-PAY-003: the release gives the allowance back to the participant who redeemed, never
+    // to whoever the caller names; a mismatching personId is refused, replay included.
+    if (
+      input.personId !== undefined &&
+      input.personId !== null &&
+      input.personId !== redeemed.person_id
+    ) {
+      throw errors.validation('personId does not match the redemption being released.', {
+        path: 'personId',
+      });
+    }
+    const counterBefore = await this.counter(trx, organizationId, input.discountDefinitionId, true);
     const existing = await this.entry(trx, organizationId, input, 'release');
     if (existing) {
       return {
@@ -563,7 +585,18 @@ export class DiscountsService {
         replayed: true,
       };
     }
-    await this.insertEntry(trx, organizationId, input, 'release');
+    // The release row mirrors the redeem row it reverses (append-only correction).
+    await this.insertEntry(
+      trx,
+      organizationId,
+      {
+        ...input,
+        personId: redeemed.person_id,
+        amountMinor: redeemed.amount_minor === null ? null : Number(redeemed.amount_minor),
+        currency: redeemed.currency,
+      },
+      'release',
+    );
     const updated = await trx
       .updateTable('discount_redemptions')
       .set({ redeemed_count: sql`redeemed_count - 1` })
@@ -616,12 +649,13 @@ export class DiscountsService {
     return row;
   }
 
-  private async counter(db: Db | Trx, organizationId: string, id: string) {
+  private async counter(db: Db | Trx, organizationId: string, id: string, forUpdate = false) {
     return db
       .selectFrom('discount_redemptions')
       .select(['redeemed_count', 'redemption_limit'])
       .where('organization_id', '=', organizationId)
       .where('discount_definition_id', '=', id)
+      .$if(forUpdate, (qb) => qb.forUpdate())
       .executeTakeFirstOrThrow(() => errors.notFound('discount', id));
   }
 

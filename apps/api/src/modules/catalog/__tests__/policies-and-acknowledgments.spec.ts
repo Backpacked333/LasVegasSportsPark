@@ -206,6 +206,39 @@ describe('policy versions and acknowledgments (§4.4 Policies, SPK-REG-002, SPK-
     expect(listed.body.items.map((p: { version: number }) => p.version)).toEqual([1, 2]);
   });
 
+  it('SPK-PAY-002 / §4.4: retiring a version may shorten its approved window from now on, never extend or backdate it', async () => {
+    // approved window [2026-10-22, 2026-12-31); the clock is 2026-10-23T12:00Z
+    const id = await createPolicyVersionFixture(t, {
+      kind: 'eligibility',
+      effectiveTo: new Date('2026-12-31T00:00:00Z'),
+    });
+    const retire = (effectiveTo: string) =>
+      t.http
+        .post(`/v1/policy-versions/${id}/retire`)
+        .set(pm)
+        .set('Idempotency-Key', key())
+        .send({ reason: 'Superseded', expectedRevision: 1, effectiveTo });
+    const extended = await retire('2030-01-01T00:00:00Z');
+    expect(extended.status).toBe(400);
+    expect(extended.body.details).toMatchObject({ path: 'effectiveTo' });
+    const backdated = await retire('2026-10-23T00:00:00Z');
+    expect(backdated.status).toBe(400);
+    expect(backdated.body.details).toMatchObject({ path: 'effectiveTo' });
+    const stored = await t.db
+      .selectFrom('policy_versions')
+      .select(['approval_status', 'effective_to'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(stored.approval_status).toBe('approved');
+    expect(new Date(stored.effective_to as Date).toISOString()).toBe('2026-12-31T00:00:00.000Z');
+    const shortened = await retire('2026-11-30T00:00:00Z');
+    expect(shortened.status).toBe(200);
+    expect(shortened.body).toMatchObject({
+      approvalStatus: 'retired',
+      effectiveTo: '2026-11-30T00:00:00.000Z',
+    });
+  });
+
   it('SPK-PAY-003: financial policy kinds are approved by the finance operator only', async () => {
     const draft = await createVersion(finance, {
       kind: 'discount',

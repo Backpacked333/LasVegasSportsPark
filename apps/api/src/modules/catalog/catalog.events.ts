@@ -90,6 +90,8 @@ export const CatalogEvents = {
       scheduledStart: z.string(),
       scheduledEnd: z.string(),
       schedulingEventId: z.uuid().nullable(),
+      /** SPK-YOUTH-002: a session capacity override is published, never silent. */
+      capacityOverride: z.array(CapacityUnitSchema).nullable().optional(),
     }),
   ),
   sessionCanceled: defineEvent(
