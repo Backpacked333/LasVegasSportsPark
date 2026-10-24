@@ -11,6 +11,10 @@ export interface StaffArea {
   path: string;
   screenIds: string;
   purpose: string;
+  /** The area's screen group registers its own routes in App.tsx (no placeholder). */
+  ownRoutes?: boolean;
+  /** Built screens of an area that still shows its placeholder, linked from the area page. */
+  links?: readonly { path: string; title: string; screenIds: string }[];
 }
 
 export const STAFF_AREAS: readonly StaffArea[] = [
@@ -106,6 +110,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/reports',
     screenIds: 'SCR-S-43 to SCR-S-45',
     purpose: 'Operating reports, utilization and economics, exports.',
+    ownRoutes: true,
   },
   {
     id: 'admin',
@@ -114,6 +119,19 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-46 to SCR-S-49, SCR-S-56',
     purpose:
       'Accounts and roles, integrations and configuration, migration imports, support cases.',
+    links: [
+      { path: '/admin/accounts', title: 'Accounts, roles and permissions', screenIds: 'SCR-S-46' },
+      {
+        path: '/admin/integrations',
+        title: 'Integrations and configuration',
+        screenIds: 'SCR-S-47',
+      },
+      {
+        path: '/admin/migration',
+        title: 'Migration imports and reconciliation',
+        screenIds: 'SCR-S-48',
+      },
+    ],
   },
 ];
 

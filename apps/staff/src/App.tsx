@@ -3,6 +3,7 @@
  * and referee workspace (SPK-UX-007), sign-in, and a not-available page for unknown paths.
  */
 import { Navigate, Route, Routes } from 'react-router';
+import { insightAdminRoutes } from './features/insight-admin/routes';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS, WORKSPACE_PATH } from './navigation/areas';
 import { AreaScreen } from './screens/area/AreaScreen';
@@ -24,6 +25,8 @@ export function AppRoutes() {
         }
       >
         <Route index element={<Navigate to="/today" replace />} />
+        {/* Before the area placeholders: equally ranked routes match in order. */}
+        {insightAdminRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         {STAFF_AREAS.filter((a) => a.id !== 'today').map((area) => (
           <Route key={area.id} path={area.path} element={<AreaScreen area={area} />} />

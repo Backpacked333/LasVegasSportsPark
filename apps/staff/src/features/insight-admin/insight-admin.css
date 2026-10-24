@@ -1,0 +1,251 @@
+/*
+ * Reports and Administration screens (SCR-S-43 to SCR-S-48): dense but readable staff views
+ * (SPK-UX-010), tables that scroll inside a focusable region instead of the page, and status shown
+ * with a glyph and text, never colour alone (SPK-UX-009). Uses the dashboard tokens of ui/styles.css.
+ */
+.ia-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.ia-screen h2 {
+  margin: 0;
+}
+.ia-subnav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.ia-subnav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  text-decoration: none;
+}
+.ia-subnav a[aria-current='page'] {
+  border: 2px solid var(--color-primary);
+  font-weight: 600;
+}
+.ia-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ia-section h3,
+.ia-section h4 {
+  margin: 0;
+}
+.ia-form,
+.ia-inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 40rem;
+}
+.ia-inline-form {
+  max-width: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.ia-form h3,
+.ia-form h4 {
+  margin: 0;
+}
+.ia-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ia-field label {
+  font-weight: 600;
+}
+.ia-field input,
+.ia-field select,
+.ia-field textarea {
+  min-height: var(--touch);
+  font: inherit;
+  padding: 0 var(--space-3);
+  border: 2px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+.ia-field textarea {
+  padding: var(--space-2) var(--space-3);
+}
+.ia-field [aria-invalid='true'],
+.ia-fieldset[aria-invalid='true'] {
+  border-color: var(--tone-danger);
+}
+.ia-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+.ia-fieldset legend {
+  font-weight: 600;
+}
+.ia-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch);
+}
+.ia-check input {
+  width: 20px;
+  height: 20px;
+}
+.ia-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.ia-actions,
+.ia-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+.ia-action {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-2) 0;
+}
+.ia-dl {
+  display: grid;
+  grid-template-columns: minmax(9rem, max-content) 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+.ia-dl dt {
+  font-weight: 600;
+}
+.ia-dl dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ia-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.ia-report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+.ia-report h3 {
+  margin: 0;
+}
+.ia-values {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-2);
+}
+.ia-value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+}
+.ia-figure {
+  font-size: 1.375rem;
+  font-weight: 600;
+}
+.ia-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.ia-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9375rem;
+}
+.ia-table caption {
+  text-align: left;
+  font-weight: 600;
+  padding: var(--space-1) 0;
+}
+.ia-table th,
+.ia-table td {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  vertical-align: top;
+}
+.ia-definition {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+}
+.ia-definition summary {
+  cursor: pointer;
+  min-height: var(--touch);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.ia-definition .ia-dl {
+  margin-top: var(--space-2);
+}
+.ia-pending,
+.ia-partial,
+.ia-withheld,
+.ia-success {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0;
+}
+.ia-pending p {
+  margin: 0;
+}
+.ia-gap {
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+}
+.ia-gap h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.ia-export,
+.ia-reproduce {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .ia-dl {
+    grid-template-columns: 1fr;
+  }
+  .ia-inline-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
