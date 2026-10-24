@@ -8,6 +8,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import {
+  NOW_ISO,
   RUN_1,
   metricDefinition,
   ok,
@@ -195,9 +196,10 @@ describe('SCR-S-43 OperatingReportsScreen', () => {
     await user.click(await screen.findByRole('button', { name: 'Store this run: Daily schedule' }));
     expect(await screen.findByText('Run stored')).toBeInTheDocument();
     const post = test.fake.requests.find((r) => r.route === '/reports/runs' && r.method === 'POST');
+    // SPK-REPORT-007: the run is stored at the reviewed result's as-of instant.
     expect(post?.body).toEqual({
       report: 'daily_schedule',
-      parameters: { facilityId: FACILITY_A, date: '2026-10-24' },
+      parameters: { facilityId: FACILITY_A, date: '2026-10-24', asOf: NOW_ISO },
     });
     expect(post?.headers['idempotency-key']).toMatch(/^key-\d{8}$/);
     expect(screen.getByRole('link', { name: 'Export it' })).toHaveAttribute(

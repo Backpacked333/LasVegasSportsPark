@@ -27,6 +27,7 @@ import {
   CommandError,
   CommandSuccess,
   InsightQueryBoundary,
+  detailCodeOf,
 } from '../../features/insight-admin/feedback';
 import { RadioGroup, SelectField, TextField } from '../../features/insight-admin/fields';
 import { formatInstant, shortId } from '../../features/insight-admin/format';
@@ -146,17 +147,23 @@ function ReproduceRun({ run }: { run: ReportRunSummary }) {
   const send = () =>
     void reproduce.submit({ path: { id: run.id }, body: {} }).catch(() => undefined);
   const outcome = reproduce.data;
+  // A live-only report (pointInTime "none") cannot be reproduced: the API refuses it as
+  // live_only, so only "Run again with current data" is offered (SPK-REPORT-002).
+  const reproducible = run.pointInTime !== 'none';
+  const liveOnlyRefusal = detailCodeOf(reproduce.error) === 'live_only';
   return (
     <div className="ia-reproduce">
-      <Button
-        variant="secondary"
-        busy={reproduce.isProcessing}
-        disabled={!online}
-        aria-label={`Check reproduction of run ${shortId(run.id)}`}
-        onClick={send}
-      >
-        Check reproduction
-      </Button>
+      {reproducible ? (
+        <Button
+          variant="secondary"
+          busy={reproduce.isProcessing}
+          disabled={!online}
+          aria-label={`Check reproduction of run ${shortId(run.id)}`}
+          onClick={send}
+        >
+          Check reproduction
+        </Button>
+      ) : null}
       {outcome ? (
         outcome.matched ? (
           <p role="status">
@@ -185,7 +192,11 @@ function ReproduceRun({ run }: { run: ReportRunSummary }) {
           <Link to={`/reports/exports?run=${rerun.id}`}>Export the new run</Link>
         </p>
       ) : null}
-      <CommandError error={reproduce.error} onRetry={send} />
+      {liveOnlyRefusal ? (
+        <p className="caption">{POINT_IN_TIME_LABELS.none}</p>
+      ) : (
+        <CommandError error={reproduce.error} onRetry={send} />
+      )}
     </div>
   );
 }
@@ -193,14 +204,17 @@ function ReproduceRun({ run }: { run: ReportRunSummary }) {
 function RunRow({
   run,
   onCreated,
+  idPrefix = 'list',
 }: {
   run: ReportRunSummary;
   onCreated: (created: ReportExportCreated) => void;
+  /** Keeps element ids unique when the same run is shown as selected and in the list. */
+  idPrefix?: string;
 }) {
   return (
-    <li aria-labelledby={`run-${run.id}`}>
+    <li aria-labelledby={`${idPrefix}-run-${run.id}`}>
       <div className="row-text">
-        <span className="row-title" id={`run-${run.id}`}>
+        <span className="row-title" id={`${idPrefix}-run-${run.id}`}>
           {reportTitle(run.reportKey)} · run {shortId(run.id)}
         </span>
         <span className="caption">
@@ -234,12 +248,15 @@ function RunsPage({
   isLast,
   onMore,
   onCreated,
+  excludeRunId,
 }: {
   report: string;
   cursor: string | null;
   isLast: boolean;
   onMore: (cursor: string) => void;
   onCreated: (created: ReportExportCreated) => void;
+  /** The run already shown as selected is not listed twice (SPK-UX-009). */
+  excludeRunId: string | null;
 }) {
   const query = {
     limit: 20,
@@ -262,9 +279,11 @@ function RunsPage({
       {(data) => (
         <>
           <ul className="list" aria-label={cursor ? 'More stored runs' : 'Stored runs'}>
-            {data.items.map((run) => (
-              <RunRow key={run.id} run={run} onCreated={onCreated} />
-            ))}
+            {data.items
+              .filter((run) => run.id !== excludeRunId)
+              .map((run) => (
+                <RunRow key={run.id} run={run} onCreated={onCreated} />
+              ))}
           </ul>
           {isLast && data.nextCursor ? (
             <Button variant="secondary" onClick={() => onMore(data.nextCursor as string)}>
@@ -295,7 +314,7 @@ function SelectedRun({
       >
         {(data) => (
           <ul className="list" aria-label="Selected run">
-            <RunRow run={data} onCreated={onCreated} />
+            <RunRow run={data} onCreated={onCreated} idPrefix="selected" />
           </ul>
         )}
       </InsightQueryBoundary>
@@ -432,7 +451,7 @@ function SessionExport({
   };
 
   return (
-    <li aria-labelledby={`export-${handle.id}`}>
+    <li aria-label={`Export ${shortId(handle.id)}`}>
       <InsightQueryBoundary
         query={exportQuery}
         label={`export ${shortId(handle.id)}`}
@@ -586,6 +605,7 @@ export function ExportsScreen() {
             isLast={index === cursors.length - 1}
             onMore={(next) => setCursors((list) => [...list, next])}
             onCreated={onCreated}
+            excludeRunId={selectedRun}
           />
         ))}
       </section>

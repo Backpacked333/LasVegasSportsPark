@@ -266,14 +266,68 @@ describe('SCR-S-45 ExportsScreen', () => {
     await waitFor(() => expect(button).toBeDisabled());
   });
 
-  it('preselects a run from the link and shows a run the viewer may not see as not available', async () => {
+  it('preselects a run from the link and lists it once (SPK-UX-009)', async () => {
     render(
-      app({ 'GET /reports/runs/{id}': ok(reportRun(RUN_2)) }).at(`/reports/exports?run=${RUN_2}`),
+      app({
+        'GET /reports/runs': page([runSummary(RUN_2), runSummary(RUN_1)]),
+        'GET /reports/runs/{id}': ok(reportRun(RUN_2)),
+      }).at(`/reports/exports?run=${RUN_2}`),
     );
     const selected = await screen.findByRole('list', { name: 'Selected run' });
     expect(
       within(selected).getByText(`Daily schedule · run ${RUN_2.slice(0, 8)}`),
     ).toBeInTheDocument();
+    const stored = await screen.findByRole('list', { name: 'Stored runs' });
+    const hrefs = within(stored)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain(`/reports/runs/${RUN_1}`);
+    expect(hrefs).not.toContain(`/reports/runs/${RUN_2}`);
+  });
+
+  it('shows a selected run the viewer may not see as not available, with no export form', async () => {
+    render(
+      app({
+        'GET /reports/runs/{id}': () =>
+          fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' })),
+      }).at(`/reports/exports?run=${RUN_2}`),
+    );
+    const section = await screen.findByRole('region', { name: 'Selected run' });
+    expect(await within(section).findByTestId('state-unavailable')).toBeInTheDocument();
+    expect(within(section).queryByRole('form')).toBeNull();
+  });
+
+  it('SPK-REPORT-002: a live-only run offers no reproduction check, only running again', async () => {
+    render(
+      app({ 'GET /reports/runs': page([runSummary(RUN_1, { pointInTime: 'none' })]) }).at(
+        '/reports/exports',
+      ),
+    );
+    expect(
+      await screen.findByRole('button', { name: 'Run again with current data' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Check reproduction/ })).toBeNull();
+  });
+
+  it('§4.9: an export whose request got no answer is retried with the same idempotency key', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const test = app({
+      'POST /reports/exports': () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError('connection dropped');
+        return fakeResponse(201, exportCreated());
+      },
+      'GET /reports/exports/{id}': ok(reportExport('ready')),
+    });
+    render(test.at('/reports/exports'));
+    await createExport(user);
+    await user.click(await screen.findByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(calls).toBe(2));
+    const [first, second] = test.fake.requests.filter(
+      (r) => r.route === '/reports/exports' && r.method === 'POST',
+    );
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 });
 

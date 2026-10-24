@@ -8,6 +8,8 @@
 import { useApp, useNow } from '../../providers/AppProviders';
 import { deviceMidnight, deviceTimeZone, localDateOf } from './format';
 import type { FacilityChoice } from './facilities';
+import type { ApiError } from '@sportspark/api-client';
+import { CommandError } from './feedback';
 import { SelectField, TextField } from './fields';
 import type { ReportParameterShape } from './labels';
 import type { ReportParams } from './ReportPanel';
@@ -80,6 +82,8 @@ export function BaseParameterFields({
   errors,
   choices,
   facilitiesLoading,
+  facilitiesError,
+  onRetryFacilities,
 }: {
   shape: ReportParameterShape;
   state: BaseParamsState;
@@ -87,6 +91,9 @@ export function BaseParameterFields({
   errors: FieldErrors;
   choices: readonly FacilityChoice[];
   facilitiesLoading?: boolean;
+  /** The facility choices could not be read: shown as an error, never an empty select. */
+  facilitiesError?: ApiError | null;
+  onRetryFacilities?: () => void;
 }) {
   const set = (patch: Partial<BaseParamsState>) => onChange({ ...state, ...patch });
   const facility = choices.find((c) => c.id === state.facilityId);
@@ -95,7 +102,9 @@ export function BaseParameterFields({
     : 'Local dates of the facility.';
   return (
     <>
-      {needsFacility(shape) ? (
+      {needsFacility(shape) && facilitiesError ? (
+        <CommandError error={facilitiesError} onRetry={onRetryFacilities} />
+      ) : needsFacility(shape) ? (
         <SelectField
           label="Facility"
           required

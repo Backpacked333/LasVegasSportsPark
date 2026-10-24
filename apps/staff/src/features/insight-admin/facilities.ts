@@ -5,6 +5,7 @@
  * facility directory, so an unnamed facility shows a short reference. The time zone and local date
  * come from the same feed (SPK-SCHED-008); nothing here decides authorization.
  */
+import type { ApiError } from '@sportspark/api-client';
 import { useMemo } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
 import { facilityLabel } from '../../layout/FacilitySwitcher';
@@ -21,6 +22,12 @@ export function useFacilityChoices(): {
   /** The principal is scoped to listed facilities (organization-wide reports are refused). */
   scoped: boolean;
   loading: boolean;
+  /**
+   * SPK-UX-008: the choices could not be read (no facility listed because a read failed), so
+   * consumers show the error, never an empty list.
+   */
+  error: ApiError | null;
+  refetch: () => void;
 } {
   const me = useApiQuery({ path: '/me' });
   const today = useApiQuery({ path: '/today', staleTime: 5 * 60_000 });
@@ -39,6 +46,11 @@ export function useFacilityChoices(): {
       })),
       scoped: scopedIds.length > 0,
       loading: me.isLoading || today.isLoading,
+      error: ids.length === 0 ? (me.error ?? today.error ?? null) : null,
+      refetch: () => {
+        void me.refetch();
+        void today.refetch();
+      },
     };
-  }, [me.data, me.isLoading, today.data, today.isLoading]);
+  }, [me, today]);
 }

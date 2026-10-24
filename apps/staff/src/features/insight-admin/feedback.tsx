@@ -16,6 +16,7 @@
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { QueryBoundary, type QueryBoundaryProps } from '../../ui/QueryBoundary';
+import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { DECISIONS } from './labels';
@@ -99,6 +100,19 @@ export function CommandError({ error, onRetry, onReload, deniedDescription }: Co
     );
   }
   const fields = Object.entries(fieldErrorsOf(error));
+  if (error.isStale && !onReload) {
+    // No reload exists for this record here: the caller explains how to start again, so no
+    // "Reload" label is printed that cannot be acted on (SPK-UX-008).
+    return (
+      <section className="state" aria-live="polite" data-testid="state-stale">
+        <StatusBadge tone="warning" label="This record changed" />
+        <p className="caption">
+          Error code: {error.code}
+          {error.correlationId ? `. Reference: ${error.correlationId}` : ''}
+        </p>
+      </section>
+    );
+  }
   return (
     <div>
       <StateView
@@ -183,4 +197,35 @@ export function InsightQueryBoundary<T>(
     return <CommandError error={error} onRetry={() => void rest.query.refetch()} />;
   }
   return <QueryBoundary {...rest} />;
+}
+
+/** Previous and next pages over an API cursor (§4.5): nothing is silently cut off. */
+export function CursorPages({
+  what,
+  depth,
+  nextCursor,
+  onNext,
+  onPrevious,
+}: {
+  what: string;
+  depth: number;
+  nextCursor: string | null;
+  onNext: (cursor: string) => void;
+  onPrevious: () => void;
+}) {
+  if (depth === 0 && !nextCursor) return null;
+  return (
+    <div className="ia-row-actions" role="group" aria-label={`Pages of ${what}`}>
+      {depth > 0 ? (
+        <Button variant="secondary" onClick={onPrevious}>
+          Previous page
+        </Button>
+      ) : null}
+      {nextCursor ? (
+        <Button variant="secondary" onClick={() => onNext(nextCursor)}>
+          Next page
+        </Button>
+      ) : null}
+    </div>
+  );
 }

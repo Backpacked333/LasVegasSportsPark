@@ -143,6 +143,8 @@ describe('SCR-S-46 AccountsRolesScreen', () => {
     expect(
       screen.getByText(/cannot be reloaded on this page; your entries are kept/),
     ).toBeInTheDocument();
+    // No "Reload" that cannot be acted on (SPK-UX-008).
+    expect(screen.queryByText('Reload')).toBeNull();
     const patch = test.fake.requests.find((r) => r.route === '/staff-memberships/{id}');
     expect(patch?.body).toEqual({
       roles: ['scheduler', 'front_desk'],
@@ -172,8 +174,31 @@ describe('SCR-S-46 AccountsRolesScreen', () => {
     expect(test.fake.requests.find((r) => r.route === '/staff-memberships/{id}/end')?.body).toEqual(
       {
         reason: 'Left the organization',
+        expectedRevision: 1,
       },
     );
+  });
+
+  it('ending a membership changed by another administrator is refused as STALE_REVISION', async () => {
+    const user = userEvent.setup();
+    const test = app({
+      'POST /staff-memberships': { status: 201, body: staffMembership() },
+      'POST /staff-memberships/{id}/end': () =>
+        fakeResponse(
+          409,
+          apiErrorBody('STALE_REVISION', {
+            message: 'The record changed since it was loaded.',
+            nextAction: 'reload_and_retry',
+          }),
+        ),
+    });
+    render(test.at('/admin/accounts'));
+    await assign(user);
+    await user.click(await screen.findByRole('button', { name: 'End membership' }));
+    await user.type(screen.getByLabelText('Reason for ending (required)'), 'Left the organization');
+    await user.click(screen.getByRole('button', { name: 'End membership now' }));
+    expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeInTheDocument();
+    expect(screen.getByText(/cannot be reloaded on this page/)).toBeInTheDocument();
   });
 
   it('never names a child person record when checking a person id', async () => {

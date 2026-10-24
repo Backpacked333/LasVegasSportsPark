@@ -22,6 +22,8 @@ export type ApiQueryArgs<P extends GetPath> = {
   enabled?: boolean;
   staleTime?: number;
   refetchInterval?: number | false;
+  /** False for a result the viewer acts on as shown (for example a report about to be stored). */
+  refetchOnWindowFocus?: boolean;
 } & (undefined extends OptionsArg<P, 'get'>[0]
   ? { request?: Omit<RequestOf<P>, 'signal'> }
   : { request: Omit<RequestOf<P>, 'signal'> });
@@ -58,6 +60,9 @@ export function useApiQuery<P extends GetPath>(args: ApiQueryArgs<P>): ApiQueryR
     enabled: args.enabled,
     staleTime: args.staleTime,
     refetchInterval: args.refetchInterval,
+    ...(args.refetchOnWindowFocus !== undefined
+      ? { refetchOnWindowFocus: args.refetchOnWindowFocus }
+      : {}),
   });
   return {
     ...query,

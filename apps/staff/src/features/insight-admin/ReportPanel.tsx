@@ -31,11 +31,27 @@ export type ReportParams = Record<string, string | boolean | number>;
 
 const RUNS_KEY = ['api', '/reports/runs'] as const;
 
-function StoreRun({ entry, params }: { entry: ReportCatalogEntry; params: ReportParams }) {
+/**
+ * Stores the run the viewer reviewed (SPK-REPORT-007): a point-in-time report is stored at the
+ * shown result's as-of instant, so the stored figures are the ones on screen. A live-only report
+ * cannot be evaluated at an earlier instant, so storing it is a new live evaluation, and the
+ * outcome says its figures may differ from those shown.
+ */
+function StoreRun({
+  entry,
+  params,
+  report,
+}: {
+  entry: ReportCatalogEntry;
+  params: ReportParams;
+  report: Schema<'ReportResponse'>;
+}) {
   const { online } = useApp();
   const store = useApiCommand('post', '/reports/runs', { invalidate: [RUNS_KEY] });
+  const liveOnly = report.freshness.pointInTime === 'none';
+  const parameters = liveOnly ? params : { ...params, asOf: report.asOf };
   const submit = () =>
-    void store.submit({ body: { report: entry.key, parameters: params } }).catch(() => undefined);
+    void store.submit({ body: { report: entry.key, parameters } }).catch(() => undefined);
   const run = store.data as Schema<'ReportRun'> | undefined;
   return (
     <section className="ia-section" aria-label="Store this run">
@@ -59,6 +75,9 @@ function StoreRun({ entry, params }: { entry: ReportCatalogEntry; params: Report
           {formatInstant(run.asOf, run.result.scope.timezone)}.{' '}
           <Link to={`/reports/runs/${run.id}`}>Open the stored run</Link> ·{' '}
           <Link to={`/reports/exports?run=${run.id}`}>Export it</Link>
+          {liveOnly
+            ? ' Stored as a new live evaluation; its figures may differ from those shown above.'
+            : ''}
         </p>
       ) : null}
       <CommandError error={store.error} onRetry={submit} />
@@ -110,6 +129,8 @@ export function ReportPanel({
     path: entry.path as ReportPath,
     request: { query: (params ?? {}) as never },
     enabled: params !== null,
+    // The shown result is what "Store this run" stores: it does not drift on window focus.
+    refetchOnWindowFocus: false,
   });
 
   if (params === null) {
@@ -149,7 +170,7 @@ export function ReportPanel({
       {(data) => (
         <>
           <ReportView report={data} facilityName={facilityName} />
-          <StoreRun entry={entry} params={params} />
+          <StoreRun entry={entry} params={params} report={data} />
         </>
       )}
     </InsightQueryBoundary>

@@ -173,7 +173,9 @@ const EMPTY_DRAFT: AssignDraft = {
 
 function AssignRoles({ onSaved }: { onSaved: (membership: StaffMembership) => void }) {
   const { online } = useApp();
-  const { choices } = useFacilityChoices();
+  // A failed read of the facility choices is shown, and assigning waits for it: an empty scope
+  // would silently mean the whole organization (SPK-UX-008).
+  const { choices, error: choicesError, refetch: refetchChoices } = useFacilityChoices();
   const [draft, setDraft] = useState<AssignDraft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [checkedPerson, setCheckedPerson] = useState<string | null>(null);
@@ -284,10 +286,18 @@ function AssignRoles({ onSaved }: { onSaved: (membership: StaffMembership) => vo
         hint="Recorded in the audit with the change."
       />
       <div>
-        <Button type="submit" busy={assign.isProcessing} disabled={!online}>
+        <Button type="submit" busy={assign.isProcessing} disabled={!online || !!choicesError}>
           Assign roles
         </Button>
       </div>
+      {choicesError ? (
+        <>
+          <p className="caption">
+            The facilities could not be read, so a facility scope cannot be chosen yet.
+          </p>
+          <CommandError error={choicesError} onRetry={refetchChoices} />
+        </>
+      ) : null}
       {!online ? <p className="caption">Changing staff roles needs a connection.</p> : null}
       <CommandSuccess message={success} />
       <CommandError
@@ -306,7 +316,9 @@ function StaleNote({ error }: { error: { isStale: boolean } | null }) {
   return (
     <p className="caption">
       This membership changed since it was shown here. The API offers no read of a single
-      membership, so it cannot be reloaded on this page; your entries are kept.
+      membership, so it cannot be reloaded on this page; your entries are kept. To start again, open
+      the person&apos;s current memberships from their staff record, or end this one and assign a
+      new one.
     </p>
   );
 }
@@ -408,7 +420,12 @@ function EndMembership({
   const end = useApiCommand('post', '/staff-memberships/{id}/end', { invalidate: [ME_KEY] });
   const send = () =>
     void end
-      .submit({ path: { id: membership.id }, body: { reason: reason.trim() } })
+      // The membership's revision: a concurrent change by another administrator is refused
+      // (STALE_REVISION), never silently overridden (§4.9).
+      .submit({
+        path: { id: membership.id },
+        body: { reason: reason.trim(), expectedRevision: membership.revision },
+      })
       .then(onSaved)
       .catch(() => undefined);
   const submit = (event: FormEvent) => {

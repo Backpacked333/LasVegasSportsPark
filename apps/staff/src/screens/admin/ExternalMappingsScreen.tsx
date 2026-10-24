@@ -9,7 +9,7 @@
 import type { Schema } from '@sportspark/api-client';
 import { useState, type FormEvent } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
-import { InsightQueryBoundary } from '../../features/insight-admin/feedback';
+import { CursorPages, InsightQueryBoundary } from '../../features/insight-admin/feedback';
 import { SelectField, TextField } from '../../features/insight-admin/fields';
 import { formatInstant, shortId, UUID_PATTERN } from '../../features/insight-admin/format';
 import { ENTITY_TYPE_LABELS, ENTITY_TYPES } from '../../features/insight-admin/labels';
@@ -27,11 +27,14 @@ interface Lookup {
 const EMPTY: Lookup = { sourceSystem: '', entityType: '', externalId: '', internalId: '' };
 
 function Results({ lookup }: { lookup: Lookup }) {
+  const [cursors, setCursors] = useState<string[]>([]);
+  const cursor = cursors[cursors.length - 1];
   const mappings = useApiQuery({
     path: '/external-mappings',
     request: {
       query: {
         limit: 100,
+        ...(cursor ? { cursor } : {}),
         ...(lookup.sourceSystem ? { sourceSystem: lookup.sourceSystem } : {}),
         ...(lookup.entityType
           ? { entityType: lookup.entityType as Schema<'ImportEntityType'> }
@@ -45,56 +48,65 @@ function Results({ lookup }: { lookup: Lookup }) {
     <InsightQueryBoundary
       query={mappings}
       label="external mappings"
-      isEmpty={(data) => data.items.length === 0}
+      isEmpty={(data) => data.items.length === 0 && cursors.length === 0}
       empty={{
         title: 'No mapping found',
         description: 'No external identifier matches this lookup.',
       }}
     >
       {(data) => (
-        <div
-          className="ia-table-wrap"
-          role="region"
-          aria-label="External mappings table"
-          tabIndex={0}
-        >
-          <table className="ia-table">
-            <caption>External identifiers and their internal records</caption>
-            <thead>
-              <tr>
-                <th scope="col">Source</th>
-                <th scope="col">Records</th>
-                <th scope="col">External id</th>
-                <th scope="col">Status</th>
-                <th scope="col">Internal record</th>
-                <th scope="col">First and last batch</th>
-                <th scope="col">Linked</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((m) => (
-                <tr key={m.id}>
-                  <td>{m.sourceSystem}</td>
-                  <td>{ENTITY_TYPE_LABELS[m.entityType]}</td>
-                  <td>{m.externalId}</td>
-                  <td>
-                    <StatusBadge
-                      tone={m.status === 'linked' ? 'success' : 'pending'}
-                      label={m.status}
-                    />
-                  </td>
-                  <td title={m.internalId ?? undefined}>
-                    {m.internalId ? shortId(m.internalId) : 'none yet'}
-                  </td>
-                  <td>
-                    {shortId(m.firstSeenBatchId)} / {shortId(m.lastSeenBatchId)}
-                  </td>
-                  <td>{formatInstant(m.linkedAt)}</td>
+        <>
+          <div
+            className="ia-table-wrap"
+            role="region"
+            aria-label="External mappings table"
+            tabIndex={0}
+          >
+            <table className="ia-table">
+              <caption>External identifiers and their internal records</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Source</th>
+                  <th scope="col">Records</th>
+                  <th scope="col">External id</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Internal record</th>
+                  <th scope="col">First and last batch</th>
+                  <th scope="col">Linked</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {data.items.map((m) => (
+                  <tr key={m.id}>
+                    <td>{m.sourceSystem}</td>
+                    <td>{ENTITY_TYPE_LABELS[m.entityType]}</td>
+                    <td>{m.externalId}</td>
+                    <td>
+                      <StatusBadge
+                        tone={m.status === 'linked' ? 'success' : 'pending'}
+                        label={m.status}
+                      />
+                    </td>
+                    <td title={m.internalId ?? undefined}>
+                      {m.internalId ? shortId(m.internalId) : 'none yet'}
+                    </td>
+                    <td>
+                      {shortId(m.firstSeenBatchId)} / {shortId(m.lastSeenBatchId)}
+                    </td>
+                    <td>{formatInstant(m.linkedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <CursorPages
+            what="external mappings"
+            depth={cursors.length}
+            nextCursor={data.nextCursor}
+            onNext={(next) => setCursors((list) => [...list, next])}
+            onPrevious={() => setCursors((list) => list.slice(0, -1))}
+          />
+        </>
       )}
     </InsightQueryBoundary>
   );

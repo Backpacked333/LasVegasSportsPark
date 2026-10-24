@@ -29,7 +29,7 @@ export function OperatingReportsScreen() {
   const entry: ReportCatalogEntry =
     OPERATING_REPORTS.find((e) => e.key === requested) ??
     (OPERATING_REPORTS[0] as ReportCatalogEntry);
-  const { choices, loading } = useFacilityChoices();
+  const { choices, loading, error: facilitiesError, refetch } = useFacilityChoices();
   const initial = useInitialBaseParams(choices);
   const [edited, setEdited] = useState<BaseParamsState | null>(null);
   const state = edited ?? initial;
@@ -75,6 +75,8 @@ export function OperatingReportsScreen() {
           errors={errors}
           choices={choices}
           facilitiesLoading={loading}
+          facilitiesError={facilitiesError}
+          onRetryFacilities={refetch}
         />
         <div>
           <Button type="submit">Show report</Button>

@@ -64,6 +64,38 @@ describe('SCR-S-47 IntegrationsConfigScreen', () => {
     );
   });
 
+  it('SCR-S-47: a failed connection re-check shows the failure, not the earlier result', async () => {
+    const user = userEvent.setup();
+    let checks = 0;
+    const test = app({
+      'GET /health': () => {
+        checks += 1;
+        return checks === 1
+          ? fakeResponse(200, { status: 'ok', version: '1.2.3', database: 'ok' })
+          : fakeResponse(502, apiErrorBody('INTERNAL_ERROR'));
+      },
+    });
+    render(test.at('/admin/integrations'));
+    expect(await screen.findByText('API ok')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByText('Connection test failed')).toBeInTheDocument();
+    expect(screen.queryByText('API ok')).toBeNull();
+    expect(screen.getByText(/Last successful check/)).toBeInTheDocument();
+  });
+
+  it('SPK-UX-008: facilities that cannot be read are an error, not an empty list', async () => {
+    const test = app({
+      'GET /me': () => fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
+      'GET /today': () => fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
+    });
+    render(test.at('/admin/integrations'));
+    const settings = await screen.findByRole('region', {
+      name: 'Organization and facility settings',
+    });
+    expect((await within(settings).findAllByText(/INTERNAL_ERROR/)).length).toBeGreaterThan(0);
+    expect(within(settings).queryByText('No facility is listed for you.')).toBeNull();
+  });
+
   it('SPK-SCHED-008: checks each facility time zone and keeps settings read-only', async () => {
     const feed = todayFeed();
     const facilities = (feed.body as { facilities: { timezone: string }[] }).facilities;

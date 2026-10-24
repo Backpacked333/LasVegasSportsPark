@@ -8,6 +8,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { useApiQuery } from '../../api/useApiQuery';
 import { InsightQueryBoundary } from '../../features/insight-admin/feedback';
 import { SelectField } from '../../features/insight-admin/fields';
@@ -21,16 +22,20 @@ import { ExceptionCard } from '../../features/insight-admin/migration';
 import { MigrationNav } from '../../features/insight-admin/nav';
 import { Button } from '../../ui/Button';
 
-function ExceptionsPage({
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function ExceptionsPage({
   filters,
   cursor,
   isLast,
   onMore,
+  label = 'Import exceptions',
 }: {
-  filters: { status: string; kind: string; owner: string };
+  filters: { status: string; kind: string; owner: string; batchId?: string };
   cursor: string | null;
   isLast: boolean;
   onMore: (cursor: string) => void;
+  label?: string;
 }) {
   const exceptions = useApiQuery({
     path: '/import-exceptions',
@@ -38,6 +43,7 @@ function ExceptionsPage({
       query: {
         limit: 50,
         ...(cursor ? { cursor } : {}),
+        ...(filters.batchId ? { batchId: filters.batchId } : {}),
         ...(filters.status
           ? { status: filters.status as Schema<'ImportException'>['status'] }
           : {}),
@@ -61,7 +67,7 @@ function ExceptionsPage({
     >
       {(data) => (
         <>
-          <ul className="list" aria-label="Import exceptions">
+          <ul className="list" aria-label={label}>
             {data.items.map((exception) => (
               <ExceptionCard key={exception.id} exception={exception} />
             ))}
@@ -78,6 +84,10 @@ function ExceptionsPage({
 }
 
 export function ImportReviewScreen() {
+  // `?batch=<id>` narrows the queue to one batch (linked from the batch page).
+  const [search] = useSearchParams();
+  const batchParam = search.get('batch');
+  const batchId = batchParam && UUID_RE.test(batchParam) ? batchParam : undefined;
   const [status, setStatus] = useState('open');
   const [kind, setKind] = useState('');
   const [owner, setOwner] = useState('');
@@ -122,10 +132,16 @@ export function ImportReviewScreen() {
           options={STAFF_ROLES.map((role) => ({ value: role, label: roleLabel(role) }))}
         />
       </div>
+      {batchId ? (
+        <p className="caption">
+          Showing the exceptions of batch {batchId.slice(0, 8)}.{' '}
+          <Link to="/admin/migration/review">Show every batch</Link>
+        </p>
+      ) : null}
       {cursors.map((cursor, index) => (
         <ExceptionsPage
-          key={`${status}:${kind}:${owner}:${cursor ?? 'first'}`}
-          filters={{ status, kind, owner }}
+          key={`${batchId ?? 'all'}:${status}:${kind}:${owner}:${cursor ?? 'first'}`}
+          filters={{ status, kind, owner, ...(batchId ? { batchId } : {}) }}
           cursor={cursor}
           isLast={index === cursors.length - 1}
           onMore={(next) => setCursors((list) => [...list, next])}

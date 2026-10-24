@@ -9,7 +9,11 @@
 import { useState } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useFacilityChoices } from '../../features/insight-admin/facilities';
-import { InsightQueryBoundary, PendingNote } from '../../features/insight-admin/feedback';
+import {
+  CursorPages,
+  InsightQueryBoundary,
+  PendingNote,
+} from '../../features/insight-admin/feedback';
 import { SelectField } from '../../features/insight-admin/fields';
 import { formatInstant, shortId } from '../../features/insight-admin/format';
 import {
@@ -40,9 +44,11 @@ function scopeLabel(
 }
 
 function Assignments({ facilityName }: { facilityName: (id: string) => string }) {
+  const [cursors, setCursors] = useState<string[]>([]);
+  const cursor = cursors[cursors.length - 1];
   const assignments = useApiQuery({
     path: '/authority-assignments',
-    request: { query: { limit: 200 } },
+    request: { query: { limit: 200, ...(cursor ? { cursor } : {}) } },
   });
   return (
     <section className="ia-section" aria-labelledby="assignments-title">
@@ -50,7 +56,7 @@ function Assignments({ facilityName }: { facilityName: (id: string) => string })
       <InsightQueryBoundary
         query={assignments}
         label="authority assignments"
-        isEmpty={(data) => data.items.length === 0}
+        isEmpty={(data) => data.items.length === 0 && cursors.length === 0}
         empty={{
           title: 'No authority assignments',
           description:
@@ -58,30 +64,39 @@ function Assignments({ facilityName }: { facilityName: (id: string) => string })
         }}
       >
         {(data) => (
-          <ul className="list" aria-label="Authority assignments">
-            {data.items.map((a) => (
-              <li key={a.id}>
-                <div className="row-text">
-                  <span className="row-title">
-                    {ENTITY_TYPE_LABELS[a.recordCategory]}: {a.authoritativeSystem}
-                  </span>
-                  <span className="caption">
-                    Scope {scopeLabel(a.scope, facilityName)} · from{' '}
-                    {formatInstant(a.effectiveFrom)}
-                    {a.effectiveTo ? ` to ${formatInstant(a.effectiveTo)}` : ', open-ended'} ·
-                    approved by {a.approvedBy.actorLabel}
-                  </span>
-                  <span className="caption">Reason: {a.reason}</span>
-                  {a.endedAt ? (
-                    <span className="caption">
-                      Ended {formatInstant(a.endedAt)}
-                      {a.endReason ? `: ${a.endReason}` : ''}
+          <>
+            <ul className="list" aria-label="Authority assignments">
+              {data.items.map((a) => (
+                <li key={a.id}>
+                  <div className="row-text">
+                    <span className="row-title">
+                      {ENTITY_TYPE_LABELS[a.recordCategory]}: {a.authoritativeSystem}
                     </span>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
+                    <span className="caption">
+                      Scope {scopeLabel(a.scope, facilityName)} · from{' '}
+                      {formatInstant(a.effectiveFrom)}
+                      {a.effectiveTo ? ` to ${formatInstant(a.effectiveTo)}` : ', open-ended'} ·
+                      approved by {a.approvedBy.actorLabel}
+                    </span>
+                    <span className="caption">Reason: {a.reason}</span>
+                    {a.endedAt ? (
+                      <span className="caption">
+                        Ended {formatInstant(a.endedAt)}
+                        {a.endReason ? `: ${a.endReason}` : ''}
+                      </span>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <CursorPages
+              what="authority assignments"
+              depth={cursors.length}
+              nextCursor={data.nextCursor}
+              onNext={(next) => setCursors((list) => [...list, next])}
+              onPrevious={() => setCursors((list) => list.slice(0, -1))}
+            />
+          </>
         )}
       </InsightQueryBoundary>
     </section>

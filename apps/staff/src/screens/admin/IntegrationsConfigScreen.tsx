@@ -18,7 +18,12 @@ import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useFacilityChoices } from '../../features/insight-admin/facilities';
-import { ApiGap, InsightQueryBoundary, PendingNote } from '../../features/insight-admin/feedback';
+import {
+  ApiGap,
+  CommandError,
+  InsightQueryBoundary,
+  PendingNote,
+} from '../../features/insight-admin/feedback';
 import { SelectField } from '../../features/insight-admin/fields';
 import { formatInstant, isValidTimeZone, shortId } from '../../features/insight-admin/format';
 import {
@@ -60,21 +65,39 @@ function ApiConnection() {
       >
         {(data) => (
           <>
-            <dl className="ia-dl">
-              <dt>API</dt>
-              <dd>
-                <StatusBadge tone="success" label={`API ${data.status}`} /> version {data.version}
-              </dd>
-              <dt>Database</dt>
-              <dd>
-                <StatusBadge
-                  tone={data.database === 'ok' ? 'success' : 'danger'}
-                  label={`database ${data.database}`}
-                />
-              </dd>
-              <dt>This dashboard</dt>
-              <dd>version {services.config.appVersion}</dd>
-            </dl>
+            {health.error ? (
+              // SCR-S-47: a failed re-check is a failure, never the earlier green result.
+              <>
+                <p>
+                  <StatusBadge tone="danger" label="Connection test failed" />{' '}
+                  {health.errorUpdatedAt
+                    ? `at ${formatInstant(new Date(health.errorUpdatedAt).toISOString())}`
+                    : ''}
+                </p>
+                <CommandError error={health.error} onRetry={() => void health.refetch()} />
+                {health.updatedAt ? (
+                  <p className="caption">
+                    Last successful check {formatInstant(health.updatedAt.toISOString())}.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <dl className="ia-dl">
+                <dt>API</dt>
+                <dd>
+                  <StatusBadge tone="success" label={`API ${data.status}`} /> version {data.version}
+                </dd>
+                <dt>Database</dt>
+                <dd>
+                  <StatusBadge
+                    tone={data.database === 'ok' ? 'success' : 'danger'}
+                    label={`database ${data.database}`}
+                  />
+                </dd>
+                <dt>This dashboard</dt>
+                <dd>version {services.config.appVersion}</dd>
+              </dl>
+            )}
             <Button
               variant="secondary"
               busy={health.isFetching}
@@ -125,7 +148,7 @@ function ProviderGates() {
 }
 
 function FacilitySettings() {
-  const { choices, loading } = useFacilityChoices();
+  const { choices, loading, error, refetch } = useFacilityChoices();
   const me = useApiQuery({ path: '/me' });
   return (
     <section className="ia-section" aria-labelledby="facility-settings-title">
@@ -137,6 +160,8 @@ function FacilitySettings() {
         <p role="progressbar" aria-busy="true" aria-label="Loading facility settings">
           Loading facility settings…
         </p>
+      ) : error ? (
+        <CommandError error={error} onRetry={refetch} />
       ) : choices.length === 0 ? (
         <p className="caption">No facility is listed for you.</p>
       ) : (

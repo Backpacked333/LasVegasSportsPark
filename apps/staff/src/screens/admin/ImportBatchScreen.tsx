@@ -35,6 +35,7 @@ import {
 import {
   BATCH_BADGES,
   ENTITY_TYPE_LABELS,
+  EXCEPTION_STATUS_BADGES,
   ENTITY_TYPES,
   ROW_OUTCOME_BADGES,
   type RowOutcome,
@@ -43,11 +44,11 @@ import {
   BATCHES_KEY,
   BATCH_KEY,
   EXCEPTIONS_KEY,
-  ExceptionCard,
   ReasonList,
   ReconciliationReportView,
 } from '../../features/insight-admin/migration';
 import { MigrationNav } from '../../features/insight-admin/nav';
+import { ExceptionsPage } from './ImportReviewScreen';
 import { parseStagingDocument, readFileText } from '../../features/insight-admin/staging';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -211,7 +212,14 @@ function ReviewAction({ batch, onDone }: { batch: ImportBatch; onDone: OnDone })
           ? `${batch.exceptions.open} exceptions are open; the review completes once every one is decided.`
           : 'Every exception is decided.'}
       </p>
-      {message ? <p className="ia-withheld">{message}</p> : null}
+      {message ? (
+        <p className="ia-withheld">
+          {message}{' '}
+          <Link to={`/admin/migration/review?batch=${batch.id}`}>
+            Open this batch&apos;s exceptions in the review queue
+          </Link>
+        </p>
+      ) : null}
       <CommandError error={review.error} onRetry={send} onReload={() => void refresh()} />
     </div>
   );
@@ -320,17 +328,35 @@ function ReconcileAction({ batch }: { batch: ImportBatch }) {
         again supersedes a pending report; earlier reports stay as evidence.
       </p>
       <CommandError error={generate.error} onRetry={send} />
-      {generate.data ? (
-        <>
-          <p>
-            <Link to={`/admin/migration/reconciliation/${generate.data.id}`}>
-              Open reconciliation report {shortId(generate.data.id)}
-            </Link>
-          </p>
-          <ReconciliationReportView report={generate.data} />
-        </>
-      ) : null}
+      {generate.data ? <GeneratedReport reportId={generate.data.id} /> : null}
     </div>
+  );
+}
+
+/**
+ * The generated report read through its own query, so a sign-off refetches it and the next
+ * sign-off carries the current revision (the mutation result would stay as generated).
+ */
+function GeneratedReport({ reportId }: { reportId: string }) {
+  const report = useApiQuery({
+    path: '/import-reconciliation-reports/{id}',
+    request: { path: { id: reportId } },
+  });
+  return (
+    <>
+      <p>
+        <Link to={`/admin/migration/reconciliation/${reportId}`}>
+          Open reconciliation report {shortId(reportId)}
+        </Link>
+      </p>
+      <InsightQueryBoundary
+        query={report}
+        label="the reconciliation report"
+        empty={{ title: 'Not available', description: '' }}
+      >
+        {(data) => <ReconciliationReportView report={data} />}
+      </InsightQueryBoundary>
+    </>
   );
 }
 
@@ -652,32 +678,34 @@ function BatchRows({ batchId }: { batchId: string }) {
 }
 
 function BatchExceptions({ batchId }: { batchId: string }) {
-  const exceptions = useApiQuery({
-    path: '/import-exceptions',
-    request: { query: { batchId, limit: 100 } },
-  });
+  // Every open exception of the batch is reachable: open ones first, paged with the cursor.
+  const [status, setStatus] = useState('open');
+  const [cursors, setCursors] = useState<(string | null)[]>([null]);
   return (
     <section className="ia-section" aria-labelledby="batch-exceptions-title">
       <h3 id="batch-exceptions-title">Review exceptions of this batch</h3>
-      <InsightQueryBoundary
-        query={exceptions}
-        label="review exceptions"
-        isEmpty={(data) => data.items.length === 0}
-        empty={{
-          title: 'No review exceptions',
-          description:
-            'Ambiguous relationships and balances, conflicts and validation errors appear here.',
+      <SelectField
+        label="Exception status"
+        value={status}
+        onChange={(v) => {
+          setStatus(v);
+          setCursors([null]);
         }}
-        unavailableOffline={['recording review decisions']}
-      >
-        {(data) => (
-          <ul className="list" aria-label="Review exceptions of this batch">
-            {data.items.map((exception) => (
-              <ExceptionCard key={exception.id} exception={exception} />
-            ))}
-          </ul>
-        )}
-      </InsightQueryBoundary>
+        placeholder="All statuses"
+        options={Object.keys(EXCEPTION_STATUS_BADGES).map((s) => ({ value: s, label: s }))}
+      />
+      {cursors.map((cursor, index) => (
+        <ExceptionsPage
+          key={`${status}:${cursor ?? 'first'}`}
+          filters={{ status, kind: '', owner: '', batchId }}
+          cursor={cursor}
+          isLast={index === cursors.length - 1}
+          onMore={(next) => setCursors((list) => [...list, next])}
+          label={
+            cursor ? 'More review exceptions of this batch' : 'Review exceptions of this batch'
+          }
+        />
+      ))}
     </section>
   );
 }

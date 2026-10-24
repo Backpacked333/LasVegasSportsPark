@@ -115,6 +115,9 @@ describe('SCR-S-48 ImportBatchScreen', () => {
     await user.click(await screen.findByRole('button', { name: 'Complete the review' }));
     expect(await screen.findByText(/1 review exceptions are still open/)).toBeInTheDocument();
 
+    expect(
+      screen.getByRole('link', { name: "Open this batch's exceptions in the review queue" }),
+    ).toHaveAttribute('href', `/admin/migration/review?batch=${BATCH_1}`);
     const queue = screen.getByRole('list', { name: 'Review exceptions of this batch' });
     expect(within(queue).getByText(/Review owner: Support operator/)).toBeInTheDocument();
     await user.click(within(queue).getByRole('button', { name: 'Decide Validation error X-3' }));
@@ -147,8 +150,13 @@ describe('SCR-S-48 ImportBatchScreen', () => {
     await user.click(await screen.findByRole('button', { name: 'Decide Ambiguous balance X-3' }));
     const form = screen.getByRole('form', { name: /Decide exception/ });
     await user.click(within(form).getByRole('radio', { name: 'Accept' }));
-    await user.type(within(form).getByLabelText('Currency of the approved amount'), 'USD');
-    await user.type(within(form).getByLabelText('Opening amount finance approved'), '24.00');
+    // The staged balance's currency is unknown here, so the amount is in minor units, with the
+    // amount to be recorded confirmed before sending.
+    await user.type(
+      within(form).getByLabelText(/^Approved amount in minor units of the staged balance/),
+      '2400',
+    );
+    expect(within(form).getByText(/Records amountMinor 2400/)).toBeInTheDocument();
     await user.type(
       within(form).getByLabelText('Reason (required)'),
       'Finance approved the corrected balance',
@@ -239,16 +247,55 @@ describe('SCR-S-48 ImportBatchScreen', () => {
     );
   });
 
+  it('lists the batch exceptions open first and pages them with the cursor', async () => {
+    const user = userEvent.setup();
+    const test = app(importBatch(BATCH_1, 'validated'), {
+      'GET /import-exceptions': (req) =>
+        fakeResponse(200, {
+          items: [importException('validation', req.query.cursor ? { externalId: 'X-9' } : {})],
+          nextCursor: req.query.cursor ? null : 'e-2',
+        }),
+    });
+    render(test.at(at));
+    await screen.findByRole('list', { name: 'Review exceptions of this batch' });
+    const first = test.fake.requests.find((r) => r.route === '/import-exceptions');
+    expect(first?.query).toMatchObject({ batchId: BATCH_1, status: 'open' });
+    await user.click(screen.getByRole('button', { name: 'Show more exceptions' }));
+    const more = await screen.findByRole('list', { name: 'More review exceptions of this batch' });
+    expect(within(more).getByText(/X-9/)).toBeInTheDocument();
+    expect(
+      test.fake.requests.some((r) => r.route === '/import-exceptions' && r.query.cursor === 'e-2'),
+    ).toBe(true);
+  });
+
   it('§5.5: reconciles at four levels, lists discrepancies unnetted and records an area sign-off', async () => {
     const user = userEvent.setup();
+    let signed = false;
+    const signedReport = reconciliationReport({
+      revision: 2,
+      approvals: [
+        {
+          area: 'finance',
+          decision: 'approved',
+          approverPersonId: '0192f1a0-0000-7000-8000-0000000000dd',
+          approverRole: 'finance_operator',
+          reason: 'Difference explained by a late refund',
+          acknowledgedDiscrepancies: 1,
+          decidedAt: '2026-10-24T12:00:00.000Z',
+        },
+      ],
+    });
     const test = app(importBatch(BATCH_1, 'applied'), {
       'POST /import-batches/{id}/reconciliation-reports': {
         status: 201,
         body: reconciliationReport(),
       },
-      'POST /import-reconciliation-reports/{id}/approvals': ok(
-        reconciliationReport({ revision: 2 }),
-      ),
+      'GET /import-reconciliation-reports/{id}': () =>
+        fakeResponse(200, signed ? signedReport : reconciliationReport()),
+      'POST /import-reconciliation-reports/{id}/approvals': () => {
+        signed = true;
+        return fakeResponse(200, signedReport);
+      },
     });
     render(test.at(at));
     await user.click(await screen.findByRole('button', { name: 'Reconcile this batch' }));
@@ -289,6 +336,28 @@ describe('SCR-S-48 ImportBatchScreen', () => {
         expectedRevision: 1,
         reason: 'Difference explained by a late refund',
       }),
+    );
+    // The confirmed outcome names the result, the decided area leaves the form, and the next
+    // sign-off carries the refetched revision.
+    expect(await screen.findByText(/Finance approved; sign-off pending/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('form', { name: 'Record an area sign-off' })).queryByRole(
+          'option',
+          { name: /Finance/ },
+        ),
+      ).toBeNull(),
+    );
+    const again = screen.getByRole('form', { name: 'Record an area sign-off' });
+    await user.selectOptions(within(again).getByLabelText('Area (required)'), 'identity');
+    await user.click(within(again).getByRole('radio', { name: 'Approve' }));
+    await user.click(within(again).getByRole('button', { name: 'Record sign-off' }));
+    await waitFor(() =>
+      expect(
+        test.fake.requests.filter(
+          (r) => r.route === '/import-reconciliation-reports/{id}/approvals',
+        )[1]?.body,
+      ).toMatchObject({ area: 'identity', expectedRevision: 2 }),
     );
   });
 

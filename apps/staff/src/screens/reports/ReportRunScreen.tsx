@@ -72,7 +72,9 @@ export function ReportRunScreen() {
               ) : null}
             </dl>
             <p>
-              <Link to={`/reports/exports?run=${data.id}`}>Export or reproduce this run</Link>
+              <Link to={`/reports/exports?run=${data.id}`}>
+                {data.pointInTime === 'none' ? 'Export this run' : 'Export or reproduce this run'}
+              </Link>
             </p>
             <ReportView report={data.result} />
           </>

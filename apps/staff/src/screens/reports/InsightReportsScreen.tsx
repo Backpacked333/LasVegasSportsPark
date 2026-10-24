@@ -363,7 +363,7 @@ export function InsightReportsScreen() {
   const requested = search.get('report');
   const entry: ReportCatalogEntry =
     INSIGHT_REPORTS.find((e) => e.key === requested) ?? (INSIGHT_REPORTS[0] as ReportCatalogEntry);
-  const { choices, loading } = useFacilityChoices();
+  const { choices, loading, error: facilitiesError, refetch } = useFacilityChoices();
   const initial = useInitialBaseParams(choices);
   const [edited, setEdited] = useState<BaseParamsState | null>(null);
   const base = edited ?? initial;
@@ -427,6 +427,8 @@ export function InsightReportsScreen() {
           errors={errors}
           choices={choices}
           facilitiesLoading={loading}
+          facilitiesError={facilitiesError}
+          onRetryFacilities={refetch}
         />
         <ExtraFields
           entry={entry}

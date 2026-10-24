@@ -14,7 +14,7 @@ import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError, CommandSuccess, PendingNote } from './feedback';
 import { CheckboxGroup, RadioGroup, SelectField, TextField } from './fields';
-import { formatInstant, formatMinor, formatScalar, parseMajorToMinor, shortId } from './format';
+import { formatInstant, formatMinor, formatScalar, shortId } from './format';
 import {
   APPROVAL_BADGES,
   DECISIONS,
@@ -59,7 +59,6 @@ function DecideException({ exception }: { exception: ImportException }) {
   const [decision, setDecision] = useState('');
   const [reason, setReason] = useState('');
   const [permissions, setPermissions] = useState<string[]>([]);
-  const [currency, setCurrency] = useState('');
   const [amount, setAmount] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [success, setSuccess] = useState<string | null>(null);
@@ -87,8 +86,12 @@ function DecideException({ exception }: { exception: ImportException }) {
       resolution = { permissions: permissions as Schema<'GrantPermission'>[] };
     }
     if (decision === 'accept' && exception.kind === 'ambiguous_balance' && amount.trim()) {
-      const minor = currency ? parseMajorToMinor(amount, currency.toUpperCase()) : null;
-      if (minor === null || minor < 1) next.amount = 'Enter the approved amount and its currency.';
+      // The staged balance's currency is not on the exception (API gap), so the scale is never
+      // inferred from a typed currency: the approved amount is entered in minor units.
+      const minor = /^\d{1,15}$/.test(amount.trim()) ? Number(amount.trim()) : null;
+      if (minor === null || minor < 1)
+        next.amount =
+          'Enter the approved amount as a whole number of minor units, for example 2500.';
       else resolution = { amountMinor: minor };
     }
     setErrors(next);
@@ -147,19 +150,18 @@ function DecideException({ exception }: { exception: ImportException }) {
       {decision === 'accept' && exception.kind === 'ambiguous_balance' ? (
         <>
           <TextField
-            label="Currency of the approved amount"
-            value={currency}
-            onChange={setCurrency}
-            maxLength={3}
-          />
-          <TextField
-            label="Opening amount finance approved"
-            inputMode="decimal"
+            label="Approved amount in minor units of the staged balance's currency"
+            inputMode="numeric"
             value={amount}
             onChange={setAmount}
-            hint="Leave empty to accept the staged amount."
+            hint="For example cents: 2500 for 25.00. Leave empty to accept the staged amount."
             error={errors.amount}
           />
+          {/^\d{1,15}$/.test(amount.trim()) && Number(amount.trim()) > 0 ? (
+            <p className="caption" role="status">
+              Records amountMinor {Number(amount.trim())} in the staged balance&apos;s currency.
+            </p>
+          ) : null}
         </>
       ) : null}
       <TextField
@@ -238,10 +240,13 @@ function ApproveArea({ report }: { report: Report }) {
   const [decision, setDecision] = useState('');
   const [reason, setReason] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [success, setSuccess] = useState<string | null>(null);
   const approve = useApiCommand('post', '/import-reconciliation-reports/{id}/approvals', {
     invalidate: [['api', '/import-reconciliation-reports/{id}']],
   });
-  if (report.approvalStatus !== 'pending' || open.length === 0) return null;
+  if (report.approvalStatus !== 'pending' || open.length === 0) {
+    return <CommandSuccess message={success} />;
+  }
   const build = () => {
     const next: Record<string, string> = {};
     if (!area) next.area = 'Choose the area you approve for.';
@@ -256,7 +261,19 @@ function ApproveArea({ report }: { report: Report }) {
     };
   };
   const send = (body: NonNullable<ReturnType<typeof build>>) =>
-    void approve.submit({ path: { id: report.id }, body }).catch(() => undefined);
+    void approve
+      .submit({ path: { id: report.id }, body })
+      .then((next) => {
+        // A confirmed outcome naming the resulting state; the decided area leaves the form, so
+        // it can never be sent again as a new intent.
+        setSuccess(
+          `${RECONCILIATION_AREA_LABELS[body.area]} ${body.decision}; sign-off ${next.approvalStatus}.`,
+        );
+        setArea('');
+        setDecision('');
+        setReason('');
+      })
+      .catch(() => undefined);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const body = build();
@@ -303,6 +320,7 @@ function ApproveArea({ report }: { report: Report }) {
           Record sign-off
         </Button>
       </div>
+      <CommandSuccess message={success} />
       <CommandError
         error={approve.error}
         onRetry={() => {
