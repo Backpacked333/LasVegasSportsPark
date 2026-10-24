@@ -21,6 +21,11 @@ export interface EnrollmentPolicy {
   approvalPolicyKey: string;
   /** SPK-REG-004 (DEC-026): household fulfillment default. */
   defaultFulfillmentMode: 'all_or_nothing' | 'partial';
+  /**
+   * SPK-REG-008 (DEC-006): while participants wait, a freed place is offered to the waitlist
+   * rather than taken by a new registrant who did not queue.
+   */
+  waitlistFirst: boolean;
 }
 
 export const ENROLLMENT_POLICY = Symbol('ENROLLMENT_POLICY');
@@ -33,6 +38,18 @@ export const DEFAULT_ENROLLMENT_POLICY: EnrollmentPolicy = {
   approvalReservesCapacity: false,
   approvalPolicyKey: 'registration',
   defaultFulfillmentMode: 'all_or_nothing',
+  waitlistFirst: true,
+};
+
+/**
+ * Intents that have their own command and record instead of a basket line: trials keep a trial
+ * participation (SPK-YOUTH-003), makeups redeem an entitlement (SPK-YOUTH-004) and pickup books a
+ * session seat that never creates league membership (SPK-PLACE-004).
+ */
+export const SESSION_INTENT_COMMANDS: Partial<Record<RegistrationIntent, string>> = {
+  trial: 'POST /v1/trial-participations',
+  makeup: 'POST /v1/makeup-entitlements/{id}/redeem',
+  pickup: 'POST /v1/session-bookings',
 };
 
 /** Offering kinds each registration intent may target (SPK-REG-001 × SPK-CAT-002). */

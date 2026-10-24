@@ -62,7 +62,12 @@ export const EnrollmentEvents = {
   ),
   basketFulfilled: defineEvent(
     'enrollment.basket_fulfilled',
-    z.object({ ...Ref, basketId: z.uuid(), enrollmentIds: z.array(z.uuid()), partial: z.boolean() }),
+    z.object({
+      ...Ref,
+      basketId: z.uuid(),
+      enrollmentIds: z.array(z.uuid()),
+      partial: z.boolean(),
+    }),
   ),
   /** Timer: enqueued with availableAt = expiresAt; handled by `enrollment.expire_hold` (SPK-REG-006). */
   holdExpiryDue: defineEvent(
@@ -137,6 +142,15 @@ export const EnrollmentEvents = {
       previousStatus: EnrollmentStatusSchema,
     }),
   ),
+  enrollmentCompleted: defineEvent(
+    'enrollment.enrollment_completed',
+    z.object({
+      ...Ref,
+      enrollmentId: z.uuid(),
+      offeringId: z.uuid(),
+      participantPersonId: z.uuid(),
+    }),
+  ),
   enrollmentTransferred: defineEvent(
     'enrollment.enrollment_transferred',
     z.object({
@@ -187,7 +201,12 @@ export const EnrollmentEvents = {
   ),
   placementRequested: defineEvent(
     'enrollment.placement_requested',
-    z.object({ ...Ref, placementRequestId: z.uuid(), seasonId: z.uuid(), participantPersonId: z.uuid() }),
+    z.object({
+      ...Ref,
+      placementRequestId: z.uuid(),
+      seasonId: z.uuid(),
+      participantPersonId: z.uuid(),
+    }),
   ),
   placementProposed: defineEvent(
     'enrollment.placement_proposed',
@@ -250,13 +269,28 @@ export const EnrollmentEvents = {
       redemptionLimit: z.number().int(),
     }),
   ),
+  /** Timer: enqueued with availableAt = expiresAt; handled by `enrollment.expire_makeup`. */
+  makeupExpiryDue: defineEvent(
+    'enrollment.makeup_expiry_due',
+    z.object({ ...Ref, makeupEntitlementId: z.uuid(), expiresAt: z.string() }),
+  ),
   makeupChanged: defineEvent(
     'enrollment.makeup_changed',
-    z.object({ ...Ref, makeupEntitlementId: z.uuid(), status: z.string(), reason: z.string().nullable() }),
+    z.object({
+      ...Ref,
+      makeupEntitlementId: z.uuid(),
+      status: z.string(),
+      reason: z.string().nullable(),
+    }),
   ),
   trialRecorded: defineEvent(
     'enrollment.trial_recorded',
-    z.object({ ...Ref, trialParticipationId: z.uuid(), offeringId: z.uuid(), participantPersonId: z.uuid() }),
+    z.object({
+      ...Ref,
+      trialParticipationId: z.uuid(),
+      offeringId: z.uuid(),
+      participantPersonId: z.uuid(),
+    }),
   ),
   trialChanged: defineEvent(
     'enrollment.trial_changed',
@@ -274,3 +308,4 @@ export const HoldExpiryDue = EnrollmentEvents.holdExpiryDue;
 export const CapacityReleased = EnrollmentEvents.capacityReleased;
 export const EnrollmentConfirmed = EnrollmentEvents.enrollmentConfirmed;
 export const EnrollmentCanceled = EnrollmentEvents.enrollmentCanceled;
+export const MakeupExpiryDue = EnrollmentEvents.makeupExpiryDue;

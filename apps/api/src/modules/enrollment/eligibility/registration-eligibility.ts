@@ -124,7 +124,11 @@ export function evaluateRegistrationEligibility(input: EligibilityInput): Eligib
       source: offeringSource,
       requiredAction: 'contact_staff',
     });
-    alternatives.push({ kind: 'contact_staff', message: 'Ask staff to review this registration.', offeringId: null });
+    alternatives.push({
+      kind: 'contact_staff',
+      message: 'Ask staff to review this registration.',
+      offeringId: null,
+    });
   } else if (policy.approvalStatus !== 'approved') {
     reasons.push({
       code: 'eligibility_policy_not_approved',
@@ -183,12 +187,16 @@ export function evaluateRegistrationEligibility(input: EligibilityInput): Eligib
           code: age < (minAge ?? 0) ? 'below_minimum_age' : 'above_maximum_age',
           severity: 'blocking',
           message: `The participant is ${age} on ${input.eligibilityReferenceDate}; this offering requires ${band}${content.ageRuleLabel ? ` (${content.ageRuleLabel})` : ''}.`,
-          source: content.minAgeYears !== undefined || content.maxAgeYears !== undefined ? policySource : offeringSource,
+          source:
+            content.minAgeYears !== undefined || content.maxAgeYears !== undefined
+              ? policySource
+              : offeringSource,
           requiredAction: 'choose_age_appropriate_offering',
         });
         alternatives.push({
           kind: 'other_offering',
-          message: 'Choose an offering whose age band includes the participant on its reference date.',
+          message:
+            'Choose an offering whose age band includes the participant on its reference date.',
           offeringId: null,
         });
         alternatives.push({
@@ -225,7 +233,10 @@ export function evaluateRegistrationEligibility(input: EligibilityInput): Eligib
     }
   }
 
-  if (input.session !== undefined && (input.intent === 'pickup' || input.intent === 'trial' || input.intent === 'makeup')) {
+  if (
+    input.session !== undefined &&
+    (input.intent === 'pickup' || input.intent === 'trial' || input.intent === 'makeup')
+  ) {
     if (!input.session) {
       reasons.push({
         code: 'session_missing',
@@ -234,7 +245,10 @@ export function evaluateRegistrationEligibility(input: EligibilityInput): Eligib
         source: { type: 'offering_session', id: null },
         requiredAction: 'choose_session',
       });
-    } else if (input.session.status !== 'scheduled' || input.session.scheduledStart.getTime() <= input.at.getTime()) {
+    } else if (
+      input.session.status !== 'scheduled' ||
+      input.session.scheduledStart.getTime() <= input.at.getTime()
+    ) {
       reasons.push({
         code: 'session_not_bookable',
         severity: 'blocking',

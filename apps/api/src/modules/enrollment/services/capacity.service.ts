@@ -14,7 +14,6 @@ import {
   type SyncOfferingPoolsInput,
 } from '@sportspark/contracts';
 import {
-  isUniqueViolation,
   json,
   type CapacityConstraintKind,
   type CapacityPoolsTable,
@@ -36,12 +35,22 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
-import { OFFERING_LOOKUP_PORT, type OfferingLookupPort, type OfferingSnapshot } from '../../catalog';
+import {
+  OFFERING_LOOKUP_PORT,
+  type OfferingLookupPort,
+  type OfferingSnapshot,
+} from '../../catalog';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import { INTENT_CAPACITY_UNITS } from '../enrollment.policy';
 import type { AcquireHoldInput, CapacityPort } from '../enrollment.ports';
-import { organizationOf, toCapacityPool, toHold, type Reader } from '../enrollment.shared';
+import {
+  enrollmentSystem,
+  organizationOf,
+  toCapacityPool,
+  toHold,
+  type Reader,
+} from '../enrollment.shared';
 
 export type PoolRow = Selectable<CapacityPoolsTable>;
 export type HoldRow = Selectable<HoldsTable>;
@@ -76,8 +85,16 @@ export class CapacityService implements CapacityPort {
   // Reads
   // -------------------------------------------------------------------------------------------
 
-  async poolsForOffering(organizationId: string, offeringId: string, trx?: Trx): Promise<CapacityPool[]> {
-    const rows = await this.poolRowsForOffering(trx ?? this.uow.reader(), organizationId, offeringId);
+  async poolsForOffering(
+    organizationId: string,
+    offeringId: string,
+    trx?: Trx,
+  ): Promise<CapacityPool[]> {
+    const rows = await this.poolRowsForOffering(
+      trx ?? this.uow.reader(),
+      organizationId,
+      offeringId,
+    );
     return rows.map(toCapacityPool);
   }
 
@@ -104,7 +121,11 @@ export class CapacityService implements CapacityPort {
     return (await q.execute()).map(toCapacityPool);
   }
 
-  async poolRowsForOffering(db: Reader, organizationId: string, offeringId: string): Promise<PoolRow[]> {
+  async poolRowsForOffering(
+    db: Reader,
+    organizationId: string,
+    offeringId: string,
+  ): Promise<PoolRow[]> {
     return db
       .selectFrom('capacity_pools')
       .selectAll()
@@ -114,7 +135,12 @@ export class CapacityService implements CapacityPort {
       .execute();
   }
 
-  async loadPool(db: Reader, organizationId: string, poolId: string, forUpdate = false): Promise<PoolRow | undefined> {
+  async loadPool(
+    db: Reader,
+    organizationId: string,
+    poolId: string,
+    forUpdate = false,
+  ): Promise<PoolRow | undefined> {
     let q = db
       .selectFrom('capacity_pools')
       .selectAll()
@@ -124,8 +150,17 @@ export class CapacityService implements CapacityPort {
     return q.executeTakeFirst();
   }
 
-  async loadHold(db: Reader, organizationId: string, holdId: string, forUpdate = false): Promise<HoldRow | undefined> {
-    let q = db.selectFrom('holds').selectAll().where('organization_id', '=', organizationId).where('id', '=', holdId);
+  async loadHold(
+    db: Reader,
+    organizationId: string,
+    holdId: string,
+    forUpdate = false,
+  ): Promise<HoldRow | undefined> {
+    let q = db
+      .selectFrom('holds')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', holdId);
     if (forUpdate) q = q.forUpdate();
     return q.executeTakeFirst();
   }
@@ -141,7 +176,12 @@ export class CapacityService implements CapacityPort {
       .execute();
   }
 
-  async holdsOfOwner(db: Reader, organizationId: string, ownerKind: HoldRow['owner_kind'], ownerId: string): Promise<HoldRow[]> {
+  async holdsOfOwner(
+    db: Reader,
+    organizationId: string,
+    ownerKind: HoldRow['owner_kind'],
+    ownerId: string,
+  ): Promise<HoldRow[]> {
     return db
       .selectFrom('holds')
       .selectAll()
@@ -155,7 +195,9 @@ export class CapacityService implements CapacityPort {
   /** The offering-level pools an intent must hold (commercial and staffing constraints alike). */
   poolsForIntent(pools: readonly PoolRow[], intent: RegistrationIntent): PoolRow[] {
     const units: readonly string[] = INTENT_CAPACITY_UNITS[intent];
-    return pools.filter((p) => p.scope_type === 'offering' && p.status === 'active' && units.includes(p.unit));
+    return pools.filter(
+      (p) => p.scope_type === 'offering' && p.status === 'active' && units.includes(p.unit),
+    );
   }
 
   // -------------------------------------------------------------------------------------------
@@ -167,16 +209,27 @@ export class CapacityService implements CapacityPort {
    * unit and, for units with a staffing ratio, a staffing pool sized from the staff count the
    * ratio implies (SPK-YOUTH-002). Session seats are per session (ensureSessionPool).
    */
-  async ensurePoolsForOffering(trx: Trx, organizationId: string, snapshot: OfferingSnapshot, actor: Principal): Promise<PoolRow[]> {
+  async ensurePoolsForOffering(
+    trx: Trx,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    actor: Principal,
+  ): Promise<PoolRow[]> {
     const offeringId = snapshot.offering.id;
     const existing = await this.poolRowsForOffering(trx, organizationId, offeringId);
-    const wanted = this.offeringPoolSpecs(snapshot.capacityUnits);
-    let created = false;
+    const wanted = this.offeringPoolSpecs(
+      snapshot.capacityUnits.filter((u) => u.unit !== 'session_seats'),
+    );
+    let missing = false;
     for (const spec of wanted) {
       const present = existing.some(
-        (p) => p.scope_type === 'offering' && p.unit === spec.unit && p.constraint_kind === spec.constraintKind,
+        (p) =>
+          p.scope_type === 'offering' &&
+          p.unit === spec.unit &&
+          p.constraint_kind === spec.constraintKind,
       );
       if (present) continue;
+      missing = true;
       await this.insertPool(trx, organizationId, {
         offeringId,
         scopeType: 'offering',
@@ -184,13 +237,20 @@ export class CapacityService implements CapacityPort {
         ...spec,
         actor,
       });
-      created = true;
     }
-    return created ? this.poolRowsForOffering(trx, organizationId, offeringId) : existing;
+    // Re-read whenever a pool was missing: a concurrent creator may have won the insert, and its
+    // committed row (not this transaction's earlier read) is the pool to hold.
+    return missing ? this.poolRowsForOffering(trx, organizationId, offeringId) : existing;
   }
 
   /** The session pool for pickup/trial/makeup seats; null when the catalog configures no session capacity. */
-  async ensureSessionPool(trx: Trx, organizationId: string, snapshot: OfferingSnapshot, session: OfferingSession, actor: Principal): Promise<PoolRow[]> {
+  async ensureSessionPool(
+    trx: Trx,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    session: OfferingSession,
+    actor: Principal,
+  ): Promise<PoolRow[]> {
     const units = session.capacityOverride ?? snapshot.capacityUnits;
     const unit =
       units.find((u) => u.unit === 'session_seats') ??
@@ -207,9 +267,10 @@ export class CapacityService implements CapacityPort {
       .execute();
     if (!unit) return rows;
     const specs = this.offeringPoolSpecs([{ ...unit, unit: 'session_seats' }]);
-    let created = false;
+    let missing = false;
     for (const spec of specs) {
       if (rows.some((p) => p.constraint_kind === spec.constraintKind)) continue;
+      missing = true;
       await this.insertPool(trx, organizationId, {
         offeringId: snapshot.offering.id,
         scopeType: 'session',
@@ -217,9 +278,8 @@ export class CapacityService implements CapacityPort {
         ...spec,
         actor,
       });
-      created = true;
     }
-    return created
+    return missing
       ? trx
           .selectFrom('capacity_pools')
           .selectAll()
@@ -246,7 +306,13 @@ export class CapacityService implements CapacityPort {
       staffCount: number | null;
     }> = [];
     for (const unit of units) {
-      specs.push({ unit: unit.unit, constraintKind: 'commercial', capacity: unit.limit, participantsPerStaff: null, staffCount: null });
+      specs.push({
+        unit: unit.unit,
+        constraintKind: 'commercial',
+        capacity: unit.limit,
+        participantsPerStaff: null,
+        staffCount: null,
+      });
       if (unit.staffingRatio) {
         const ratio = unit.staffingRatio.participantsPerStaff;
         const staffCount = Math.ceil(unit.limit / ratio);
@@ -278,32 +344,38 @@ export class CapacityService implements CapacityPort {
     },
   ): Promise<string | null> {
     const id = newId();
-    try {
-      await trx
-        .insertInto('capacity_pools')
-        .values({
-          id,
-          organization_id: organizationId,
-          offering_id: input.offeringId,
-          scope_type: input.scopeType,
-          scope_id: input.scopeId,
-          unit: input.unit,
-          constraint_kind: input.constraintKind,
-          capacity: input.capacity,
-          participants_per_staff: input.participantsPerStaff,
-          staff_count: input.staffCount,
-          created_by: json(snapshotActor(input.actor)),
-        })
-        .execute();
-      return id;
-    } catch (error) {
-      // Another command created the same pool concurrently; the unique key keeps one pool per constraint.
-      if (isUniqueViolation(error)) return null;
-      throw error;
-    }
+    // One pool per scope, unit and constraint: a concurrent creator wins and this insert becomes a
+    // no-op (ON CONFLICT keeps the surrounding transaction usable, unlike a caught violation).
+    const inserted = await trx
+      .insertInto('capacity_pools')
+      .values({
+        id,
+        organization_id: organizationId,
+        offering_id: input.offeringId,
+        scope_type: input.scopeType,
+        scope_id: input.scopeId,
+        unit: input.unit,
+        constraint_kind: input.constraintKind,
+        capacity: input.capacity,
+        participants_per_staff: input.participantsPerStaff,
+        staff_count: input.staffCount,
+        created_by: json(snapshotActor(input.actor)),
+      })
+      .onConflict((oc) =>
+        oc
+          .columns(['organization_id', 'scope_type', 'scope_id', 'unit', 'constraint_kind'])
+          .doNothing(),
+      )
+      .returning('id')
+      .executeTakeFirst();
+    return inserted ? id : null;
   }
 
-  async createPool(principal: Principal, input: CreateCapacityPoolInput, correlationId: string | null): Promise<CapacityPool> {
+  async createPool(
+    principal: Principal,
+    input: CreateCapacityPoolInput,
+    correlationId: string | null,
+  ): Promise<CapacityPool> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       await this.authorization.require(principal, EnrollmentActions.manageCapacity, {
@@ -311,12 +383,18 @@ export class CapacityService implements CapacityPort {
         organizationId,
       });
       if (input.offeringId) {
-        const snapshot = await this.offerings.getOffering(organizationId, input.offeringId, this.clock.now(), trx);
+        const snapshot = await this.offerings.getOffering(
+          organizationId,
+          input.offeringId,
+          this.clock.now(),
+          trx,
+        );
         if (!snapshot) throw errors.notFound('offering', input.offeringId);
       }
       const staffCount = input.constraintKind === 'staffing' ? (input.staffCount ?? 0) : null;
       const ratio = input.constraintKind === 'staffing' ? (input.participantsPerStaff ?? 1) : null;
-      const capacity = input.constraintKind === 'staffing' ? (staffCount ?? 0) * (ratio ?? 1) : input.capacity;
+      const capacity =
+        input.constraintKind === 'staffing' ? (staffCount ?? 0) * (ratio ?? 1) : input.capacity;
       const id = await this.insertPool(trx, organizationId, {
         offeringId: input.offeringId ?? null,
         scopeType: input.scopeType,
@@ -328,7 +406,8 @@ export class CapacityService implements CapacityPort {
         staffCount,
         actor: principal,
       });
-      if (!id) throw errors.resourceConflict('A pool for this scope, unit and constraint already exists.');
+      if (!id)
+        throw errors.resourceConflict('A pool for this scope, unit and constraint already exists.');
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -350,7 +429,12 @@ export class CapacityService implements CapacityPort {
    * SPK-YOUTH-002: a staffing pool grows only through an explicit staff count with a reason;
    * capacity never drops below what is already committed and held.
    */
-  async adjustPool(principal: Principal, poolId: string, input: AdjustCapacityPoolInput, correlationId: string | null): Promise<CapacityPool> {
+  async adjustPool(
+    principal: Principal,
+    poolId: string,
+    input: AdjustCapacityPoolInput,
+    correlationId: string | null,
+  ): Promise<CapacityPool> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const row = await this.loadPool(trx, organizationId, poolId, true);
@@ -361,11 +445,13 @@ export class CapacityService implements CapacityPort {
         organizationId,
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
-      let capacity = row.capacity;
+      let capacity: number;
       let staffCount = row.staff_count;
       if (row.constraint_kind === 'staffing') {
         if (input.staffCount === undefined) {
-          throw errors.validation('A staffing pool is adjusted through its staff count, not its capacity.');
+          throw errors.validation(
+            'A staffing pool is adjusted through its staff count, not its capacity.',
+          );
         }
         staffCount = input.staffCount;
         capacity = staffCount * (row.participants_per_staff ?? 1);
@@ -397,7 +483,12 @@ export class CapacityService implements CapacityPort {
         afterRevision: row.revision + 1,
         reason: input.reason,
         correlationId,
-        details: { capacityBefore: row.capacity, capacityAfter: capacity, staffCountBefore: row.staff_count, staffCountAfter: staffCount },
+        details: {
+          capacityBefore: row.capacity,
+          capacityAfter: capacity,
+          staffCountBefore: row.staff_count,
+          staffCountAfter: staffCount,
+        },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.capacityPoolChanged, {
         organizationId,
@@ -420,7 +511,12 @@ export class CapacityService implements CapacityPort {
           aggregateType: 'capacity_pool',
           aggregateId: poolId,
           correlationId,
-          payload: { organizationId, poolId, quantity: capacity - row.capacity, cause: 'capacity_raised' },
+          payload: {
+            organizationId,
+            poolId,
+            quantity: capacity - row.capacity,
+            cause: 'capacity_raised',
+          },
         });
       }
       const updated = await this.loadPool(trx, organizationId, poolId);
@@ -430,7 +526,12 @@ export class CapacityService implements CapacityPort {
   }
 
   /** Staff command: create or resize the pools of an offering from its current catalog units. */
-  async syncOfferingPools(principal: Principal, offeringId: string, _input: SyncOfferingPoolsInput, correlationId: string | null): Promise<CapacityPool[]> {
+  async syncOfferingPools(
+    principal: Principal,
+    offeringId: string,
+    _input: SyncOfferingPoolsInput,
+    correlationId: string | null,
+  ): Promise<CapacityPool[]> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       await this.authorization.require(principal, EnrollmentActions.manageCapacity, {
@@ -438,10 +539,21 @@ export class CapacityService implements CapacityPort {
         id: offeringId,
         organizationId,
       });
-      const snapshot = await this.offerings.getOffering(organizationId, offeringId, this.clock.now(), trx);
+      const snapshot = await this.offerings.getOffering(
+        organizationId,
+        offeringId,
+        this.clock.now(),
+        trx,
+      );
       if (!snapshot) throw errors.notFound('offering', offeringId);
       await this.ensurePoolsForOffering(trx, organizationId, snapshot, principal);
-      await this.syncFromCatalog(trx, organizationId, offeringId, snapshot.capacityUnits, correlationId);
+      await this.syncFromCatalog(
+        trx,
+        organizationId,
+        offeringId,
+        snapshot.capacityUnits,
+        correlationId,
+      );
       return (await this.poolRowsForOffering(trx, organizationId, offeringId)).map(toCapacityPool);
     });
   }
@@ -452,12 +564,21 @@ export class CapacityService implements CapacityPort {
    * the staffing requirement (SPK-YOUTH-002). A limit below the places already committed or held
    * is kept at the used quantity and raised as an operational exception. Idempotent under replay.
    */
-  async syncFromCatalog(trx: Trx, organizationId: string, offeringId: string, units: readonly CapacityUnit[], correlationId: string | null): Promise<void> {
+  async syncFromCatalog(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+    units: readonly CapacityUnit[],
+    correlationId: string | null,
+  ): Promise<void> {
     const pools = await this.poolRowsForOffering(trx, organizationId, offeringId);
     if (pools.length === 0) return; // pools are created lazily on the first hold
     for (const unit of units) {
       if (unit.unit === 'session_seats') continue;
-      const commercial = pools.find((p) => p.scope_type === 'offering' && p.unit === unit.unit && p.constraint_kind === 'commercial');
+      const commercial = pools.find(
+        (p) =>
+          p.scope_type === 'offering' && p.unit === unit.unit && p.constraint_kind === 'commercial',
+      );
       if (!commercial) {
         await this.insertPool(trx, organizationId, {
           offeringId,
@@ -468,7 +589,7 @@ export class CapacityService implements CapacityPort {
           capacity: unit.limit,
           participantsPerStaff: null,
           staffCount: null,
-          actor: { kind: 'system', organizationId, accountId: null, personId: null, staffRoles: [], facilityIds: [], sessionId: null, actorLabel: 'enrollment.capacity_sync' },
+          actor: enrollmentSystem(organizationId, 'enrollment.capacity_sync'),
         });
       } else if (commercial.capacity !== unit.limit) {
         const used = commercial.committed + commercial.held;
@@ -486,7 +607,12 @@ export class CapacityService implements CapacityPort {
             aggregateType: 'capacity_pool',
             aggregateId: commercial.id,
             correlationId,
-            payload: { organizationId, poolId: commercial.id, quantity: capacity - commercial.capacity, cause: 'catalog_capacity_raised' },
+            payload: {
+              organizationId,
+              poolId: commercial.id,
+              quantity: capacity - commercial.capacity,
+              cause: 'catalog_capacity_raised',
+            },
           });
         }
         if (unit.limit < used) {
@@ -499,11 +625,20 @@ export class CapacityService implements CapacityPort {
             affectedId: commercial.id,
             ownerQueue: 'program_manager',
             dedupeKey: `capacity_below:${commercial.id}`,
-            details: { offeringId, unit: unit.unit, requestedLimit: unit.limit, committed: commercial.committed, held: commercial.held },
+            details: {
+              offeringId,
+              unit: unit.unit,
+              requestedLimit: unit.limit,
+              committed: commercial.committed,
+              held: commercial.held,
+            },
           });
         }
       }
-      const staffing = pools.find((p) => p.scope_type === 'offering' && p.unit === unit.unit && p.constraint_kind === 'staffing');
+      const staffing = pools.find(
+        (p) =>
+          p.scope_type === 'offering' && p.unit === unit.unit && p.constraint_kind === 'staffing',
+      );
       if (unit.staffingRatio) {
         const ratio = unit.staffingRatio.participantsPerStaff;
         if (!staffing) {
@@ -517,11 +652,14 @@ export class CapacityService implements CapacityPort {
             capacity: staffCount * ratio,
             participantsPerStaff: ratio,
             staffCount,
-            actor: { kind: 'system', organizationId, accountId: null, personId: null, staffRoles: [], facilityIds: [], sessionId: null, actorLabel: 'enrollment.capacity_sync' },
+            actor: enrollmentSystem(organizationId, 'enrollment.capacity_sync'),
           });
         } else if (staffing.participants_per_staff !== ratio) {
           // The ratio changed; the staff count is a staffing fact that only staff may raise.
-          const capacity = Math.max((staffing.staff_count ?? 0) * ratio, staffing.committed + staffing.held);
+          const capacity = Math.max(
+            (staffing.staff_count ?? 0) * ratio,
+            staffing.committed + staffing.held,
+          );
           await trx
             .updateTable('capacity_pools')
             .set({ participants_per_staff: ratio, capacity, revision: staffing.revision + 1 })
@@ -540,8 +678,11 @@ export class CapacityService implements CapacityPort {
 
   async acquireHolds(trx: Trx, organizationId: string, input: AcquireHoldInput): Promise<Hold[]> {
     const now = this.clock.now();
-    if (input.expiresAt.getTime() <= now.getTime()) throw errors.validation('A hold must expire in the future.');
-    const requests = [...input.pools].sort((a, b) => (a.poolId < b.poolId ? -1 : a.poolId > b.poolId ? 1 : 0));
+    if (input.expiresAt.getTime() <= now.getTime())
+      throw errors.validation('A hold must expire in the future.');
+    const requests = [...input.pools].sort((a, b) =>
+      a.poolId < b.poolId ? -1 : a.poolId > b.poolId ? 1 : 0,
+    );
     const rows: HoldRow[] = [];
     for (const request of requests) {
       await this.reserve(trx, organizationId, request.poolId, request.quantity, 'held');
@@ -571,24 +712,38 @@ export class CapacityService implements CapacityPort {
         aggregateId: id,
         correlationId: input.correlationId ?? null,
         availableAt: input.expiresAt,
-        payload: { organizationId, holdId: id, poolId: request.poolId, expiresAt: input.expiresAt.toISOString() },
+        payload: {
+          organizationId,
+          holdId: id,
+          poolId: request.poolId,
+          expiresAt: input.expiresAt.toISOString(),
+        },
       });
     }
     return rows.map(toHold);
   }
 
   /**
+   * Counter movements (held/committed) never bump the pool revision: the revision guards staff
+   * configuration edits (capacity, staff count), while the counters are guarded by the row lock,
+   * this conditional update and the check constraint.
+   *
    * The conditional UPDATE that enforces §4.7 invariant 3 together with the check constraint:
    * the row lock serializes contenders and the WHERE clause is re-evaluated after the lock, so
    * on a pool with one free place exactly one of fifty concurrent attempts succeeds (SPK-AT-005).
    */
-  private async reserve(trx: Trx, organizationId: string, poolId: string, quantity: number, mode: 'held' | 'committed'): Promise<void> {
+  private async reserve(
+    trx: Trx,
+    organizationId: string,
+    poolId: string,
+    quantity: number,
+    mode: 'held' | 'committed',
+  ): Promise<void> {
     const result = await trx
       .updateTable('capacity_pools')
       .set((eb) => ({
         held: mode === 'held' ? eb('held', '+', quantity) : eb.ref('held'),
         committed: mode === 'committed' ? eb('committed', '+', quantity) : eb.ref('committed'),
-        revision: eb('revision', '+', 1),
       }))
       .where('organization_id', '=', organizationId)
       .where('id', '=', poolId)
@@ -613,7 +768,13 @@ export class CapacityService implements CapacityPort {
   }
 
   /** Converts an active hold to an allocation; throws CAPACITY_UNAVAILABLE when it is no longer active. */
-  async commitHold(trx: Trx, organizationId: string, holdId: string, target: AllocationTarget, correlationId: string | null): Promise<HoldRow> {
+  async commitHold(
+    trx: Trx,
+    organizationId: string,
+    holdId: string,
+    target: AllocationTarget,
+    correlationId: string | null,
+  ): Promise<HoldRow> {
     const now = this.clock.now();
     const hold = await this.loadHold(trx, organizationId, holdId, true);
     if (!hold) throw errors.notFound('hold', holdId);
@@ -625,23 +786,33 @@ export class CapacityService implements CapacityPort {
       .where('status', '=', 'active')
       .executeTakeFirst();
     if (Number(result.numUpdatedRows) === 0) {
-      throw errors.capacityUnavailable(`The hold is ${hold.status}; the place is no longer reserved.`, {
-        holdId,
-        status: hold.status,
-        poolId: hold.pool_id,
-      });
+      throw errors.capacityUnavailable(
+        `The hold is ${hold.status}; the place is no longer reserved.`,
+        {
+          holdId,
+          status: hold.status,
+          poolId: hold.pool_id,
+        },
+      );
     }
     await trx
       .updateTable('capacity_pools')
       .set((eb) => ({
         held: eb('held', '-', hold.quantity),
         committed: eb('committed', '+', hold.quantity),
-        revision: eb('revision', '+', 1),
       }))
       .where('organization_id', '=', organizationId)
       .where('id', '=', hold.pool_id)
       .execute();
-    await this.insertAllocation(trx, organizationId, hold.pool_id, holdId, hold.quantity, target, now);
+    await this.insertAllocation(
+      trx,
+      organizationId,
+      hold.pool_id,
+      holdId,
+      hold.quantity,
+      target,
+      now,
+    );
     await this.outbox.enqueue(trx, EnrollmentEvents.holdCommitted, {
       organizationId,
       aggregateType: 'hold',
@@ -655,18 +826,43 @@ export class CapacityService implements CapacityPort {
   }
 
   /** Commits capacity directly (no hold): transfers and re-acquisition after a hold expired (SPK-AT-006). */
-  async acquireCommitted(trx: Trx, organizationId: string, pools: ReadonlyArray<{ poolId: string; quantity: number }>, target: AllocationTarget): Promise<string[]> {
+  async acquireCommitted(
+    trx: Trx,
+    organizationId: string,
+    pools: ReadonlyArray<{ poolId: string; quantity: number }>,
+    target: AllocationTarget,
+  ): Promise<string[]> {
     const now = this.clock.now();
     const ids: string[] = [];
-    const sorted = [...pools].sort((a, b) => (a.poolId < b.poolId ? -1 : a.poolId > b.poolId ? 1 : 0));
+    const sorted = [...pools].sort((a, b) =>
+      a.poolId < b.poolId ? -1 : a.poolId > b.poolId ? 1 : 0,
+    );
     for (const request of sorted) {
       await this.reserve(trx, organizationId, request.poolId, request.quantity, 'committed');
-      ids.push(await this.insertAllocation(trx, organizationId, request.poolId, null, request.quantity, target, now));
+      ids.push(
+        await this.insertAllocation(
+          trx,
+          organizationId,
+          request.poolId,
+          null,
+          request.quantity,
+          target,
+          now,
+        ),
+      );
     }
     return ids;
   }
 
-  private async insertAllocation(trx: Trx, organizationId: string, poolId: string, holdId: string | null, quantity: number, target: AllocationTarget, now: Date): Promise<string> {
+  private async insertAllocation(
+    trx: Trx,
+    organizationId: string,
+    poolId: string,
+    holdId: string | null,
+    quantity: number,
+    target: AllocationTarget,
+    now: Date,
+  ): Promise<string> {
     const id = newId();
     await trx
       .insertInto('allocations')
@@ -686,15 +882,22 @@ export class CapacityService implements CapacityPort {
   }
 
   /** Releases the active allocations of a record; returns the pools and quantities freed. */
-  async releaseAllocationsFor(trx: Trx, organizationId: string, target: AllocationTarget, reason: string): Promise<Array<{ poolId: string; quantity: number }>> {
+  async releaseAllocationsFor(
+    trx: Trx,
+    organizationId: string,
+    target: AllocationTarget,
+    reason: string,
+  ): Promise<Array<{ poolId: string; quantity: number }>> {
     let q = trx
       .selectFrom('allocations')
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('status', '=', 'active');
     if (target.enrollmentId) q = q.where('enrollment_id', '=', target.enrollmentId);
-    else if (target.sessionBookingId) q = q.where('session_booking_id', '=', target.sessionBookingId);
-    else if (target.placementRequestId) q = q.where('placement_request_id', '=', target.placementRequestId);
+    else if (target.sessionBookingId)
+      q = q.where('session_booking_id', '=', target.sessionBookingId);
+    else if (target.placementRequestId)
+      q = q.where('placement_request_id', '=', target.placementRequestId);
     else return [];
     const rows = await q.forUpdate().execute();
     const now = this.clock.now();
@@ -709,7 +912,7 @@ export class CapacityService implements CapacityPort {
         .execute();
       await trx
         .updateTable('capacity_pools')
-        .set((eb) => ({ committed: eb('committed', '-', row.quantity), revision: eb('revision', '+', 1) }))
+        .set((eb) => ({ committed: eb('committed', '-', row.quantity) }))
         .where('organization_id', '=', organizationId)
         .where('id', '=', row.pool_id)
         .execute();
@@ -718,22 +921,54 @@ export class CapacityService implements CapacityPort {
     return freed;
   }
 
-  async releaseHold(trx: Trx, organizationId: string, holdId: string, reason: string, actor: Principal, correlationId: string | null = null): Promise<Hold> {
+  async releaseHold(
+    trx: Trx,
+    organizationId: string,
+    holdId: string,
+    reason: string,
+    actor: Principal,
+    correlationId: string | null = null,
+  ): Promise<Hold> {
+    const before = await this.loadHold(trx, organizationId, holdId);
     const row = await this.releaseHoldRow(trx, organizationId, holdId, reason, correlationId);
-    if (!row) throw errors.notFound('hold', holdId);
-    void actor;
+    if (!row || !before) throw errors.notFound('hold', holdId);
+    if (before.status === 'active') {
+      await this.audit.record(trx, {
+        organizationId,
+        actor,
+        action: 'enrollment.release_hold',
+        targetType: 'hold',
+        targetId: holdId,
+        beforeRevision: before.revision,
+        afterRevision: row.revision,
+        reason,
+        correlationId,
+        details: { poolId: row.pool_id, quantity: row.quantity },
+      });
+    }
     return toHold(row);
   }
 
   /** Releases an active hold (idempotent: a non-active hold is returned unchanged). */
-  async releaseHoldRow(trx: Trx, organizationId: string, holdId: string, reason: string, correlationId: string | null): Promise<HoldRow | undefined> {
+  async releaseHoldRow(
+    trx: Trx,
+    organizationId: string,
+    holdId: string,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<HoldRow | undefined> {
     const now = this.clock.now();
     const hold = await this.loadHold(trx, organizationId, holdId, true);
     if (!hold) return undefined;
     if (hold.status !== 'active') return hold;
     await trx
       .updateTable('holds')
-      .set({ status: 'released', released_at: now, release_reason: reason, revision: hold.revision + 1 })
+      .set({
+        status: 'released',
+        released_at: now,
+        release_reason: reason,
+        revision: hold.revision + 1,
+      })
       .where('organization_id', '=', organizationId)
       .where('id', '=', holdId)
       .where('status', '=', 'active')
@@ -751,7 +986,12 @@ export class CapacityService implements CapacityPort {
       aggregateType: 'capacity_pool',
       aggregateId: hold.pool_id,
       correlationId,
-      payload: { organizationId, poolId: hold.pool_id, quantity: hold.quantity, cause: 'hold_released' },
+      payload: {
+        organizationId,
+        poolId: hold.pool_id,
+        quantity: hold.quantity,
+        cause: 'hold_released',
+      },
     });
     return this.loadHold(trx, organizationId, holdId);
   }
@@ -761,7 +1001,12 @@ export class CapacityService implements CapacityPort {
    * gives the quantity back. Returns the hold when it expired now, null when nothing changed
    * (already terminal, or extended to a later instant — the later timer handles it).
    */
-  async expireHoldIfDue(trx: Trx, organizationId: string, holdId: string, correlationId: string | null): Promise<HoldRow | null> {
+  async expireHoldIfDue(
+    trx: Trx,
+    organizationId: string,
+    holdId: string,
+    correlationId: string | null,
+  ): Promise<HoldRow | null> {
     const now = this.clock.now();
     const hold = await this.loadHold(trx, organizationId, holdId, true);
     if (!hold || hold.status !== 'active') return null;
@@ -781,15 +1026,38 @@ export class CapacityService implements CapacityPort {
       correlationId,
       payload: { organizationId, holdId, poolId: hold.pool_id, quantity: hold.quantity },
     });
+    // The expired place goes back to the pool; waitlist offers follow (SPK-REG-008, SPK-AT-006).
+    await this.outbox.enqueue(trx, EnrollmentEvents.capacityReleased, {
+      organizationId,
+      aggregateType: 'capacity_pool',
+      aggregateId: hold.pool_id,
+      correlationId,
+      payload: {
+        organizationId,
+        poolId: hold.pool_id,
+        quantity: hold.quantity,
+        cause: 'hold_expired',
+      },
+    });
     return (await this.loadHold(trx, organizationId, holdId)) ?? null;
   }
 
   /** Moves an active hold to a new owner and expiry (a waitlist offer accepted into a basket). */
-  async reassignHold(trx: Trx, organizationId: string, holdId: string, owner: { ownerKind: HoldRow['owner_kind']; ownerId: string; basketId: string | null }, expiresAt: Date, correlationId: string | null): Promise<HoldRow> {
+  async reassignHold(
+    trx: Trx,
+    organizationId: string,
+    holdId: string,
+    owner: { ownerKind: HoldRow['owner_kind']; ownerId: string; basketId: string | null },
+    expiresAt: Date,
+    correlationId: string | null,
+  ): Promise<HoldRow> {
     const hold = await this.loadHold(trx, organizationId, holdId, true);
     if (!hold) throw errors.notFound('hold', holdId);
     if (hold.status !== 'active') {
-      throw errors.capacityUnavailable(`The hold is ${hold.status}; the place is no longer reserved.`, { holdId, status: hold.status });
+      throw errors.capacityUnavailable(
+        `The hold is ${hold.status}; the place is no longer reserved.`,
+        { holdId, status: hold.status },
+      );
     }
     await trx
       .updateTable('holds')
@@ -804,14 +1072,20 @@ export class CapacityService implements CapacityPort {
       .where('id', '=', holdId)
       .where('revision', '=', hold.revision)
       .execute();
-    if (expiresAt.getTime() > new Date(hold.expires_at).getTime()) {
+    if (expiresAt.getTime() !== new Date(hold.expires_at).getTime()) {
+      // A timer for the new instant; the earlier timer finds the hold not yet due and does nothing.
       await this.outbox.enqueue(trx, EnrollmentEvents.holdExpiryDue, {
         organizationId,
         aggregateType: 'hold',
         aggregateId: holdId,
         correlationId,
         availableAt: expiresAt,
-        payload: { organizationId, holdId, poolId: hold.pool_id, expiresAt: expiresAt.toISOString() },
+        payload: {
+          organizationId,
+          holdId,
+          poolId: hold.pool_id,
+          expiresAt: expiresAt.toISOString(),
+        },
       });
     }
     const updated = await this.loadHold(trx, organizationId, holdId);
@@ -819,16 +1093,51 @@ export class CapacityService implements CapacityPort {
     return updated;
   }
 
-  private async giveBack(trx: Trx, organizationId: string, poolId: string, quantity: number): Promise<void> {
+  private async giveBack(
+    trx: Trx,
+    organizationId: string,
+    poolId: string,
+    quantity: number,
+  ): Promise<void> {
     await trx
       .updateTable('capacity_pools')
-      .set((eb) => ({ held: eb('held', '-', quantity), revision: eb('revision', '+', 1) }))
+      .set((eb) => ({ held: eb('held', '-', quantity) }))
       .where('organization_id', '=', organizationId)
       .where('id', '=', poolId)
       .execute();
   }
 
-  async enqueueCapacityReleased(trx: Trx, organizationId: string, freed: ReadonlyArray<{ poolId: string; quantity: number }>, cause: string, correlationId: string | null): Promise<void> {
+  /**
+   * DEC-006 (proposed default `waitlistFirst`): while participants wait for an offering or session,
+   * freed places go to them through offers, not to a new registrant who skipped the queue.
+   */
+  async othersWaiting(
+    db: Reader,
+    organizationId: string,
+    scope: { offeringId: string; sessionId: string | null },
+    participantPersonId: string,
+  ): Promise<number> {
+    let q = db
+      .selectFrom('waitlist_entries')
+      .select((eb) => eb.fn.countAll<string>().as('n'))
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', scope.offeringId)
+      .where('status', '=', 'waiting')
+      .where('participant_person_id', '<>', participantPersonId);
+    q = scope.sessionId
+      ? q.where('session_id', '=', scope.sessionId)
+      : q.where('session_id', 'is', null);
+    const row = await q.executeTakeFirst();
+    return Number(row?.n ?? 0);
+  }
+
+  async enqueueCapacityReleased(
+    trx: Trx,
+    organizationId: string,
+    freed: ReadonlyArray<{ poolId: string; quantity: number }>,
+    cause: string,
+    correlationId: string | null,
+  ): Promise<void> {
     for (const item of freed) {
       await this.outbox.enqueue(trx, EnrollmentEvents.capacityReleased, {
         organizationId,

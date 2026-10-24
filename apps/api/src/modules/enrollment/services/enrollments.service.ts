@@ -4,6 +4,8 @@ import {
   errors,
   newId,
   type CancelEnrollmentInput,
+  type CancellationPreview,
+  type CompleteEnrollmentInput,
   type EligibilityResult,
   type Enrollment,
   type FinancialConsequence,
@@ -46,11 +48,13 @@ import {
   type ConfirmEnrollmentOptions,
   type EnrollmentPort,
   type FinancePolicyPort,
+  type ParticipationSummary,
 } from '../enrollment.ports';
 import {
   actorSnapshot,
   isStaffLike,
   organizationOf,
+  redactEnrollment,
   toEnrollment,
   toHold,
   toSessionBooking,
@@ -106,19 +110,71 @@ export class EnrollmentsService implements EnrollmentPort {
   // Reads
   // -------------------------------------------------------------------------------------------
 
-  async load(db: Reader, organizationId: string, id: string, forUpdate = false): Promise<EnrollmentRow | undefined> {
-    let q = db.selectFrom('enrollments').selectAll().where('organization_id', '=', organizationId).where('id', '=', id);
+  async load(
+    db: Reader,
+    organizationId: string,
+    id: string,
+    forUpdate = false,
+  ): Promise<EnrollmentRow | undefined> {
+    let q = db
+      .selectFrom('enrollments')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id);
     if (forUpdate) q = q.forUpdate();
     return q.executeTakeFirst();
   }
 
-  async getEnrollment(organizationId: string, enrollmentId: string, trx?: Trx): Promise<Enrollment | null> {
+  async participationsOf(
+    organizationId: string,
+    participantPersonIds: readonly string[],
+    window?: { from: Date; to: Date },
+    trx?: Trx,
+  ): Promise<ParticipationSummary[]> {
+    const db = trx ?? this.uow.reader();
+    const ids = [...new Set(participantPersonIds)];
+    if (ids.length === 0) return [];
+    const enrollments = await this.activeEnrollmentsOf(db, organizationId, ids);
+    let bookings = db
+      .selectFrom('session_bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', 'in', ids)
+      .where('status', 'in', ['pending', 'confirmed'])
+      .orderBy('scheduled_start')
+      .orderBy('id');
+    if (window) {
+      bookings = bookings
+        .where('scheduled_start', '<', window.to)
+        .where('scheduled_end', '>', window.from);
+    }
+    const bookingRows = await bookings.execute();
+    return ids.map((participantPersonId) => ({
+      participantPersonId,
+      enrollments: enrollments
+        .filter((e) => e.participant_person_id === participantPersonId)
+        .map(toEnrollment),
+      sessionBookings: bookingRows
+        .filter((b) => b.participant_person_id === participantPersonId)
+        .map(toSessionBooking),
+    }));
+  }
+
+  async getEnrollment(
+    organizationId: string,
+    enrollmentId: string,
+    trx?: Trx,
+  ): Promise<Enrollment | null> {
     const row = await this.load(trx ?? this.uow.reader(), organizationId, enrollmentId);
     return row ? toEnrollment(row) : null;
   }
 
   async holdsForBasket(organizationId: string, basketId: string, trx?: Trx): Promise<Hold[]> {
-    const rows = await this.capacity.holdsOfBasket(trx ?? this.uow.reader(), organizationId, basketId);
+    const rows = await this.capacity.holdsOfBasket(
+      trx ?? this.uow.reader(),
+      organizationId,
+      basketId,
+    );
     return rows.map(toHold);
   }
 
@@ -134,7 +190,7 @@ export class EnrollmentsService implements EnrollmentPort {
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return toEnrollment(row);
+    return redactEnrollment(principal, toEnrollment(row));
   }
 
   async list(principal: Principal, query: ListEnrollmentsQuery): Promise<Page<Enrollment>> {
@@ -155,15 +211,23 @@ export class EnrollmentsService implements EnrollmentPort {
       .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
       .limit(query.limit);
-    if (query.participantPersonId) q = q.where('participant_person_id', '=', query.participantPersonId);
+    if (query.participantPersonId)
+      q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
     if (query.status) q = q.where('status', '=', query.status);
     const rows = await q.execute();
-    return { items: rows.map(toEnrollment), nextCursor: null };
+    return {
+      items: rows.map((r) => redactEnrollment(principal, toEnrollment(r))),
+      nextCursor: null,
+    };
   }
 
   /** Enrollments of several participants for the family calendar (authorization done by the caller). */
-  async activeEnrollmentsOf(db: Reader, organizationId: string, participantPersonIds: readonly string[]): Promise<EnrollmentRow[]> {
+  async activeEnrollmentsOf(
+    db: Reader,
+    organizationId: string,
+    participantPersonIds: readonly string[],
+  ): Promise<EnrollmentRow[]> {
     if (participantPersonIds.length === 0) return [];
     return db
       .selectFrom('enrollments')
@@ -179,7 +243,11 @@ export class EnrollmentsService implements EnrollmentPort {
   // Creation (pending, inside a basket hold or a placement) — §4.7 invariant 2 at the database
   // -------------------------------------------------------------------------------------------
 
-  async createPending(trx: Trx, organizationId: string, input: CreatePendingEnrollmentInput): Promise<EnrollmentRow> {
+  async createPending(
+    trx: Trx,
+    organizationId: string,
+    input: CreatePendingEnrollmentInput,
+  ): Promise<EnrollmentRow> {
     const id = newId();
     try {
       await trx
@@ -243,7 +311,10 @@ export class EnrollmentsService implements EnrollmentPort {
 
   /** SPK-AT-004: the message never names the other registrant or payer (payer privacy). */
   mapDuplicate(error: unknown, participantPersonId: string, offeringId: string): unknown {
-    if (isUniqueViolation(error) && pgConstraintName(error) === 'enrollments_equivalent_active_idx') {
+    if (
+      isUniqueViolation(error) &&
+      pgConstraintName(error) === 'enrollments_equivalent_active_idx'
+    ) {
       return errors.duplicateEntitlement(
         'An equivalent active registration already exists for this participant.',
         { participantPersonId, offeringId },
@@ -253,7 +324,12 @@ export class EnrollmentsService implements EnrollmentPort {
   }
 
   /** Application-level early feedback for §4.7 invariant 2; the partial unique index is the guarantee. */
-  async findEquivalentActive(db: Reader, organizationId: string, participantPersonId: string, key: string | null): Promise<EnrollmentRow | undefined> {
+  async findEquivalentActive(
+    db: Reader,
+    organizationId: string,
+    participantPersonId: string,
+    key: string | null,
+  ): Promise<EnrollmentRow | undefined> {
     if (!key) return undefined;
     return db
       .selectFrom('enrollments')
@@ -275,11 +351,14 @@ export class EnrollmentsService implements EnrollmentPort {
       const hold = await this.capacity.loadHold(trx, organizationId, holdId, true);
       if (!hold) throw errors.notFound('hold', holdId);
       if (hold.status !== 'active') {
-        throw errors.capacityUnavailable(`Hold ${holdId} is ${hold.status}; nothing was committed.`, {
-          holdId,
-          status: hold.status,
-          poolId: hold.pool_id,
-        });
+        throw errors.capacityUnavailable(
+          `Hold ${holdId} is ${hold.status}; nothing was committed.`,
+          {
+            holdId,
+            status: hold.status,
+            poolId: hold.pool_id,
+          },
+        );
       }
       rows.push(hold);
     }
@@ -297,12 +376,19 @@ export class EnrollmentsService implements EnrollmentPort {
                 .executeTakeFirst()
             )?.id ?? null)
           : null;
-      committed.push(await this.capacity.commitHold(trx, organizationId, hold.id, { enrollmentId }, null));
+      committed.push(
+        await this.capacity.commitHold(trx, organizationId, hold.id, { enrollmentId }, null),
+      );
     }
     return committed.map(toHold);
   }
 
-  async confirmEnrollment(trx: Trx, organizationId: string, enrollmentId: string, options: ConfirmEnrollmentOptions): Promise<Enrollment> {
+  async confirmEnrollment(
+    trx: Trx,
+    organizationId: string,
+    enrollmentId: string,
+    options: ConfirmEnrollmentOptions,
+  ): Promise<Enrollment> {
     const row = await this.confirmInTrx(trx, organizationId, enrollmentId, options);
     return toEnrollment(row);
   }
@@ -312,7 +398,12 @@ export class EnrollmentsService implements EnrollmentPort {
    * the place only if it is still free, so a late payment never displaces a valid waitlist offer
    * (its hold counts in `held`) — CAPACITY_UNAVAILABLE otherwise (SPK-AT-006). Replay-safe.
    */
-  async confirmInTrx(trx: Trx, organizationId: string, enrollmentId: string, options: ConfirmEnrollmentOptions): Promise<EnrollmentRow> {
+  async confirmInTrx(
+    trx: Trx,
+    organizationId: string,
+    enrollmentId: string,
+    options: ConfirmEnrollmentOptions,
+  ): Promise<EnrollmentRow> {
     const now = this.clock.now();
     const row = await this.load(trx, organizationId, enrollmentId, true);
     if (!row) throw errors.notFound('enrollment', enrollmentId);
@@ -327,11 +418,14 @@ export class EnrollmentsService implements EnrollmentPort {
         .executeTakeFirst();
       if (application?.requires_approval && application.status !== 'accepted') {
         // SPK-REG-007: human approval comes before a new payment is captured and before confirmation.
-        throw errors.resourceConflict('This registration awaits human approval before it can be confirmed.', {
-          code: 'APPROVAL_PENDING',
-          applicationId: row.source_application_id,
-          applicationStatus: application.status,
-        });
+        throw errors.resourceConflict(
+          'This registration awaits human approval before it can be confirmed.',
+          {
+            code: 'APPROVAL_PENDING',
+            applicationId: row.source_application_id,
+            applicationStatus: application.status,
+          },
+        );
       }
     }
     const holds = row.basket_line_id
@@ -340,7 +434,13 @@ export class EnrollmentsService implements EnrollmentPort {
     const reacquire: Array<{ poolId: string; quantity: number }> = [];
     for (const hold of holds) {
       if (hold.status === 'active') {
-        await this.capacity.commitHold(trx, organizationId, hold.id, { enrollmentId }, options.correlationId ?? null);
+        await this.capacity.commitHold(
+          trx,
+          organizationId,
+          hold.id,
+          { enrollmentId },
+          options.correlationId ?? null,
+        );
       } else if (hold.status !== 'committed') {
         reacquire.push({ poolId: hold.pool_id, quantity: hold.quantity });
       }
@@ -364,7 +464,11 @@ export class EnrollmentsService implements EnrollmentPort {
     if (row.basket_line_id) {
       await trx
         .updateTable('basket_lines')
-        .set((eb) => ({ outcome: 'confirmed', enrollment_id: enrollmentId, revision: eb('revision', '+', 1) }))
+        .set((eb) => ({
+          outcome: 'confirmed',
+          enrollment_id: enrollmentId,
+          revision: eb('revision', '+', 1),
+        }))
         .where('organization_id', '=', organizationId)
         .where('id', '=', row.basket_line_id)
         .execute();
@@ -381,7 +485,7 @@ export class EnrollmentsService implements EnrollmentPort {
         }))
         .where('organization_id', '=', organizationId)
         .where('id', '=', row.trial_participation_id)
-        .where('status', '<>', 'converted')
+        .where('status', 'in', ['scheduled', 'attended', 'no_show'])
         .execute();
       await this.outbox.enqueue(trx, EnrollmentEvents.trialChanged, {
         organizationId,
@@ -428,15 +532,36 @@ export class EnrollmentsService implements EnrollmentPort {
     return updated;
   }
 
-  async failConfirmation(trx: Trx, organizationId: string, enrollmentId: string, reason: string, actor: Principal, correlationId: string | null = null): Promise<Enrollment> {
+  async failConfirmation(
+    trx: Trx,
+    organizationId: string,
+    enrollmentId: string,
+    reason: string,
+    actor: Principal,
+    correlationId: string | null = null,
+  ): Promise<Enrollment> {
     const row = await this.load(trx, organizationId, enrollmentId, true);
     if (!row) throw errors.notFound('enrollment', enrollmentId);
     if (row.status === 'canceled') return toEnrollment(row);
-    const updated = await this.cancelInTrx(trx, organizationId, row, reason, actor, correlationId, null, 'failed');
+    const updated = await this.cancelInTrx(
+      trx,
+      organizationId,
+      row,
+      reason,
+      actor,
+      correlationId,
+      null,
+      'failed',
+    );
     return toEnrollment(updated);
   }
 
-  async confirmSessionBooking(trx: Trx, organizationId: string, bookingId: string, options: ConfirmEnrollmentOptions): Promise<SessionBooking> {
+  async confirmSessionBooking(
+    trx: Trx,
+    organizationId: string,
+    bookingId: string,
+    options: ConfirmEnrollmentOptions,
+  ): Promise<SessionBooking> {
     const now = this.clock.now();
     const row = await trx
       .selectFrom('session_bookings')
@@ -447,13 +572,25 @@ export class EnrollmentsService implements EnrollmentPort {
       .executeTakeFirst();
     if (!row) throw errors.notFound('session_booking', bookingId);
     if (row.status === 'confirmed') return toSessionBooking(row);
-    if (row.status !== 'pending') throw errors.invalidTransition('SessionBooking', row.status, 'confirm');
+    if (row.status !== 'pending')
+      throw errors.invalidTransition('SessionBooking', row.status, 'confirm');
     if (row.hold_id) {
       const hold = await this.capacity.loadHold(trx, organizationId, row.hold_id);
       if (hold?.status === 'active') {
-        await this.capacity.commitHold(trx, organizationId, row.hold_id, { sessionBookingId: bookingId }, options.correlationId ?? null);
+        await this.capacity.commitHold(
+          trx,
+          organizationId,
+          row.hold_id,
+          { sessionBookingId: bookingId },
+          options.correlationId ?? null,
+        );
       } else if (hold && hold.status !== 'committed') {
-        await this.capacity.acquireCommitted(trx, organizationId, [{ poolId: hold.pool_id, quantity: hold.quantity }], { sessionBookingId: bookingId });
+        await this.capacity.acquireCommitted(
+          trx,
+          organizationId,
+          [{ poolId: hold.pool_id, quantity: hold.quantity }],
+          { sessionBookingId: bookingId },
+        );
       }
     }
     await trx
@@ -500,7 +637,71 @@ export class EnrollmentsService implements EnrollmentPort {
   // Cancellation (SPK-REG-010): releases capacity; the finance consequence is recorded as a fact
   // -------------------------------------------------------------------------------------------
 
-  async cancel(principal: Principal, id: string, input: CancelEnrollmentInput, correlationId: string | null): Promise<Enrollment> {
+  /** SPK-REG-010: shows what a cancellation would mean before it is committed; writes nothing. */
+  async cancellationPreview(principal: Principal, id: string): Promise<CancellationPreview> {
+    const organizationId = organizationOf(principal);
+    const row = await this.load(this.db, organizationId, id);
+    if (!row) throw errors.protectedNotFound('enrollment');
+    await this.authorization.require(principal, EnrollmentActions.cancelEnrollment, {
+      type: 'enrollment',
+      id,
+      organizationId,
+      subjectPersonIds: [row.participant_person_id],
+      protected: true,
+    });
+    const now = this.clock.now();
+    const snapshot = await this.evaluator.snapshot(undefined, organizationId, row.offering_id, now);
+    const released = await this.db
+      .selectFrom('allocations')
+      .innerJoin('capacity_pools', (join) =>
+        join
+          .onRef('capacity_pools.id', '=', 'allocations.pool_id')
+          .onRef('capacity_pools.organization_id', '=', 'allocations.organization_id'),
+      )
+      .select([
+        'allocations.pool_id as pool_id',
+        'capacity_pools.unit as unit',
+        'allocations.quantity as quantity',
+      ])
+      .where('allocations.organization_id', '=', organizationId)
+      .where('allocations.enrollment_id', '=', id)
+      .where('allocations.status', '=', 'active')
+      .execute();
+    const cancellationPolicyVersionId =
+      (row.policy_references['cancellationPolicyVersionId'] as string | null) ?? null;
+    const consequence = await this.finance.cancellationConsequence(organizationId, {
+      enrollmentId: id,
+      participantPersonId: row.participant_person_id,
+      offeringId: row.offering_id,
+      cancellationPolicyVersionId,
+      price: this.priceOf(row),
+      at: now,
+    });
+    return {
+      enrollmentId: id,
+      status: row.status,
+      existing: this.participation(
+        snapshot,
+        (row.price_snapshot as unknown as PriceSnapshot) ?? null,
+      ),
+      affectedDates: { startsOn: snapshot.offering.startsOn, endsOn: snapshot.offering.endsOn },
+      capacity: {
+        released: released.map((r) => ({ poolId: r.pool_id, unit: r.unit, quantity: r.quantity })),
+      },
+      cancellationPolicyVersionId,
+      financialConsequence: consequence,
+      // Cancelling needs no human approval under the proposed defaults (DEC-009 governs money).
+      requiredApproval: false,
+      permitted: EnrollmentMachine.can(row.status, 'cancel'),
+    };
+  }
+
+  async cancel(
+    principal: Principal,
+    id: string,
+    input: CancelEnrollmentInput,
+    correlationId: string | null,
+  ): Promise<Enrollment> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
@@ -519,14 +720,79 @@ export class EnrollmentsService implements EnrollmentPort {
           enrollmentId: id,
           participantPersonId: row.participant_person_id,
           offeringId: row.offering_id,
-          cancellationPolicyVersionId: (row.policy_references['cancellationPolicyVersionId'] as string | null) ?? null,
+          cancellationPolicyVersionId:
+            (row.policy_references['cancellationPolicyVersionId'] as string | null) ?? null,
           price: this.priceOf(row),
           at: this.clock.now(),
         },
         trx,
       );
-      const updated = await this.cancelInTrx(trx, organizationId, row, input.reason, principal, correlationId, consequence, 'released');
-      return toEnrollment(updated);
+      const updated = await this.cancelInTrx(
+        trx,
+        organizationId,
+        row,
+        input.reason,
+        principal,
+        correlationId,
+        consequence,
+        'released',
+      );
+      return redactEnrollment(principal, toEnrollment(updated));
+    });
+  }
+
+  /** EnrollmentMachine `complete` (staff): the participation ended as planned; capacity stays history. */
+  async complete(
+    principal: Principal,
+    id: string,
+    input: CompleteEnrollmentInput,
+    correlationId: string | null,
+  ): Promise<Enrollment> {
+    const organizationId = organizationOf(principal);
+    const now = this.clock.now();
+    return this.uow.run(async ({ trx }) => {
+      const row = await this.load(trx, organizationId, id, true);
+      if (!row) throw errors.protectedNotFound('enrollment');
+      await this.authorization.require(principal, EnrollmentActions.completeEnrollment, {
+        type: 'enrollment',
+        id,
+        organizationId,
+        subjectPersonIds: [row.participant_person_id],
+        protected: true,
+      });
+      assertExpectedRevision(input.expectedRevision, row.revision);
+      const status = EnrollmentMachine.next(row.status, 'complete');
+      await trx
+        .updateTable('enrollments')
+        .set({ status, completed_at: now, revision: row.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', id)
+        .where('revision', '=', row.revision)
+        .execute();
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: EnrollmentActions.completeEnrollment.id,
+        targetType: 'enrollment',
+        targetId: id,
+        beforeRevision: row.revision,
+        afterRevision: row.revision + 1,
+        reason: input.reason ?? null,
+        correlationId,
+      });
+      await this.outbox.enqueue(trx, EnrollmentEvents.enrollmentCompleted, {
+        organizationId,
+        aggregateType: 'enrollment',
+        aggregateId: id,
+        correlationId,
+        payload: {
+          organizationId,
+          enrollmentId: id,
+          offeringId: row.offering_id,
+          participantPersonId: row.participant_person_id,
+        },
+      });
+      return toEnrollment((await this.load(trx, organizationId, id))!);
     });
   }
 
@@ -543,14 +809,29 @@ export class EnrollmentsService implements EnrollmentPort {
   ): Promise<EnrollmentRow> {
     const now = this.clock.now();
     EnrollmentMachine.next(row.status, 'cancel');
-    const freed = await this.capacity.releaseAllocationsFor(trx, organizationId, { enrollmentId: row.id }, reason);
+    const freed = await this.capacity.releaseAllocationsFor(
+      trx,
+      organizationId,
+      { enrollmentId: row.id },
+      reason,
+    );
     if (row.basket_line_id) {
-      for (const hold of await this.capacity.holdsOfOwner(trx, organizationId, 'basket', row.basket_line_id)) {
-        if (hold.status === 'active') await this.capacity.releaseHoldRow(trx, organizationId, hold.id, reason, correlationId);
+      for (const hold of await this.capacity.holdsOfOwner(
+        trx,
+        organizationId,
+        'basket',
+        row.basket_line_id,
+      )) {
+        if (hold.status === 'active')
+          await this.capacity.releaseHoldRow(trx, organizationId, hold.id, reason, correlationId);
       }
       await trx
         .updateTable('basket_lines')
-        .set((eb) => ({ outcome: lineOutcome, outcome_reason: reason, revision: eb('revision', '+', 1) }))
+        .set((eb) => ({
+          outcome: lineOutcome,
+          outcome_reason: reason,
+          revision: eb('revision', '+', 1),
+        }))
         .where('organization_id', '=', organizationId)
         .where('id', '=', row.basket_line_id)
         .execute();
@@ -561,7 +842,8 @@ export class EnrollmentsService implements EnrollmentPort {
         status: 'canceled',
         canceled_at: now,
         cancellation_reason: reason,
-        cancellation_policy_version_id: (row.policy_references['cancellationPolicyVersionId'] as string | null) ?? null,
+        cancellation_policy_version_id:
+          (row.policy_references['cancellationPolicyVersionId'] as string | null) ?? null,
         cancellation_consequence: consequence ? json(consequence) : null,
         revision: row.revision + 1,
       })
@@ -595,7 +877,13 @@ export class EnrollmentsService implements EnrollmentPort {
         previousStatus: row.status,
       },
     });
-    await this.capacity.enqueueCapacityReleased(trx, organizationId, freed, 'enrollment_canceled', correlationId);
+    await this.capacity.enqueueCapacityReleased(
+      trx,
+      organizationId,
+      freed,
+      'enrollment_canceled',
+      correlationId,
+    );
     const updated = await this.load(trx, organizationId, row.id);
     if (!updated) throw errors.internal('enrollment vanished');
     return updated;
@@ -605,7 +893,12 @@ export class EnrollmentsService implements EnrollmentPort {
   // Transfer (§4.8 POST /enrollments/{id}/transfer, SPK-REG-010): preview, then commit
   // -------------------------------------------------------------------------------------------
 
-  async transfer(principal: Principal, id: string, input: TransferEnrollmentInput, correlationId: string | null): Promise<TransferPreview> {
+  async transfer(
+    principal: Principal,
+    id: string,
+    input: TransferEnrollmentInput,
+    correlationId: string | null,
+  ): Promise<TransferPreview> {
     const organizationId = organizationOf(principal);
     const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
@@ -623,9 +916,23 @@ export class EnrollmentsService implements EnrollmentPort {
         throw errors.validation('The target offering must differ from the current one.');
       }
       const source = await this.evaluator.snapshot(trx, organizationId, row.offering_id, now);
-      const target = await this.evaluator.snapshot(trx, organizationId, input.targetOfferingId, now);
-      const person = await this.evaluator.participant(trx, organizationId, row.participant_person_id);
-      const evaluation = await this.evaluator.evaluate(trx, organizationId, { snapshot: target, person, intent: row.intent }, now);
+      const target = await this.evaluator.snapshot(
+        trx,
+        organizationId,
+        input.targetOfferingId,
+        now,
+      );
+      const person = await this.evaluator.participant(
+        trx,
+        organizationId,
+        row.participant_person_id,
+      );
+      const evaluation = await this.evaluator.evaluate(
+        trx,
+        organizationId,
+        { snapshot: target, person, intent: row.intent },
+        now,
+      );
       const targetPools = this.capacity.poolsForIntent(
         await this.capacity.ensurePoolsForOffering(trx, organizationId, target, principal),
         row.intent,
@@ -633,14 +940,25 @@ export class EnrollmentsService implements EnrollmentPort {
       const released = await trx
         .selectFrom('allocations')
         .innerJoin('capacity_pools', (join) =>
-          join.onRef('capacity_pools.id', '=', 'allocations.pool_id').onRef('capacity_pools.organization_id', '=', 'allocations.organization_id'),
+          join
+            .onRef('capacity_pools.id', '=', 'allocations.pool_id')
+            .onRef('capacity_pools.organization_id', '=', 'allocations.organization_id'),
         )
-        .select(['allocations.pool_id as pool_id', 'capacity_pools.unit as unit', 'allocations.quantity as quantity'])
+        .select([
+          'allocations.pool_id as pool_id',
+          'capacity_pools.unit as unit',
+          'allocations.quantity as quantity',
+        ])
         .where('allocations.organization_id', '=', organizationId)
         .where('allocations.enrollment_id', '=', id)
         .where('allocations.status', '=', 'active')
         .execute();
-      const targetPrice = await this.evaluator.priceSnapshot(trx, organizationId, target.offering.id, now);
+      const targetPrice = await this.evaluator.priceSnapshot(
+        trx,
+        organizationId,
+        target.offering.id,
+        now,
+      );
       const fromPrice = this.priceOf(row);
       const consequence = await this.finance.transferConsequence(
         organizationId,
@@ -650,7 +968,9 @@ export class EnrollmentsService implements EnrollmentPort {
           fromOfferingId: row.offering_id,
           toOfferingId: target.offering.id,
           fromPrice,
-          toPrice: targetPrice ? { amountMinor: targetPrice.basePriceMinor, currency: targetPrice.currency } : null,
+          toPrice: targetPrice
+            ? { amountMinor: targetPrice.basePriceMinor, currency: targetPrice.currency }
+            : null,
           at: now,
         },
         trx,
@@ -663,12 +983,17 @@ export class EnrollmentsService implements EnrollmentPort {
       }));
       const preview: TransferPreview = {
         enrollmentId: id,
-        existing: this.participation(source, fromPrice ? (row.price_snapshot as unknown as PriceSnapshot) : null),
+        existing: this.participation(
+          source,
+          fromPrice ? (row.price_snapshot as unknown as PriceSnapshot) : null,
+        ),
         proposed: this.participation(target, targetPrice),
         affectedDates: {
           existingRange: { startsOn: source.offering.startsOn, endsOn: source.offering.endsOn },
           proposedRange: { startsOn: target.offering.startsOn, endsOn: target.offering.endsOn },
-          overlapping: source.offering.startsOn <= target.offering.endsOn && target.offering.startsOn <= source.offering.endsOn,
+          overlapping:
+            source.offering.startsOn <= target.offering.endsOn &&
+            target.offering.startsOn <= source.offering.endsOn,
         },
         capacity: {
           released: released.map((r) => ({ poolId: r.pool_id, unit: r.unit })),
@@ -694,20 +1019,29 @@ export class EnrollmentsService implements EnrollmentPort {
       }
       const missing = missingAcknowledgments(evaluation.result);
       if (missing.length > 0) {
-        throw errors.missingAcknowledgment('Required forms of the target offering are not acknowledged.', {
-          policyVersionIds: missing,
-        });
+        throw errors.missingAcknowledgment(
+          'Required forms of the target offering are not acknowledged.',
+          {
+            policyVersionIds: missing,
+          },
+        );
       }
       if (evaluation.requiresApproval && !isStaffLike(principal)) {
-        throw errors.resourceConflict('The target offering requires staff approval; ask staff to transfer.', {
-          code: 'APPROVAL_REQUIRED',
-        });
+        throw errors.resourceConflict(
+          'The target offering requires staff approval; ask staff to transfer.',
+          {
+            code: 'APPROVAL_REQUIRED',
+          },
+        );
       }
       if (consequence.kind !== 'none' && !input.acceptConsequence) {
-        throw errors.resourceConflict('Review and accept the financial consequence before committing the transfer.', {
-          code: 'CONSEQUENCE_NOT_ACCEPTED',
-          consequence,
-        });
+        throw errors.resourceConflict(
+          'Review and accept the financial consequence before committing the transfer.',
+          {
+            code: 'CONSEQUENCE_NOT_ACCEPTED',
+            consequence,
+          },
+        );
       }
       const operationId = await this.operations.create(trx, {
         organizationId,
@@ -734,7 +1068,12 @@ export class EnrollmentsService implements EnrollmentPort {
         eligibilityResult: evaluation.result,
         correlationId,
       });
-      const freed = await this.capacity.releaseAllocationsFor(trx, organizationId, { enrollmentId: id }, 'transferred');
+      const freed = await this.capacity.releaseAllocationsFor(
+        trx,
+        organizationId,
+        { enrollmentId: id },
+        'transferred',
+      );
       await trx
         .updateTable('enrollments')
         .set({
@@ -784,7 +1123,11 @@ export class EnrollmentsService implements EnrollmentPort {
         reason: input.reason ?? null,
         correlationId,
         operationId,
-        details: { toEnrollmentId: created.id, toOfferingId: target.offering.id, consequence: consequence.kind },
+        details: {
+          toEnrollmentId: created.id,
+          toOfferingId: target.offering.id,
+          consequence: consequence.kind,
+        },
       });
       await this.audit.record(trx, {
         organizationId,
@@ -813,7 +1156,13 @@ export class EnrollmentsService implements EnrollmentPort {
           financialConsequence: consequence.kind,
         },
       });
-      await this.capacity.enqueueCapacityReleased(trx, organizationId, freed, 'enrollment_transferred', correlationId);
+      await this.capacity.enqueueCapacityReleased(
+        trx,
+        organizationId,
+        freed,
+        'enrollment_transferred',
+        correlationId,
+      );
       await this.operations.transition(trx, operationId, 'succeeded', {
         result: { fromEnrollmentId: id, toEnrollmentId: created.id },
       });
@@ -823,13 +1172,16 @@ export class EnrollmentsService implements EnrollmentPort {
       return {
         ...preview,
         committed: true,
-        previousEnrollment: toEnrollment(previous),
-        newEnrollment: toEnrollment(next),
+        previousEnrollment: redactEnrollment(principal, toEnrollment(previous)),
+        newEnrollment: redactEnrollment(principal, toEnrollment(next)),
       };
     });
   }
 
-  private participation(snapshot: OfferingSnapshot, price: PriceSnapshot | null): TransferPreview['existing'] {
+  private participation(
+    snapshot: OfferingSnapshot,
+    price: PriceSnapshot | null,
+  ): TransferPreview['existing'] {
     return {
       offeringId: snapshot.offering.id,
       offeringName: snapshot.offering.name,

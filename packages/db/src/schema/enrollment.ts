@@ -193,6 +193,7 @@ export interface BasketLinesTable {
   intent: RegistrationIntent;
   quantity: Generated<number>;
   application_id: string | null;
+  trial_participation_id: string | null;
   entitlement_definition_id: string | null;
   equivalence_key: string | null;
   eligibility_result: GeneratedJson<Record<string, unknown>>;
@@ -342,11 +343,13 @@ export interface WaitlistEntriesTable {
   organization_id: string;
   offering_id: string;
   pool_id: string;
+  session_id: string | null;
   participant_person_id: string;
   intent: RegistrationIntent;
   priority_basis: Generated<WaitlistPriorityBasis>;
   priority_rank: Generated<number>;
   joined_at: Timestamp;
+  queued_at: Timestamp;
   preferences: GeneratedJson<Record<string, unknown>>;
   requested_by: Json<Record<string, unknown>>;
   requested_by_person_id: string | null;
@@ -376,6 +379,7 @@ export interface WaitlistOffersTable {
   accepted_at: NullableTimestamp;
   accepted_basket_id: string | null;
   accepted_enrollment_id: string | null;
+  accepted_session_booking_id: string | null;
   declined_at: NullableTimestamp;
   expired_at: NullableTimestamp;
   revision: Generated<number>;

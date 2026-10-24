@@ -30,7 +30,11 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
-import { OFFERING_LOOKUP_PORT, type OfferingLookupPort, type OfferingSnapshot } from '../../catalog';
+import {
+  OFFERING_LOOKUP_PORT,
+  type OfferingLookupPort,
+  type OfferingSnapshot,
+} from '../../catalog';
 import type { PersonSummary } from '../../identity';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
@@ -48,8 +52,10 @@ import {
   type Reader,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
+import { SESSION_INTENT_COMMANDS } from '../enrollment.policy';
 import { ApplicationsService } from './applications.service';
 import { CapacityService, type HoldRow } from './capacity.service';
+import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
 
@@ -77,6 +83,7 @@ export class BasketsService implements BasketPort {
     private readonly applications: ApplicationsService,
     private readonly capacity: CapacityService,
     private readonly enrollments: EnrollmentsService,
+    private readonly sessions: CatalogSessions,
     @Inject(OFFERING_LOOKUP_PORT) private readonly offerings: OfferingLookupPort,
   ) {}
 
@@ -84,8 +91,17 @@ export class BasketsService implements BasketPort {
   // Reads and views
   // -------------------------------------------------------------------------------------------
 
-  async load(db: Reader, organizationId: string, id: string, forUpdate = false): Promise<BasketRow | undefined> {
-    let q = db.selectFrom('baskets').selectAll().where('organization_id', '=', organizationId).where('id', '=', id);
+  async load(
+    db: Reader,
+    organizationId: string,
+    id: string,
+    forUpdate = false,
+  ): Promise<BasketRow | undefined> {
+    let q = db
+      .selectFrom('baskets')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id);
     if (forUpdate) q = q.forUpdate();
     return q.executeTakeFirst();
   }
@@ -111,11 +127,18 @@ export class BasketsService implements BasketPort {
     const kinds = new Map<string, string | null>();
     for (const line of lineRows) {
       if (!kinds.has(line.offering_id)) {
-        const snapshot = await this.offerings.getOffering(organizationId, line.offering_id, this.clock.now(), db as Trx);
+        const snapshot = await this.offerings.getOffering(
+          organizationId,
+          line.offering_id,
+          this.clock.now(),
+          db as Trx,
+        );
         kinds.set(line.offering_id, snapshot?.offering.kind ?? null);
       }
     }
-    const lines: BasketLine[] = lineRows.map((line) => toBasketLine({ ...line, offering_kind: kinds.get(line.offering_id) ?? null }));
+    const lines: BasketLine[] = lineRows.map((line) =>
+      toBasketLine({ ...line, offering_kind: kinds.get(line.offering_id) ?? null }),
+    );
     const holds = await this.capacity.holdsOfBasket(db, organizationId, row.id);
     return toBasket(row, lines, holds.map(toHold));
   }
@@ -144,20 +167,28 @@ export class BasketsService implements BasketPort {
   // POST /baskets
   // -------------------------------------------------------------------------------------------
 
-  async create(principal: Principal, input: CreateBasketInput, correlationId: string | null): Promise<Basket> {
+  async create(
+    principal: Principal,
+    input: CreateBasketInput,
+    correlationId: string | null,
+  ): Promise<Basket> {
     const organizationId = organizationOf(principal);
-    const ownerPersonId = input.ownerPersonId ?? (isStaffLike(principal) ? null : principal.personId);
-    if (!ownerPersonId) throw errors.validation('ownerPersonId is required when staff open a basket.');
+    const ownerPersonId =
+      input.ownerPersonId ?? (isStaffLike(principal) ? null : principal.personId);
+    if (!ownerPersonId)
+      throw errors.validation('ownerPersonId is required when staff open a basket.');
     return this.uow.run(async ({ trx }) => {
       const owner = await this.evaluator.participant(trx, organizationId, ownerPersonId);
-      if (owner.kind !== 'adult') throw errors.validation('A basket belongs to an adult household member.');
+      if (owner.kind !== 'adult')
+        throw errors.validation('A basket belongs to an adult household member.');
       await this.authorization.require(principal, EnrollmentActions.manageBasket, {
         type: 'basket',
         organizationId,
         subjectPersonIds: [owner.id],
       });
       const payerPersonId = input.payerPersonId ?? owner.id;
-      if (payerPersonId !== owner.id) await this.evaluator.participant(trx, organizationId, payerPersonId);
+      if (payerPersonId !== owner.id)
+        await this.evaluator.participant(trx, organizationId, payerPersonId);
       const id = newId();
       const now = this.clock.now();
       await trx
@@ -192,7 +223,10 @@ export class BasketsService implements BasketPort {
         targetId: id,
         afterRevision: 1,
         correlationId,
-        details: { fulfillmentMode: input.fulfillmentMode, assistedByStaff: isStaffLike(principal) },
+        details: {
+          fulfillmentMode: input.fulfillmentMode,
+          assistedByStaff: isStaffLike(principal),
+        },
       });
       return this.view(trx, organizationId, (await this.load(trx, organizationId, id))!);
     });
@@ -202,13 +236,26 @@ export class BasketsService implements BasketPort {
   // Lines
   // -------------------------------------------------------------------------------------------
 
-  async addLine(principal: Principal, basketId: string, input: AddBasketLineInput, correlationId: string | null): Promise<Basket> {
+  async addLine(
+    principal: Principal,
+    basketId: string,
+    input: AddBasketLineInput,
+    correlationId: string | null,
+  ): Promise<Basket> {
     const organizationId = organizationOf(principal);
-    const session = await this.applications.sessionFor(principal, input.offeringId, input.sessionId);
+    const session = await this.applications.sessionFor(
+      organizationId,
+      input.offeringId,
+      input.sessionId,
+    );
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
-      const person = await this.evaluator.participant(trx, organizationId, input.participantPersonId);
+      const person = await this.evaluator.participant(
+        trx,
+        organizationId,
+        input.participantPersonId,
+      );
       await this.authorization.require(principal, EnrollmentActions.manageBasket, {
         type: 'basket',
         id: basketId,
@@ -217,7 +264,17 @@ export class BasketsService implements BasketPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, basket.revision);
-      if (basket.status !== 'open') throw errors.invalidTransition('Basket', basket.status, 'add_line');
+      if (basket.status !== 'open')
+        throw errors.invalidTransition('Basket', basket.status, 'add_line');
+      const ownCommand = SESSION_INTENT_COMMANDS[input.intent];
+      if (ownCommand) {
+        throw errors.validation(
+          `A ${input.intent} registration has its own command: ${ownCommand}.`,
+          {
+            path: 'intent',
+          },
+        );
+      }
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
       const evaluation = await this.evaluator.evaluate(trx, organizationId, {
         snapshot,
@@ -227,13 +284,40 @@ export class BasketsService implements BasketPort {
         session,
       });
       const equivalence = this.evaluator.equivalence(snapshot, person.id, session?.id ?? null);
-      if (await this.enrollments.findEquivalentActive(trx, organizationId, person.id, equivalence)) {
-        throw errors.duplicateEntitlement('An equivalent active registration already exists for this participant.', {
-          participantPersonId: person.id,
-          offeringId: snapshot.offering.id,
-        });
+      if (
+        await this.enrollments.findEquivalentActive(trx, organizationId, person.id, equivalence)
+      ) {
+        throw errors.duplicateEntitlement(
+          'An equivalent active registration already exists for this participant.',
+          {
+            participantPersonId: person.id,
+            offeringId: snapshot.offering.id,
+          },
+        );
       }
-      let application = await this.applications.findCurrent(trx, organizationId, snapshot.offering.id, person.id);
+      let application = await this.applications.findCurrent(
+        trx,
+        organizationId,
+        snapshot.offering.id,
+        person.id,
+      );
+      if (
+        application &&
+        !isStaffLike(principal) &&
+        application.submitted_by_person_id !== principal.personId &&
+        application.submitted_by_person_id !== basket.owner_person_id &&
+        application.payer_person_id !== basket.owner_person_id
+      ) {
+        // SPK-AT-004: another adult's application already covers this participant and offering. One
+        // equivalent entitlement; the other registrant and payer are never revealed.
+        throw errors.duplicateEntitlement(
+          'An application for this participant and offering already exists.',
+          {
+            participantPersonId: person.id,
+            offeringId: snapshot.offering.id,
+          },
+        );
+      }
       if (!application) {
         application = await this.applications.createInTrx(trx, organizationId, {
           snapshot,
@@ -273,11 +357,14 @@ export class BasketsService implements BasketPort {
           intent: input.intent,
           quantity: input.quantity,
           application_id: application.id,
+          trial_participation_id: null,
           entitlement_definition_id: snapshot.entitlementDefinition?.id ?? null,
           equivalence_key: equivalence,
           eligibility_result: json(evaluation.result),
           price_snapshot: price ? json(price) : null,
-          policy_references: json(this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy)),
+          policy_references: json(
+            this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy),
+          ),
           requires_approval: evaluation.requiresApproval,
           enrollment_id: null,
           outcome: 'pending',
@@ -286,7 +373,10 @@ export class BasketsService implements BasketPort {
         .execute();
       await trx
         .updateTable('baskets')
-        .set({ currency: basket.currency ?? price?.currency ?? null, revision: basket.revision + 1 })
+        .set({
+          currency: basket.currency ?? price?.currency ?? null,
+          revision: basket.revision + 1,
+        })
         .where('organization_id', '=', organizationId)
         .where('id', '=', basketId)
         .where('revision', '=', basket.revision)
@@ -312,7 +402,13 @@ export class BasketsService implements BasketPort {
     });
   }
 
-  async removeLine(principal: Principal, basketId: string, lineId: string, input: RemoveBasketLineInput, correlationId: string | null): Promise<Basket> {
+  async removeLine(
+    principal: Principal,
+    basketId: string,
+    lineId: string,
+    input: RemoveBasketLineInput,
+    correlationId: string | null,
+  ): Promise<Basket> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
@@ -325,7 +421,8 @@ export class BasketsService implements BasketPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, basket.revision);
-      if (basket.status !== 'open') throw errors.invalidTransition('Basket', basket.status, 'remove_line');
+      if (basket.status !== 'open')
+        throw errors.invalidTransition('Basket', basket.status, 'remove_line');
       const deleted = await trx
         .deleteFrom('basket_lines')
         .where('organization_id', '=', organizationId)
@@ -356,10 +453,21 @@ export class BasketsService implements BasketPort {
   // POST /baskets/{id}/hold — SPK-REG-005/006, SPK-AT-004/005
   // -------------------------------------------------------------------------------------------
 
-  async hold(principal: Principal, basketId: string, input: HoldBasketInput, correlationId: string | null): Promise<Basket> {
+  async hold(
+    principal: Principal,
+    basketId: string,
+    input: HoldBasketInput,
+    correlationId: string | null,
+  ): Promise<Basket> {
     const organizationId = organizationOf(principal);
     const now = this.clock.now();
     const policy = this.evaluator.configuration;
+    // Catalog sessions of session-scoped lines are read before the transaction (catalog service).
+    const preview = await this.lineRows(this.db, organizationId, basketId);
+    const sessions = await this.sessions.many(
+      organizationId,
+      preview.map((l) => ({ offeringId: l.offering_id, sessionId: l.session_id })),
+    );
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
@@ -387,7 +495,17 @@ export class BasketsService implements BasketPort {
       const enrollmentIds: string[] = [];
       const failures: Array<{ lineId: string; error: DomainError }> = [];
       for (const line of lines) {
-        const run = () => this.holdLine(trx, organizationId, basket, line, principal, expiresAt, correlationId);
+        const run = () =>
+          this.holdLine(
+            trx,
+            organizationId,
+            basket,
+            line,
+            principal,
+            expiresAt,
+            sessions,
+            correlationId,
+          );
         if (basket.fulfillment_mode === 'partial') {
           try {
             const outcome = await withSavepoint(trx, `line_${line.sequence}`, run);
@@ -398,7 +516,11 @@ export class BasketsService implements BasketPort {
             failures.push({ lineId: line.id, error });
             await trx
               .updateTable('basket_lines')
-              .set((eb) => ({ outcome: 'failed', outcome_reason: `${error.code}: ${error.message}`, revision: eb('revision', '+', 1) }))
+              .set((eb) => ({
+                outcome: 'failed',
+                outcome_reason: `${error.code}: ${error.message}`,
+                revision: eb('revision', '+', 1),
+              }))
               .where('organization_id', '=', organizationId)
               .where('id', '=', line.id)
               .execute();
@@ -417,12 +539,21 @@ export class BasketsService implements BasketPort {
       }
       await trx
         .updateTable('baskets')
-        .set({ status: 'held', hold_expires_at: expiresAt, last_operation_id: operationId, revision: basket.revision + 1 })
+        .set({
+          status: 'held',
+          hold_expires_at: expiresAt,
+          last_operation_id: operationId,
+          revision: basket.revision + 1,
+        })
         .where('organization_id', '=', organizationId)
         .where('id', '=', basketId)
         .where('revision', '=', basket.revision)
         .execute();
-      const view = await this.view(trx, organizationId, (await this.load(trx, organizationId, basketId))!);
+      const view = await this.view(
+        trx,
+        organizationId,
+        (await this.load(trx, organizationId, basketId))!,
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -433,7 +564,12 @@ export class BasketsService implements BasketPort {
         afterRevision: basket.revision + 1,
         correlationId,
         operationId,
-        details: { holdIds, enrollmentIds, expiresAt: expiresAt.toISOString(), failedLines: failures.map((f) => f.lineId) },
+        details: {
+          holdIds,
+          enrollmentIds,
+          expiresAt: expiresAt.toISOString(),
+          failedLines: failures.map((f) => f.lineId),
+        },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.basketHeld, {
         organizationId,
@@ -441,20 +577,48 @@ export class BasketsService implements BasketPort {
         aggregateId: basketId,
         correlationId,
         operationId,
-        payload: { organizationId, basketId, holdIds, enrollmentIds, expiresAt: expiresAt.toISOString(), approvalPending: view.approvalPending },
+        payload: {
+          organizationId,
+          basketId,
+          holdIds,
+          enrollmentIds,
+          expiresAt: expiresAt.toISOString(),
+          approvalPending: view.approvalPending,
+        },
       });
       await this.operations.transition(trx, operationId, 'succeeded', {
-        result: { basketId, holdIds, enrollmentIds, expiresAt: expiresAt.toISOString(), failedLines: failures.map((f) => ({ lineId: f.lineId, code: f.error.code })) },
+        result: {
+          basketId,
+          holdIds,
+          enrollmentIds,
+          expiresAt: expiresAt.toISOString(),
+          failedLines: failures.map((f) => ({ lineId: f.lineId, code: f.error.code })),
+        },
       });
       return view;
     });
   }
 
   /** Holds one line: fresh eligibility and acknowledgments, every required pool, one pending enrollment. */
-  private async holdLine(trx: Trx, organizationId: string, basket: BasketRow, line: BasketLineRow, principal: Principal, expiresAt: Date, correlationId: string | null): Promise<{ holdIds: string[]; enrollmentId: string }> {
+  private async holdLine(
+    trx: Trx,
+    organizationId: string,
+    basket: BasketRow,
+    line: BasketLineRow,
+    principal: Principal,
+    expiresAt: Date,
+    sessions: ReadonlyMap<string, OfferingSession>,
+    correlationId: string | null,
+  ): Promise<{ holdIds: string[]; enrollmentId: string }> {
     const snapshot = await this.evaluator.snapshot(trx, organizationId, line.offering_id);
-    const person = await this.evaluator.participant(trx, organizationId, line.participant_person_id);
-    const application = line.application_id ? await this.applications.load(trx, organizationId, line.application_id) : undefined;
+    const person = await this.evaluator.participant(
+      trx,
+      organizationId,
+      line.participant_person_id,
+    );
+    const application = line.application_id
+      ? await this.applications.load(trx, organizationId, line.application_id)
+      : undefined;
     if (application && (application.status === 'declined' || application.status === 'withdrawn')) {
       throw errors.resourceConflict('The application for this line was declined or withdrawn.', {
         code: 'APPLICATION_CLOSED',
@@ -463,7 +627,7 @@ export class BasketsService implements BasketPort {
         applicationStatus: application.status,
       });
     }
-    const session = line.session_id ? await this.catalogSession(principal, line.offering_id, line.session_id) : undefined;
+    const session = line.session_id ? (sessions.get(line.session_id) ?? null) : undefined;
     const evaluation = await this.evaluator.evaluate(trx, organizationId, {
       snapshot,
       person,
@@ -483,16 +647,37 @@ export class BasketsService implements BasketPort {
     const missing = missingAcknowledgments(evaluation.result);
     if (missing.length > 0) {
       // SPK-REG-009: the guardian (or adult participant) signs through the catalog; staff never do.
-      throw errors.missingAcknowledgment('Required forms must be acknowledged before the place is held.', {
-        lineId: line.id,
-        participantPersonId: person.id,
-        policyVersionIds: missing,
-      });
+      throw errors.missingAcknowledgment(
+        'Required forms must be acknowledged before the place is held.',
+        {
+          lineId: line.id,
+          participantPersonId: person.id,
+          policyVersionIds: missing,
+        },
+      );
     }
     const pools = this.capacity.poolsForIntent(
       await this.capacity.ensurePoolsForOffering(trx, organizationId, snapshot, principal),
       line.intent,
     );
+    if (
+      this.evaluator.configuration.waitlistFirst &&
+      (await this.capacity.othersWaiting(
+        trx,
+        organizationId,
+        { offeringId: snapshot.offering.id, sessionId: null },
+        person.id,
+      )) > 0
+    ) {
+      throw errors.capacityUnavailable(
+        'Places of this offering are offered to its waitlist first.',
+        {
+          lineId: line.id,
+          offeringId: snapshot.offering.id,
+          waitlistFirst: true,
+        },
+      );
+    }
     const holds = await this.capacity.acquireHolds(trx, organizationId, {
       pools: pools.map((p) => ({ poolId: p.id, quantity: line.quantity })),
       ownerKind: 'basket',
@@ -516,6 +701,7 @@ export class BasketsService implements BasketPort {
       sourceApplicationId: application?.id ?? null,
       basketId: basket.id,
       basketLineId: line.id,
+      trialParticipationId: line.trial_participation_id,
       priceSnapshot: (line.price_snapshot as unknown as Basket['lines'][number]['price']) ?? null,
       policyReferences: this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy),
       eligibilityResult: result,
@@ -536,20 +722,16 @@ export class BasketsService implements BasketPort {
     return { holdIds: holds.map((h) => h.id), enrollmentId: enrollment.id };
   }
 
-  private async catalogSession(principal: Principal, offeringId: string, sessionId: string): Promise<OfferingSession | null> {
-    try {
-      return (await this.applications.sessionFor(principal, offeringId, sessionId)) ?? null;
-    } catch (error) {
-      if (DomainError.is(error) && error.code === 'NOT_FOUND') return null;
-      throw error;
-    }
-  }
-
   // -------------------------------------------------------------------------------------------
   // Release, complete, expiry
   // -------------------------------------------------------------------------------------------
 
-  async release(principal: Principal, basketId: string, input: ReleaseBasketInput, correlationId: string | null): Promise<Basket> {
+  async release(
+    principal: Principal,
+    basketId: string,
+    input: ReleaseBasketInput,
+    correlationId: string | null,
+  ): Promise<Basket> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
@@ -565,7 +747,15 @@ export class BasketsService implements BasketPort {
       if (!['open', 'held', 'checking_out'].includes(basket.status)) {
         throw errors.invalidTransition('Basket', basket.status, 'release');
       }
-      await this.releaseInTrx(trx, organizationId, basket, input.reason, principal, correlationId, 'released');
+      await this.releaseInTrx(
+        trx,
+        organizationId,
+        basket,
+        input.reason,
+        principal,
+        correlationId,
+        'released',
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -583,19 +773,42 @@ export class BasketsService implements BasketPort {
   }
 
   /** Cancels the pending enrollments (which releases their holds) and closes the basket. */
-  async releaseInTrx(trx: Trx, organizationId: string, basket: BasketRow, reason: string, actor: Principal, correlationId: string | null, status: 'released' | 'expired' | 'abandoned'): Promise<void> {
+  async releaseInTrx(
+    trx: Trx,
+    organizationId: string,
+    basket: BasketRow,
+    reason: string,
+    actor: Principal,
+    correlationId: string | null,
+    status: 'released' | 'expired' | 'abandoned',
+  ): Promise<void> {
     const now = this.clock.now();
     const lines = await this.lineRows(trx, organizationId, basket.id);
     for (const line of lines) {
       if (line.enrollment_id) {
-        const enrollment = await this.enrollments.load(trx, organizationId, line.enrollment_id, true);
+        const enrollment = await this.enrollments.load(
+          trx,
+          organizationId,
+          line.enrollment_id,
+          true,
+        );
         if (enrollment && enrollment.status === 'pending') {
-          await this.enrollments.cancelInTrx(trx, organizationId, enrollment, reason, actor, correlationId, null, 'released');
+          await this.enrollments.cancelInTrx(
+            trx,
+            organizationId,
+            enrollment,
+            reason,
+            actor,
+            correlationId,
+            null,
+            'released',
+          );
         }
       }
     }
     for (const hold of await this.capacity.holdsOfBasket(trx, organizationId, basket.id)) {
-      if (hold.status === 'active') await this.capacity.releaseHoldRow(trx, organizationId, hold.id, reason, correlationId);
+      if (hold.status === 'active')
+        await this.capacity.releaseHoldRow(trx, organizationId, hold.id, reason, correlationId);
     }
     await trx
       .updateTable('baskets')
@@ -618,7 +831,12 @@ export class BasketsService implements BasketPort {
    * frees its pending enrollments; a basket in `checking_out` keeps them for finance to confirm
    * (re-acquiring the place if still free) or fail (SPK-AT-006).
    */
-  async onHoldExpired(trx: Trx, organizationId: string, hold: HoldRow, correlationId: string | null): Promise<void> {
+  async onHoldExpired(
+    trx: Trx,
+    organizationId: string,
+    hold: HoldRow,
+    correlationId: string | null,
+  ): Promise<void> {
     if (!hold.basket_id) return;
     const basket = await this.load(trx, organizationId, hold.basket_id, true);
     if (!basket || basket.status !== 'held') return;
@@ -632,7 +850,15 @@ export class BasketsService implements BasketPort {
       sessionId: null,
       actorLabel: 'enrollment.expire_hold',
     };
-    await this.releaseInTrx(trx, organizationId, basket, 'hold_expired', system, correlationId, 'expired');
+    await this.releaseInTrx(
+      trx,
+      organizationId,
+      basket,
+      'hold_expired',
+      system,
+      correlationId,
+      'expired',
+    );
     await this.audit.record(trx, {
       organizationId,
       actor: system,
@@ -648,7 +874,12 @@ export class BasketsService implements BasketPort {
   }
 
   /** Completes a basket that owes nothing; paid baskets finish through the finance checkout (§4.11). */
-  async complete(principal: Principal, basketId: string, input: CompleteBasketInput, correlationId: string | null): Promise<Basket> {
+  async complete(
+    principal: Principal,
+    basketId: string,
+    input: CompleteBasketInput,
+    correlationId: string | null,
+  ): Promise<Basket> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
@@ -661,15 +892,19 @@ export class BasketsService implements BasketPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, basket.revision);
-      if (basket.status !== 'held') throw errors.invalidTransition('Basket', basket.status, 'complete');
+      if (basket.status !== 'held')
+        throw errors.invalidTransition('Basket', basket.status, 'complete');
       const current = await this.view(trx, organizationId, basket);
       this.assertPayable(current);
       if (current.subtotalMinor > 0) {
-        throw errors.resourceConflict('This basket owes a payment; complete it through the checkout.', {
-          code: 'PAYMENT_REQUIRED',
-          subtotalMinor: current.subtotalMinor,
-          currency: current.currency,
-        });
+        throw errors.resourceConflict(
+          'This basket owes a payment; complete it through the checkout.',
+          {
+            code: 'PAYMENT_REQUIRED',
+            subtotalMinor: current.subtotalMinor,
+            currency: current.currency,
+          },
+        );
       }
       const operationId = await this.operations.create(trx, {
         organizationId,
@@ -690,7 +925,9 @@ export class BasketsService implements BasketPort {
         confirmed.push(line.enrollmentId);
       }
       await this.markFulfilled(trx, organizationId, basket, confirmed, operationId, correlationId);
-      await this.operations.transition(trx, operationId, 'succeeded', { result: { basketId, enrollmentIds: confirmed } });
+      await this.operations.transition(trx, operationId, 'succeeded', {
+        result: { basketId, enrollmentIds: confirmed },
+      });
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -707,7 +944,14 @@ export class BasketsService implements BasketPort {
     });
   }
 
-  private async markFulfilled(trx: Trx, organizationId: string, basket: BasketRow, enrollmentIds: string[], operationId: string | null, correlationId: string | null): Promise<void> {
+  private async markFulfilled(
+    trx: Trx,
+    organizationId: string,
+    basket: BasketRow,
+    enrollmentIds: string[],
+    operationId: string | null,
+    correlationId: string | null,
+  ): Promise<void> {
     const lines = await this.lineRows(trx, organizationId, basket.id);
     const partial = lines.some((l) => l.outcome !== 'confirmed');
     await trx
@@ -737,11 +981,18 @@ export class BasketsService implements BasketPort {
     if (basket.approvalPending) {
       throw errors.resourceConflict('A line of this basket awaits human approval before payment.', {
         code: 'APPROVAL_PENDING',
-        lineIds: basket.lines.filter((l) => l.requiresApproval && l.applicationStatus !== 'accepted').map((l) => l.id),
+        lineIds: basket.lines
+          .filter((l) => l.requiresApproval && l.applicationStatus !== 'accepted')
+          .map((l) => l.id),
       });
     }
-    if (basket.holdExpiresAt && new Date(basket.holdExpiresAt).getTime() <= this.clock.now().getTime()) {
-      throw errors.resourceConflict('The hold on this basket has expired.', { code: 'HOLD_EXPIRED' });
+    if (
+      basket.holdExpiresAt &&
+      new Date(basket.holdExpiresAt).getTime() <= this.clock.now().getTime()
+    ) {
+      throw errors.resourceConflict('The hold on this basket has expired.', {
+        code: 'HOLD_EXPIRED',
+      });
     }
   }
 
@@ -749,16 +1000,29 @@ export class BasketsService implements BasketPort {
   // BasketPort for the finance checkout coordinator (§4.11)
   // -------------------------------------------------------------------------------------------
 
-  async startCheckout(trx: Trx, organizationId: string, basketId: string, orderRef: string, actor: Principal): Promise<Basket> {
+  async startCheckout(
+    trx: Trx,
+    organizationId: string,
+    basketId: string,
+    orderRef: string,
+    actor: Principal,
+  ): Promise<Basket> {
     const basket = await this.load(trx, organizationId, basketId, true);
     if (!basket) throw errors.notFound('basket', basketId);
-    if (basket.status === 'checking_out' && basket.order_ref === orderRef) return this.view(trx, organizationId, basket);
-    if (basket.status !== 'held') throw errors.invalidTransition('Basket', basket.status, 'start_checkout');
+    if (basket.status === 'checking_out' && basket.order_ref === orderRef)
+      return this.view(trx, organizationId, basket);
+    if (basket.status !== 'held')
+      throw errors.invalidTransition('Basket', basket.status, 'start_checkout');
     const current = await this.view(trx, organizationId, basket);
     this.assertPayable(current);
     await trx
       .updateTable('baskets')
-      .set({ status: 'checking_out', order_ref: orderRef, checkout_started_at: this.clock.now(), revision: basket.revision + 1 })
+      .set({
+        status: 'checking_out',
+        order_ref: orderRef,
+        checkout_started_at: this.clock.now(),
+        revision: basket.revision + 1,
+      })
       .where('organization_id', '=', organizationId)
       .where('id', '=', basketId)
       .where('revision', '=', basket.revision)
@@ -776,7 +1040,11 @@ export class BasketsService implements BasketPort {
     return this.view(trx, organizationId, (await this.load(trx, organizationId, basketId))!);
   }
 
-  async assertPaymentPermitted(trx: Trx, organizationId: string, basketId: string): Promise<Basket> {
+  async assertPaymentPermitted(
+    trx: Trx,
+    organizationId: string,
+    basketId: string,
+  ): Promise<Basket> {
     const basket = await this.load(trx, organizationId, basketId);
     if (!basket) throw errors.notFound('basket', basketId);
     const current = await this.view(trx, organizationId, basket);
@@ -787,20 +1055,38 @@ export class BasketsService implements BasketPort {
     return current;
   }
 
-  async finishCheckout(trx: Trx, organizationId: string, basketId: string, outcome: 'fulfilled' | 'partially_fulfilled' | 'abandoned', actor: Principal): Promise<Basket> {
+  async finishCheckout(
+    trx: Trx,
+    organizationId: string,
+    basketId: string,
+    outcome: 'fulfilled' | 'partially_fulfilled' | 'abandoned',
+    actor: Principal,
+  ): Promise<Basket> {
     const basket = await this.load(trx, organizationId, basketId, true);
     if (!basket) throw errors.notFound('basket', basketId);
     if (outcome === 'abandoned') {
-      if (!['held', 'checking_out'].includes(basket.status)) return this.view(trx, organizationId, basket);
-      await this.releaseInTrx(trx, organizationId, basket, 'checkout_abandoned', actor, null, 'abandoned');
+      if (!['held', 'checking_out'].includes(basket.status))
+        return this.view(trx, organizationId, basket);
+      await this.releaseInTrx(
+        trx,
+        organizationId,
+        basket,
+        'checkout_abandoned',
+        actor,
+        null,
+        'abandoned',
+      );
     } else {
-      if (basket.status === 'fulfilled' || basket.status === 'partially_fulfilled') return this.view(trx, organizationId, basket);
+      if (basket.status === 'fulfilled' || basket.status === 'partially_fulfilled')
+        return this.view(trx, organizationId, basket);
       const lines = await this.lineRows(trx, organizationId, basketId);
       await this.markFulfilled(
         trx,
         organizationId,
         basket,
-        lines.filter((l) => l.outcome === 'confirmed' && l.enrollment_id).map((l) => l.enrollment_id as string),
+        lines
+          .filter((l) => l.outcome === 'confirmed' && l.enrollment_id)
+          .map((l) => l.enrollment_id as string),
         basket.last_operation_id,
         null,
       );
@@ -831,7 +1117,11 @@ export class BasketsService implements BasketPort {
   ): Promise<{ basket: BasketRow; lineId: string }> {
     const now = this.clock.now();
     const basketId = newId();
-    const price = await this.evaluator.priceSnapshot(trx, organizationId, input.snapshot.offering.id);
+    const price = await this.evaluator.priceSnapshot(
+      trx,
+      organizationId,
+      input.snapshot.offering.id,
+    );
     await trx
       .insertInto('baskets')
       .values({
@@ -870,11 +1160,18 @@ export class BasketsService implements BasketPort {
         intent: input.intent,
         quantity: 1,
         application_id: input.applicationId,
+        trial_participation_id: input.trialParticipationId ?? null,
         entitlement_definition_id: input.snapshot.entitlementDefinition?.id ?? null,
-        equivalence_key: this.evaluator.equivalence(input.snapshot, input.participant.id, input.sessionId),
+        equivalence_key: this.evaluator.equivalence(
+          input.snapshot,
+          input.participant.id,
+          input.sessionId,
+        ),
         eligibility_result: json(input.evaluation.result),
         price_snapshot: price ? json(price) : null,
-        policy_references: json(this.evaluator.policyReferences(input.snapshot, input.evaluation.approvalPolicy)),
+        policy_references: json(
+          this.evaluator.policyReferences(input.snapshot, input.evaluation.approvalPolicy),
+        ),
         requires_approval: input.evaluation.requiresApproval,
         enrollment_id: null,
         outcome: 'pending',
@@ -888,14 +1185,32 @@ export class BasketsService implements BasketPort {
   }
 
   /** Holds the single line of a basket opened by another command, reusing an existing active hold when given. */
-  async holdOpenedBasket(trx: Trx, organizationId: string, basket: BasketRow, lineId: string, actor: Principal, existingHoldIds: readonly string[], expiresAt: Date, correlationId: string | null, trialParticipationId: string | null = null): Promise<{ basket: BasketRow; enrollmentId: string }> {
+  async holdOpenedBasket(
+    trx: Trx,
+    organizationId: string,
+    basket: BasketRow,
+    lineId: string,
+    actor: Principal,
+    existingHoldIds: readonly string[],
+    expiresAt: Date,
+    correlationId: string | null,
+  ): Promise<{ basket: BasketRow; enrollmentId: string }> {
     const line = (await this.lineRows(trx, organizationId, basket.id)).find((l) => l.id === lineId);
     if (!line) throw errors.internal('basket line vanished');
     for (const holdId of existingHoldIds) {
-      await this.capacity.reassignHold(trx, organizationId, holdId, { ownerKind: 'basket', ownerId: lineId, basketId: basket.id }, expiresAt, correlationId);
+      await this.capacity.reassignHold(
+        trx,
+        organizationId,
+        holdId,
+        { ownerKind: 'basket', ownerId: lineId, basketId: basket.id },
+        expiresAt,
+        correlationId,
+      );
     }
     const snapshot = await this.evaluator.snapshot(trx, organizationId, line.offering_id);
-    const application = line.application_id ? await this.applications.load(trx, organizationId, line.application_id) : undefined;
+    const application = line.application_id
+      ? await this.applications.load(trx, organizationId, line.application_id)
+      : undefined;
     const enrollment = await this.enrollments.createPending(trx, organizationId, {
       offeringId: line.offering_id,
       participantPersonId: line.participant_person_id,
@@ -907,7 +1222,7 @@ export class BasketsService implements BasketPort {
       sourceApplicationId: application?.id ?? null,
       basketId: basket.id,
       basketLineId: line.id,
-      trialParticipationId,
+      trialParticipationId: line.trial_participation_id,
       priceSnapshot: (line.price_snapshot as unknown as Basket['lines'][number]['price']) ?? null,
       policyReferences: this.evaluator.policyReferences(snapshot, null),
       eligibilityResult: line.eligibility_result as unknown as EligibilityResult,
@@ -915,7 +1230,11 @@ export class BasketsService implements BasketPort {
     });
     await trx
       .updateTable('basket_lines')
-      .set((eb) => ({ outcome: 'held', enrollment_id: enrollment.id, revision: eb('revision', '+', 1) }))
+      .set((eb) => ({
+        outcome: 'held',
+        enrollment_id: enrollment.id,
+        revision: eb('revision', '+', 1),
+      }))
       .where('organization_id', '=', organizationId)
       .where('id', '=', line.id)
       .execute();

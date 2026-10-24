@@ -30,11 +30,19 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
-import { SessionsService, type OfferingSnapshot } from '../../catalog';
+import type { OfferingSnapshot } from '../../catalog';
 import type { PersonSummary } from '../../identity';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
-import { actorSnapshot, isStaffLike, organizationOf, toApplication, type Reader } from '../enrollment.shared';
+import {
+  actorSnapshot,
+  isStaffLike,
+  organizationOf,
+  redactApplication,
+  toApplication,
+  type Reader,
+} from '../enrollment.shared';
+import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
 
@@ -71,47 +79,91 @@ export class ApplicationsService {
     private readonly outbox: Outbox,
     private readonly evaluator: RegistrationEvaluator,
     private readonly enrollments: EnrollmentsService,
-    private readonly sessions: SessionsService,
+    private readonly sessions: CatalogSessions,
   ) {}
 
-  async load(db: Reader, organizationId: string, id: string, forUpdate = false): Promise<ApplicationRow | undefined> {
-    let q = db.selectFrom('applications').selectAll().where('organization_id', '=', organizationId).where('id', '=', id);
+  async load(
+    db: Reader,
+    organizationId: string,
+    id: string,
+    forUpdate = false,
+  ): Promise<ApplicationRow | undefined> {
+    let q = db
+      .selectFrom('applications')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id);
     if (forUpdate) q = q.forUpdate();
     return q.executeTakeFirst();
   }
 
-  /** The current application of a participant for an offering (open or accepted and not yet used). */
-  async findCurrent(db: Reader, organizationId: string, offeringId: string, participantPersonId: string): Promise<ApplicationRow | undefined> {
+  /**
+   * The current application of a participant for an offering: one under review, or an accepted
+   * one whose participation has not ended (an accepted application whose enrollment was canceled,
+   * transferred or completed no longer blocks a new application).
+   */
+  async findCurrent(
+    db: Reader,
+    organizationId: string,
+    offeringId: string,
+    participantPersonId: string,
+  ): Promise<ApplicationRow | undefined> {
     return db
       .selectFrom('applications')
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('offering_id', '=', offeringId)
       .where('participant_person_id', '=', participantPersonId)
-      .where('status', 'in', ['submitted', 'awaiting_review', 'accepted'])
+      .where((eb) =>
+        eb.or([
+          eb('status', 'in', ['submitted', 'awaiting_review']),
+          eb.and([
+            eb('status', '=', 'accepted'),
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom('enrollments')
+                  .select('enrollments.id')
+                  .whereRef('enrollments.organization_id', '=', 'applications.organization_id')
+                  .whereRef('enrollments.source_application_id', '=', 'applications.id')
+                  .where('enrollments.status', 'in', ['canceled', 'transferred', 'completed']),
+              ),
+            ),
+          ]),
+        ]),
+      )
       .orderBy('created_at', 'desc')
       .executeTakeFirst();
   }
 
-  /** The catalog session named on a session-scoped intent, through the catalog service (visibility applies). */
-  async sessionFor(principal: Principal, offeringId: string, sessionId: string | null | undefined): Promise<OfferingSession | null | undefined> {
+  /** The catalog session named on a session-scoped intent (read before the transaction). */
+  async sessionFor(
+    organizationId: string,
+    offeringId: string,
+    sessionId: string | null | undefined,
+  ): Promise<OfferingSession | undefined> {
     if (!sessionId) return undefined;
-    const sessions = await this.sessions.list(principal, offeringId);
-    const session = sessions.find((s) => s.id === sessionId);
-    if (!session) throw errors.notFound('offering_session', sessionId);
-    return session;
+    return this.sessions.get(organizationId, offeringId, sessionId);
   }
 
   // -------------------------------------------------------------------------------------------
   // POST /applications
   // -------------------------------------------------------------------------------------------
 
-  async create(principal: Principal, input: CreateApplicationInput, correlationId: string | null): Promise<Application> {
+  async create(
+    principal: Principal,
+    input: CreateApplicationInput,
+    correlationId: string | null,
+  ): Promise<Application> {
     const organizationId = organizationOf(principal);
     // The catalog session is read before the transaction (it reads through its own service).
-    const session = await this.sessionFor(principal, input.offeringId, input.sessionId);
+    const session = await this.sessionFor(organizationId, input.offeringId, input.sessionId);
     return this.uow.run(async ({ trx }) => {
-      const person = await this.evaluator.participant(trx, organizationId, input.participantPersonId);
+      const person = await this.evaluator.participant(
+        trx,
+        organizationId,
+        input.participantPersonId,
+      );
       await this.authorization.require(principal, EnrollmentActions.apply, {
         type: 'application',
         organizationId,
@@ -129,18 +181,25 @@ export class ApplicationsService {
       if (existing) {
         // SPK-AT-004: one application per participant and offering, whichever guardian asks; the
         // other household member's identity and payer are never revealed.
-        throw errors.duplicateEntitlement('An application for this participant and offering already exists.', {
-          participantPersonId: person.id,
-          offeringId: snapshot.offering.id,
-          applicationStatus: existing.status,
-        });
+        throw errors.duplicateEntitlement(
+          'An application for this participant and offering already exists.',
+          {
+            participantPersonId: person.id,
+            offeringId: snapshot.offering.id,
+          },
+        );
       }
       const equivalence = this.evaluator.equivalence(snapshot, person.id, session?.id ?? null);
-      if (await this.enrollments.findEquivalentActive(trx, organizationId, person.id, equivalence)) {
-        throw errors.duplicateEntitlement('An equivalent active registration already exists for this participant.', {
-          participantPersonId: person.id,
-          offeringId: snapshot.offering.id,
-        });
+      if (
+        await this.enrollments.findEquivalentActive(trx, organizationId, person.id, equivalence)
+      ) {
+        throw errors.duplicateEntitlement(
+          'An equivalent active registration already exists for this participant.',
+          {
+            participantPersonId: person.id,
+            offeringId: snapshot.offering.id,
+          },
+        );
       }
       const row = await this.createInTrx(trx, organizationId, {
         snapshot,
@@ -163,7 +222,11 @@ export class ApplicationsService {
    * and no approval is needed, awaiting_review when approval is needed (SPK-REG-007), or left
    * submitted when eligibility failed so staff can override or decline it (SPK-REG-002).
    */
-  async createInTrx(trx: Trx, organizationId: string, input: CreateApplicationInTrx): Promise<ApplicationRow> {
+  async createInTrx(
+    trx: Trx,
+    organizationId: string,
+    input: CreateApplicationInTrx,
+  ): Promise<ApplicationRow> {
     const now = this.clock.now();
     const id = newId();
     let status: ApplicationState = ApplicationMachine.next('draft', 'submit');
@@ -194,18 +257,25 @@ export class ApplicationsService {
           notes: input.notes,
           submitted_at: now,
           decided_at: accepted ? now : null,
-          decided_by: accepted ? json({ kind: 'system', actorLabel: 'enrollment.auto_accept' }) : null,
+          decided_by: accepted
+            ? json({ kind: 'system', actorLabel: 'enrollment.auto_accept' })
+            : null,
           decided_by_person_id: null,
-          decision_reason: accepted ? 'Eligible; no human approval is configured for this intent.' : null,
+          decision_reason: accepted
+            ? 'Eligible; no human approval is configured for this intent.'
+            : null,
           withdrawn_at: null,
         })
         .execute();
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw errors.duplicateEntitlement('An application for this participant and offering already exists.', {
-          participantPersonId: input.person.id,
-          offeringId: input.snapshot.offering.id,
-        });
+        throw errors.duplicateEntitlement(
+          'An application for this participant and offering already exists.',
+          {
+            participantPersonId: input.person.id,
+            offeringId: input.snapshot.offering.id,
+          },
+        );
       }
       throw error;
     }
@@ -263,7 +333,7 @@ export class ApplicationsService {
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return toApplication(row);
+    return redactApplication(principal, toApplication(row));
   }
 
   async list(principal: Principal, query: ListApplicationsQuery): Promise<Page<Application>> {
@@ -290,17 +360,26 @@ export class ApplicationsService {
       .orderBy('id', 'desc')
       .limit(query.limit);
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
-    if (query.participantPersonId) q = q.where('participant_person_id', '=', query.participantPersonId);
+    if (query.participantPersonId)
+      q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.status) q = q.where('status', '=', query.status);
     const rows = await q.execute();
-    return { items: rows.map(toApplication), nextCursor: null };
+    return {
+      items: rows.map((r) => redactApplication(principal, toApplication(r))),
+      nextCursor: null,
+    };
   }
 
   // -------------------------------------------------------------------------------------------
   // Override (SPK-REG-002: specific authority, reason, audit history)
   // -------------------------------------------------------------------------------------------
 
-  async overrideEligibility(principal: Principal, id: string, input: OverrideEligibilityInput, correlationId: string | null): Promise<Application> {
+  async overrideEligibility(
+    principal: Principal,
+    id: string,
+    input: OverrideEligibilityInput,
+    correlationId: string | null,
+  ): Promise<Application> {
     const organizationId = organizationOf(principal);
     const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
@@ -321,7 +400,10 @@ export class ApplicationsService {
         ...result,
         eligible: true,
         overridden: true,
-        reasons: result.reasons.map((r) => ({ ...r, severity: r.severity === 'warning' ? 'warning' : 'info' })),
+        reasons: result.reasons.map((r) => ({
+          ...r,
+          severity: r.severity === 'warning' ? 'warning' : 'info',
+        })),
       };
       const status = row.requires_approval
         ? ApplicationMachine.next(row.status, 'route_for_review')
@@ -365,9 +447,15 @@ export class ApplicationsService {
         aggregateType: 'application',
         aggregateId: id,
         correlationId,
-        payload: { organizationId, applicationId: id, offeringId: row.offering_id, reason: input.reason },
+        payload: {
+          organizationId,
+          applicationId: id,
+          offeringId: row.offering_id,
+          reason: input.reason,
+        },
       });
-      if (status === 'accepted') await this.enqueueDecided(trx, organizationId, row, status, correlationId);
+      if (status === 'accepted')
+        await this.enqueueDecided(trx, organizationId, row, status, correlationId);
       return toApplication((await this.load(trx, organizationId, id))!);
     });
   }
@@ -376,15 +464,46 @@ export class ApplicationsService {
   // Review decisions (SPK-REG-007) and withdrawal
   // -------------------------------------------------------------------------------------------
 
-  async accept(principal: Principal, id: string, input: DecideApplicationInput, correlationId: string | null): Promise<Application> {
-    return this.decide(principal, id, 'accept', input.expectedRevision, input.reason ?? null, correlationId);
+  async accept(
+    principal: Principal,
+    id: string,
+    input: DecideApplicationInput,
+    correlationId: string | null,
+  ): Promise<Application> {
+    return this.decide(
+      principal,
+      id,
+      'accept',
+      input.expectedRevision,
+      input.reason ?? null,
+      correlationId,
+    );
   }
 
-  async decline(principal: Principal, id: string, input: DeclineApplicationInput, correlationId: string | null): Promise<Application> {
-    return this.decide(principal, id, 'decline', input.expectedRevision, input.reason, correlationId);
+  async decline(
+    principal: Principal,
+    id: string,
+    input: DeclineApplicationInput,
+    correlationId: string | null,
+  ): Promise<Application> {
+    return this.decide(
+      principal,
+      id,
+      'decline',
+      input.expectedRevision,
+      input.reason,
+      correlationId,
+    );
   }
 
-  private async decide(principal: Principal, id: string, event: 'accept' | 'decline', expectedRevision: number, reason: string | null, correlationId: string | null): Promise<Application> {
+  private async decide(
+    principal: Principal,
+    id: string,
+    event: 'accept' | 'decline',
+    expectedRevision: number,
+    reason: string | null,
+    correlationId: string | null,
+  ): Promise<Application> {
     const organizationId = organizationOf(principal);
     const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
@@ -418,7 +537,15 @@ export class ApplicationsService {
         .where('id', '=', id)
         .where('revision', '=', row.revision)
         .execute();
-      if (status === 'declined') await this.releaseLinkedLines(trx, organizationId, id, 'application_declined', principal, correlationId);
+      if (status === 'declined')
+        await this.releaseLinkedLines(
+          trx,
+          organizationId,
+          id,
+          'application_declined',
+          principal,
+          correlationId,
+        );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -436,7 +563,12 @@ export class ApplicationsService {
     });
   }
 
-  async withdraw(principal: Principal, id: string, input: WithdrawApplicationInput, correlationId: string | null): Promise<Application> {
+  async withdraw(
+    principal: Principal,
+    id: string,
+    input: WithdrawApplicationInput,
+    correlationId: string | null,
+  ): Promise<Application> {
     const organizationId = organizationOf(principal);
     const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
@@ -458,7 +590,14 @@ export class ApplicationsService {
         .where('id', '=', id)
         .where('revision', '=', row.revision)
         .execute();
-      await this.releaseLinkedLines(trx, organizationId, id, 'application_withdrawn', principal, correlationId);
+      await this.releaseLinkedLines(
+        trx,
+        organizationId,
+        id,
+        'application_withdrawn',
+        principal,
+        correlationId,
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -477,12 +616,22 @@ export class ApplicationsService {
         correlationId,
         payload: { organizationId, applicationId: id, offeringId: row.offering_id },
       });
-      return toApplication((await this.load(trx, organizationId, id))!);
+      return redactApplication(
+        principal,
+        toApplication((await this.load(trx, organizationId, id))!),
+      );
     });
   }
 
   /** A declined or withdrawn application frees any pending enrollment a basket line created for it. */
-  private async releaseLinkedLines(trx: Trx, organizationId: string, applicationId: string, reason: string, actor: Principal, correlationId: string | null): Promise<void> {
+  private async releaseLinkedLines(
+    trx: Trx,
+    organizationId: string,
+    applicationId: string,
+    reason: string,
+    actor: Principal,
+    correlationId: string | null,
+  ): Promise<void> {
     const lines = await trx
       .selectFrom('basket_lines')
       .select(['id', 'enrollment_id'])
@@ -491,14 +640,32 @@ export class ApplicationsService {
       .execute();
     for (const line of lines) {
       if (line.enrollment_id) {
-        const enrollment = await this.enrollments.load(trx, organizationId, line.enrollment_id, true);
+        const enrollment = await this.enrollments.load(
+          trx,
+          organizationId,
+          line.enrollment_id,
+          true,
+        );
         if (enrollment && enrollment.status === 'pending') {
-          await this.enrollments.cancelInTrx(trx, organizationId, enrollment, reason, actor, correlationId, null, 'failed');
+          await this.enrollments.cancelInTrx(
+            trx,
+            organizationId,
+            enrollment,
+            reason,
+            actor,
+            correlationId,
+            null,
+            'failed',
+          );
         }
       } else {
         await trx
           .updateTable('basket_lines')
-          .set((eb) => ({ outcome: 'failed', outcome_reason: reason, revision: eb('revision', '+', 1) }))
+          .set((eb) => ({
+            outcome: 'failed',
+            outcome_reason: reason,
+            revision: eb('revision', '+', 1),
+          }))
           .where('organization_id', '=', organizationId)
           .where('id', '=', line.id)
           .where('outcome', 'in', ['pending', 'held'])
@@ -507,7 +674,13 @@ export class ApplicationsService {
     }
   }
 
-  private async enqueueDecided(trx: Trx, organizationId: string, row: ApplicationRow, status: ApplicationState, correlationId: string | null): Promise<void> {
+  private async enqueueDecided(
+    trx: Trx,
+    organizationId: string,
+    row: ApplicationRow,
+    status: ApplicationState,
+    correlationId: string | null,
+  ): Promise<void> {
     await this.outbox.enqueue(trx, EnrollmentEvents.applicationDecided, {
       organizationId,
       aggregateType: 'application',

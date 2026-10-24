@@ -21,7 +21,11 @@ import {
   type PricingPort,
 } from '../../catalog';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
-import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort, type PersonSummary } from '../../identity';
+import {
+  PERSON_DIRECTORY_PORT,
+  type PersonDirectoryPort,
+  type PersonSummary,
+} from '../../identity';
 import { ENROLLMENT_POLICY, requiresApproval, type EnrollmentPolicy } from '../enrollment.policy';
 import { evaluateRegistrationEligibility } from '../eligibility/registration-eligibility';
 
@@ -57,21 +61,44 @@ export class RegistrationEvaluator {
     @Inject(ENROLLMENT_POLICY) private readonly policy: EnrollmentPolicy,
   ) {}
 
-  async snapshot(trx: Trx | undefined, organizationId: string, offeringId: string, at: Date = this.clock.now()): Promise<OfferingSnapshot> {
+  async snapshot(
+    trx: Trx | undefined,
+    organizationId: string,
+    offeringId: string,
+    at: Date = this.clock.now(),
+  ): Promise<OfferingSnapshot> {
     const snapshot = await this.offerings.getOffering(organizationId, offeringId, at, trx);
     if (!snapshot) throw errors.notFound('offering', offeringId);
     return snapshot;
   }
 
   /** The participant; merged persons resolve to their survivor so an old id never splits a household's records. */
-  async participant(trx: Trx | undefined, organizationId: string, personId: string): Promise<PersonSummary> {
+  async participant(
+    trx: Trx | undefined,
+    organizationId: string,
+    personId: string,
+  ): Promise<PersonSummary> {
     const canonical = await this.persons.resolveCanonicalPersonId(organizationId, personId, trx);
     const person = await this.persons.findPerson(organizationId, canonical, trx);
     if (!person) throw errors.notFound('person', personId);
     return person;
   }
 
-  async evaluate(trx: Trx | undefined, organizationId: string, ctx: EvaluationContext, at: Date = this.clock.now()): Promise<Evaluation> {
+  async participantOrNull(
+    trx: Trx | undefined,
+    organizationId: string,
+    personId: string,
+  ): Promise<PersonSummary | null> {
+    const canonical = await this.persons.resolveCanonicalPersonId(organizationId, personId, trx);
+    return this.persons.findPerson(organizationId, canonical, trx);
+  }
+
+  async evaluate(
+    trx: Trx | undefined,
+    organizationId: string,
+    ctx: EvaluationContext,
+    at: Date = this.clock.now(),
+  ): Promise<Evaluation> {
     const { snapshot, person } = ctx;
     const acknowledged: string[] = [];
     for (const form of snapshot.requiredForms) {
@@ -101,13 +128,22 @@ export class RegistrationEvaluator {
       eligibilityPolicy: snapshot.eligibilityPolicy,
       requiredForms: snapshot.requiredForms,
       acknowledgedFormIds: acknowledged,
-      person: { id: person.id, kind: person.kind, status: person.status, dateOfBirth: person.dateOfBirth },
+      person: {
+        id: person.id,
+        kind: person.kind,
+        status: person.status,
+        dateOfBirth: person.dateOfBirth,
+      },
       teamEntry,
       session:
         ctx.session === undefined
           ? undefined
           : ctx.session
-            ? { id: ctx.session.id, status: ctx.session.status, scheduledStart: new Date(ctx.session.scheduledStart) }
+            ? {
+                id: ctx.session.id,
+                status: ctx.session.status,
+                scheduledStart: new Date(ctx.session.scheduledStart),
+              }
             : null,
     });
     const approvalPolicy = await this.policies.currentPolicyVersion(
@@ -127,12 +163,19 @@ export class RegistrationEvaluator {
         approvalPolicy,
       ),
       approvalPolicy,
-      missingFormIds: snapshot.requiredForms.map((f) => f.id).filter((id) => !acknowledged.includes(id)),
+      missingFormIds: snapshot.requiredForms
+        .map((f) => f.id)
+        .filter((id) => !acknowledged.includes(id)),
     };
   }
 
   /** The price basis of a line, from the catalog pricing port at the instant (SPK-PAY-001). */
-  async priceSnapshot(trx: Trx | undefined, organizationId: string, offeringId: string, at: Date = this.clock.now()): Promise<PriceSnapshot | null> {
+  async priceSnapshot(
+    trx: Trx | undefined,
+    organizationId: string,
+    offeringId: string,
+    at: Date = this.clock.now(),
+  ): Promise<PriceSnapshot | null> {
     const rule = await this.pricing.effectivePriceRule(organizationId, offeringId, at, trx);
     if (!rule) return null;
     return {
@@ -143,7 +186,10 @@ export class RegistrationEvaluator {
     };
   }
 
-  policyReferences(snapshot: OfferingSnapshot, approvalPolicy: PolicyVersion | null): PolicyReferences {
+  policyReferences(
+    snapshot: OfferingSnapshot,
+    approvalPolicy: PolicyVersion | null,
+  ): PolicyReferences {
     return {
       eligibilityPolicyVersionId: snapshot.eligibilityPolicy?.id ?? null,
       cancellationPolicyVersionId: snapshot.cancellationPolicy?.id ?? null,
@@ -153,7 +199,11 @@ export class RegistrationEvaluator {
   }
 
   /** §4.7 invariant 2 key from the entitlement definition's equivalence scope. */
-  equivalence(snapshot: OfferingSnapshot, participantPersonId: string, sessionId: string | null = null): string | null {
+  equivalence(
+    snapshot: OfferingSnapshot,
+    participantPersonId: string,
+    sessionId: string | null = null,
+  ): string | null {
     const definition = snapshot.entitlementDefinition;
     if (!definition) return null;
     if (definition.equivalenceScope === 'session' && !sessionId) return null;

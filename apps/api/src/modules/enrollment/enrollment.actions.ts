@@ -17,7 +17,19 @@ const PROGRAM_ADMIN: readonly StaffRole[] = [
   'general_manager',
   'system_administrator',
 ];
-/** Staff who read participation records (never the public, SPK-PLACE-005). */
+/**
+ * League administration places free agents: the roster addition goes through competition's
+ * `competition.manage_roster`, which these roles hold (SPK-PLACE-002, DEC-031).
+ */
+const LEAGUE_ADMIN: readonly StaffRole[] = [
+  'league_manager',
+  'general_manager',
+  'system_administrator',
+];
+/**
+ * Staff who read participation records (never the public, SPK-PLACE-005). Coaches and officials
+ * are not here: their view of participants is scoped to assignments (workforce), not the registry.
+ */
 const READERS: readonly StaffRole[] = [
   'front_desk',
   'program_manager',
@@ -27,7 +39,6 @@ const READERS: readonly StaffRole[] = [
   'general_manager',
   'system_administrator',
   'support_operator',
-  'coach',
 ];
 
 /**
@@ -112,6 +123,12 @@ export const EnrollmentActions = defineActions({
     subjectPermission: 'register',
     requirements: ['SPK-REG-010'],
   },
+  completeEnrollment: {
+    id: 'enrollment.complete_enrollment',
+    description: 'Mark a confirmed enrollment completed',
+    staffRoles: PROGRAM_ADMIN,
+    requirements: ['§4.6', 'SPK-REG-003'],
+  },
   transferEnrollment: {
     id: 'enrollment.transfer_enrollment',
     description: 'Preview and commit a transfer to another offering',
@@ -161,7 +178,7 @@ export const EnrollmentActions = defineActions({
   managePlacement: {
     id: 'enrollment.manage_placement',
     description: 'See candidates, propose, assign and release placements (operator-mediated)',
-    staffRoles: PROGRAM_ADMIN,
+    staffRoles: LEAGUE_ADMIN,
     requirements: ['SPK-PLACE-002', 'SPK-PLACE-003', 'SPK-PLACE-005'],
   },
   bookSession: {

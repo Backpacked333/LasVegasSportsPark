@@ -366,6 +366,8 @@ export const BasketLineSchema = z
     quantity: z.number().int(),
     applicationId: z.uuid().nullable(),
     applicationStatus: ApplicationStatusSchema.nullable(),
+    /** SPK-AT-019: the trial this follow-up line was opened from. */
+    trialParticipationId: z.uuid().nullable(),
     entitlementDefinitionId: z.uuid().nullable(),
     equivalenceKey: z.string().nullable(),
     eligibility: EligibilityResultSchema.nullable(),
@@ -512,6 +514,12 @@ export const CancelEnrollmentBody = withCommandMeta({})
   .openapi('CancelEnrollmentRequest');
 export type CancelEnrollmentInput = z.infer<typeof CancelEnrollmentBody>;
 
+/** EnrollmentMachine `complete`: the participation ended as planned (staff). */
+export const CompleteEnrollmentBody = withCommandMeta({})
+  .extend({ expectedRevision: Revision })
+  .openapi('CompleteEnrollmentRequest');
+export type CompleteEnrollmentInput = z.infer<typeof CompleteEnrollmentBody>;
+
 /** §4.8 transfer: `commit: false` previews (SPK-REG-010 "before commitment, show …"); `true` commits. */
 export const TransferEnrollmentBody = withCommandMeta({
   targetOfferingId: z.uuid(),
@@ -566,6 +574,26 @@ export const TransferPreviewSchema = z
   .openapi('TransferPreview');
 export type TransferPreview = z.infer<typeof TransferPreviewSchema>;
 
+/** SPK-REG-010: what a cancellation would mean, shown before it is committed. Changes nothing. */
+export const CancellationPreviewSchema = z
+  .object({
+    enrollmentId: z.uuid(),
+    status: EnrollmentStatusSchema,
+    existing: ParticipationSummarySchema,
+    affectedDates: z.object({ startsOn: z.iso.date(), endsOn: z.iso.date() }),
+    capacity: z.object({
+      released: z.array(
+        z.object({ poolId: z.uuid(), unit: CapacityUnitKindSchema, quantity: z.number().int() }),
+      ),
+    }),
+    cancellationPolicyVersionId: z.uuid().nullable(),
+    financialConsequence: FinancialConsequenceSchema,
+    requiredApproval: z.boolean(),
+    permitted: z.boolean(),
+  })
+  .openapi('CancellationPreview');
+export type CancellationPreview = z.infer<typeof CancellationPreviewSchema>;
+
 // ---------------------------------------------------------------------------------------------
 // Waitlists (§4.4 WaitlistEntry/WaitlistOffer, SPK-REG-008)
 // ---------------------------------------------------------------------------------------------
@@ -583,6 +611,7 @@ export const WaitlistOfferSchema = z
     acceptedAt: Instant.nullable(),
     acceptedBasketId: z.uuid().nullable(),
     acceptedEnrollmentId: z.uuid().nullable(),
+    acceptedSessionBookingId: z.uuid().nullable(),
     declinedAt: Instant.nullable(),
     expiredAt: Instant.nullable(),
     revision: Revision,
@@ -595,11 +624,13 @@ export const WaitlistEntrySchema = z
     id: z.uuid(),
     offeringId: z.uuid(),
     poolId: z.uuid(),
+    sessionId: z.uuid().nullable(),
     participantPersonId: z.uuid(),
     intent: RegistrationIntentSchema,
     priorityBasis: WaitlistPriorityBasisSchema,
     priorityRank: z.number().int(),
     joinedAt: Instant,
+    queuedAt: Instant,
     preferences: z.record(z.string(), z.unknown()),
     payerPersonId: z.uuid().nullable(),
     status: WaitlistEntryStatusSchema,
@@ -641,18 +672,14 @@ export const ListWaitlistQuery = z.object({
 export type ListWaitlistQuery = z.infer<typeof ListWaitlistQuery>;
 
 export const AcceptWaitlistOfferBody = withCommandMeta({
+  /** Household adult the follow-up basket belongs to; defaults to the acting customer (staff must name it). */
+  ownerPersonId: z.uuid().optional(),
   payerPersonId: z.uuid().optional(),
 }).openapi('AcceptWaitlistOfferRequest');
 export type AcceptWaitlistOfferInput = z.infer<typeof AcceptWaitlistOfferBody>;
 
 export const DeclineWaitlistOfferBody = withCommandMeta({}).openapi('DeclineWaitlistOfferRequest');
 export type DeclineWaitlistOfferInput = z.infer<typeof DeclineWaitlistOfferBody>;
-
-/** Accepting an offer opens a held basket the customer completes (free) or pays (finance). */
-export const WaitlistAcceptanceSchema = z
-  .object({ offer: WaitlistOfferSchema, entry: WaitlistEntrySchema, basket: BasketSchema })
-  .openapi('WaitlistAcceptance');
-export type WaitlistAcceptance = z.infer<typeof WaitlistAcceptanceSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Placement (§4.4 PlacementRequest, SPK-PLACE-001..005)
@@ -755,6 +782,11 @@ export const AssignPlacementBody = withCommandMeta({
   .openapi('AssignPlacementRequest');
 export type AssignPlacementInput = z.infer<typeof AssignPlacementBody>;
 
+export const RejectPlacementProposalBody = withCommandMeta({})
+  .extend({ reason: Reason, expectedRevision: Revision })
+  .openapi('RejectPlacementProposalRequest');
+export type RejectPlacementProposalInput = z.infer<typeof RejectPlacementProposalBody>;
+
 export const ReleasePlacementBody = withCommandMeta({})
   .extend({ reason: Reason, expectedRevision: Revision })
   .openapi('ReleasePlacementRequest');
@@ -801,20 +833,31 @@ export const SessionBookingSchema = z
   .openapi('SessionBooking');
 export type SessionBooking = z.infer<typeof SessionBookingSchema>;
 
+/**
+ * Accepting an offer moves its reserved place into a held basket (offering waitlists) or a pending
+ * session booking (session waitlists) that the customer completes (free) or pays (finance).
+ */
+export const WaitlistAcceptanceSchema = z
+  .object({
+    offer: WaitlistOfferSchema,
+    entry: WaitlistEntrySchema,
+    basket: BasketSchema.nullable(),
+    sessionBooking: SessionBookingSchema.nullable(),
+  })
+  .openapi('WaitlistAcceptance');
+export type WaitlistAcceptance = z.infer<typeof WaitlistAcceptanceSchema>;
+
+/**
+ * Books a seat in one session of a pickup offering (SPK-PLACE-004). Trials book through
+ * `/trial-participations` (SPK-YOUTH-003) and makeups through `/makeup-entitlements/{id}/redeem`
+ * (SPK-YOUTH-004), so each keeps its own record.
+ */
 export const CreateSessionBookingBody = withCommandMeta({
   offeringId: z.uuid(),
   sessionId: z.uuid(),
   participantPersonId: z.uuid(),
-  kind: SessionBookingKindSchema,
   payerPersonId: z.uuid().optional(),
-  /** A makeup booking redeems this entitlement (SPK-YOUTH-004). */
-  makeupEntitlementId: z.uuid().optional(),
-})
-  .refine((v) => v.kind !== 'makeup' || v.makeupEntitlementId !== undefined, {
-    message: 'a makeup booking needs makeupEntitlementId',
-    path: ['makeupEntitlementId'],
-  })
-  .openapi('CreateSessionBookingRequest');
+}).openapi('CreateSessionBookingRequest');
 export type CreateSessionBookingInput = z.infer<typeof CreateSessionBookingBody>;
 
 export const ConfirmSessionBookingBody = withCommandMeta({})
@@ -832,6 +875,9 @@ export const ListSessionBookingsQuery = z.object({
   participantPersonId: z.uuid().optional(),
   status: SessionBookingStatusSchema.optional(),
 });
+
+export const ListMakeupEntitlementsQuery = z.object({ participantPersonId: z.uuid() });
+export type ListMakeupEntitlementsQuery = z.infer<typeof ListMakeupEntitlementsQuery>;
 export type ListSessionBookingsQuery = z.infer<typeof ListSessionBookingsQuery>;
 
 // ---------------------------------------------------------------------------------------------
@@ -933,8 +979,9 @@ export type TrialParticipation = z.infer<typeof TrialParticipationSchema>;
 export const CreateTrialBody = withCommandMeta({
   offeringId: z.uuid(),
   participantPersonId: z.uuid(),
+  /** The trial session; its seat is held in that session's own pool. */
   sessionId: z.uuid().optional(),
-  applicationId: z.uuid().optional(),
+  /** SPK-YOUTH-003: may staff reuse this trial's information for a follow-up offer? */
   followUpConsent: z.boolean().default(false),
   payerPersonId: z.uuid().optional(),
 }).openapi('CreateTrialRequest');
@@ -1181,11 +1228,25 @@ query(
   pageSchema(EnrollmentSchema),
 );
 query('/enrollments/{id}', 'Read an enrollment', null, EnrollmentSchema);
+query(
+  '/enrollments/{id}/cancellation-preview',
+  'Preview a cancellation: participation, dates, capacity released, refund/credit/charge, approval (SPK-REG-010)',
+  null,
+  CancellationPreviewSchema,
+);
 command(
   'post',
   '/enrollments/{id}/cancel',
   'Cancel an enrollment under its cancellation policy (SPK-REG-010)',
   CancelEnrollmentBody,
+  EnrollmentSchema,
+  200,
+);
+command(
+  'post',
+  '/enrollments/{id}/complete',
+  'Complete a confirmed enrollment (staff)',
+  CompleteEnrollmentBody,
   EnrollmentSchema,
   200,
 );
@@ -1273,6 +1334,14 @@ command(
 );
 command(
   'post',
+  '/placement-requests/{id}/reject-proposal',
+  'Reject a proposal and return the request to unassigned',
+  RejectPlacementProposalBody,
+  PlacementRequestSchema,
+  200,
+);
+command(
+  'post',
   '/placement-requests/{id}/assign',
   'Assign: checks capacity and current eligibility at commitment and adds the roster membership (SPK-PLACE-003)',
   AssignPlacementBody,
@@ -1291,7 +1360,7 @@ command(
 command(
   'post',
   '/session-bookings',
-  'Book a session seat (pickup, trial, makeup) with its own capacity and waitlist (SPK-PLACE-004)',
+  'Book a pickup session seat with its own capacity, entry requirements and waitlist (SPK-PLACE-004)',
   CreateSessionBookingBody,
   SessionBookingSchema,
 );
@@ -1325,6 +1394,12 @@ command(
   'Issue a makeup entitlement (SPK-YOUTH-004)',
   IssueMakeupBody,
   MakeupEntitlementSchema,
+);
+query(
+  '/makeup-entitlements',
+  'List the makeup entitlements of a participant',
+  ListMakeupEntitlementsQuery,
+  z.array(MakeupEntitlementSchema),
 );
 query(
   '/makeup-entitlements/{id}',

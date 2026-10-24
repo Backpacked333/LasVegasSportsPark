@@ -290,6 +290,7 @@ create table basket_lines (
   )),
   quantity integer not null default 1 check (quantity >= 1),
   application_id uuid,
+  trial_participation_id uuid,                        -- SPK-AT-019: a follow-up line opened from a trial (FK added below)
   entitlement_definition_id uuid,
   equivalence_key text,
   eligibility_result jsonb not null default '{}'::jsonb,
@@ -471,9 +472,10 @@ create table session_bookings (
   foreign key (organization_id, assisted_by_person_id) references persons (organization_id, id),
   foreign key (organization_id, payer_person_id) references persons (organization_id, id),
   check (scheduled_start < scheduled_end),
-  check ((status = 'confirmed') = (confirmed_at is not null)),
-  check ((status = 'canceled') = (canceled_at is not null)),
-  check ((status = 'expired') = (expired_at is not null))
+  -- a canceled booking keeps the instant it had been confirmed (history), so confirmation is one-way
+  constraint session_bookings_confirmation_fact check (status <> 'confirmed' or confirmed_at is not null),
+  constraint session_bookings_cancellation_fact check ((status = 'canceled') = (canceled_at is not null)),
+  constraint session_bookings_expiry_fact check ((status = 'expired') = (expired_at is not null and confirmed_at is null))
 );
 -- One live booking per participant and session (pickup or otherwise).
 create unique index session_bookings_live_idx on session_bookings (organization_id, session_id, participant_person_id)
@@ -505,6 +507,8 @@ create table makeup_redemptions (
   foreign key (organization_id, reverses_redemption_id) references makeup_redemptions (organization_id, id),
   check ((kind = 'reversal') = (reverses_redemption_id is not null))
 );
+create unique index makeup_redemptions_reversal_idx on makeup_redemptions (organization_id, reverses_redemption_id)
+  where reverses_redemption_id is not null;
 create index makeup_redemptions_entitlement_idx on makeup_redemptions (organization_id, makeup_entitlement_id, redeemed_at);
 create trigger makeup_redemptions_append_only before update or delete on makeup_redemptions
   for each row execute function forbid_mutation();
@@ -552,14 +556,16 @@ create table waitlist_entries (
   id uuid primary key,
   organization_id uuid not null references organizations(id),
   offering_id uuid not null,
-  pool_id uuid not null,                              -- the pool the entry waits for (offering or session seats)
+  pool_id uuid not null,                              -- the primary pool the entry waits for (offering or session seats)
+  session_id uuid,                                    -- session waitlists (pickup, trial, makeup seats, SPK-PLACE-004)
   participant_person_id uuid not null,
   intent text not null check (intent in (
     'individual_league', 'join_team', 'create_team_entry', 'youth', 'trial', 'makeup', 'pickup', 'rental_request'
   )),
   priority_basis text not null default 'joined_at' check (priority_basis in ('joined_at', 'priority_tier', 'returning', 'manual')),
   priority_rank integer not null default 100,         -- lower ranks are offered first; ties by joined_at
-  joined_at timestamptz not null,
+  joined_at timestamptz not null,                     -- fact: when the participant joined
+  queued_at timestamptz not null,                     -- queue order within a rank; an expired offer may requeue (DEC-006)
   preferences jsonb not null default '{}'::jsonb,
   requested_by jsonb not null,
   requested_by_person_id uuid,
@@ -576,6 +582,7 @@ create table waitlist_entries (
   unique (organization_id, id),
   foreign key (organization_id, offering_id) references offerings (organization_id, id),
   foreign key (organization_id, pool_id) references capacity_pools (organization_id, id),
+  foreign key (organization_id, session_id) references offering_sessions (organization_id, id),
   foreign key (organization_id, participant_person_id) references persons (organization_id, id),
   foreign key (organization_id, requested_by_person_id) references persons (organization_id, id),
   foreign key (organization_id, payer_person_id) references persons (organization_id, id),
@@ -585,7 +592,7 @@ create table waitlist_entries (
 );
 create unique index waitlist_entries_live_idx on waitlist_entries (organization_id, pool_id, participant_person_id)
   where status in ('waiting', 'offered');
-create index waitlist_entries_queue_idx on waitlist_entries (organization_id, pool_id, priority_rank, joined_at)
+create index waitlist_entries_queue_idx on waitlist_entries (organization_id, offering_id, priority_rank, queued_at)
   where status = 'waiting';
 create trigger waitlist_entries_touch before update on waitlist_entries
   for each row execute function touch_updated_at();
@@ -603,6 +610,7 @@ create table waitlist_offers (
   accepted_at timestamptz,
   accepted_basket_id uuid,
   accepted_enrollment_id uuid,
+  accepted_session_booking_id uuid,
   declined_at timestamptz,
   expired_at timestamptz,
   revision integer not null default 1,
@@ -614,6 +622,7 @@ create table waitlist_offers (
   foreign key (organization_id, hold_id) references holds (organization_id, id),
   foreign key (organization_id, accepted_basket_id) references baskets (organization_id, id),
   foreign key (organization_id, accepted_enrollment_id) references enrollments (organization_id, id),
+  foreign key (organization_id, accepted_session_booking_id) references session_bookings (organization_id, id),
   check (expires_at > offered_at),
   check ((status = 'accepted') = (accepted_at is not null)),
   check ((status = 'declined') = (declined_at is not null)),
@@ -667,9 +676,120 @@ create table trial_participations (
   check ((status = 'converted') = (converted_enrollment_id is not null and converted_at is not null)),
   check ((status = 'canceled') = (canceled_at is not null))
 );
+-- One scheduled trial per participant and trial offering (a trial is a try-out, not a series).
+create unique index trial_participations_live_idx on trial_participations (organization_id, offering_id, participant_person_id)
+  where status = 'scheduled';
 create index trial_participations_participant_idx on trial_participations (organization_id, participant_person_id, status);
 create trigger trial_participations_touch before update on trial_participations
   for each row execute function touch_updated_at();
 
 alter table enrollments
   add foreign key (organization_id, trial_participation_id) references trial_participations (organization_id, id);
+
+alter table basket_lines
+  add foreign key (organization_id, trial_participation_id) references trial_participations (organization_id, id);
+
+-- ---------------------------------------------------------------------------------------------
+-- Database guards for the §4.6 machines whose outcome must never be rewritten
+-- ---------------------------------------------------------------------------------------------
+
+-- SPK-REG-006: a hold has exactly one terminal outcome. Once committed, released or expired it can
+-- never change status again, and its pool and quantity are fixed from acquisition.
+create or replace function holds_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.pool_id <> old.pool_id or new.quantity <> old.quantity or new.organization_id <> old.organization_id then
+    raise exception 'hold %: pool and quantity are fixed at acquisition', old.id
+      using errcode = 'check_violation', constraint = 'holds_one_terminal_outcome';
+  end if;
+  if old.status <> 'active' and (
+       new.status <> old.status
+       or new.committed_at is distinct from old.committed_at
+       or new.released_at is distinct from old.released_at
+       or new.expired_at is distinct from old.expired_at) then
+    raise exception 'hold % already has its terminal outcome (%)', old.id, old.status
+      using errcode = 'check_violation', constraint = 'holds_one_terminal_outcome';
+  end if;
+  return new;
+end
+$$;
+create trigger holds_guard before update on holds
+  for each row execute function holds_guard();
+
+-- SPK-REG-008: an offer is consumed once; accepted, declined and expired offers are final.
+create or replace function waitlist_offers_guard() returns trigger
+language plpgsql as $$
+begin
+  if old.status <> 'offered' and new.status <> old.status then
+    raise exception 'waitlist offer % is already %', old.id, old.status
+      using errcode = 'check_violation', constraint = 'waitlist_offers_consumed_once';
+  end if;
+  if new.hold_id <> old.hold_id or new.waitlist_entry_id <> old.waitlist_entry_id then
+    raise exception 'waitlist offer %: entry and hold are fixed', old.id
+      using errcode = 'check_violation', constraint = 'waitlist_offers_consumed_once';
+  end if;
+  return new;
+end
+$$;
+create trigger waitlist_offers_guard before update on waitlist_offers
+  for each row execute function waitlist_offers_guard();
+
+-- §4.6 EnrollmentMachine (packages/contracts/src/state-machines.ts): pending → confirmed | canceled;
+-- confirmed → canceled | transferred | completed; the terminal states never change.
+create or replace function enrollments_transition_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.status = old.status then
+    return new;
+  end if;
+  if (old.status = 'pending' and new.status in ('confirmed', 'canceled'))
+     or (old.status = 'confirmed' and new.status in ('canceled', 'transferred', 'completed')) then
+    return new;
+  end if;
+  raise exception 'enrollment % cannot move from % to %', old.id, old.status, new.status
+    using errcode = 'check_violation', constraint = 'enrollments_machine';
+end
+$$;
+create trigger enrollments_transition_guard before update on enrollments
+  for each row execute function enrollments_transition_guard();
+
+-- SPK-YOUTH-004 / SPK-AT-020 / §4.7 invariant 7: the redemption history is the source of the count.
+-- Inserting a redemption locks the entitlement, refuses one that is not active, expired at the
+-- redemption instant or belongs to someone else, and moves the counter; the check constraint
+-- (redeemed_count <= redemption_limit) is the final guarantee against double redemption.
+create or replace function makeup_redemptions_apply() returns trigger
+language plpgsql as $$
+declare
+  ent record;
+begin
+  select id, participant_person_id, status, expires_at, redeemed_count, redemption_limit
+    into ent
+    from makeup_entitlements
+   where organization_id = new.organization_id and id = new.makeup_entitlement_id
+   for update;
+  if new.kind = 'redeem' then
+    if ent.participant_person_id <> new.participant_person_id then
+      raise exception 'makeup entitlement % belongs to another participant', ent.id
+        using errcode = 'check_violation', constraint = 'makeup_entitlements_within_limit';
+    end if;
+    if ent.status <> 'active' or ent.expires_at <= new.redeemed_at then
+      raise exception 'makeup entitlement % is not redeemable (status %, expires %)', ent.id, ent.status, ent.expires_at
+        using errcode = 'check_violation', constraint = 'makeup_entitlements_within_limit';
+    end if;
+    update makeup_entitlements
+       set redeemed_count = redeemed_count + 1,
+           status = case when redeemed_count + 1 >= redemption_limit then 'exhausted' else status end,
+           revision = revision + 1
+     where organization_id = new.organization_id and id = new.makeup_entitlement_id;
+  else
+    update makeup_entitlements
+       set redeemed_count = redeemed_count - 1,
+           status = case when status = 'exhausted' then 'active' else status end,
+           revision = revision + 1
+     where organization_id = new.organization_id and id = new.makeup_entitlement_id;
+  end if;
+  return null;
+end
+$$;
+create trigger makeup_redemptions_apply after insert on makeup_redemptions
+  for each row execute function makeup_redemptions_apply();

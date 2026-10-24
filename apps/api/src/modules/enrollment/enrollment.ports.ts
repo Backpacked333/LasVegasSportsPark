@@ -34,8 +34,30 @@ export interface ConfirmEnrollmentOptions {
   operationId?: string | null;
 }
 
+/** One participant's current commitments (SPK-AT-015: entry records only the actual child and session). */
+export interface ParticipationSummary {
+  participantPersonId: string;
+  enrollments: Enrollment[];
+  sessionBookings: SessionBooking[];
+}
+
 export interface EnrollmentPort {
-  getEnrollment(organizationId: string, enrollmentId: string, trx?: Trx): Promise<Enrollment | null>;
+  /**
+   * Active (pending or confirmed) enrollments and session bookings per participant, each person
+   * separately so arrival for one child never implies another (entry, SPK-ENTRY, SPK-AT-015).
+   * Bookings are limited to the window when one is given.
+   */
+  participationsOf(
+    organizationId: string,
+    participantPersonIds: readonly string[],
+    window?: { from: Date; to: Date },
+    trx?: Trx,
+  ): Promise<ParticipationSummary[]>;
+  getEnrollment(
+    organizationId: string,
+    enrollmentId: string,
+    trx?: Trx,
+  ): Promise<Enrollment | null>;
   /** Active and historical holds of a basket. */
   holdsForBasket(organizationId: string, basketId: string, trx?: Trx): Promise<Hold[]>;
   /**
@@ -120,7 +142,12 @@ export interface WaitlistPort {
   getOffer(organizationId: string, offerId: string, trx?: Trx): Promise<WaitlistOffer | null>;
   entriesForPool(organizationId: string, poolId: string, trx?: Trx): Promise<WaitlistEntry[]>;
   /** Generates offers for the pool's free places by priority (idempotent; safe under replay). */
-  offerFromPool(trx: Trx, organizationId: string, poolId: string, correlationId: string | null): Promise<WaitlistOffer[]>;
+  offerFromPool(
+    trx: Trx,
+    organizationId: string,
+    poolId: string,
+    correlationId: string | null,
+  ): Promise<WaitlistOffer[]>;
 }
 
 export interface TransferConsequenceInput {

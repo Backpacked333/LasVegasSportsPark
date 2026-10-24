@@ -1,6 +1,7 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import {
   errors,
+  systemPrincipal,
   type Application,
   type Basket,
   type BasketLine,
@@ -56,6 +57,80 @@ export function organizationOf(principal: Principal): string {
 
 export function isStaffLike(principal: Principal): boolean {
   return principal.kind === 'staff' || principal.kind === 'system';
+}
+
+/** The system principal enrollment uses for its own follow-up work (outbox handlers, timers). */
+export function enrollmentSystem(organizationId: string, label = 'enrollment'): Principal {
+  return systemPrincipal(organizationId, label);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Payer privacy (SPK-AT-004, §4.14): a guardian who may see a child's participation does not
+// learn which other adult registered or pays for it. Staff, the payer and the registrant see all.
+// ---------------------------------------------------------------------------------------------
+
+const REDACTED_ACTOR: RegistrationActorSnapshot = {
+  kind: 'customer',
+  accountId: null,
+  personId: null,
+  staffRoles: [],
+  actorLabel: 'another authorized adult',
+};
+
+function seesPrivateFacts(principal: Principal, personIds: ReadonlyArray<string | null>): boolean {
+  if (isStaffLike(principal)) return true;
+  return principal.personId !== null && personIds.includes(principal.personId);
+}
+
+export function redactApplication(principal: Principal, application: Application): Application {
+  if (seesPrivateFacts(principal, [application.payerPersonId, application.submittedByPersonId])) {
+    return application;
+  }
+  return {
+    ...application,
+    submittedBy:
+      application.submittedBy.kind === 'staff' ? application.submittedBy : REDACTED_ACTOR,
+    submittedByPersonId: null,
+    payerPersonId: null,
+  };
+}
+
+export function redactEnrollment(principal: Principal, enrollment: Enrollment): Enrollment {
+  if (seesPrivateFacts(principal, [enrollment.payerPersonId, enrollment.registeredBy.personId])) {
+    return enrollment;
+  }
+  return {
+    ...enrollment,
+    registeredBy:
+      enrollment.registeredBy.kind === 'staff' ? enrollment.registeredBy : REDACTED_ACTOR,
+    payerPersonId: null,
+    basketId: null,
+    basketLineId: null,
+    orderRef: null,
+    cancellationConsequence: null,
+  };
+}
+
+export function redactSessionBooking(
+  principal: Principal,
+  booking: SessionBooking,
+): SessionBooking {
+  if (seesPrivateFacts(principal, [booking.payerPersonId, booking.bookedBy.personId]))
+    return booking;
+  return {
+    ...booking,
+    bookedBy: booking.bookedBy.kind === 'staff' ? booking.bookedBy : REDACTED_ACTOR,
+    payerPersonId: null,
+  };
+}
+
+export function redactWaitlistEntry(
+  principal: Principal,
+  entry: WaitlistEntry,
+  requestedByPersonId: string | null,
+): WaitlistEntry {
+  if (seesPrivateFacts(principal, [entry.payerPersonId, requestedByPersonId])) return entry;
+  return { ...entry, payerPersonId: null };
 }
 
 export const iso = (value: Date | string): string => new Date(value).toISOString();
@@ -242,6 +317,7 @@ export function toBasketLine(row: BasketLineRow): BasketLine {
     quantity: row.quantity,
     applicationId: row.application_id,
     applicationStatus: (row.application_status as BasketLine['applicationStatus']) ?? null,
+    trialParticipationId: row.trial_participation_id,
     entitlementDefinitionId: row.entitlement_definition_id,
     equivalenceKey: row.equivalence_key,
     eligibility: emptyToNull<EligibilityResult>(row.eligibility_result),
@@ -399,6 +475,7 @@ export function toWaitlistOffer(row: Selectable<WaitlistOffersTable>): WaitlistO
     acceptedAt: isoOrNull(row.accepted_at),
     acceptedBasketId: row.accepted_basket_id,
     acceptedEnrollmentId: row.accepted_enrollment_id,
+    acceptedSessionBookingId: row.accepted_session_booking_id,
     declinedAt: isoOrNull(row.declined_at),
     expiredAt: isoOrNull(row.expired_at),
     revision: row.revision,
@@ -414,11 +491,13 @@ export function toWaitlistEntry(
     id: row.id,
     offeringId: row.offering_id,
     poolId: row.pool_id,
+    sessionId: row.session_id,
     participantPersonId: row.participant_person_id,
     intent: row.intent,
     priorityBasis: row.priority_basis,
     priorityRank: row.priority_rank,
     joinedAt: iso(row.joined_at),
+    queuedAt: iso(row.queued_at),
     preferences: row.preferences,
     payerPersonId: row.payer_person_id,
     status: row.status,
@@ -433,7 +512,9 @@ export function toWaitlistEntry(
   };
 }
 
-export function toTrialParticipation(row: Selectable<TrialParticipationsTable>): TrialParticipation {
+export function toTrialParticipation(
+  row: Selectable<TrialParticipationsTable>,
+): TrialParticipation {
   return {
     id: row.id,
     offeringId: row.offering_id,
