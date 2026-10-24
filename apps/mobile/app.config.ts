@@ -25,5 +25,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     staleDataThresholdMinutes: process.env.SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES
       ? Number(process.env.SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES)
       : null,
+    // Organization whose public catalog signed-out visitors browse (deployment setting, SCR-C-07).
+    organizationSlug: process.env.SPORTSPARK_ORGANIZATION_SLUG ?? null,
+    // Approved placement fields (SCR-C-10). Pending DEC-051: unset until the operator approves them.
+    placementFields: process.env.SPORTSPARK_PLACEMENT_FIELDS
+      ? process.env.SPORTSPARK_PLACEMENT_FIELDS.split(',').map((f: string) => f.trim())
+      : null,
   },
 });

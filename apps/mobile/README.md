@@ -59,6 +59,9 @@ SPORTSPARK_API_BASE_URL=http://localhost:3000/v1 pnpm --filter @sportspark/mobil
 | Facility pass (SCR-C-05).                                                                                                                                                                                                 | Not built: the API has no read of the customer's own pass                                                 |                                                                              |
 | Native acceptance on signed builds and physical devices (§6.2), including VoiceOver, TalkBack and large text.                                                                                                             | **Pending**: not possible in this repository; tracked in `docs/package-a/native-acceptance-matrix.md`     |                                                                              |
 
+Discover, registration and checkout (SCR-C-07 to SCR-C-16) are described, with their status and
+pending decisions, in [`src/screens/registration/README.md`](src/screens/registration/README.md).
+
 ## Conventions for screen builders
 
 - **Layout.** A route file under `app/` only re-exports a screen: `export { InboxScreen as default } from '../src/screens/inbox/InboxScreen';`.
