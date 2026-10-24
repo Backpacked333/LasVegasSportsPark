@@ -79,22 +79,22 @@ modes agree.
 
 ## Module map (spec §4.2)
 
-| Module         | Depends on                                 | Registers with kernel                                                                              |
-| -------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| identity       | —                                          | principal resolver, relationship authority                                                         |
-| catalog        | identity                                   | —                                                                                                  |
-| scheduling     | — (facilities table in core)               | — (offers FIXTURE_OBLIGATION_IMPL hook)                                                            |
-| competition    | identity, scheduling                       | team authority, fixture obligations; outbox handler syncing fixtures (`scheduling.event_changed`)  |
-| workforce      | identity, scheduling, competition          | —                                                                                                  |
-| facilities     | scheduling                                 | outbox handlers (due timers, lifted closures)                                                      |
-| communications | identity, scheduling, competition          | outbox handlers (dispatch, schedule notices, revoked grants); inbox handler for messaging receipts |
-| enrollment     | identity, catalog, competition, scheduling | —                                                                                                  |
-| finance        | identity, catalog, enrollment              | inbox handlers for payment provider events                                                         |
-| entry          | identity, enrollment, scheduling           | —                                                                                                  |
-| support        | identity (+ reads everything)              | —                                                                                                  |
-| migration      | all                                        | —                                                                                                  |
-| reporting      | all (read models)                          | —                                                                                                  |
-| automation     | all (through commands)                     | —                                                                                                  |
+| Module         | Depends on                                 | Registers with kernel                                                                                                                          |
+| -------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| identity       | —                                          | principal resolver, relationship authority                                                                                                     |
+| catalog        | identity                                   | —                                                                                                                                              |
+| scheduling     | — (facilities table in core)               | — (offers FIXTURE_OBLIGATION_IMPL hook)                                                                                                        |
+| competition    | identity, scheduling                       | team authority, fixture obligations; outbox handler syncing fixtures (`scheduling.event_changed`)                                              |
+| workforce      | identity, scheduling, competition, catalog | competition readiness check (`workforce.required_officials`) and `ASSIGNMENT_CHECK_IMPL`; outbox handlers (fixture, event and session changes) |
+| facilities     | scheduling                                 | outbox handlers (due timers, lifted closures)                                                                                                  |
+| communications | identity, scheduling, competition          | outbox handlers (dispatch, schedule notices, revoked grants); inbox handler for messaging receipts                                             |
+| enrollment     | identity, catalog, competition, scheduling | —                                                                                                                                              |
+| finance        | identity, catalog, enrollment              | inbox handlers for payment provider events                                                                                                     |
+| entry          | identity, enrollment, scheduling           | —                                                                                                                                              |
+| support        | identity (+ reads everything)              | —                                                                                                                                              |
+| migration      | all                                        | —                                                                                                                                              |
+| reporting      | all (read models)                          | —                                                                                                                                              |
+| automation     | all (through commands)                     | —                                                                                                                                              |
 
 Each module directory has a README naming its owned records and specification sections.
 

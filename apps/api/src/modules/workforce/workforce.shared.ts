@@ -196,7 +196,10 @@ export function toFeeAdjustment(row: FeeAdjustmentRow): FeeAdjustment {
   };
 }
 
-export function toFeeSubmission(row: FeeSubmissionRow, adjustments: FeeAdjustmentRow[]): FeeSubmission {
+export function toFeeSubmission(
+  row: FeeSubmissionRow,
+  adjustments: FeeAdjustmentRow[],
+): FeeSubmission {
   return {
     id: row.id,
     assignmentId: row.assignment_id,

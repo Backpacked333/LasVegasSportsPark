@@ -223,7 +223,10 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
           ? ` ${role.offered} offered and ${role.proposed} proposed assignment(s) do not count until accepted.`
           : '';
       issues.push({
-        code: role.kind === 'official' ? 'required_officials_not_accepted' : 'required_staff_not_accepted',
+        code:
+          role.kind === 'official'
+            ? 'required_officials_not_accepted'
+            : 'required_staff_not_accepted',
         severity: role.mustBeAccepted ? 'blocking' : 'warning',
         message: `${accepted} of ${role.requiredCount} required ${role.role} accepted.${pending}`,
         source: { type: 'assignment_requirement', id: role.requirementId },
@@ -333,7 +336,11 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       .selectFrom('operational_exceptions')
       .select('id')
       .where('organization_id', '=', row.organization_id)
-      .where('dedupe_key', '=', uncoveredDedupeKey(row.target_type, row.target_id, row.role, row.slot))
+      .where(
+        'dedupe_key',
+        '=',
+        uncoveredDedupeKey(row.target_type, row.target_id, row.role, row.slot),
+      )
       .where('status', 'in', ['open', 'acknowledged'])
       .executeTakeFirst();
     if (!open) return null;

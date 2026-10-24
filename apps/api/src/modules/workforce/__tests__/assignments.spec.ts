@@ -43,7 +43,11 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
 
   const propose = (actor: Actor, body: Record<string, unknown>, k = key()) =>
     post(t, '/v1/assignments', actor, body, k);
-  const refereeFor = (fixtureId: string, personId: string, extra: Record<string, unknown> = {}) => ({
+  const refereeFor = (
+    fixtureId: string,
+    personId: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
     personId,
     kind: 'official',
     targetType: 'fixture',
@@ -81,7 +85,10 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
       expectedRevision: assignment.revision,
     });
     expect(offered.status, JSON.stringify(offered.body)).toBe(200);
-    expect(offered.body.assignment).toMatchObject({ status: 'offered', offeredAt: expect.any(String) });
+    expect(offered.body.assignment).toMatchObject({
+      status: 'offered',
+      offeredAt: expect.any(String),
+    });
 
     const accepted = await post(t, `/v1/assignments/${assignment.id}/accept`, referee, {
       expectedRevision: offered.body.assignment.revision,
@@ -99,7 +106,12 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
     expect(tooSoon.status).toBe(400);
     t.clock.set(new Date(new Date(game.start).getTime() + 30 * 60_000));
     try {
-      const completed = await post(t, `/v1/assignments/${assignment.id}/complete`, leagueManager, {});
+      const completed = await post(
+        t,
+        `/v1/assignments/${assignment.id}/complete`,
+        leagueManager,
+        {},
+      );
       expect(completed.status, JSON.stringify(completed.body)).toBe(200);
       expect(completed.body.assignment).toMatchObject({
         status: 'completed',
@@ -146,7 +158,10 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
 
   it('SPK-STAFF-002: an offered assignment can be declined by the assignee and withdrawn by staff; terminal states stay put', async () => {
     const other = await scheduleFixture(t, world, { date: '2027-01-21' });
-    const a = await propose(scheduler, refereeFor(other.fixtureId, referee.personId, { offer: true }));
+    const a = await propose(
+      scheduler,
+      refereeFor(other.fixtureId, referee.personId, { offer: true }),
+    );
     expect(a.status, JSON.stringify(a.body)).toBe(201);
     expect(a.body.assignment.status).toBe('offered');
     const declined = await post(t, `/v1/assignments/${a.body.assignment.id}/decline`, referee, {
@@ -164,9 +179,14 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
 
     const b = await propose(scheduler, refereeFor(other.fixtureId, referee.personId));
     expect(b.status, JSON.stringify(b.body)).toBe(201);
-    const withdrawn = await post(t, `/v1/assignments/${b.body.assignment.id}/withdraw`, leagueManager, {
-      reason: 'not needed',
-    });
+    const withdrawn = await post(
+      t,
+      `/v1/assignments/${b.body.assignment.id}/withdraw`,
+      leagueManager,
+      {
+        reason: 'not needed',
+      },
+    );
     expect(withdrawn.status).toBe(200);
     expect(withdrawn.body.assignment).toMatchObject({
       status: 'withdrawn',
@@ -213,7 +233,9 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
       refereeFor(other.fixtureId, referee.personId, { offer: true }),
     );
     const id = created.body.assignment.id as string;
-    const stale = await post(t, `/v1/assignments/${id}/accept`, referee, { expectedRevision: 1 + 5 });
+    const stale = await post(t, `/v1/assignments/${id}/accept`, referee, {
+      expectedRevision: 1 + 5,
+    });
     expect(stale.status).toBe(409);
     expect(stale.body.code).toBe('STALE_REVISION');
     const k = key();
@@ -260,7 +282,10 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
       to: '13:30',
       resourceId: world.pitch.southHalfId,
     });
-    const a = await propose(scheduler, refereeFor(first.fixtureId, official.personId, { offer: true }));
+    const a = await propose(
+      scheduler,
+      refereeFor(first.fixtureId, official.personId, { offer: true }),
+    );
     const accepted = await post(t, `/v1/assignments/${a.body.assignment.id}/accept`, official, {});
     expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
 
@@ -277,6 +302,52 @@ describe('assignments (§4.6 Assignment machine, SPK-STAFF-001..003, §4.8 accep
     // 30 minutes after the first game's end (the proposed official turnaround) is fine
     const fine = await propose(scheduler, refereeFor(afterTurnaround.fixtureId, official.personId));
     expect(fine.status, JSON.stringify(fine.body)).toBe(201);
+  });
+
+  it('SPK-STAFF-002/003 under concurrency: two acceptances of one slot, or of one person’s overlapping offers, leave exactly one accepted', async () => {
+    const slotGame = await scheduleFixture(t, world, { date: '2027-01-29' });
+    const first = await staffMember(t, ['official']);
+    const second = await staffMember(t, ['official']);
+    const offers = await Promise.all(
+      [first, second].map((p) =>
+        propose(scheduler, refereeFor(slotGame.fixtureId, p.personId, { offer: true })),
+      ),
+    );
+    expect(offers.map((o) => o.status)).toEqual([201, 201]);
+    const accepts = await Promise.all(
+      offers.map((o, i) =>
+        post(t, `/v1/assignments/${o.body.assignment.id}/accept`, i === 0 ? first : second, {}),
+      ),
+    );
+    expect(accepts.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(accepts.find((r) => r.status === 409)?.body.code).toBe('RESOURCE_CONFLICT');
+
+    const official = await staffMember(t, ['official']);
+    const north = await scheduleFixture(t, world, {
+      date: '2027-01-30',
+      resourceId: world.pitch.northHalfId,
+    });
+    const south = await scheduleFixture(t, world, {
+      date: '2027-01-30',
+      resourceId: world.pitch.southHalfId,
+    });
+    const both = await Promise.all(
+      [north, south].map((g) =>
+        propose(scheduler, refereeFor(g.fixtureId, official.personId, { offer: true })),
+      ),
+    );
+    expect(both.map((o) => o.status)).toEqual([201, 201]);
+    const raced = await Promise.all(
+      both.map((o) => post(t, `/v1/assignments/${o.body.assignment.id}/accept`, official, {})),
+    );
+    expect(raced.map((r) => r.status).sort()).toEqual([200, 409]);
+    const accepted = await t.db
+      .selectFrom('assignments')
+      .select('id')
+      .where('person_id', '=', official.personId)
+      .where('status', '=', 'accepted')
+      .execute();
+    expect(accepted).toHaveLength(1);
   });
 
   it('SPK-STAFF-003: a person committed to an overlapping scheduling event is refused through scheduling’s commitments', async () => {

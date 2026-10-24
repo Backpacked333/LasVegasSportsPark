@@ -174,7 +174,12 @@ export class TemporaryAccessService {
     }
     const membershipId = row.access_membership_id;
     try {
-      await this.memberships.end(accessActor(organizationId), membershipId, { reason }, correlationId);
+      await this.memberships.end(
+        accessActor(organizationId),
+        membershipId,
+        { reason },
+        correlationId,
+      );
     } catch (error) {
       // A membership that already ended (or expired and was ended) is the outcome we want.
       const alreadyEnded = DomainError.is(error) && error.code === 'INVALID_TRANSITION';

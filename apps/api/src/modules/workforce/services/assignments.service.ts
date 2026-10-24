@@ -178,7 +178,8 @@ export class AssignmentsService {
           requirementId: requirement.id,
         });
       }
-      const slot = body.slot ?? (await this.defaultSlot(trx, organizationId, target, body.role, requirement));
+      const slot =
+        body.slot ?? (await this.defaultSlot(trx, organizationId, target, body.role, requirement));
       if (requirement && slot > requirement.required_count) {
         throw errors.validation(
           `Slot ${slot} exceeds the ${requirement.required_count} required ${body.role}.`,
@@ -603,9 +604,7 @@ export class AssignmentsService {
     if (conflicts.length > 0) {
       throw errors.resourceConflict('The person has conflicting commitments for this time.', {
         conflicts,
-        conflictingAssignmentIds: [
-          ...new Set(commitments.flatMap((c) => c.assignmentIds)),
-        ].sort(),
+        conflictingAssignmentIds: [...new Set(commitments.flatMap((c) => c.assignmentIds))].sort(),
         conflictingEventIds: [...new Set(commitments.flatMap((c) => c.conflictingEventIds))].sort(),
       });
     }
@@ -613,7 +612,11 @@ export class AssignmentsService {
 
   /** Inserts a proposed (or offered) assignment after the assignability checks. */
   async insertAssignment(trx: Trx, input: NewAssignmentInput): Promise<AssignmentRow> {
-    const facility = await this.targets.facility(trx, input.organizationId, input.target.facilityId);
+    const facility = await this.targets.facility(
+      trx,
+      input.organizationId,
+      input.target.facilityId,
+    );
     const requirement = await this.coverage.requirementFor(
       trx,
       input.organizationId,
@@ -731,7 +734,11 @@ export class AssignmentsService {
       facilitySettings: Record<string, unknown>;
       operationId?: string | null;
     },
-  ): Promise<{ row: AssignmentRow; operationId: string | null; uncovered: UncoveredNotice | null }> {
+  ): Promise<{
+    row: AssignmentRow;
+    operationId: string | null;
+    uncovered: UncoveredNotice | null;
+  }> {
     const next = AssignmentMachine.next(current.status, 'withdraw');
     const endsAccess = current.access_status === 'granted';
     const operationId =
@@ -831,7 +838,12 @@ export class AssignmentsService {
     event: DomainEvent<EventPayload<typeof CatalogEvents.sessionCanceled>>,
     ctx: HandlerContext,
   ): Promise<void> {
-    const rows = await this.liveFor(ctx.trx, event.organizationId, 'session', event.payload.sessionId);
+    const rows = await this.liveFor(
+      ctx.trx,
+      event.organizationId,
+      'session',
+      event.payload.sessionId,
+    );
     for (const row of rows) {
       await this.systemWithdraw(ctx.trx, row, 'The session was canceled.', event, false);
     }
@@ -922,7 +934,14 @@ export class AssignmentsService {
           after: { start: start.toISOString(), end: end.toISOString() },
         },
       });
-      await this.notify(trx, updated, row.status, 'The activity was rescheduled.', event.correlationId, null);
+      await this.notify(
+        trx,
+        updated,
+        row.status,
+        'The activity was rescheduled.',
+        event.correlationId,
+        null,
+      );
     }
   }
 
