@@ -49,6 +49,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/programs',
     screenIds: 'SCR-S-14, SCR-S-15',
     purpose: 'Programs, offerings, sessions and publication.',
+    ownRoutes: true,
   },
   {
     id: 'teams',
@@ -72,6 +73,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/registrations',
     screenIds: 'SCR-S-24 to SCR-S-27',
     purpose: 'Approvals, assisted registration, waitlists, cancellations and transfers.',
+    ownRoutes: true,
   },
   {
     id: 'arrival',
@@ -94,6 +96,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-35 to SCR-S-38, SCR-S-53 to SCR-S-55, SCR-S-57',
     purpose:
       'Obligations, payment attempts and unknown outcomes, refunds and credits, reconciliation.',
+    ownRoutes: true,
   },
   {
     id: 'communications',

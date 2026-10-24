@@ -25,6 +25,7 @@ import { ExceptionDetailScreen } from './screens/today/ExceptionDetailScreen';
 import { TodayScreen } from './screens/today/TodayScreen';
 import { WorkspaceScreen } from './screens/workspace/WorkspaceScreen';
 import { RequireSession } from './session/RequireSession';
+import { registrationFinanceRoutes } from './features/registration-finance/routes';
 
 export function AppRoutes() {
   return (
@@ -37,6 +38,8 @@ export function AppRoutes() {
           </RequireSession>
         }
       >
+        {/* Before the area placeholders: the first of equal routes wins. */}
+        {registrationFinanceRoutes()}
         <Route index element={<Navigate to="/today" replace />} />
         {/* Before the area placeholders: equally ranked routes match in order. */}
         {competitionRoutes()}
