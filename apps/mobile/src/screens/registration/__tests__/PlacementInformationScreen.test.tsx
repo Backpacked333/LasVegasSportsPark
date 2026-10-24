@@ -1,0 +1,174 @@
+/**
+ * SCR-C-10 Participant and placement information (SPK-PLACE-001, SPK-PLACE-005, §4.14, DEC-051):
+ * only configured fields are collected (pending state while DEC-051 is open), the request carries
+ * no teammate identities, field-level validation keeps the input, and the season gap reads as not
+ * available.
+ */
+import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { IDS, basket, familyRoutes, line } from '../../../features/registration/testing/fixtures';
+import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
+import { PlacementInformationScreen } from '../PlacementInformationScreen';
+
+const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
+jest.mock('expo-router', () => ({
+  ...jest.requireActual('expo-router'),
+  useRouter: () => mockRouter,
+}));
+
+const FIELDS = [
+  'availability',
+  'declaredLevel',
+  'positionPreferences',
+  'notes',
+  'requestedTeammates',
+];
+const ADULT_LINE = basket({
+  lines: [
+    line({ participantPersonId: IDS.parent, intent: 'individual_league', offeringKind: 'season' }),
+  ],
+});
+
+function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
+  return {
+    ...familyRoutes(),
+    'GET /baskets/{id}': { status: 200, body: ADULT_LINE },
+    ...overrides,
+  };
+}
+
+function renderPlacement(
+  options: Parameters<typeof createRegistrationTestApp>[0] = {},
+  seasonId: string | null = IDS.season,
+) {
+  const app = createRegistrationTestApp({ config: { placementFields: FIELDS }, ...options });
+  render(
+    <PlacementInformationScreen
+      basketId={IDS.basket}
+      lineId={IDS.lineA}
+      seasonId={seasonId ?? undefined}
+    />,
+    { wrapper: app.wrapper },
+  );
+  return app;
+}
+
+describe('SCR-C-10 PlacementInformationScreen', () => {
+  it('DEC-051: without approved fields it shows the pending decision and collects nothing', async () => {
+    const app = createRegistrationTestApp({ routes: routes() });
+    render(
+      <PlacementInformationScreen basketId={IDS.basket} lineId={IDS.lineA} seasonId={IDS.season} />,
+      { wrapper: app.wrapper },
+    );
+    expect(await screen.findByLabelText('Waiting on a decision')).toBeOnTheScreen();
+    expect(screen.getByText(/depends on DEC-051, DEC-031/)).toBeOnTheScreen();
+    expect(app.fake.requests).toHaveLength(0);
+  });
+
+  it("SPK-PLACE-001: records only the approved fields and never another person's identity", async () => {
+    const app = renderPlacement({
+      routes: routes({
+        'POST /placement-requests': {
+          status: 201,
+          body: { id: IDS.placement, status: 'unassigned' },
+        },
+      }),
+    });
+    expect(await screen.findByRole('header', { name: 'About you as a player' })).toBeOnTheScreen();
+    expect(
+      screen.getByText('Not available in the app yet: Requested teammates.'),
+    ).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('radio', { name: 'Monday' }));
+    fireEvent.changeText(screen.getByLabelText('From (HH:MM)'), '18:00');
+    fireEvent.changeText(screen.getByLabelText('To (HH:MM)'), '20:00');
+    fireEvent.press(screen.getByRole('button', { name: 'Add this time' }));
+    expect(screen.getByText('Monday 18:00 to 20:00')).toBeOnTheScreen();
+    fireEvent.changeText(screen.getByLabelText('Playing level'), 'Played college club soccer');
+    fireEvent.changeText(screen.getByLabelText('Preferred positions'), 'Goalkeeper, Defender');
+    const save = screen.getByRole('button', { name: 'Save placement information' });
+    await act(async () => {
+      fireEvent.press(save);
+    });
+    expect(app.fake.requests.find((r) => r.route === '/placement-requests')?.body).toEqual({
+      participantPersonId: IDS.parent,
+      seasonId: IDS.season,
+      offeringId: IDS.offering,
+      applicationId: '0192f1a0-0000-7000-8000-0000000000d1',
+      availability: [{ weekday: 1, from: '18:00', to: '20:00' }],
+      declaredLevel: 'Played college club soccer',
+      positionPreferences: ['Goalkeeper', 'Defender'],
+      requestedTeammatePersonIds: [],
+    });
+    expect(await screen.findByLabelText('Placement information sent')).toBeOnTheScreen();
+    expect(screen.getByText(/No team is assigned yet, and no place is reserved/)).toBeOnTheScreen();
+  });
+
+  it('checks a time window before adding it', async () => {
+    renderPlacement({ routes: routes() });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Tuesday' }));
+    fireEvent.changeText(screen.getByLabelText('From (HH:MM)'), '20:00');
+    fireEvent.changeText(screen.getByLabelText('To (HH:MM)'), '19:00');
+    fireEvent.press(screen.getByRole('button', { name: 'Add this time' }));
+    expect(screen.getByText('✕ The end time must be after the start time.')).toBeOnTheScreen();
+  });
+
+  it('VALIDATION_FAILED: shows the API message at the field and keeps the input', async () => {
+    renderPlacement({
+      routes: routes({
+        'POST /placement-requests': () =>
+          fakeResponse(
+            400,
+            apiErrorBody('VALIDATION_FAILED', {
+              message: 'Request validation failed.',
+              nextAction: 'correct_input',
+              details: [
+                { path: 'declaredLevel', message: 'Use at most 100 characters.', code: 'too_big' },
+              ],
+            }),
+          ),
+      }),
+    });
+    fireEvent.changeText(await screen.findByLabelText('Playing level'), 'x'.repeat(120));
+    const save = screen.getByRole('button', { name: 'Save placement information' });
+    await act(async () => {
+      fireEvent.press(save);
+    });
+    expect(await screen.findByText('✕ Use at most 100 characters.')).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
+    expect(screen.getByLabelText('Playing level')).toHaveProp('value', 'x'.repeat(120));
+  });
+
+  it('permission restriction: no register permission for the participant reads not available', async () => {
+    renderPlacement({
+      routes: routes({
+        'POST /placement-requests': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('PARTICIPANT_AUTHORITY_REQUIRED', {
+              nextAction: 'request_participant_authority',
+            }),
+          ),
+      }),
+    });
+    const save = await screen.findByRole('button', { name: 'Save placement information' });
+    await act(async () => {
+      fireEvent.press(save);
+    });
+    expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
+  });
+
+  it("API gap: without the offering's season the form reads not available", async () => {
+    renderPlacement({ routes: routes() }, null);
+    expect(await screen.findByLabelText('Not available in the app yet')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Save placement information' })).toBeNull();
+  });
+
+  it('offline: answers are kept and saving is disabled', async () => {
+    const app = renderPlacement({ routes: routes() });
+    fireEvent.changeText(await screen.findByLabelText('Preferred positions'), 'Winger');
+    act(() => app.sources.setReachable(false));
+    expect(screen.getByRole('button', { name: 'Save placement information' })).toBeDisabled();
+    expect(screen.getByText('Saving needs a connection. Your answers are kept.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Preferred positions')).toHaveProp('value', 'Winger');
+  });
+});

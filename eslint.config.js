@@ -1,6 +1,7 @@
 // @ts-check
 const js = require('@eslint/js');
 const tseslint = require('typescript-eslint');
+const reactHooks = require('eslint-plugin-react-hooks');
 
 module.exports = tseslint.config(
   {
@@ -10,16 +11,19 @@ module.exports = tseslint.config(
       '**/coverage/**',
       '.claude/**',
       'docs/api/openapi.json',
+      '**/.expo/**',
+      // Generated from docs/api/openapi.json (pnpm --filter @sportspark/api-client generate).
+      'packages/api-client/src/generated/**',
     ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.ts', '**/*.mjs'],
+    files: ['**/*.ts', '**/*.tsx', '**/*.mjs'],
     languageOptions: { parserOptions: { tsconfigRootDir: __dirname } },
   },
   {
-    files: ['**/*.ts'],
+    files: ['**/*.ts', '**/*.tsx'],
     rules: {
       '@typescript-eslint/no-unused-vars': [
         'error',
@@ -68,5 +72,20 @@ module.exports = tseslint.config(
   {
     files: ['**/*.spec.ts', '**/test/**/*.ts', '**/scripts/**/*.ts'],
     rules: { 'no-console': 'off' },
+  },
+  {
+    // Client apps (spec §4.1): React hooks rules; no Nest decorator metadata, so type-only imports
+    // are enforced again.
+    files: ['apps/mobile/**/*.{ts,tsx}', 'apps/staff/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
+      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+    },
+  },
+  {
+    files: ['apps/mobile/**/*.test.{ts,tsx}', 'apps/staff/**/*.test.{ts,tsx}'],
+    rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
 );

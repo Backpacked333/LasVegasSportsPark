@@ -1,0 +1,211 @@
+# @sportspark/staff
+
+Staff dashboard and the coach and referee workspace: React, Vite and React Router (spec §2.3, §2.4,
+§4.1, SPK-UX-005 to SPK-UX-007). Every staff and workspace screen of the inventory
+(`docs/package-a/screen-and-journey-inventory.md` sections 5 and 6) is built or shows its pending
+state; see "Screen coverage" below.
+
+Status legend (§6.7): **Verified** = implemented and asserted by a test here. **Proposed** =
+engineering proposal awaiting operator approval. **Pending decision** = needs an operator answer;
+owners are in `docs/package-a/decision-register.md`. Staff acceptance on the actual workstation,
+tablet and scanner configurations (§6.3) has not happened; jsdom tests are not staff acceptance.
+
+## Run against a local API
+
+```bash
+pnpm install
+AUTH_LOCAL_SECRET=$(openssl rand -hex 32) pnpm --filter @sportspark/api dev   # API on :3000
+pnpm --filter @sportspark/staff dev                                            # http://localhost:5173
+```
+
+- The development server proxies `/v1` to `SPORTSPARK_API_ORIGIN` (default `http://localhost:3000`),
+  so the browser talks to one origin and the API needs no CORS configuration. `VITE_API_BASE_URL`
+  points the build at another API base URL.
+- Development builds offer **Development sign-in** (`POST /v1/dev/tokens` with an existing local
+  account id; the route exists only when the API runs with `AUTH_MODE=local` outside production).
+  The API has no development seed, so the account and its staff membership must already exist.
+- `VITE_STALE_DATA_THRESHOLD_MINUTES` sets when shown data is called stale; pending DEC-032/DEC-033,
+  unset by default.
+- `VITE_OFFLINE_ROSTER_MAX_AGE_MINUTES` sets the maximum roster age for queuing offline arrival and
+  attendance observations; pending DEC-033, unset by default (see `src/features/operations/README.md`).
+
+## Commands
+
+| Command                                     | What it checks                                                                                |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `pnpm --filter @sportspark/staff test`      | vitest, jsdom, Testing Library (also a project of the root `pnpm test`)                       |
+| `pnpm --filter @sportspark/staff typecheck` | TypeScript strict (also run by the root `pnpm typecheck`)                                     |
+| `pnpm --filter @sportspark/staff lint`      | Root ESLint config, including React hooks rules                                               |
+| `pnpm --filter @sportspark/staff build`     | Typecheck, `vite build`, then `scripts/check-release-bundle.mjs` (no development sign-in; CI) |
+
+## What is here and how it is verified
+
+| Item                                                                                                                                                                                       | Status                                                                                                  | Evidence                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| The fourteen SPK-UX-005 areas in specification order, then "My assignments"; Today is the operating home (`/` redirects there); keyboard navigation, skip link, `aria-current`.            | **Verified** in jsdom                                                                                   | `src/__tests__/shell.test.tsx`                             |
+| "Visibility depends on permissions": every area is listed because the API publishes no per-principal list of permitted areas or actions; areas render ACCESS_DENIED as "not available".    | **Proposed** handling of an API gap                                                                     | `src/navigation/areas.ts`                                  |
+| Facility switcher limited to `GET /v1/me` `principal.facilityIds` (empty = whole organization, names from the Today feed); the choice filters Today.                                       | **Verified** in jsdom                                                                                   | `src/__tests__/shell.test.tsx`                             |
+| SCR-S-01 Today shell: each issue's title, severity as text, affected record, owner queue, age, deadline, next actions; sources the viewer may not read listed as not available.            | **Verified** in jsdom                                                                                   | `src/screens/today/__tests__/TodayScreen.test.tsx`         |
+| SCR-W-01 My assignments, phone-width layout (one column below 768 px); "Accept" only where the API lists it, with `expectedRevision` and an idempotency key; STALE_REVISION offers Reload. | **Verified** in jsdom (behaviour); the phone layout is CSS and needs real devices (SPK-UX-007, §6.3)    | `src/screens/workspace/__tests__/WorkspaceScreen.test.tsx` |
+| State primitives (same variants and wording as the customer app) and `StatusBadge` (glyph and text).                                                                                       | **Verified** in jsdom                                                                                   | `src/ui/__tests__/primitives.test.tsx`                     |
+| Keyboard alternative to drag (SPK-UX-009): `ReorderableList` with Move buttons, Alt+Arrow keys and announcements. No screen uses drag yet.                                                 | **Verified** in jsdom                                                                                   | same                                                       |
+| Offline banner with the age of what is shown and the actions unavailable offline (SCR-W-10, §4.15).                                                                                        | **Verified** in jsdom; the offline queue is in `src/features/operations/README.md`                      | `src/__tests__/shell.test.tsx`                             |
+| Session in `sessionStorage` behind `SessionStore`; AUTHENTICATION_REQUIRED ends it; "Update required" replaces the dashboard.                                                              | **Verified** in jsdom. How a production staff session is held depends on DEC-018 (**Pending decision**) | same                                                       |
+| Development sign-in only in development builds.                                                                                                                                            | **Verified** (jsdom, and the build check)                                                               | `scripts/check-release-bundle.mjs`                         |
+| Managed staff sign-in with multifactor authentication for privileged staff (§4.14).                                                                                                        | **Pending decision** DEC-018 (Technical lead/account owners); the sign-in page shows the pending state  |                                                            |
+| Hosting and the production origin (CORS or a same-origin proxy).                                                                                                                           | **Pending decision** DEC-021                                                                            |                                                            |
+| Schedule (SCR-S-03 to SCR-S-07) and Facilities (SCR-S-41, SCR-S-42) screens; SCR-S-51 and SCR-S-52 shown as pending decisions; details in `src/screens/schedule/README.md`.                | **Verified** in jsdom                                                                                   | `src/screens/*/__tests__`                                  |
+
+## Today, People and families, support cases (SCR-S-01, SCR-S-02, SCR-S-20 to SCR-S-23, SCR-S-49, SCR-S-50)
+
+Routes: `/today`, `/today/exceptions/:exceptionId`, `/people`, `/people/:personId`,
+`/people/:personId/relationships`, `/people/access-reviews` (`/new`, `/:reviewId`),
+`/people/duplicates`, `/admin/cases` (`/new`, `/:caseId`, linked from Administration). Tests live in
+`src/screens/{today,people,support}/__tests__/`. Shared pieces: `src/ui/FormFields.tsx` (labelled
+fields), `src/ui/CommandFeedback.tsx` (command outcome states), `src/ui/RecordRef.tsx`,
+`src/ui/time.ts`, `src/api/useOperation.ts` (polls `GET /v1/operations/{id}`),
+`src/api/server-defaults.ts`, `src/features/people/`.
+
+| Item                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Status                                                                                           | Evidence                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| SCR-S-01: issues with severity text, affected record, owner, age, deadline, next actions and resolution history; money-moved-but-not-fulfilled financial issues pinned first; Acknowledge only where `nextActions` lists it, with `expectedRevision` and one key per intent; only current and upcoming activities (`GET /v1/events` from now to the end of the facility day, facility-local time); field status (`GET /v1/facilities/{id}/operating-status`).                                | **Verified** in jsdom                                                                            | `src/screens/today/__tests__/TodayScreen.test.tsx`            |
+| SCR-S-01 expected arrivals: shown as not available (no API read).                                                                                                                                                                                                                                                                                                                                                                                                                            | **Proposed** handling of an API gap                                                              | same                                                          |
+| SCR-S-02: acknowledge, resolve, close as the API lists them; resolve and close need a note; STALE_REVISION offers Reload and keeps the note; a retry reuses the idempotency key; the affected payment attempt, checkout or maintenance task shows its own state, and a record in recovery says so; offline read-only; protected NOT_FOUND not available.                                                                                                                                     | **Verified** in jsdom                                                                            | `src/screens/today/__tests__/ExceptionDetailScreen.test.tsx`  |
+| SCR-S-50: optional panel, closed by default; "turned off" when the API answers INTEGRATION_UNAVAILABLE with `details.reason: 'disabled'`; evidence with freshness and missing evidence; recommendations show the command they would run; approve, reject (reason) and apply are separate commands with `expectedRevision`. Whether the assistant is used is DEC-016.                                                                                                                         | **Verified** in jsdom; DEC-016 **Pending decision**                                              | `src/screens/today/__tests__/AssistantPanel.test.tsx`         |
+| SCR-S-20: person record, contact points and the scoped timeline with paging; sources not readable listed as not available; a child minimized as the API returns it. Search by name or contact is not available (no API search); lookup by reference, validated before any request. Lookup latency target DEC-036.                                                                                                                                                                            | **Verified** in jsdom; search **Proposed** handling of an API gap                                | `src/screens/people/__tests__/PersonRecordScreen.test.tsx`    |
+| SCR-S-21: relationships with each permission chosen on its own (none pre-selected), grants shown and revoked individually with a reason and `expectedRevision`, households (grouping only), invitations with their full record and the API's own expiry; no changes offline (§4.15). The existing relationships, grants, households and invitations of a person cannot be listed (no API read); the people a person may view come from the timeline scope. Guardian verification is DEC-004. | **Verified** in jsdom; list **Proposed** handling of an API gap; DEC-004 **Pending decision**    | `src/screens/people/__tests__/RelationshipsScreen.test.tsx`   |
+| SCR-S-22: open a review (reason and owner required, evidence references only), the review with parties, evidence and decision history, decisions with `expectedRevision`, a restriction's end chosen explicitly. Open reviews cannot be listed (no API read); escalated reviews come from support cases with an `access_review` origin.                                                                                                                                                      | **Verified** in jsdom; queue **Proposed** handling of an API gap                                 | `src/screens/people/__tests__/AccessReviewScreen.test.tsx`    |
+| SCR-S-23: flag a pair (score left to the API), compare both records, merge with an explicit survivor and reason, follow the merge operation (`recovery_required` shown), dismiss. Candidates cannot be listed or re-read (no API read). Migration duplicates are DEC-014, DEC-067, DEC-068.                                                                                                                                                                                                  | **Verified** in jsdom; queue **Proposed** handling of an API gap; migration **Pending decision** | `src/screens/people/__tests__/DuplicateReviewScreen.test.tsx` |
+| SCR-S-49: case queue with status, category, facility and "assigned to me" filters and paging; open a case (category required); the case with related records' own state, origin exception status, history, linked actions (unknown outcome says not to repeat it); status changes exactly the API's `allowedEvents`, resolve with a resolution, notes (history only), owner, linking a command by its operation. The refund and resend helpers are not built here.                           | **Verified** in jsdom                                                                            | `src/screens/support/__tests__/SupportCaseScreen.test.tsx`    |
+
+## Screen coverage (SCR-S-01 to SCR-S-57, SCR-W-01 to SCR-W-10)
+
+State: **Implemented and tested** = built and asserted by vitest and Testing Library in jsdom
+against a mocked API client (the fake fetch of `@sportspark/api-client/testing`); **Partial** =
+built and tested, with the part a named API gap or pending decision blocks shown as "not
+available" or as the pending state; **Pending decision** = only the pending state is shown. This
+is verified only by automated tests and the production build; staff acceptance on the actual
+workstation, tablet and scanner configurations (§6.3) has not happened for any screen. Details per
+group are in `src/screens/schedule/README.md` and `src/features/{competition,registration-finance,operations,insight-admin}/README.md`.
+
+| Screen                                                 | State                  | What is missing, and why                                                                                                                                                        |
+| ------------------------------------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SCR-S-01 Today workspace                               | Partial                | Expected arrivals have no API read.                                                                                                                                             |
+| SCR-S-02 Exception detail                              | Implemented and tested | Records other than payment attempts, checkouts and maintenance tasks show "kept by its owning module" (no state on the exception).                                              |
+| SCR-S-03 Schedule calendar and resource view           | Partial                | Up to 200 events per range; a truncated range says so and never reads as free.                                                                                                  |
+| SCR-S-04 Schedule draft editor                         | Partial                | The API re-captures base revisions on every save, so the client pauses autosave until a rebase is acknowledged (API gap).                                                       |
+| SCR-S-05 Publication review                            | Partial                | Notice audience and channels **Pending decision** DEC-012, DEC-062.                                                                                                             |
+| SCR-S-06 Closure impact and resolution                 | Partial                | Customers, obligations and messages are not in the closure impact; financial adjustment **Pending decision** POL-041, DEC-009; a pending closure cannot be withdrawn (API gap). |
+| SCR-S-07 Resource inventory and configurations         | Partial                | Conflict units are derived and read-only; staffing constraints read-only (no API command).                                                                                      |
+| SCR-S-08 Competition, season and division setup        | Partial                | Season copy has no API command; rule values **Pending decision** DEC-002.                                                                                                       |
+| SCR-S-09 Fixture generation                            | Implemented and tested | Hard or weighted preferences are chosen explicitly (DEC-049 pending, nothing preselected).                                                                                      |
+| SCR-S-10 Fixtures and match readiness                  | Implemented and tested | Readiness is read per fixture (no list read).                                                                                                                                   |
+| SCR-S-11 Results review and publication                | Partial                | Publication authority **Pending decision** DEC-065 (the API decides).                                                                                                           |
+| SCR-S-12 Disputes and discipline                       | Partial                | No list endpoints for disputes, decisions and appeals; appeals **Pending decision** DEC-010.                                                                                    |
+| SCR-S-13 Standings and brackets                        | Partial                | Tournaments **Pending decision** DEC-078.                                                                                                                                       |
+| SCR-S-14 Program, offering and session setup           | Implemented and tested |                                                                                                                                                                                 |
+| SCR-S-15 Offering publication                          | Partial                | No dry-run publication validation (API gap).                                                                                                                                    |
+| SCR-S-16 Team entry review                             | Implemented and tested |                                                                                                                                                                                 |
+| SCR-S-17 Roster management                             | Partial                | Overriding an eligibility failure **Pending decision** DEC-066; no person search (references by id).                                                                            |
+| SCR-S-18 Placement board                               | Partial                | Placement model **Pending decision** DEC-031, DEC-051.                                                                                                                          |
+| SCR-S-19 Youth group placement                         | Partial                | No group membership or progression record in the API; requirements **Pending decision** DEC-003, DEC-055.                                                                       |
+| SCR-S-20 Person search and record                      | Partial                | No person search endpoint: lookup by reference only.                                                                                                                            |
+| SCR-S-21 Household, relationships and grants           | Partial                | Existing relationships, grants, households and invitations cannot be listed or re-read (API gap); guardian verification **Pending decision** DEC-004.                           |
+| SCR-S-22 Disputed access review                        | Partial                | Open reviews cannot be listed (API gap); a lift cannot target one person's grants (API gap).                                                                                    |
+| SCR-S-23 Duplicate review and merge                    | Partial                | Candidates cannot be listed or re-read (API gap); migration duplicates **Pending decision** DEC-014, DEC-067, DEC-068.                                                          |
+| SCR-S-24 Registration queue and approvals              | Partial                | No review deadline or resolver on applications; `GET /applications` does not page (API gaps).                                                                                   |
+| SCR-S-25 Assisted registration                         | Partial                | Card payment **Pending decision** DEC-019; installments **Pending decision** DEC-073; no basket-to-checkout reference (API gap).                                                |
+| SCR-S-26 Waitlist management                           | Partial                | No staff command to issue an offer (API gap); policy **Pending decision** DEC-006.                                                                                              |
+| SCR-S-27 Cancellation and transfer (staff)             | Implemented and tested |                                                                                                                                                                                 |
+| SCR-S-28 Arrival scanner and selection                 | Partial                | Person lookup without a pass has no API search.                                                                                                                                 |
+| SCR-S-29 Session attendance and corrections            | Implemented and tested |                                                                                                                                                                                 |
+| SCR-S-30 Supervised release                            | Partial                | Procedure **Pending decision** DEC-005, DEC-034, DEC-075.                                                                                                                       |
+| SCR-S-31 Offline queue and synchronisation review      | Partial                | Device approval and encrypted roster **Pending decision** DEC-032, DEC-033; the roster snapshot reference is client-made (API gap).                                             |
+| SCR-S-32 Availability and qualifications               | Partial                | Required qualifications **Pending decision** DEC-011.                                                                                                                           |
+| SCR-S-33 Assignment management and replacement         | Implemented and tested | No directory of officials and coaches (API gap).                                                                                                                                |
+| SCR-S-34 Fee and hours approvals                       | Partial                | Rates, payroll boundary and export target **Pending decision** DEC-011, DEC-052, DEC-022.                                                                                       |
+| SCR-S-35 Obligations and orders                        | Partial                | `GET /obligations` does not page; no order list (API gaps); team liability **Pending decision** DEC-008.                                                                        |
+| SCR-S-36 Payment attempts and unknown outcomes         | Partial                | No list of payment attempts or provider events (API gap); classification target **Pending decision** DEC-039.                                                                   |
+| SCR-S-37 Refunds and credits                           | Partial                | A payment's earlier refunds cannot be listed (API gap); rules **Pending decision** DEC-009, DEC-058.                                                                            |
+| SCR-S-38 Reconciliation                                | Partial                | Accounting export **Pending decision** DEC-022.                                                                                                                                 |
+| SCR-S-39 Message composer and audience preview         | Partial                | Channels per kind **Pending decision** DEC-012, DEC-062.                                                                                                                        |
+| SCR-S-40 Delivery status                               | Partial                | No recipient display name and no single-delivery retry (API gaps); escalation **Pending decision** DEC-041.                                                                     |
+| SCR-S-41 Assets and maintenance tasks                  | Partial                | No staff directory (owner is "assign to me" or none); default due times **Pending decision** DEC-001.                                                                           |
+| SCR-S-42 Operating restrictions and release to service | Partial                | A proposed restriction cannot be withdrawn (API gap); approval rule **Pending decision** DEC-001.                                                                               |
+| SCR-S-43 Operating reports                             | Implemented and tested |                                                                                                                                                                                 |
+| SCR-S-44 Utilization, economics, demand and retention  | Implemented and tested | Margin is withheld without agreed cost inputs, as the API answers.                                                                                                              |
+| SCR-S-45 Exports                                       | Partial                | No list of a requester's exports (API gap): exports made on the page are shown.                                                                                                 |
+| SCR-S-46 Accounts, roles and permissions               | Partial                | No membership list or read and no audit log read (API gaps); multifactor **Pending decision** DEC-018.                                                                          |
+| SCR-S-47 Integrations and configuration                | Partial                | Provider selection **Pending decision** DEC-018 to DEC-023; no integration register or settings endpoints (API gap).                                                            |
+| SCR-S-48 Migration imports and reconciliation          | Partial                | The staged balance currency is not exposed (approved amounts in minor units); sign-off roles **Pending decision** DEC-067.                                                      |
+| SCR-S-49 Support cases                                 | Partial                | The server does not block resolving a case whose related record is in recovery; the client asks for an acknowledgment.                                                          |
+| SCR-S-50 Operational assistant (optional)              | Pending decision       | DEC-016; the panel is built and tested behind the API's on/off answer.                                                                                                          |
+| SCR-S-51 Rentals                                       | Pending decision       | DEC-076 (with DEC-016, DEC-047).                                                                                                                                                |
+| SCR-S-52 Parties                                       | Pending decision       | DEC-077 (with DEC-016, DEC-047).                                                                                                                                                |
+| SCR-S-53 Memberships                                   | Pending decision       | DEC-072.                                                                                                                                                                        |
+| SCR-S-54 Session packages                              | Pending decision       | DEC-074.                                                                                                                                                                        |
+| SCR-S-55 Point of sale                                 | Pending decision       | DEC-057, DEC-079.                                                                                                                                                               |
+| SCR-S-56 Access hardware                               | Pending decision       | DEC-023, DEC-080.                                                                                                                                                               |
+| SCR-S-57 Accounting export batches                     | Pending decision       | DEC-022, DEC-081.                                                                                                                                                               |
+| SCR-W-01 My assignments                                | Implemented and tested |                                                                                                                                                                                 |
+| SCR-W-02 Assignment offer and response                 | Partial                | No respond-by deadline on offers (API gap).                                                                                                                                     |
+| SCR-W-03 Activity detail for staff                     | Partial                | No field-limited player list for the assigned official (API gap).                                                                                                               |
+| SCR-W-04 Session attendance (coach)                    | Partial                | A coach cannot read child names (identity read not granted): children are shown by short reference (API gap).                                                                   |
+| SCR-W-05 Match report (official)                       | Partial                | Cards need player ids the workspace cannot read (API gap); publication **Pending decision** DEC-065; queued submission DEC-032.                                                 |
+| SCR-W-06 Permitted communication                       | Pending decision       | DEC-012, DEC-062; the API has no workspace message action.                                                                                                                      |
+| SCR-W-07 Assessments (coach)                           | Pending decision       | DEC-054 (Package G, no API).                                                                                                                                                    |
+| SCR-W-08 Hours and fee records                         | Implemented and tested | Never shown as "Paid" (§1.7).                                                                                                                                                   |
+| SCR-W-09 Supervised release (coach)                    | Partial                | Identifying the collector needs the desk-only pass scan (API gap).                                                                                                              |
+| SCR-W-10 Workspace connectivity state                  | Implemented and tested |                                                                                                                                                                                 |
+
+## Conventions for screen builders
+
+- **Layout.** One directory per screen under `src/screens/<area>/`, the screen in
+  `<Name>Screen.tsx`, tests in `__tests__/<Name>Screen.test.tsx`. Register the route in
+  `src/App.tsx` under the area's path from `src/navigation/areas.ts`. Start each component with a
+  comment naming its SCR id and SPK requirements.
+- **Reading.** `useApiQuery({ path: '/today', request: { query: { facilityId } } })`, typed from the
+  OpenAPI document; render through `QueryBoundary` for loading, empty, error, offline with age and
+  "not available". Use `useApp().facilityId` for the selected facility.
+- **Commands.** `useApiCommand('post', '/assignments/{id}/accept', { invalidate: [['api', '/me/assignments']] })`
+  and `submit({ path, body: { expectedRevision, reason, policyReferences } })`. One idempotency key
+  per unchanged input; show `error` with `StateView variant="error"` and keep the form input.
+- **Authorization.** Offer an action only when the API says it is available (`availableActions`,
+  `nextActions`, sources marked `ok`); never from role names. ACCESS_DENIED and protected NOT_FOUND
+  render as "not available".
+- **Drag.** Any drag interaction must also work with `ReorderableList` or equivalent buttons and
+  keys (SPK-UX-009).
+- **Status.** `StatusBadge` with the staff label from `docs/package-a/journeys.md` section 3 (machine
+  state names), never colour alone.
+- **Privacy.** No child data in logs, analytics or URLs; route parameters are opaque ids.
+- **Pending values.** A pending policy value comes from configuration or shows
+  `StateView variant="pending-decision"`.
+- **Tests.** `createTestApp({ routes, session, online, now, config })` from
+  `src/testing/test-app.tsx`; `render(app.at('/today'))` renders the whole dashboard at a path with a
+  fake API (`GET /me` and `GET /today` have defaults; override with `routes`), memory session,
+  manual connectivity (`act(() => app.connectivity.set(false))`) and a fixed clock. Assert on
+  `app.fake.requests`. Use `userEvent` for keyboard and pointer input.
+
+## Dependencies
+
+Exact versions published at least two weeks before 2026-10-24; transitive dependencies resolved with
+the same floor. React matches the customer app (19.2.3, the version Expo SDK 57 requires), so React
+Router 7 is used (React Router 8 requires React 19.2.7 or later).
+
+| Package                             | Version | Published  | Why                                                                         |
+| ----------------------------------- | ------- | ---------- | --------------------------------------------------------------------------- |
+| `react`, `react-dom`                | 19.2.3  | 2025-12-11 | UI; same React as the customer app                                          |
+| `react-router`                      | 7.18.4  | 2026-09-15 | Routing for the fourteen areas and the workspace                            |
+| `@tanstack/react-query`             | 5.104.1 | 2026-10-02 | Data layer shared in design with the customer app                           |
+| `vite` (dev)                        | 8.3.4   | 2026-10-08 | Development server with the `/v1` proxy, production build                   |
+| `@vitejs/plugin-react` (dev)        | 6.1.2   | 2026-10-05 | React transform and fast refresh for `vite` (not used by the tests)         |
+| `jsdom` (dev)                       | 29.1.1  | 2026-04-30 | DOM for tests (30.x needs Node 22.22.2; CI runs 22.22.0)                    |
+| `@testing-library/react` (dev)      | 16.3.3  | 2026-08-27 | Component tests by role and label                                           |
+| `@testing-library/dom` (dev)        | 10.4.2  | 2026-09-13 | Peer of `@testing-library/react`                                            |
+| `@testing-library/user-event` (dev) | 14.6.7  | 2026-09-02 | Keyboard and pointer input in tests                                         |
+| `@testing-library/jest-dom` (dev)   | 7.0.1   | 2026-08-09 | DOM matchers (types adapted to vitest 5 in `src/testing/jest-dom-types.ts`) |
+| `@types/react` (dev)                | 19.2.18 | 2026-07-30 | React types                                                                 |
+| `@types/react-dom` (dev)            | 19.2.7  | 2026-09-03 | React DOM types                                                             |
+
+The root `vitest` (5.0.5) runs these tests as the `staff` project; the root also gained
+`eslint-plugin-react-hooks` 7.1.1 (2026-04-17) for the React hooks lint rules.

@@ -31,6 +31,18 @@ jobs:
         run: |
           pnpm openapi
           git diff --exit-code -- docs/api/openapi.json
+      - name: API client types are current against the OpenAPI document
+        run: |
+          pnpm api-client:generate
+          git diff --exit-code -- packages/api-client/src/generated/paths.ts
+      - name: Staff dashboard build (fails if the development sign-in is in the bundle)
+        run: pnpm build:staff
+      - name: Expo export smoke check (bundles only; not native acceptance, spec §6.2)
+        run: pnpm export:mobile
+        env:
+          CI: 'true'
+          EXPO_NO_TELEMETRY: '1'
+          EXPO_OFFLINE: '1'
 
   test-postgres:
     name: Test against PostgreSQL (true concurrency)

@@ -1,0 +1,256 @@
+# @sportspark/mobile
+
+Customer app for iOS and Android: Expo, React Native and Expo Router (spec §2.2, §4.1, SPK-UX-001).
+Every customer screen of the inventory (`docs/package-a/screen-and-journey-inventory.md` section 4)
+is built or shows its pending state; see "Screen coverage" below.
+
+Status legend (§6.7): **Verified** = implemented and asserted by a test here. **Proposed** =
+engineering proposal awaiting operator approval. **Pending decision** = needs an operator answer;
+owners are in `docs/package-a/decision-register.md`. Nothing in this app has passed native
+acceptance (§6.2): a passing test or a successful bundle export is not native acceptance.
+
+## Run against a local API
+
+```bash
+pnpm install
+# API in development mode (local identity provider, in-process PGlite):
+AUTH_LOCAL_SECRET=$(openssl rand -hex 32) pnpm --filter @sportspark/api dev
+# The app (Expo dev server; open in a simulator, an emulator or a development build):
+SPORTSPARK_API_BASE_URL=http://localhost:3000/v1 pnpm --filter @sportspark/mobile start
+```
+
+- An Android emulator reaches the host at `http://10.0.2.2:3000/v1`; a physical device needs the
+  computer's LAN address.
+- Sign in from Account or Home: development builds offer **Development sign-in**, which asks the
+  API's `POST /v1/dev/tokens` for a token for an existing local account id. That route exists only
+  when the API runs with `AUTH_MODE=local` outside production. The API has no development seed, so
+  the account must already exist in the database you run against.
+- `SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES` sets the age after which shown data is called stale.
+  The value is pending (DEC-032, DEC-033); unset, the app shows data age but never calls it stale.
+
+## Commands
+
+| Command                                       | What it checks                                                                |
+| --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `pnpm --filter @sportspark/mobile test`       | jest-expo and React Native Testing Library (also run by the root `pnpm test`) |
+| `pnpm --filter @sportspark/mobile typecheck`  | TypeScript strict (also run by the root `pnpm typecheck`)                     |
+| `pnpm --filter @sportspark/mobile lint`       | Root ESLint config, including React hooks rules                               |
+| `pnpm --filter @sportspark/mobile export:ios` | Release bundle export, then `scripts/check-release-bundle.mjs` (CI runs this) |
+
+## What is here and how it is verified
+
+| Item                                                                                                                                                                                                                                                                                                                                                     | Status                                                                                                    | Evidence                                                                     |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Five tabs in order Home, Discover, Schedule, Teams, Account, each with an accessible label (SPK-UX-002).                                                                                                                                                                                                                                                 | **Verified** in jest                                                                                      | `src/navigation/__tests__/navigation.test.tsx`                               |
+| Facility pass and notification inbox reachable from Home and from the header of every destination, not as tabs (SPK-UX-002).                                                                                                                                                                                                                             | **Verified** in jest                                                                                      | same                                                                         |
+| Unknown links land on "Link not available" (SCR-C-39, §4.13 safe destinations). Which links are verified is DEC-061.                                                                                                                                                                                                                                     | **Verified** (fallback only); link verification **Pending decision**                                      | same                                                                         |
+| State primitives for SPK-UX-008: `StateView` (loading, empty, error with code and recovery, offline-stale with age, unavailable, pending-decision), `StatusBadge` (glyph and text), `Button`, `ListRow`, `QueryBoundary`.                                                                                                                                | **Verified** in jest                                                                                      | `src/ui/__tests__/primitives.test.tsx`                                       |
+| SCR-C-40 connectivity and stale-data banner: offline with the age of what is shown and the actions that need a connection; "Back online. Refreshing", then "Back online. Updated <age>"; degraded (online, but the service could not refresh what is shown) with the error code and "Try again"; stale only with a configured threshold, with "Refresh". | **Verified** in jest                                                                                      | `src/connectivity/__tests__/ConnectivityBanner.test.tsx`                     |
+| Foreground refresh (SPK-UX-001): returning to the app refetches what is on screen (TanStack `focusManager` on `AppState`).                                                                                                                                                                                                                               | Implemented, not asserted by a test; needs devices (§6.2 "App backgrounding during payment")              | `src/providers/AppProviders.tsx`                                             |
+| Session in expo-secure-store (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`) behind the `SessionStore` interface; memory store in tests (§4.13).                                                                                                                                                                                                                      | **Verified** with a mocked module; device lifecycle (reinstall, restore, OS upgrade) needs devices        | `src/session/__tests__/secure-session-store.test.ts`                         |
+| Session expiry: an AUTHENTICATION_REQUIRED answer clears the stored session and asks to sign in again.                                                                                                                                                                                                                                                   | **Verified** in jest                                                                                      | `src/api/__tests__/data-layer.test.tsx`                                      |
+| "Update required" covers the app when the API says the build is unsupported (SCR-C-39, SPK-AT-027).                                                                                                                                                                                                                                                      | **Verified** client side; the API answer (DEC-092) and minimum version (DEC-061) are **Pending decision** | same                                                                         |
+| One idempotency key per user intent, reused on retry (`useApiCommand`, §4.9).                                                                                                                                                                                                                                                                            | **Verified** in jest                                                                                      | same                                                                         |
+| SCR-C-06 inbox: open marks read, acknowledge once, one idempotency key per intent and reuse on retry, a withdrawn (revoked) protected notice shown as no longer available and dropped from the list, replaced notices linked to the newer one, old and new details, essential vs promotional, older pages. See "Today screens" below.                    | **Verified** in jest                                                                                      | `src/screens/inbox/__tests__/InboxScreen.test.tsx`                           |
+| Development sign-in exists in development builds only and is absent from release bundles.                                                                                                                                                                                                                                                                | **Verified** (jest, and the export check fails on a development bundle)                                   | `src/dev/__tests__/dev-sign-in.test.tsx`, `scripts/check-release-bundle.mjs` |
+| SCR-C-01 onboarding: steps read from `GET /v1/me`, so setup resumes where it stopped; claim of a desk-created record; contact points "Verification pending" or "Verified".                                                                                                                                                                               | **Verified** in jest                                                                                      | `src/screens/onboarding/__tests__/OnboardingScreen.test.tsx`                 |
+| SCR-C-02 recovery: the rule (only verified prior access, nothing new), the access the API lists after signing in again, RATE_LIMITED and INTEGRATION_UNAVAILABLE.                                                                                                                                                                                        | **Verified** in jest                                                                                      | `src/screens/onboarding/__tests__/AccountRecoveryScreen.test.tsx`            |
+| SCR-C-17 invitation acceptance (family access, team): grants listed after accepting, dropped permissions named, NOT_FOUND as not available, closed states, accept for a child.                                                                                                                                                                           | **Verified** in jest; no read before accepting and no decline in the API (reported)                       | `src/screens/invitations/__tests__/InvitationScreen.test.tsx`                |
+| SCR-C-30 Account hub: sections in SPK-UX-002 order, built ones open, the rest "Not available yet"; setup and recovery entries.                                                                                                                                                                                                                           | **Verified** in jest                                                                                      | `src/screens/account/__tests__/AccountScreen.test.tsx`                       |
+| SCR-C-31 family: the six permissions per person as the API states them; invite a guardian or pickup delegate with chosen permissions; withdraw it; claim a child record.                                                                                                                                                                                 | **Verified** in jest; adding a child (DEC-004) and pickup (DEC-075, DEC-005) **Pending decision**         | `src/screens/family/__tests__/FamilyScreen.test.tsx`                         |
+| SCR-C-36 preferences: essential and promotional notices apart, in-app essential notices always on; calendar feeds created, shared and revoked.                                                                                                                                                                                                           | **Verified** in jest; channels (DEC-062) and push (DEC-061) **Pending decision**                          | `src/screens/preferences/__tests__/PreferencesScreen.test.tsx`               |
+| SCR-C-39 link landing: outside links open only Home or `/link` (`app/+native-intent.tsx`), which validates them; tokens stay in memory; operations shown as they are now.                                                                                                                                                                                | **Verified** in jest; verified-link domains **Pending decision** DEC-061                                  | `src/links/__tests__`, `src/screens/link/__tests__`                          |
+| Managed sign-in, account verification and recovery (SCR-C-01, SCR-C-02).                                                                                                                                                                                                                                                                                 | **Pending decision** DEC-018 (Technical lead/account owners); the screen shows the pending state          |                                                                              |
+| Account deletion and data requests (§4.13).                                                                                                                                                                                                                                                                                                              | **Pending decision** DEC-059 (Operator/privacy owner); Account shows the pending state                    |                                                                              |
+| Bundle identifiers, supported OS versions, minimum app version, privacy declarations, push, deep-link domains (§4.13).                                                                                                                                                                                                                                   | **Pending decision** DEC-061; not set in `app.config.ts`                                                  |                                                                              |
+| Facility pass (SCR-C-05): issue a personal pass, keep its one-time reference in the secure store, show it offline, replace it. See "Today screens" below.                                                                                                                                                                                                | **Verified** in jest; scannable symbol **Pending decision** DEC-023                                       | `src/screens/pass/__tests__/PassScreen.test.tsx`                             |
+| Native acceptance on signed builds and physical devices (§6.2), including VoiceOver, TalkBack and large text.                                                                                                                                                                                                                                            | **Pending**: not possible in this repository; tracked in `docs/package-a/native-acceptance-matrix.md`     |                                                                              |
+
+## Screen coverage (SCR-C-01 to SCR-C-40)
+
+State, per the inventory (`docs/package-a/screen-and-journey-inventory.md` section 4):
+**Implemented and tested** = built and asserted by jest tests against a mocked API client (the
+fake fetch of `@sportspark/api-client/testing`); **Partial** = built and tested, with the part a
+named API gap or pending decision blocks shown as "not available" or as the pending state;
+**Pending decision** = only the pending state is shown, because the decision decides what the
+screen is. "Implemented" is verified only by automated tests and the release bundle export; native
+acceptance on signed builds and devices (§6.2) has not happened for any screen.
+
+| Screen                                         | State                  | What is missing, and why                                                                                                                                         |
+| ---------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SCR-C-01 Onboarding and account verification   | Partial                | Managed sign-in and verification codes: **Pending decision** DEC-018; the API has no contact-point verification endpoints.                                       |
+| SCR-C-02 Account recovery                      | Partial                | Recovery is staff-only in the API (`POST /v1/accounts/{id}/relink`); self-service recovery **Pending decision** DEC-018.                                         |
+| SCR-C-03 Home                                  | Partial                | Fixtures are not in Next activity: no customer read of a person's fixtures or team entries (API gap).                                                            |
+| SCR-C-04 Next-activity card                    | Partial                | Arrival guidance **Pending decision** POL-046; fixtures carry no facility time zone (API gap; the device zone is named).                                         |
+| SCR-C-05 Facility pass                         | Partial                | Scannable symbol **Pending decision** DEC-023; no holder read of a pass, so a revoked pass cannot be detected (API gap).                                         |
+| SCR-C-06 Notification inbox                    | Implemented and tested | `InboxItem` has no revision, so read and acknowledge send no `expectedRevision` (API gap).                                                                       |
+| SCR-C-07 Discover                              | Partial                | No format, age band or date filters on `GET /offerings` (API gap).                                                                                               |
+| SCR-C-08 Offering detail                       | Partial                | No per-participant eligibility preview and no facility time zone on the public offering (API gaps).                                                              |
+| SCR-C-09 Registration intent chooser           | Partial                | Session bookings and joining a team are explained, not built; accepted intents are mirrored from the API policy (no `availableIntents`).                         |
+| SCR-C-10 Participant and placement information | Partial                | Field list **Pending decision** DEC-051, DEC-031 (form built for configured fields); league entries need a season the public offering does not expose (API gap). |
+| SCR-C-11 Household basket                      | Implemented and tested | No list of a customer's baskets: resuming relies on ids kept on the device (API gap).                                                                            |
+| SCR-C-12 Quote review                          | Implemented and tested |                                                                                                                                                                  |
+| SCR-C-13 Required forms and acknowledgments    | Implemented and tested |                                                                                                                                                                  |
+| SCR-C-14 Checkout and payment                  | Partial                | In-app payment **Pending decision** DEC-019; release builds show the pending state, development builds use the API's fake provider.                              |
+| SCR-C-15 Checkout outcome                      | Implemented and tested | No list of a customer's checkouts (API gap).                                                                                                                     |
+| SCR-C-16 Waitlist status and offer             | Partial                | No customer list of waitlist entries and no offer notification (API gaps).                                                                                       |
+| SCR-C-17 Invitation acceptance                 | Partial                | No read of an invitation before accepting and no decline endpoint (API gaps); invitation expiry **Pending decision** POL-044.                                    |
+| SCR-C-18 Schedule                              | Partial                | Sessions and fixtures carry no facility time zone or field names (API gap; the zone used is named).                                                              |
+| SCR-C-19 Family calendar                       | Partial                | Pickup arrangements **Pending decision** DEC-075, DEC-005 (configured by `SPORTSPARK_SUPERVISED_PICKUP`).                                                        |
+| SCR-C-20 Activity or fixture detail            | Partial                | "Tentative" RSVP **Pending decision** DEC-064; RSVP for a child **Pending decision** DEC-090.                                                                    |
+| SCR-C-21 Teams                                 | Partial                | No list of a person's teams (API gap): teams opened in this session are listed (**Proposed** stopgap).                                                           |
+| SCR-C-22 Team workspace overview               | Partial                | No permitted actions on the workspace, no forms-outstanding indicator, no customer contact with operations (API gaps).                                           |
+| SCR-C-23 Roster and invitations                | Partial                | Invitation expiry **Pending decision** POL-044 (the server's expiry is shown).                                                                                   |
+| SCR-C-24 Availability request and responses    | Partial                | No availability request or reminder command; a child's current answer is not returned (API gaps).                                                                |
+| SCR-C-25 Team contributions                    | Partial                | No player list of requested contributions (API gap); paying in release builds **Pending decision** DEC-019.                                                      |
+| SCR-C-26 Roster change and substitute request  | Partial                | No substitute or guest request record for league approval (API gap).                                                                                             |
+| SCR-C-27 Create or renew team entry            | Partial                | A customer cannot state a preferred division (API gap).                                                                                                          |
+| SCR-C-28 Standings and results                 | Implemented and tested | Public sharing of standings **Pending decision** DEC-012 (not offered).                                                                                          |
+| SCR-C-29 Dispute submission                    | Partial                | Appeals **Pending decision** DEC-010.                                                                                                                            |
+| SCR-C-30 Account                               | Partial                | Account deletion and data requests **Pending decision** DEC-059.                                                                                                 |
+| SCR-C-31 Family and permissions                | Partial                | Adding a child **Pending decision** DEC-004; pickup **Pending decision** DEC-075, DEC-005; grant ids and other adults' grants are not readable (API gap).        |
+| SCR-C-32 Enrollments and participation         | Partial                | A pending enrollment does not say what is outstanding; closed offerings and assigned teams have no readable names (API gaps).                                    |
+| SCR-C-33 Cancellation and transfer preview     | Partial                | The API does not tie acceptance to the previewed consequence, so a changed consequence is caught by re-previewing at confirm time only (API gap).                |
+| SCR-C-34 Payments and obligations              | Partial                | Payment method collection **Pending decision** DEC-019; no customer list of payment attempts or receipts (API gap).                                              |
+| SCR-C-35 Credits and makeup entitlements       | Partial                | Credit expiry rules **Pending decision** DEC-058 (no policy claim is shown).                                                                                     |
+| SCR-C-36 Preferences                           | Partial                | Channels **Pending decision** DEC-062; push registration **Pending decision** DEC-061 and no push registration endpoint (API gap).                               |
+| SCR-C-37 Youth feedback and development record | Pending decision       | DEC-003, DEC-054, DEC-055; the API has no endpoint. The pending state is tested.                                                                                 |
+| SCR-C-38 Support request and case history      | Partial                | Cases are staff-only in the API; contact guidance is shown, its details **Pending decision** DEC-015 unless configured.                                          |
+| SCR-C-39 Verified link landing                 | Partial                | Verified link domains **Pending decision** DEC-061 (`SPORTSPARK_VERIFIED_LINK_HOSTS`); update required answer DEC-092 pending.                                   |
+| SCR-C-40 Connectivity and stale-data banner    | Partial                | Stale threshold **Pending decision** DEC-032, DEC-033 (unset: age shown, never called stale).                                                                    |
+
+The API client sends the client version as the proposed `X-Sportspark-Client` header and handles a
+`CLIENT_UPDATE_REQUIRED` (426) answer with the "Update required" screen (SPK-AT-027, tested). The
+API kernel defines neither yet, so this is **Proposed** until the API adopts it (DEC-092).
+
+## Today screens (SCR-C-03, SCR-C-04, SCR-C-05, SCR-C-06, SCR-C-18, SCR-C-19, SCR-C-20, SCR-C-40)
+
+Shared code is in `src/features/today/` (time display, status vocabulary, notice placement,
+calendar windows, the next-activity card, the RSVP control, section states); screens are in
+`src/screens/{home,pass,inbox,schedule,family-calendar,activity}/`. Routes added: `/family-calendar`,
+`/fixtures/[id]`, `/sessions/[sessionId]?enrollmentId=…|bookingId=…`, and `/inbox?open=<attemptId>`.
+Route parameters are opaque ids only (§4.14).
+
+| Item                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Status                                                                                                       | Evidence                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| SCR-C-03 Home in the SPK-UX-003 order: a registration in checkout `recovery_required` pinned first ("Payment received. We are completing your registration." and "Do not pay again"), then urgent changes, next activity, actions required, invitations and offers, results, renewals; promotional messages never on Home; each section has its own loading, error (code and retry), not-available and offline state; empty state points to Discover.                                                                               | **Verified** in jest                                                                                         | `src/screens/home/__tests__/HomeScreen.test.tsx`                            |
+| SCR-C-04 next-activity card: participant (given name or "You"), activity, opponent for fixtures, place as the API states it, time with its time zone, status from journeys.md section 3 ("Payment processing", "Confirmed in <offering>. Awaiting placement.", "Confirmed" differ in words and glyph), the latest change as "Was" and "Now".                                                                                                                                                                                        | **Verified** in jest                                                                                         | `HomeScreen.test.tsx`, `src/features/today/__tests__/today-helpers.test.ts` |
+| SCR-C-05 pass: `POST /v1/passes` for the signed-in person; the reference (returned once by the API) is stored in expo-secure-store under the account (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`) and shown offline with its age and "may refuse it if it was revoked"; no name, household or child detail; "Replace pass" issues the new pass first, then revokes the old one with reason and expected revision; household passes are staff-issued (API rule). Device lifecycle (reinstall loses the stored reference) needs devices (§6.2). | **Verified** in jest                                                                                         | `src/screens/pass/__tests__/PassScreen.test.tsx`                            |
+| SCR-C-18 Schedule: activities by local day with zone, participant and status; changes and cancellations with old and new details; later 28-day windows load without hiding what is shown; family calendar link only when the API includes family members.                                                                                                                                                                                                                                                                           | **Verified** in jest                                                                                         | `src/screens/schedule/__tests__/ScheduleScreen.test.tsx`                    |
+| SCR-C-19 Family calendar: one week at a time, only the people `GET /v1/me/family-calendar` includes (a child without `view` is absent, even if `/me` lists another grant), a per-person filter (radio buttons), overlaps marked with "▲ Overlaps with …" and a count.                                                                                                                                                                                                                                                               | **Verified** in jest                                                                                         | `src/screens/family-calendar/__tests__/FamilyCalendarScreen.test.tsx`       |
+| SCR-C-20 fixture detail: card with RSVP, team availability counts, match readiness as the API returns it to this person (assessment, severity, responsible role, action; counts only), current official or provisional result ("Official. Corrected on <date>"), rule set summary from the readable team entry; NOT_FOUND as not available.                                                                                                                                                                                         | **Verified** in jest                                                                                         | `src/screens/activity/__tests__/FixtureDetailScreen.test.tsx`               |
+| SCR-C-20 activity detail (program session or booked session): read through the enrollment or booking the person may see; canceled sessions with the reason; payment and placement status.                                                                                                                                                                                                                                                                                                                                           | **Verified** in jest                                                                                         | `src/screens/activity/__tests__/SessionDetailScreen.test.tsx`               |
+| RSVP (SPK-CAP-003): "Available" and "Unavailable" for the signed-in person; a different answer is a new intent, a retry reuses the key; VALIDATION_FAILED (not on a roster), PARTICIPANT_AUTHORITY_REQUIRED and INVALID_TRANSITION (with "Reload") shown as the API answers; disabled offline with nothing queued.                                                                                                                                                                                                                  | **Verified** in jest                                                                                         | `FixtureDetailScreen.test.tsx`                                              |
+| Facility time zone (SPK-SCHED-008): times use the zone a schedule notice states; otherwise the device zone, always with its abbreviation and a one-line notice. Midnight and day grouping are daylight-saving safe.                                                                                                                                                                                                                                                                                                                 | **Verified** in jest                                                                                         | `today-helpers.test.ts`                                                     |
+| "Tentative" RSVP                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Pending decision** DEC-064 (Product and operations): not offered; a recorded tentative answer is displayed |                                                                             |
+| RSVP for a child by a guardian                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | **Pending decision** DEC-090 (Product and operations): not offered                                           |                                                                             |
+| Pickup arrangements per supervised session (SCR-C-19)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | **Pending decision** DEC-075 (Product owner), DEC-005 (Operations); no customer command exists               |                                                                             |
+| Arrival guidance (SCR-C-04, SCR-C-20)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | **Pending decision** POL-046 (Operations): none shown on the card; the detail shows the pending state        |                                                                             |
+| Scannable pass symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | **Pending decision** DEC-023 (Technical lead/account owners): the reference is shown as text                 |                                                                             |
+| Dispute entry on a result (SCR-C-29)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Not built in this group; the detail says it is not available in the app yet                                  |                                                                             |
+
+API gaps found while building these screens (the screens show the missing part as unavailable):
+
+- No customer read of upcoming fixtures across the person's team entries (`/me/fixtures` or
+  `/me/team-entries`): Home's next activity covers program sessions and session bookings only;
+  a fixture is reachable from a notice whose subject is a fixture or a link.
+- Family calendar items and fixtures carry no facility time zone, facility name or field names;
+  only schedule notices (`EventDetails`) do. A customer's access to `GET /v1/events/{id}` counts
+  person commitments only, so sessions and fixtures are generally not readable, and
+  `GET /v1/resources/{id}` is staff-only.
+- No holder read of a pass (`GET /v1/passes/{id}` or `/me/passes`): the app cannot tell whether
+  staff revoked it, and after a reinstall the old pass cannot be listed or revoked by the holder.
+- `InboxItem` has no `revision` and no participant reference, so read and acknowledge cannot send
+  `expectedRevision`, and Home cannot name the participant of a notice-based action.
+- `POST /v1/fixtures/{id}/availability` ignores `expectedRevision`, `FixtureDetail` does not expose
+  the response revision, `myResponse: null` does not distinguish "not on a roster" from "no answer",
+  and the API accepts an answer after kickoff as long as the fixture is still `scheduled`.
+- Pending enrollments do not say which requirement is outstanding (approval, payment or a form),
+  so Home shows "Registration pending" without the reason journeys.md asks for.
+- The OpenAPI document does not declare the `Idempotency-Key` header on `POST /v1/me/inbox/{id}/read`
+  and `/acknowledge`, although both routes are idempotent.
+
+Discover, registration and checkout (SCR-C-07 to SCR-C-16) are described, with their status and
+pending decisions, in [`src/screens/registration/README.md`](src/screens/registration/README.md).
+
+## Conventions for screen builders
+
+- **Layout.** A route file under `app/` only re-exports a screen: `export { InboxScreen as default } from '../src/screens/inbox/InboxScreen';`.
+  The screen lives in `src/screens/<area>/<Name>Screen.tsx`, its tests in
+  `src/screens/<area>/__tests__/<Name>Screen.test.tsx` (never under `app/`: every file there is a
+  route). Start each component with a comment naming its SCR id and SPK requirements.
+- **Frame.** Wrap the screen in `<Screen>` (connectivity banner, scrolling for large text). Use
+  `RequireSession` for anything that needs an account.
+- **Reading.** `useApiQuery({ path: '/me/inbox', request: { query: { limit: 50 } } })` is typed from
+  the OpenAPI document and returns `updatedAt`. Render it with `QueryBoundary`, which handles
+  loading, empty, error, offline with age, and NOT_FOUND or ACCESS_DENIED as "not available".
+- **Commands.** `const accept = useApiCommand('post', '/assignments/{id}/accept', { invalidate: [['api', '/me/assignments']] })`,
+  then `accept.submit({ path: { id }, body: { expectedRevision } })`. The hook keeps one idempotency
+  key per unchanged input, so "Try again" never duplicates an effect. Always send `expectedRevision`
+  where the body takes it. Show `accept.error` with `StateView variant="error"`; keep the user's input.
+- **Status.** `StatusBadge` with the phrase from `docs/package-a/journeys.md` section 3; never
+  colour alone. "Payment processing", "Confirmed, awaiting placement" and "Confirmed" use different
+  tones, glyphs and words.
+- **Authorization.** Render what the API returns (`availableActions`, scopes) and its answers; never
+  hide or show actions from role names. A protected NOT_FOUND is "not available" with no hint that
+  the record exists.
+- **Privacy.** No child data in logs, analytics or URLs (§4.14); route parameters are opaque ids.
+- **Pending values.** A policy value or decision that is pending (decision register) comes from
+  configuration or is shown with `StateView variant="pending-decision"`; never hard-code one.
+- **Links.** Links from outside the app open only Home and `/link` (`app/+native-intent.tsx`); a new
+  destination is added to the closed list in `src/links/link-targets.ts`, never as a new external route.
+  Tokens from links stay in memory (`src/links/link-secrets.ts`), never in a route or storage.
+  `src/testing/expo-router-native-intent.ts` lets `renderRouter({ appDir, overrides })` load it as in the app.
+- **Tests.** `createTestApp({ routes, session, reachable, now, config })` from
+  `src/testing/test-app.tsx` gives real providers with a fake API
+  (`'GET /me/inbox': { status: 200, body }` or a function returning `fakeResponse(...)`), a memory
+  session store, manual connectivity (`app.sources.setReachable(false)`) and a fixed clock. Render
+  with `render(<Screen />, { wrapper: app.wrapper })` and assert on `app.fake.requests`. Name each
+  test after the requirement it proves. Whole-navigation tests use `renderRouter` from
+  `expo-router/testing-library` (see `navigation.test.tsx`).
+
+## Dependencies
+
+Expo SDK 57 is used: it is the newest SDK whose release is more than two weeks old. SDK 58 is
+published, but its first patch on a final React Native release (58.0.11, with React Native 0.88.0)
+is from 2026-10-15, less than two weeks before this foundation was built (2026-10-24); earlier
+SDK 58 patches depend on a React Native release candidate. Versions are exact and were published at
+least two weeks earlier; the Expo set equals the `bundledNativeModules` of `expo@57.0.27`. Transitive
+dependencies were resolved with the same two-week floor. (`npx expo install --check` compares
+against later SDK 57 patches published after that floor.)
+
+| Package                               | Version | Published  | Why                                                                                                   |
+| ------------------------------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------------- |
+| `expo`                                | 57.0.27 | 2026-10-06 | SDK, CLI (`expo start`, `expo export`), native module runtime                                         |
+| `react`                               | 19.2.3  | 2025-12-11 | Version required by SDK 57                                                                            |
+| `react-native`                        | 0.86.3  | 2026-08-24 | Version required by SDK 57                                                                            |
+| `expo-router`                         | 57.0.25 | 2026-10-06 | File-based native navigation, tabs and stack (SPK-UX-001/002)                                         |
+| `react-native-screens`                | 4.26.2  | 2026-07-16 | Native screens, required by expo-router                                                               |
+| `react-native-safe-area-context`      | 5.7.0   | 2026-02-24 | Safe areas, required by expo-router                                                                   |
+| `expo-linking`                        | 57.0.12 | 2026-10-06 | Links, required by expo-router                                                                        |
+| `expo-constants`                      | 57.0.21 | 2026-10-06 | Reads `app.config.ts` (API base URL, app version)                                                     |
+| `@expo/metro-runtime`                 | 57.0.16 | 2026-09-18 | Metro runtime, required by expo-router                                                                |
+| `@expo/log-box`                       | 57.0.4  | 2026-08-26 | Error overlay, required by expo-router                                                                |
+| `expo-secure-store`                   | 57.0.4  | 2026-09-11 | Platform secure storage for the session (§4.13)                                                       |
+| `expo-network`                        | 57.0.2  | 2026-09-11 | Connectivity for SCR-C-40                                                                             |
+| `expo-crypto`                         | 57.0.3  | 2026-09-11 | Secure random idempotency keys (React Native has no `crypto`)                                         |
+| `@tanstack/react-query`               | 5.104.1 | 2026-10-02 | Data layer: caching, refetch on focus and reconnect, data age                                         |
+| `jest` (dev)                          | 29.7.0  | 2023-09-12 | Test runner used by jest-expo                                                                         |
+| `jest-expo` (dev)                     | 57.0.5  | 2026-08-26 | Expo's documented Jest preset for SDK 57                                                              |
+| `@react-native/jest-preset` (dev)     | 0.86.3  | 2026-08-24 | Required peer of jest-expo 57                                                                         |
+| `@testing-library/react-native` (dev) | 13.3.3  | 2025-08-26 | Component tests by role and label (14.x requires a `test-renderer@^1` peer with no published release) |
+| `react-test-renderer` (dev)           | 19.2.3  | 2025-12-11 | Renderer for React Native Testing Library 13                                                          |
+| `@types/jest` (dev)                   | 29.5.14 | 2024-10-23 | Jest types                                                                                            |
+| `@types/react` (dev)                  | 19.2.18 | 2026-07-30 | React types                                                                                           |
+
+`expo-router` brings `react-native-reanimated` and `react-native-worklets` in as peers of optional
+features (drawer, `@expo/ui`); pnpm installs them (4.7.1 and 0.13.0, not the SDK 57 versions) and
+the app does not import them. Whether native autolinking would include them has not been checked:
+there is no native build here. A screen that needs them must add the SDK 57 versions (4.5.1 and
+0.10.1) as direct dependencies.
+
+## Team screens
+
+Teams, captain workspace, roster, availability, contributions, roster changes, team entries,
+standings and disputes (SCR-C-21 to SCR-C-29) are described, with their status, pending decisions
+and API gaps, in [`src/screens/teams/README.md`](src/screens/teams/README.md).
