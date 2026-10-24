@@ -172,6 +172,32 @@ describe('SCR-S-22 AccessReviewScreen', () => {
     });
   });
 
+  it("SPK-IAM-005: a lift never sends a person: it lifts all of this review's restrictions or named permissions", async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /access-reviews/{id}': { status: 200, body: accessReview() },
+        'POST /access-reviews/{id}/decisions': {
+          status: 200,
+          body: accessReview({ revision: 3 }),
+        },
+      },
+    });
+    render(app.at(PATH));
+    const form = await screen.findByRole('form', { name: 'Record a decision' });
+    await user.selectOptions(within(form).getByLabelText(/^Decision/), 'lift');
+    expect(within(form).queryByLabelText(/Person holding the permissions/)).toBeNull();
+    expect(
+      within(form).queryByLabelText('Every permission one person holds over the subject'),
+    ).toBeNull();
+    expect(within(form).getByLabelText('All restrictions placed by this review')).toBeChecked();
+    await user.click(within(form).getByRole('button', { name: 'Record decision' }));
+    await screen.findByText('Decision recorded: lift. Review status: open.');
+    const post = app.fake.requests.find((r) => r.route === '/access-reviews/{id}/decisions');
+    expect(post?.body).toEqual({ kind: 'lift', expectedRevision: 2 });
+    expect(post?.body).not.toHaveProperty('actorPersonId');
+  });
+
   it('reports STALE_REVISION with "Reload", re-reads the review and keeps the note', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

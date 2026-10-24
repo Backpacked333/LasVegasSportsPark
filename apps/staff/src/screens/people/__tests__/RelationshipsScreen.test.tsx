@@ -219,6 +219,71 @@ describe('SCR-S-21 RelationshipsScreen', () => {
     expect(add?.body).toEqual({ personId: PERSON_ID });
   });
 
+  it('a failed add after creating a household retries only the add, never a second household', async () => {
+    const user = userEvent.setup();
+    const household = {
+      id: '0192f1a0-0000-7000-8000-000000000801',
+      name: 'Rivera',
+      revision: 1,
+      createdAt: '2026-10-24T12:00:00.000Z',
+    };
+    let adds = 0;
+    const app = createTestApp({
+      routes: {
+        ...baseRoutes(),
+        'POST /households': { status: 201, body: { ...household, members: [] } },
+        'POST /households/{id}/members': () => {
+          adds += 1;
+          return adds === 1
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(201, {
+                ...household,
+                members: [{ personId: PERSON_ID, label: null }],
+                revision: 2,
+              });
+        },
+      },
+    });
+    render(app.at(PATH));
+    await user.type(await screen.findByLabelText('New household name'), 'Rivera');
+    await user.click(screen.getByRole('button', { name: 'Create household with this person' }));
+    await user.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(
+      await screen.findByText('This person is a member of the household.'),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/households')).toHaveLength(1);
+    const memberAdds = app.fake.requests.filter((r) => r.route === '/households/{id}/members');
+    expect(memberAdds).toHaveLength(2);
+    expect(memberAdds[1]?.headers['idempotency-key']).toBe(
+      memberAdds[0]?.headers['idempotency-key'],
+    );
+  });
+
+  it('a grant revoke answered STALE_REVISION says it changed elsewhere and offers no further revoke', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...baseRoutes(),
+        'POST /relationships': { status: 201, body: relationshipCreated(['view']) },
+        'POST /access-grants/{id}/revoke': () =>
+          fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' })),
+      },
+    });
+    render(app.at(PATH));
+    const form = await relationshipForm();
+    await user.type(within(form).getByLabelText(/Other person reference/), OTHER_ID);
+    await user.selectOptions(within(form).getByLabelText(/^Kind/), 'guardian');
+    await user.click(within(form).getByLabelText(/^view:/));
+    await user.click(within(form).getByRole('button', { name: 'Record relationship' }));
+    await user.type(await screen.findByLabelText('Reason to revoke view'), 'Requested');
+    await user.click(screen.getByRole('button', { name: 'Revoke permission view' }));
+    expect(await screen.findByTestId('grant-changed-elsewhere')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revoke permission view' })).toBeNull();
+  });
+
   it('§4.15: allows no guardian or grant change offline', async () => {
     const app = createTestApp({ routes: baseRoutes() });
     render(app.at(PATH));

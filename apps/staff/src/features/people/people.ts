@@ -29,6 +29,21 @@ export function personName(person: { givenName: string; familyName: string }): s
   return `${person.givenName} ${person.familyName}`.trim();
 }
 
+/** What a staff screen shows instead of a child's minimized details (§4.14). */
+export const KEPT_NOT_SHOWN = 'Kept on the record, not shown here';
+
+/**
+ * A person's name as staff screens show it (§4.14 child data minimized): a child by given name
+ * only; an adult by full name.
+ */
+export function displayName(person: {
+  givenName: string;
+  familyName: string;
+  kind: 'adult' | 'child';
+}): string {
+  return person.kind === 'child' ? person.givenName : personName(person);
+}
+
 /** Minor units in the currency's own exponent (SPK-PAY-001), e.g. 2500 USD is "$25.00". */
 export function formatMoney(amountMinor: number, currency: string): string {
   try {

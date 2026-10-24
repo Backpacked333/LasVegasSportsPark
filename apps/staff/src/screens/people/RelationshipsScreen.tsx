@@ -45,7 +45,7 @@ import {
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge } from '../../ui/StatusBadge';
+import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { formatDateTime, localInputToIso } from '../../ui/time';
 
 /** The OpenAPI component is nullable (it is reused as a nullable field elsewhere); a created one is not. */
@@ -58,6 +58,14 @@ interface RecordedRelationship {
   relationship: Relationship;
   grants: AccessGrant[];
 }
+
+/** The status glyph agrees with the status text (SPK-UX-009). */
+const INVITATION_TONE: Readonly<Record<string, StatusTone>> = {
+  pending: 'pending',
+  accepted: 'success',
+  revoked: 'neutral',
+  expired: 'neutral',
+};
 
 function PersonLink({ id, self }: { id: string; self: string }) {
   return id === self ? <span>this person</span> : <Link to={`/people/${id}`}>{id}</Link>;
@@ -99,7 +107,17 @@ function GrantRow({ grant, onChange }: { grant: AccessGrant; onChange: (g: Acces
           label={grant.effective ? 'Effective now' : 'Not effective'}
         />
       </div>
-      {!revoked ? (
+      {!revoked && revoke.error?.isStale ? (
+        // No read of a grant exists, so a newer version cannot be loaded here: say so and stop
+        // offering a revoke that the API would refuse again (SPK-UX-008 stale version).
+        <div className="form" data-testid="grant-changed-elsewhere">
+          <StatusBadge tone="warning" label="Changed elsewhere" />
+          <p>
+            This permission changed since this page was loaded, and its current state cannot be read
+            here. Reopen the person to see it. Error code: {revoke.error.code}.
+          </p>
+        </div>
+      ) : !revoked ? (
         <div className="form">
           <TextField
             label={`Reason to revoke ${grant.permission}`}
@@ -116,7 +134,7 @@ function GrantRow({ grant, onChange }: { grant: AccessGrant; onChange: (g: Acces
           >
             Revoke
           </Button>
-          <CommandError error={revoke.error} onRetry={submit} onReload={revoke.reset} />
+          <CommandError error={revoke.error} onRetry={submit} />
         </div>
       ) : null}
     </li>
@@ -380,15 +398,25 @@ function HouseholdSection({ personId }: { personId: string }) {
   const create = useApiCommand('post', '/households');
   const addMember = useApiCommand('post', '/households/{id}/members');
 
-  const add = (householdId: string) =>
-    addMember
+  /** The household the last add was for, so "Try again" re-sends that same add (same intent). */
+  const [addTarget, setAddTarget] = useState<string | null>(null);
+  const add = (householdId: string) => {
+    setAddTarget(householdId);
+    return addMember
       .submit({
         path: { id: householdId },
         body: { personId, ...(label.trim() ? { label: label.trim() } : {}) },
       })
       .then(setHousehold);
+  };
 
   const createAndAdd = () => {
+    // A household created here whose add failed: only the add is sent again, never a second
+    // household (SCR-S-21, partial completion not permitted).
+    if (household && !household.members.some((m) => m.personId === personId)) {
+      void add(household.id).catch(() => undefined);
+      return;
+    }
     if (!name.trim()) {
       setErrors({ name: 'Name the household.' });
       return;
@@ -437,7 +465,9 @@ function HouseholdSection({ personId }: { personId: string }) {
           disabled={!online}
           onClick={createAndAdd}
         >
-          Create household with this person
+          {household && !household.members.some((m) => m.personId === personId)
+            ? `Add this person to ${household.name}`
+            : 'Create household with this person'}
         </Button>
         <TextField
           label="Existing household reference"
@@ -455,7 +485,13 @@ function HouseholdSection({ personId }: { personId: string }) {
         </Button>
       </div>
       <CommandError error={create.error} onRetry={createAndAdd} />
-      <CommandError error={addMember.error} />
+      <CommandError
+        error={addMember.error}
+        onRetry={() => {
+          const target = addTarget ?? household?.id ?? null;
+          if (target) void add(target).catch(() => undefined);
+        }}
+      />
       {household ? (
         <div aria-label="Household record">
           <p>
@@ -507,7 +543,10 @@ function InvitationRecord({
   };
   return (
     <div className="panel" aria-label="Invitation record">
-      <StatusBadge tone="pending" label={`Status: ${invitation.status}`} />
+      <StatusBadge
+        tone={INVITATION_TONE[invitation.status] ?? 'neutral'}
+        label={`Status: ${invitation.status}`}
+      />
       <Facts
         items={[
           [
@@ -556,7 +595,15 @@ function InvitationRecord({
           <code>{token}</code>
         </p>
       ) : null}
-      {invitation.status === 'pending' ? (
+      {invitation.status === 'pending' && revoke.error?.isStale ? (
+        <div className="form" data-testid="invitation-changed-elsewhere">
+          <StatusBadge tone="warning" label="Changed elsewhere" />
+          <p>
+            This invitation changed since it was shown (it may have been accepted or revoked), and
+            its current state cannot be read here. Error code: {revoke.error.code}.
+          </p>
+        </div>
+      ) : invitation.status === 'pending' ? (
         <div className="form">
           <TextField
             label="Reason to revoke the invitation"
@@ -572,7 +619,7 @@ function InvitationRecord({
           >
             Revoke invitation
           </Button>
-          <CommandError error={revoke.error} onRetry={submit} onReload={revoke.reset} />
+          <CommandError error={revoke.error} onRetry={submit} />
         </div>
       ) : null}
     </div>

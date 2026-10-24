@@ -7,11 +7,10 @@
  * birth in that payload are never rendered, logged or put in a URL (§4.14 child data minimized).
  * A person the viewer may not read (NOT_FOUND, ACCESS_DENIED) is shown as "Name not available".
  */
-import { apiQueryKey, type ApiResponse, type Schema } from '@sportspark/api-client';
-import { useQueries } from '@tanstack/react-query';
-import { useCallback, useMemo } from 'react';
+import { useMemo } from 'react';
+import { nameUnavailable, usePersonNameRecords } from '../../api/person-names';
 import { useApiQuery } from '../../api/useApiQuery';
-import { useApi, useApp } from '../../providers/AppProviders';
+import { useApp } from '../../providers/AppProviders';
 
 export interface OperatingFacility {
   /** The selected facility, or the only facility in the viewer's scope; null when ambiguous. */
@@ -61,62 +60,44 @@ export function useOperatingFacility(): OperatingFacility {
   };
 }
 
-type PersonDetail = Schema<'PersonDetail'>;
-
 export type PersonName =
   | { status: 'loading' }
+  /** A protected NOT_FOUND or a permission restriction: the viewer may not read this person. */
   | { status: 'unavailable' }
-  | { status: 'ok'; name: string; kind: PersonDetail['kind'] };
+  /** The read failed for another reason (offline, 5xx): the name may load later. */
+  | { status: 'error' }
+  | { status: 'ok'; name: string; kind: 'adult' | 'child' };
 
-/** Display names for a list of person ids (deduplicated, cached per person). */
+/**
+ * Display names for a list of person ids (deduplicated, cached per person). Read through the
+ * minimal name read (src/api/person-names.ts): only names and kind enter the cache, never a date
+ * of birth or contact point (§4.14).
+ */
 export function usePersonNames(ids: readonly string[]): ReadonlyMap<string, PersonName> {
-  const api = useApi();
-  const key = [...new Set(ids)].sort().join(',');
-  const unique = useMemo(() => (key ? key.split(',') : []), [key]);
-  const combine = useCallback(
-    (
-      results: readonly {
-        data: ApiResponse<PersonDetail> | undefined;
-        error: Error | null;
-      }[],
-    ) => {
-      const map = new Map<string, PersonName>();
-      unique.forEach((id, index) => {
-        const r = results[index];
-        if (r?.data) {
-          const p = r.data.data;
-          map.set(id, {
-            status: 'ok',
-            name: `${p.givenName} ${p.familyName}`.trim(),
-            kind: p.kind,
-          });
-        } else if (r?.error) {
-          map.set(id, { status: 'unavailable' });
-        } else {
-          map.set(id, { status: 'loading' });
-        }
-      });
-      return map as ReadonlyMap<string, PersonName>;
-    },
-    [unique],
-  );
-  return useQueries({
-    queries: unique.map((id) => ({
-      queryKey: apiQueryKey('/people/{id}', { path: { id } }),
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        api.request('get', '/people/{id}', { path: { id }, signal }) as Promise<
-          ApiResponse<PersonDetail>
-        >,
-      staleTime: 5 * 60_000,
-      retry: false,
-    })),
-    combine,
-  });
+  const records = usePersonNameRecords(ids);
+  return useMemo(() => {
+    const map = new Map<string, PersonName>();
+    for (const [id, r] of records) {
+      if (r.data) {
+        map.set(id, {
+          status: 'ok',
+          name: `${r.data.givenName} ${r.data.familyName}`.trim(),
+          kind: r.data.kind,
+        });
+      } else if (r.error) {
+        map.set(id, { status: nameUnavailable(r.error) ? 'unavailable' : 'error' });
+      } else {
+        map.set(id, { status: 'loading' });
+      }
+    }
+    return map as ReadonlyMap<string, PersonName>;
+  }, [records]);
 }
 
 export function nameOf(names: ReadonlyMap<string, PersonName>, id: string): string {
   const entry = names.get(id);
   if (!entry || entry.status === 'loading') return 'Loading name…';
   if (entry.status === 'unavailable') return 'Name not available';
+  if (entry.status === 'error') return 'Name could not load';
   return entry.name;
 }

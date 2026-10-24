@@ -36,6 +36,8 @@ type MissingEvidence = Schema<'AssistantMissingEvidence'>;
 
 export const ASSISTANT_POLL_MS = 2_000;
 const RECOMMENDATIONS_KEY = ['api', '/recommendations'] as const;
+/** How many recommendations of each status "Awaiting review" shows (a display limit). */
+const AWAITING_PAGE = 20;
 const RECOMMENDATION_KEY = ['api', '/recommendations/{id}'] as const;
 const REQUEST_KEY = ['api', '/assistant/requests/{id}'] as const;
 
@@ -128,7 +130,24 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
   const approve = useApiCommand('post', '/recommendations/{id}/approve', { invalidate });
   const reject = useApiCommand('post', '/recommendations/{id}/reject', { invalidate });
   const apply = useApiCommand('post', '/recommendations/{id}/apply', { invalidate });
-  const shown = apply.data ?? reject.data ?? approve.data ?? rec;
+  // The card reads its own record, so two copies of one recommendation (in an answer and in
+  // "Awaiting review") stay current after either is used; the newest revision wins.
+  const current = useApiQuery({
+    path: '/recommendations/{id}',
+    request: { path: { id: rec.id } },
+    staleTime: 0,
+  });
+  const shown = [apply.data, reject.data, approve.data, current.data].reduce<Recommendation>(
+    (best, next) => (next && next.revision > best.revision ? next : best),
+    rec,
+  );
+  // An apply whose owning command reported no outcome stays claimed; it is neither applied nor
+  // failed, and must not be applied again (SPK-AUTO-004).
+  const applyUnknown =
+    shown.apply.lastError?.code === 'APPLY_OUTCOME_UNKNOWN' ||
+    (shown.apply.lastError?.details as { outcome?: unknown } | undefined)?.outcome === 'unknown' ||
+    apply.error?.nextAction === 'await_reconciliation' ||
+    (apply.error?.details as { code?: unknown } | undefined)?.code === 'APPLY_OUTCOME_UNKNOWN';
   const operation = useOperation(shown.apply.operationId);
   const titleId = `recommendation-${rec.id}`;
   const busy = approve.isProcessing || reject.isProcessing || apply.isProcessing;
@@ -164,6 +183,7 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
       .catch(() => undefined);
   const canReview = shown.status === 'proposed';
   const canApply =
+    !applyUnknown &&
     shown.status === 'approved' &&
     shown.consequential &&
     shown.command !== null &&
@@ -222,7 +242,15 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
           {shown.review.reason ? `: ${shown.review.reason}` : ''}
         </p>
       ) : null}
-      {shown.apply.lastError ? (
+      {applyUnknown ? (
+        <div data-testid="apply-outcome-unknown">
+          <StatusBadge tone="warning" label="Apply outcome: unknown" />
+          <p>
+            The owning module&apos;s records are being checked. Do not apply this again.
+            {shown.apply.lastError ? ` (${shown.apply.lastError.code})` : ''}
+          </p>
+        </div>
+      ) : shown.apply.lastError ? (
         <p className="error-text">
           Not applied: {shown.apply.lastError.code}. {shown.apply.lastError.message}
         </p>
@@ -280,7 +308,9 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
       <CommandSuccess message={success} />
       <CommandError error={approve.error} onRetry={doApprove} onReload={reload} />
       <CommandError error={reject.error} onRetry={doReject} onReload={reload} />
-      <CommandError error={apply.error} onRetry={doApply} onReload={reload} />
+      {applyUnknown ? null : (
+        <CommandError error={apply.error} onRetry={doApply} onReload={reload} />
+      )}
     </li>
   );
 }
@@ -391,11 +421,19 @@ function AskForm({ facilityId }: { facilityId: string | null }) {
 
 export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
   const { online } = useApp();
-  const pending = useApiQuery({
+  // Read by status (the API filters), so newer applied or rejected ones never push the ones
+  // still waiting out of the page; a page that has more says so (never a false "none").
+  const proposed = useApiQuery({
     path: '/recommendations',
-    request: { query: { limit: 20 } },
+    request: { query: { status: 'proposed', limit: AWAITING_PAGE } },
     enabled: online,
   });
+  const approved = useApiQuery({
+    path: '/recommendations',
+    request: { query: { status: 'approved', limit: AWAITING_PAGE } },
+    enabled: online,
+  });
+  const pending = proposed.error ? proposed : approved.error ? approved : proposed;
   let body;
   if (!online) {
     body = (
@@ -422,17 +460,16 @@ export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
       ) : (
         <StateView variant="error" error={pending.error} onRetry={() => void pending.refetch()} />
       );
-  } else if (!pending.data) {
+  } else if (!proposed.data || !approved.data) {
     body = <StateView variant="loading" label="the assistant" />;
   } else {
-    const open = pending.data.items.filter(
-      (r) => r.status === 'proposed' || r.status === 'approved',
-    );
+    const open = [...proposed.data.items, ...approved.data.items];
+    const more = proposed.data.nextCursor !== null || approved.data.nextCursor !== null;
     body = (
       <>
         <AskForm facilityId={facilityId} />
         <h4>Awaiting review</h4>
-        {open.length === 0 ? (
+        {open.length === 0 && !more ? (
           <p>No recommendations are waiting for review.</p>
         ) : (
           <ul className="list" aria-label="Recommendations awaiting review">
@@ -441,6 +478,11 @@ export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
             ))}
           </ul>
         )}
+        {more ? (
+          <p className="caption" data-testid="more-awaiting">
+            More recommendations are waiting than are shown here ({AWAITING_PAGE} of each status).
+          </p>
+        ) : null}
       </>
     );
   }

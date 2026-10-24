@@ -173,7 +173,7 @@ function DecisionForm({ review }: { review: AccessReview }) {
   const queryClient = useQueryClient();
   const [kind, setKind] = useState('');
   const [note, setNote] = useState('');
-  const [target, setTarget] = useState<'actor' | 'grants'>('actor');
+  const [target, setTarget] = useState<'actor' | 'grants' | 'all'>('actor');
   const [actor, setActor] = useState('');
   const [grantIds, setGrantIds] = useState('');
   const [ends, setEnds] = useState('');
@@ -188,6 +188,11 @@ function DecisionForm({ review }: { review: AccessReview }) {
   });
   const apiErrors = fieldErrorsOf(decide.error);
   const targeting = kind === 'restrict' || kind === 'lift';
+  // The API lifts by review and optional permission references only, never by person: a lift
+  // offers "everything this review restricted" or specific references (SPK-IAM-005).
+  const liftTarget: 'all' | 'grants' = target === 'grants' ? 'grants' : 'all';
+  const restrictTarget: 'actor' | 'grants' = target === 'grants' ? 'grants' : 'actor';
+  const effectiveTarget = kind === 'lift' ? liftTarget : restrictTarget;
 
   const reload = () => {
     decide.reset();
@@ -200,7 +205,9 @@ function DecisionForm({ review }: { review: AccessReview }) {
     if (!kind) problems['kind'] = 'Choose a decision.';
     if (kind === 'note' && !note.trim()) problems['note'] = 'Write the note.';
     if (targeting) {
-      if (target === 'actor') {
+      if (effectiveTarget === 'all') {
+        // Nothing to check: every restriction this review placed.
+      } else if (effectiveTarget === 'actor') {
         const a = referenceError(actor, true);
         if (a) problems['actor'] = a;
       } else {
@@ -235,8 +242,12 @@ function DecisionForm({ review }: { review: AccessReview }) {
           kind: kind as DecisionKind,
           expectedRevision: review.revision,
           ...(note.trim() ? { note: note.trim() } : {}),
-          ...(targeting && target === 'actor' ? { actorPersonId: actor.trim().toLowerCase() } : {}),
-          ...(targeting && target === 'grants' ? { grantIds: parseGrantIds(grantIds) } : {}),
+          ...(targeting && effectiveTarget === 'actor'
+            ? { actorPersonId: actor.trim().toLowerCase() }
+            : {}),
+          ...(targeting && effectiveTarget === 'grants'
+            ? { grantIds: parseGrantIds(grantIds) }
+            : {}),
           ...(effectiveTo ? { effectiveTo } : {}),
           ...(kind === 'decide' ? { outcome: { summary: outcome.trim() } } : {}),
           ...(kind === 'reassign' && ownerRole ? { ownerRole: ownerRole as ReviewOwnerRole } : {}),
@@ -289,14 +300,28 @@ function DecisionForm({ review }: { review: AccessReview }) {
               legend="Which permissions"
               name="target"
               required
-              value={target}
-              onChange={(v) => setTarget(v as 'actor' | 'grants')}
-              options={[
-                { value: 'actor', label: 'Every permission one person holds over the subject' },
-                { value: 'grants', label: 'Specific permissions by reference' },
-              ]}
+              value={effectiveTarget}
+              onChange={(v) => setTarget(v as 'actor' | 'grants' | 'all')}
+              options={
+                kind === 'lift'
+                  ? [
+                      { value: 'all', label: 'All restrictions placed by this review' },
+                      {
+                        value: 'grants',
+                        label:
+                          'Only the permissions with these references (others stay restricted)',
+                      },
+                    ]
+                  : [
+                      {
+                        value: 'actor',
+                        label: 'Every permission one person holds over the subject',
+                      },
+                      { value: 'grants', label: 'Specific permissions by reference' },
+                    ]
+              }
             />
-            {target === 'actor' ? (
+            {effectiveTarget === 'all' ? null : effectiveTarget === 'actor' ? (
               <PersonReferenceField
                 label="Person holding the permissions"
                 required

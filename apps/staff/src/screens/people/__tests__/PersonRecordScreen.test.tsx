@@ -141,6 +141,12 @@ describe('SCR-S-20 PersonRecordScreen', () => {
     expect(
       await screen.findByText(/shown by given name only, without date of birth or contacts/),
     ).toBeInTheDocument();
+    // §4.14: the record itself is minimized too, not only described as such.
+    expect(screen.getByRole('heading', { name: 'Alex' })).toBeInTheDocument();
+    expect(screen.queryByText('Rivera')).toBeNull();
+    expect(screen.queryByText(/Rivera/)).toBeNull();
+    expect(screen.queryByText('1990-04-02')).toBeNull();
+    expect(screen.queryByText(/@example\.test/)).toBeNull();
   });
 
   it('shows a protected NOT_FOUND as not available and never names the person', async () => {

@@ -117,10 +117,11 @@ describe('area routes (SPK-UX-005)', () => {
     expect(screen.queryByText(/Not built yet/)).toBeNull();
   });
 
-  it('keeps the other areas’ placeholders', async () => {
+  it('keeps the placeholder only for what is not built: Administration names SCR-S-56 alone', async () => {
     const app = createTestApp();
-    render(app.at('/programs'));
-    expect(await screen.findByText('Not built yet (SCR-S-14, SCR-S-15).')).toBeInTheDocument();
+    render(app.at('/admin'));
+    expect(await screen.findByText('Not built yet (SCR-S-56).')).toBeInTheDocument();
+    expect(screen.queryByText(/Not built yet \(SCR-S-46/)).toBeNull();
   });
 });
 

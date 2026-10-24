@@ -9,7 +9,13 @@ import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { FACILITY_A, TEST_NOW, createTestApp, todayFeed } from '../../../testing/test-app';
+import {
+  FACILITY_A,
+  FACILITY_B,
+  TEST_NOW,
+  createTestApp,
+  todayFeed,
+} from '../../../testing/test-app';
 import { EXCEPTION_ID, PAYMENT_ID, exceptionItem, scheduledEvent } from './fixtures';
 
 /** A Today feed whose single facility day runs from 07:00 to 23:00 UTC on the test date. */
@@ -100,6 +106,20 @@ describe('SCR-S-01 TodayScreen issues', () => {
     expect(screen.getByText('Evaluated just now')).toBeInTheDocument();
     const notIncluded = screen.getByRole('region', { name: 'Issue sources not included' });
     expect(within(notIncluded).getByText('Not available to you')).toBeInTheDocument();
+    expect(within(notIncluded).getByText('coverage · all facilities')).toBeInTheDocument();
+  });
+
+  it('SCR-S-01: names the facility of each source that is not included', async () => {
+    const feed = todayFeed([]);
+    feed.body.sources = [
+      { source: 'readiness', facilityId: FACILITY_A, status: 'not_permitted', count: 0 },
+      { source: 'readiness', facilityId: FACILITY_B, status: 'not_permitted', count: 0 },
+    ] as never;
+    const app = createTestApp({ routes: { 'GET /today': feed } });
+    render(app.at('/today'));
+    const notIncluded = await screen.findByRole('region', { name: 'Issue sources not included' });
+    expect(within(notIncluded).getByText('readiness · North Park 1')).toBeInTheDocument();
+    expect(within(notIncluded).getByText('readiness · North Park 2')).toBeInTheDocument();
   });
 
   it('pins money-moved-but-not-fulfilled financial issues first, with their owner', async () => {

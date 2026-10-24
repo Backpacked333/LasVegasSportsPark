@@ -10,6 +10,7 @@ import { apiQueryKey } from '@sportspark/api-client';
 import { useQueries } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
+import { nameUnavailable, usePersonName } from '../../api/person-names';
 import { useApi } from '../../providers/AppProviders';
 import { shortRef } from './format';
 
@@ -51,16 +52,21 @@ export function TeamName({ teamId }: { teamId: string | null | undefined }) {
   return <span aria-busy="true">Team {shortRef(teamId)}</span>;
 }
 
+/**
+ * A person's name for a list row. Read through the minimal name read (src/api/person-names.ts):
+ * the cache never holds a child's date of birth or contact points (§4.14).
+ */
 export function PersonName({ personId }: { personId: string | null | undefined }) {
-  const person = useApiQuery({
-    path: '/people/{id}',
-    request: { path: { id: personId ?? '' } },
-    enabled: !!personId,
-    staleTime: NAME_STALE_MS,
-  });
+  const person = usePersonName(personId);
   if (!personId) return <span>Person not set</span>;
   if (person.data) return <span>{`${person.data.givenName} ${person.data.familyName}`}</span>;
-  if (person.error) return <span>Person {shortRef(personId)} (name not available)</span>;
+  if (person.error) {
+    return nameUnavailable(person.error) ? (
+      <span>Person {shortRef(personId)} (name not available)</span>
+    ) : (
+      <span>Person {shortRef(personId)} (name could not load)</span>
+    );
+  }
   return <span aria-busy="true">Person {shortRef(personId)}</span>;
 }
 

@@ -20,7 +20,7 @@ import { useOperation } from '../../api/useOperation';
 import { withServerDefaults } from '../../api/server-defaults';
 import { PeopleNav } from '../../features/people/PeopleNav';
 import { PersonReferenceField, referenceError } from '../../features/people/PersonReferenceField';
-import { personName } from '../../features/people/people';
+import { displayName, KEPT_NOT_SHOWN } from '../../features/people/people';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError, CommandSuccess } from '../../ui/CommandFeedback';
@@ -49,21 +49,31 @@ function PersonColumn({ personId, label }: { personId: string; label: string }) 
       {person.data ? (
         <>
           <p>
-            <Link to={`/people/${personId}`}>{personName(person.data)}</Link>
+            <Link to={`/people/${personId}`}>{displayName(person.data)}</Link>
           </p>
           <Facts
-            items={[
-              ['Kind', person.data.kind],
-              ['Status', person.data.status],
-              ['Date of birth', person.data.dateOfBirth ?? 'Not recorded'],
-              [
-                'Contact points',
-                person.data.contactPoints.length > 0
-                  ? person.data.contactPoints.map((c) => `${c.kind}: ${c.value}`).join('; ')
-                  : 'None',
-              ],
-              ['Reference', <code key="id">{personId}</code>],
-            ]}
+            items={
+              person.data.kind === 'child'
+                ? [
+                    // §4.14: a child is compared by given name, kind and status only.
+                    ['Kind', person.data.kind],
+                    ['Status', person.data.status],
+                    ['Date of birth and contacts', KEPT_NOT_SHOWN],
+                    ['Reference', <code key="id">{personId}</code>],
+                  ]
+                : [
+                    ['Kind', person.data.kind],
+                    ['Status', person.data.status],
+                    ['Date of birth', person.data.dateOfBirth ?? 'Not recorded'],
+                    [
+                      'Contact points',
+                      person.data.contactPoints.length > 0
+                        ? person.data.contactPoints.map((c) => `${c.kind}: ${c.value}`).join('; ')
+                        : 'None',
+                    ],
+                    ['Reference', <code key="id">{personId}</code>],
+                  ]
+            }
           />
         </>
       ) : person.error ? (

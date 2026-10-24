@@ -188,7 +188,14 @@ function IssueRow({
   );
 }
 
-function SourcesNote({ sources }: { sources: Schema<'TodaySource'>[] }) {
+/** Each row names its facility, so two restricted facilities never read the same (SCR-S-01). */
+function SourcesNote({
+  sources,
+  names,
+}: {
+  sources: Schema<'TodaySource'>[];
+  names: ReadonlyMap<string, string>;
+}) {
   const limited = sources.filter((s) => s.status !== 'ok');
   if (limited.length === 0) return null;
   return (
@@ -197,7 +204,9 @@ function SourcesNote({ sources }: { sources: Schema<'TodaySource'>[] }) {
       <ul className="list">
         {limited.map((s) => (
           <li key={`${s.source}-${s.facilityId ?? 'all'}`}>
-            <span>{s.source}</span>
+            <span>
+              {s.source} · {s.facilityId ? facilityLabel(s.facilityId, names) : 'all facilities'}
+            </span>
             <StatusBadge
               tone={s.status === 'unavailable' ? 'warning' : 'neutral'}
               label={SOURCE_STATUS[s.status]}
@@ -442,7 +451,7 @@ export function TodayScreen() {
                   </ul>
                 )}
               </section>
-              <SourcesNote sources={feed.sources} />
+              <SourcesNote sources={feed.sources} names={names} />
               {feed.facilities.map((f) => (
                 <FacilityToday key={f.facilityId} facility={f} now={now} />
               ))}

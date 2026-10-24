@@ -9,8 +9,11 @@
  * - A note is history only and never a refund, permission change or transfer (SPK-SUPPORT-003);
  *   real actions are the owning module's commands, linked here with their operation as evidence.
  * - A related record or origin exception in recovery is shown beside the case, so resolving the
- *   case is never mistaken for recovering the record. A linked action with an unknown outcome says
- *   so and is not repeated.
+ *   case is never mistaken for recovering the record. SCR-S-49 recovery state ("not closable as
+ *   resolved"): while one is in recovery, a notice beside Resolve and Close names each record and
+ *   its state, and resolving or closing needs an explicit acknowledgment, which is sent as the
+ *   command's reason for the audit record. The API does not enforce this yet (see the README).
+ *   A linked action with an unknown outcome says so and is not repeated.
  * - Offline the case is read-only. A case the viewer may not see is shown as not available.
  */
 import type { Schema } from '@sportspark/api-client';
@@ -29,7 +32,11 @@ import { RecordRef, isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { formatDateTime } from '../../ui/time';
-import { AffectedRecordState } from '../today/AffectedRecordState';
+import {
+  AffectedRecordState,
+  useRecordsInRecovery,
+  type RecordInRecovery,
+} from '../today/AffectedRecordState';
 import { EXCEPTION_STATUS_TONE } from '../today/exception-actions';
 import { useFacilityDirectory } from '../today/useFacilityDirectory';
 import {
@@ -229,8 +236,94 @@ function useReload(resets: (() => void)[]) {
   };
 }
 
+/** Exception states that are still being worked: the origin is not recovered yet. */
+const OPEN_EXCEPTION_STATES: ReadonlySet<string> = new Set(['open', 'acknowledged', 'unresolved']);
+
+/** Related records and the origin exception still in recovery (SCR-S-49 recovery state). */
+function useCaseRecovery(item: CaseDetail): { inRecovery: RecordInRecovery[]; checking: boolean } {
+  const records = useRecordsInRecovery(item.relatedRecords);
+  const originId = item.origin?.type === 'operational_exception' ? item.origin.id : null;
+  const origin = useApiQuery({
+    path: '/exceptions/{id}',
+    request: { path: { id: originId ?? '' } },
+    enabled: originId !== null,
+  });
+  const inRecovery = [...records.inRecovery];
+  if (originId !== null && origin.data && OPEN_EXCEPTION_STATES.has(origin.data.status)) {
+    inRecovery.push({
+      label: 'Origin exception',
+      type: 'operational_exception',
+      id: originId,
+      state: origin.data.status,
+    });
+  }
+  return {
+    inRecovery,
+    checking: records.checking || (originId !== null && origin.isPending),
+  };
+}
+
+const ENDING_EVENTS: ReadonlySet<CaseEvent> = new Set(['resolve', 'close']);
+
+function recoverySignature(records: readonly RecordInRecovery[]): string {
+  return records.map((r) => `${r.type}:${r.id}:${r.state}`).join('|');
+}
+
+function RecoveryNotice({
+  records,
+  acknowledged,
+  onAcknowledge,
+  error,
+}: {
+  records: readonly RecordInRecovery[];
+  acknowledged: boolean;
+  onAcknowledge: (value: boolean) => void;
+  error: string | undefined;
+}) {
+  return (
+    <div className="notice" role="group" aria-labelledby="case-recovery-title">
+      <p id="case-recovery-title">
+        <StatusBadge tone="warning" label="Related records still in recovery" />
+      </p>
+      <ul className="list" aria-label="Records still in recovery">
+        {records.map((r) => (
+          <li key={`${r.type}-${r.id}`}>
+            {r.label} <code>{r.id.slice(0, 8)}</code>: state {r.state}
+          </li>
+        ))}
+      </ul>
+      <p className="caption">
+        Resolving or closing this case does not recover these records. Recover them in their owning
+        module first, or confirm below that the case is ending while they are still in recovery.
+      </p>
+      <label className="choice">
+        <input
+          type="checkbox"
+          checked={acknowledged}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? 'case-recovery-error' : undefined}
+          onChange={(event) => onAcknowledge(event.target.checked)}
+        />
+        I understand these records are still in recovery and want to resolve or close the case
+        anyway
+      </label>
+      {error ? (
+        <p id="case-recovery-error" className="error-text" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function TransitionPanel({ item }: { item: CaseDetail }) {
   const { online } = useApp();
+  const recovery = useCaseRecovery(item);
+  const signature = recoverySignature(recovery.inRecovery);
+  // The acknowledgment covers exactly the records and states shown; a change asks again.
+  const [acknowledgedFor, setAcknowledgedFor] = useState<string | null>(null);
+  const acknowledged = recovery.inRecovery.length > 0 && acknowledgedFor === signature;
+  const offersEnding = item.allowedEvents.some((e) => ENDING_EVENTS.has(e));
   const [kind, setKind] = useState('');
   const [summary, setSummary] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -244,13 +337,26 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
   const run = (event: CaseEvent) => {
     setSuccess(null);
     setLastEvent(event);
+    const problems: Record<string, string> = {};
     if (event === 'resolve') {
-      const problems: Record<string, string> = {};
       if (!kind) problems['kind'] = 'Choose how the case was resolved.';
       if (!summary.trim()) problems['summary'] = 'Summarize the resolution.';
-      setErrors(problems);
-      if (Object.keys(problems).length > 0) return;
     }
+    const ending = ENDING_EVENTS.has(event);
+    if (ending && recovery.checking) {
+      problems['recovery'] = 'Wait until the related records’ state has loaded.';
+    } else if (ending && recovery.inRecovery.length > 0 && !acknowledged) {
+      problems['recovery'] =
+        'Confirm that the case may end while its related records are still in recovery.';
+    }
+    setErrors(problems);
+    if (Object.keys(problems).length > 0) return;
+    const reason =
+      ending && recovery.inRecovery.length > 0
+        ? `Ended while still in recovery: ${recovery.inRecovery
+            .map((r) => `${r.type} ${r.id} (${r.state})`)
+            .join(', ')}`.slice(0, 500)
+        : undefined;
     void transition
       .submit({
         path: { id: item.id },
@@ -260,6 +366,7 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
           ...(event === 'resolve'
             ? { resolution: { kind: kind as CaseResolutionKind, summary: summary.trim() } }
             : {}),
+          ...(reason ? { reason } : {}),
         },
       })
       .then((next) => {
@@ -302,6 +409,27 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
             maxLength={2000}
           />
         </div>
+      ) : null}
+      {offersEnding && recovery.inRecovery.length > 0 ? (
+        <RecoveryNotice
+          records={recovery.inRecovery}
+          acknowledged={acknowledged}
+          onAcknowledge={(value) => {
+            setAcknowledgedFor(value ? signature : null);
+            setErrors((current) => {
+              const next = { ...current };
+              delete next['recovery'];
+              return next;
+            });
+          }}
+          error={errors['recovery']}
+        />
+      ) : offersEnding && recovery.checking ? (
+        <p className="caption">Checking whether the related records are still in recovery…</p>
+      ) : errors['recovery'] ? (
+        <p className="error-text" role="alert">
+          {errors['recovery']}
+        </p>
       ) : null}
       <div className="actions-row">
         {item.allowedEvents.map((event) => (

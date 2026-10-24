@@ -5,7 +5,10 @@
  * SPK-SUPPORT-003). A record in recovery, or with an unknown outcome, says so. Without a read, or
  * when the viewer may not read it, the screen says where the state is kept.
  */
+import { apiQueryKey, type ApiResponse } from '@sportspark/api-client';
+import { useQueries } from '@tanstack/react-query';
 import { useApiQuery } from '../../api/useApiQuery';
+import { useApi } from '../../providers/AppProviders';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -54,6 +57,71 @@ function MaintenanceTaskState({ id }: { id: string }) {
   if (q.data) return <StateOfRecord label="Maintenance task" state={q.data.status} />;
   if (q.error) return <Unavailable />;
   return <StateView variant="loading" label="the maintenance task" />;
+}
+
+const RECORD_READS: Record<string, { path: string; label: string }> = {
+  payment_attempt: { path: '/payments/{id}', label: 'Payment attempt' },
+  checkout: { path: '/registration-checkouts/{id}', label: 'Checkout' },
+  maintenance_task: { path: '/maintenance-tasks/{id}', label: 'Maintenance task' },
+};
+
+export interface RecordInRecovery {
+  label: string;
+  type: string;
+  id: string;
+  state: string;
+}
+
+/**
+ * SCR-S-49 recovery state ("the related record is in recovery: shown, not closable as resolved"):
+ * the related records whose own state is recovery or unknown, read through the same cached
+ * queries the rows above use (same keys), so the status panel can warn beside Resolve and Close.
+ * `checking` is true while any readable record has not loaded yet.
+ */
+export function useRecordsInRecovery(records: readonly { type: string; id: string }[]): {
+  inRecovery: RecordInRecovery[];
+  checking: boolean;
+} {
+  const api = useApi();
+  const readable = records.filter((r) => isUuid(r.id) && RECORD_READS[r.type] !== undefined);
+  return useQueries({
+    queries: readable.map((r) => {
+      const read = RECORD_READS[r.type] as { path: string; label: string };
+      const request = { path: { id: r.id } };
+      return {
+        queryKey: apiQueryKey(read.path, request),
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          (
+            api.request as (
+              method: 'get',
+              path: string,
+              options: object,
+            ) => Promise<ApiResponse<{ status: string }>>
+          )('get', read.path, { ...request, signal }),
+      };
+    }),
+    combine: (results) => {
+      const inRecovery: RecordInRecovery[] = [];
+      let checking = false;
+      results.forEach((result, index) => {
+        const record = readable[index] as { type: string; id: string };
+        const state = result.data?.data.status;
+        if (state === undefined) {
+          if (result.isPending) checking = true;
+          return;
+        }
+        if (isRecoveryState(state)) {
+          inRecovery.push({
+            label: (RECORD_READS[record.type] as { label: string }).label,
+            type: record.type,
+            id: record.id,
+            state,
+          });
+        }
+      });
+      return { inRecovery, checking };
+    },
+  });
 }
 
 /** Record types whose state this client can read today. */

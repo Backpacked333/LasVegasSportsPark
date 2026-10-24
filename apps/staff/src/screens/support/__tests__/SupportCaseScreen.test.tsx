@@ -252,6 +252,11 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: detailRoutes({
+        'GET /exceptions/{id}': { status: 200, body: operationalException({ status: 'resolved' }) },
+        'GET /registration-checkouts/{id}': {
+          status: 200,
+          body: { id: CHECKOUT_ID, status: 'completed' },
+        },
         'POST /cases/{id}/transition': {
           status: 200,
           body: supportCase({
@@ -281,6 +286,62 @@ describe('SCR-S-49 SupportCaseScreen', () => {
       expectedRevision: 3,
       resolution: { kind: 'information_provided', summary: 'Explained the hold' },
     });
+  });
+
+  it('SCR-S-49 recovery state: a related record in recovery is named beside Resolve and Close, and ending the case needs an acknowledgment', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: detailRoutes({
+        'POST /cases/{id}/transition': {
+          status: 200,
+          body: supportCase({ status: 'closed', revision: 4, allowedEvents: [] }),
+        },
+      }),
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const panel = await screen.findByRole('region', { name: 'Status' });
+    const notice = await within(panel).findByRole('list', { name: 'Records still in recovery' });
+    expect(within(notice).getByText(/Checkout .*: state recovery_required/)).toBeInTheDocument();
+    expect(within(notice).getByText(/Origin exception .*: state open/)).toBeInTheDocument();
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(
+      within(panel).getByText(
+        'Confirm that the case may end while its related records are still in recovery.',
+      ),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/cases/{id}/transition')).toBe(false);
+    await user.click(
+      within(panel).getByLabelText(/I understand these records are still in recovery/),
+    );
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(await within(panel).findByText('Case updated. State: closed.')).toBeInTheDocument();
+    const post = app.fake.requests.find((r) => r.route === '/cases/{id}/transition');
+    expect(post?.body).toEqual({
+      event: 'close',
+      expectedRevision: 3,
+      reason: `Ended while still in recovery: checkout ${CHECKOUT_ID} (recovery_required), operational_exception ${EXCEPTION_ID} (open)`,
+    });
+  });
+
+  it('SCR-S-49: steps that do not end the case need no acknowledgment while records are in recovery', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: detailRoutes({
+        'POST /cases/{id}/transition': {
+          status: 200,
+          body: supportCase({ status: 'waiting_customer', revision: 4 }),
+        },
+      }),
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const panel = await screen.findByRole('region', { name: 'Status' });
+    await within(panel).findByRole('list', { name: 'Records still in recovery' });
+    await user.click(within(panel).getByRole('button', { name: 'Wait for the customer' }));
+    expect(
+      await within(panel).findByText('Case updated. State: waiting_customer.'),
+    ).toBeInTheDocument();
+    const post = app.fake.requests.find((r) => r.route === '/cases/{id}/transition');
+    expect(post?.body).toEqual({ event: 'wait_customer', expectedRevision: 3 });
   });
 
   it('reports STALE_REVISION with "Reload", which re-reads the case', async () => {

@@ -17,10 +17,25 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { formatDateTime } from '../../ui/time';
 
-function EscalatedReviews() {
+/** Access cases per page; the escalated ones are picked out on the client (no origin filter). */
+const CASES_PAGE = 50;
+
+function EscalatedPage({
+  cursor,
+  first,
+  isLast,
+  onMore,
+}: {
+  cursor: string | undefined;
+  first: boolean;
+  isLast: boolean;
+  onMore: (cursor: string) => void;
+}) {
   const cases = useApiQuery({
     path: '/cases',
-    request: { query: { category: 'access', limit: 50 } },
+    request: {
+      query: { category: 'access', limit: CASES_PAGE, ...(cursor ? { cursor } : {}) },
+    },
   });
   return (
     <QueryBoundary
@@ -30,25 +45,59 @@ function EscalatedReviews() {
     >
       {(page) => {
         const escalated = page.items.filter((c) => c.origin?.type === 'access_review');
-        if (escalated.length === 0) return <p>No access review has been escalated to support.</p>;
         return (
-          <ul className="list" aria-label="Escalated access reviews">
-            {escalated.map((c) => (
-              <li key={c.id}>
-                <div className="row-text">
-                  <Link to={`/people/access-reviews/${c.origin?.id ?? ''}`}>{c.title}</Link>
-                  <span className="caption">
-                    Case {c.status} · owner {c.owner.queue ?? 'unassigned'} · opened{' '}
-                    {formatDateTime(c.createdAt)}
-                  </span>
-                </div>
-                <StatusBadge tone="neutral" label={`Case status: ${c.status}`} />
-              </li>
-            ))}
-          </ul>
+          <>
+            {escalated.length === 0 ? (
+              first && !page.nextCursor ? (
+                <p>No access review has been escalated to support.</p>
+              ) : page.nextCursor ? (
+                // Never "none" while more access cases exist unchecked.
+                <p className="caption">
+                  None among these access cases. More access cases exist; not all were checked.
+                </p>
+              ) : null
+            ) : (
+              <ul className="list" aria-label="Escalated access reviews">
+                {escalated.map((c) => (
+                  <li key={c.id}>
+                    <div className="row-text">
+                      <Link to={`/people/access-reviews/${c.origin?.id ?? ''}`}>{c.title}</Link>
+                      <span className="caption">
+                        Case {c.status} · owner {c.owner.queue ?? 'unassigned'} · opened{' '}
+                        {formatDateTime(c.createdAt)}
+                      </span>
+                    </div>
+                    <StatusBadge tone="neutral" label={`Case status: ${c.status}`} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            {isLast && page.nextCursor ? (
+              <Button variant="secondary" onClick={() => onMore(page.nextCursor as string)}>
+                Show more access cases
+              </Button>
+            ) : null}
+          </>
         );
       }}
     </QueryBoundary>
+  );
+}
+
+function EscalatedReviews() {
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  return (
+    <>
+      {cursors.map((cursor, i) => (
+        <EscalatedPage
+          key={cursor ?? 'first'}
+          cursor={cursor}
+          first={i === 0}
+          isLast={i === cursors.length - 1}
+          onMore={(next) => setCursors((list) => [...list, next])}
+        />
+      ))}
+    </>
   );
 }
 

@@ -8,7 +8,7 @@
 import { useApiQuery } from '../../api/useApiQuery';
 import { TextField } from '../../ui/FormFields';
 import { isUuid } from '../../ui/RecordRef';
-import { personName } from './people';
+import { displayName } from './people';
 
 export const REFERENCE_FORMAT_ERROR =
   'Enter a person reference: 36 characters such as 0192f1a0-0000-7000-8000-000000000001.';
@@ -29,7 +29,7 @@ export function PersonPreview({ personId }: { personId: string }) {
   if (person.data) {
     return (
       <span className="caption" data-testid="person-preview">
-        {personName(person.data)} · {person.data.kind} · status {person.data.status}
+        {displayName(person.data)} · {person.data.kind} · status {person.data.status}
       </span>
     );
   }

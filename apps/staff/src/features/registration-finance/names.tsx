@@ -5,19 +5,25 @@
  * read is "not available", never "exists but hidden" (§4.10). Only names are shown: no date of
  * birth, contact detail or other child data (§4.14).
  */
+import { presentationForError, type ApiError } from '@sportspark/api-client';
+import { usePersonName } from '../../api/person-names';
 import { useApiQuery } from '../../api/useApiQuery';
 import { shortRef } from './format';
 
+/** "not available" only for a protected NOT_FOUND or ACCESS_DENIED; offline is said so (SPK-UX-008). */
+function readFailure(error: ApiError, what: string, id: string): string {
+  const presentation = presentationForError(error);
+  if (presentation === 'unavailable') return `${what} not available`;
+  if (presentation === 'offline') return `${what} ${shortRef(id)} (offline)`;
+  return `${what} ${shortRef(id)} (could not load: ${error.code})`;
+}
+
+/** A person's name through the minimal name read: no child date of birth or contacts cached (§4.14). */
 export function PersonName({ id, fallback = 'Person' }: { id: string | null; fallback?: string }) {
-  const person = useApiQuery({
-    path: '/people/{id}',
-    request: { path: { id: id ?? '' } },
-    enabled: id !== null,
-    staleTime: 5 * 60_000,
-  });
+  const person = usePersonName(id);
   if (id === null) return <span>{fallback}: none</span>;
   if (person.data) return <span>{`${person.data.givenName} ${person.data.familyName}`}</span>;
-  if (person.error) return <span>{fallback} not available</span>;
+  if (person.error) return <span>{readFailure(person.error, fallback, id)}</span>;
   return (
     <span>
       {fallback} {shortRef(id)}
@@ -34,7 +40,7 @@ export function OfferingName({ id }: { id: string | null }) {
   });
   if (id === null) return <span>No offering</span>;
   if (offering.data) return <span>{offering.data.name}</span>;
-  if (offering.error) return <span>Offering not available</span>;
+  if (offering.error) return <span>{readFailure(offering.error, 'Offering', id)}</span>;
   return <span>Offering {shortRef(id)}</span>;
 }
 
@@ -47,6 +53,6 @@ export function TeamEntryName({ id }: { id: string | null }) {
   });
   if (id === null) return <span>No team entry</span>;
   if (entry.data) return <span>{entry.data.team.name}</span>;
-  if (entry.error) return <span>Team entry not available</span>;
+  if (entry.error) return <span>{readFailure(entry.error, 'Team entry', id)}</span>;
   return <span>Team entry {shortRef(id)}</span>;
 }

@@ -22,6 +22,15 @@ const DISABLED = () =>
     }),
   );
 
+/** `GET /recommendations?status=…` answering with the given items of that status. */
+function byStatus(items: ReturnType<typeof recommendation>[], nextCursor: string | null = null) {
+  return (req: { query: Record<string, string> }) =>
+    fakeResponse(200, {
+      items: items.filter((r) => !req.query['status'] || r.status === req.query['status']),
+      nextCursor,
+    });
+}
+
 async function openPanel(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: 'Assistant (optional)' }));
   return screen.getByRole('region', { name: 'Operational assistant (optional)' });
@@ -140,10 +149,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
-        'GET /recommendations': {
-          status: 200,
-          body: { items: [recommendation()], nextCursor: null },
-        },
+        'GET /recommendations': byStatus([recommendation()]),
         'POST /recommendations/{id}/reject': {
           status: 200,
           body: recommendation({ status: 'rejected', revision: 3 }),
@@ -183,10 +189,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const approved = recommendation({ status: 'approved', revision: 3 });
     const app = createTestApp({
       routes: {
-        'GET /recommendations': {
-          status: 200,
-          body: { items: [recommendation()], nextCursor: null },
-        },
+        'GET /recommendations': byStatus([recommendation()]),
         'POST /recommendations/{id}/approve': { status: 200, body: approved },
         'POST /recommendations/{id}/apply': {
           status: 200,
@@ -222,10 +225,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
-        'GET /recommendations': {
-          status: 200,
-          body: { items: [recommendation({ status: 'approved' })], nextCursor: null },
-        },
+        'GET /recommendations': byStatus([recommendation({ status: 'approved' })]),
         'POST /recommendations/{id}/apply': () =>
           fakeResponse(
             403,
@@ -238,5 +238,76 @@ describe('SCR-S-50 AssistantPanel', () => {
     await user.click(await within(panel).findByRole('button', { name: /^Apply recommendation/ }));
     expect(await within(panel).findByText('Not available to you')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Today' })).toBeInTheDocument();
+  });
+
+  it('SPK-AUTO-004: an apply whose outcome is unknown is never shown as "Not applied" and cannot be applied again', async () => {
+    const user = userEvent.setup();
+    const unknown = recommendation({
+      status: 'approved',
+      apply: {
+        state: 'running',
+        operationId: null,
+        record: null,
+        lastError: {
+          code: 'APPLY_OUTCOME_UNKNOWN',
+          message: 'The owning module did not report an outcome; its records must be checked.',
+          details: { outcome: 'unknown' },
+        },
+      },
+    });
+    const app = createTestApp({ routes: { 'GET /recommendations': byStatus([unknown]) } });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    expect(await within(panel).findByText('Apply outcome: unknown')).toBeInTheDocument();
+    expect(within(panel).getByText(/Do not apply this again/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/Not applied/)).toBeNull();
+    expect(within(panel).queryByRole('button', { name: /^Apply recommendation/ })).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/recommendations/{id}/apply')).toBe(false);
+  });
+
+  it('"Awaiting review" never says none while more recommendations wait beyond the page', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { 'GET /recommendations': byStatus([], 'cursor-2') },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    expect(await within(panel).findByTestId('more-awaiting')).toBeInTheDocument();
+    expect(within(panel).queryByText('No recommendations are waiting for review.')).toBeNull();
+    const statuses = app.fake.requests
+      .filter((r) => r.route === '/recommendations')
+      .map((r) => r.query['status'])
+      .sort();
+    expect(statuses).toEqual(['approved', 'proposed']);
+  });
+
+  it('two copies of one recommendation stay current: approving one updates the other', async () => {
+    const user = userEvent.setup();
+    let approved = false;
+    const rec = recommendation();
+    const app = createTestApp({
+      routes: {
+        'GET /recommendations': byStatus([rec]),
+        'GET /recommendations/{id}': () =>
+          fakeResponse(200, approved ? recommendation({ status: 'approved', revision: 3 }) : rec),
+        'POST /assistant/requests': {
+          status: 201,
+          body: assistantRequest({ recommendations: [rec] }),
+        },
+        'POST /recommendations/{id}/approve': () => {
+          approved = true;
+          return fakeResponse(200, recommendation({ status: 'approved', revision: 3 }));
+        },
+      },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    await user.type(await within(panel).findByLabelText(/^Question/), 'What needs review?');
+    await user.click(within(panel).getByRole('button', { name: 'Ask' }));
+    const answer = await within(panel).findByRole('list', { name: 'Proposals from this answer' });
+    await user.click(within(answer).getByRole('button', { name: /^Approve recommendation/ }));
+    const awaiting = within(panel).getByRole('list', { name: 'Recommendations awaiting review' });
+    await waitFor(() => expect(within(awaiting).getByText('Status: approved')).toBeInTheDocument());
+    expect(within(awaiting).queryByRole('button', { name: /^Approve recommendation/ })).toBeNull();
   });
 });

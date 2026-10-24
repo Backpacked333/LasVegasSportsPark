@@ -15,6 +15,8 @@ export interface StaffArea {
   ownRoutes?: boolean;
   /** Built screens of an area that still shows its placeholder, linked from the area page. */
   links?: readonly { path: string; title: string; screenIds: string }[];
+  /** With `links`: the screens of the area not built yet, and why (shown as the placeholder). */
+  pending?: { screenIds: string; purpose: string };
 }
 
 export const STAFF_AREAS: readonly StaffArea[] = [
@@ -131,6 +133,11 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-46 to SCR-S-49, SCR-S-56',
     purpose:
       'Accounts and roles, integrations and configuration, migration imports, support cases.',
+    pending: {
+      screenIds: 'SCR-S-56',
+      purpose:
+        'Access hardware is a conditional capability: whether it is used is pending DEC-016 and DEC-072 to DEC-082 (Product owner).',
+    },
     links: [
       { path: '/admin/accounts', title: 'Accounts, roles and permissions', screenIds: 'SCR-S-46' },
       {

@@ -13,7 +13,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiQuery } from '../../api/useApiQuery';
 import { PeopleNav } from '../../features/people/PeopleNav';
-import { formatMoney, personName } from '../../features/people/people';
+import { displayName, formatMoney, KEPT_NOT_SHOWN } from '../../features/people/people';
 import { Button } from '../../ui/Button';
 import { Facts } from '../../ui/FormFields';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -35,6 +35,7 @@ const SOURCE_STATUS: Record<'ok' | 'not_permitted' | 'unavailable', string> = {
 };
 
 function PersonFacts({ person }: { person: PersonDetail }) {
+  const child = person.kind === 'child';
   return (
     <>
       <span className="actions-row">
@@ -52,17 +53,29 @@ function PersonFacts({ person }: { person: PersonDetail }) {
       ) : null}
       <Facts
         label="Person"
-        items={[
-          ['Given name', person.givenName],
-          ['Family name', person.familyName],
-          ['Date of birth', person.dateOfBirth ?? 'Not recorded'],
-          ['Reference', <code key="ref">{person.id}</code>],
-          ['Revision', String(person.revision)],
-        ]}
+        items={
+          child
+            ? [
+                // §4.14: a child's record is shown by given name only.
+                ['Given name', person.givenName],
+                ['Family name, date of birth and contacts', KEPT_NOT_SHOWN],
+                ['Reference', <code key="ref">{person.id}</code>],
+                ['Revision', String(person.revision)],
+              ]
+            : [
+                ['Given name', person.givenName],
+                ['Family name', person.familyName],
+                ['Date of birth', person.dateOfBirth ?? 'Not recorded'],
+                ['Reference', <code key="ref">{person.id}</code>],
+                ['Revision', String(person.revision)],
+              ]
+        }
       />
       <section aria-labelledby="contacts-title">
         <h3 id="contacts-title">Contact points</h3>
-        {person.contactPoints.length === 0 ? (
+        {child ? (
+          <p>{KEPT_NOT_SHOWN}.</p>
+        ) : person.contactPoints.length === 0 ? (
           <p>No contact points are recorded.</p>
         ) : (
           <ul className="list" aria-label="Contact points">
@@ -223,7 +236,7 @@ function PersonRecord({ personId }: { personId: string }) {
     >
       {(data) => (
         <>
-          <h3>{personName(data)}</h3>
+          <h3>{displayName(data)}</h3>
           <PersonFacts person={data} />
           <nav aria-label="Work with this person">
             <ul className="subnav">
