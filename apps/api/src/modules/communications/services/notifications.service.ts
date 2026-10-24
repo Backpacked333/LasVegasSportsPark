@@ -11,6 +11,8 @@ import {
   type DeliveryFailureCodeValue,
   type ListNotificationsQuery,
   type Notification,
+  type NotificationCategoryValue,
+  type NotificationKindValue,
   type NotificationDeliveries,
   type Page,
   type Principal,
@@ -139,6 +141,7 @@ export class NotificationsService {
       parsed.audience,
     );
     if (parsed.facilityId) await this.assertFacility(trx, organizationId, parsed.facilityId);
+    const category = this.categoryOf(parsed.kind, parsed.category);
     const id = newId();
     const createdByPersonId = await this.knownPersonId(trx, organizationId, principal.personId);
     await trx
@@ -148,7 +151,7 @@ export class NotificationsService {
         organization_id: organizationId,
         facility_id: parsed.facilityId ?? null,
         kind: parsed.kind,
-        category: parsed.category,
+        category,
         subject_type: parsed.subject?.type ?? null,
         subject_id: parsed.subject?.id ?? null,
         audience: json(parsed.audience),
@@ -182,7 +185,7 @@ export class NotificationsService {
       correlationId: input.correlationId ?? null,
       details: {
         kind: parsed.kind,
-        category: parsed.category,
+        category,
         protected: parsed.protected,
         subject: parsed.subject ?? null,
       },
@@ -194,12 +197,45 @@ export class NotificationsService {
       payload: {
         notificationId: id,
         kind: parsed.kind,
-        category: parsed.category,
+        category,
         protected: parsed.protected,
       },
       correlationId: input.correlationId ?? null,
     });
     return this.loadOrThrow(trx, organizationId, id);
+  }
+
+  /**
+   * SPK-COMMS-007: the category follows the policy's binding for the kind; a contradicting one is
+   * refused, and a kind the policy leaves open must name its category (DEC-062 pending: the binding
+   * is configuration, the refusal is the conservative default).
+   */
+  private categoryOf(
+    kind: NotificationKindValue,
+    requested: NotificationCategoryValue | undefined,
+  ): NotificationCategoryValue {
+    const bound = this.policy.categoryByKind[kind] ?? 'choose';
+    if (bound === 'choose') {
+      if (!requested) {
+        throw errors.validation('This kind of notice must name its category.', {
+          code: 'CATEGORY_REQUIRED',
+          path: 'category',
+          kind,
+          allowed: ['operational', 'promotional'],
+        });
+      }
+      return requested;
+    }
+    if (requested && requested !== bound) {
+      throw errors.validation(`A ${kind.replace(/_/g, ' ')} notice is ${bound}.`, {
+        code: 'CATEGORY_MISMATCH',
+        path: 'category',
+        kind,
+        category: requested,
+        required: bound,
+      });
+    }
+    return bound;
   }
 
   /** For other modules: compose and queue in the caller's transaction (system or staff principal). */

@@ -10,7 +10,7 @@ Preference, Acknowledgment), §4.5 "Messages must represent actual delivery stat
 SPK-UX-003/006 (inbox, failed urgent communications).
 
 **Migration range:** `packages/db/migrations/1000_communications_*.sql` … `1099` (this module uses
-`1000`).
+`1000` to `1003`).
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`, `AUTHORITY_LOOKUP_PORT`, `STAFF_DIRECTORY_PORT`,
 `PeopleService` for display names and contact points), scheduling (`scheduling.event_changed` and
@@ -58,7 +58,9 @@ Lifecycles (`communications.machines.ts`; the database check constraints list ex
 | `calendar_entries` (+`_parties`) | this module's projection of scheduled events built from `scheduling.event_changed`: stable `event_id` (the iCalendar UID), `sequence` bumped per change, status, parties (team / person)                                                                                                                                                 |
 
 Database-enforced invariants (tests in `__tests__/schema-invariants.spec.ts`): organization scope
-and composite `(organization_id, id)` foreign keys everywhere; status/kind/category/channel check
+and composite `(organization_id, id)` foreign keys everywhere (an attempt or acknowledgment names a
+recipient of its own notification, and an acknowledgment one of that recipient's attempts:
+migration `1003`); status/kind/category/channel check
 constraints equal to the machines; timestamps consistent with states (`failed ⇔ failed_at`,
 `delivered/read/acknowledged ⇒ delivered_at`, …); `in_app ⇔ provider = 'in_app'`; one notice per
 source domain event; one recipient per person per notification; at most one live (non-failed)
@@ -67,22 +69,22 @@ recipient; unique token hashes; one calendar entry per event.
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/communications.ts`)
 
-| Method | Path                                    | Who (action)                                                                                                                                                        |
-| ------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/notifications`                        | composer roles (`communications.compose`): compose against an audience; `protected` marks participant-private content; `scheduledFor` makes a reminder              |
-| GET    | `/notifications`, `/notifications/{id}` | reader roles (`communications.read_notification`), newest first, filters status/kind/facility, cursor paging                                                        |
-| GET    | `/notifications/{id}/recipients`        | composer roles (`communications.preview_recipients`): names, basis and a count from CURRENT permissions; never contact details (SPK-COMMS-006)                      |
-| POST   | `/notifications/{id}/send`              | composer roles (`communications.send`): resolves recipients now, suppresses obsolete unsent notices about the same subject, creates an operation, requests delivery |
-| GET    | `/notifications/{id}/deliveries`        | reader roles: recipients and attempts with their actual states (SPK-COMMS-004, SPK-UX-006)                                                                          |
-| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging (SPK-UX-003)                                                                                       |
-| POST   | `/me/inbox/{id}/read`, `/acknowledge`   | self (`communications.acknowledge`); another person's notice is NOT_FOUND; acknowledgment recorded once                                                             |
-| GET    | `/me/communication-preferences`         | self: the effective 4 × 2 matrix with `stored` and `locked` flags                                                                                                   |
-| PATCH  | `/me/communication-preferences`         | self (`communications.manage_preferences`); disabling operational in-app is refused by the service and the database                                                 |
-| GET    | `/me/calendar-feeds`                    | self: feeds without tokens                                                                                                                                          |
-| POST   | `/me/calendar-feeds`                    | self (`communications.manage_calendar_feeds`); including another person requires `view` over them (`communications.include_in_calendar_feed`, otherwise NOT_FOUND)  |
-| POST   | `/me/calendar-feeds/{id}/revoke`        | owner only; future fetches answer 404 (SPK-COMMS-008, SPK-IAM-006)                                                                                                  |
-| GET    | `/calendar-feeds/{token}.ics`           | public, token-authorized `text/calendar`; unknown, malformed or revoked tokens are NOT_FOUND; scope re-checked on every fetch                                       |
-| POST   | `/webhooks/messaging/{provider}`        | public, signed receipt from the (fake) messaging provider; recorded once in the kernel inbox (202 with `duplicate`), applied by the inbox worker                    |
+| Method | Path                                    | Who (action)                                                                                                                                                                                                                                                                                                              |
+| ------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/notifications`                        | composer roles (`communications.compose`): compose against an audience; `protected` marks participant-private content; `scheduledFor` makes a reminder                                                                                                                                                                    |
+| GET    | `/notifications`, `/notifications/{id}` | reader roles (`communications.read_notification`), newest first, filters status/kind/facility, cursor paging                                                                                                                                                                                                              |
+| GET    | `/notifications/{id}/recipients`        | composer roles (`communications.preview_recipients`): names, basis and a count from CURRENT permissions; never contact details (SPK-COMMS-006)                                                                                                                                                                            |
+| POST   | `/notifications/{id}/send`              | composer roles (`communications.send`): resolves recipients now, suppresses obsolete unsent notices about the same subject, creates an operation, requests delivery                                                                                                                                                       |
+| GET    | `/notifications/{id}/deliveries`        | reader roles: recipients and attempts with their actual states (SPK-COMMS-004, SPK-UX-006)                                                                                                                                                                                                                                |
+| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging (SPK-UX-003)                                                                                                                                                                                                                                             |
+| POST   | `/me/inbox/{id}/read`, `/acknowledge`   | self (`communications.acknowledge`); another person's notice is NOT_FOUND; acknowledgment recorded once                                                                                                                                                                                                                   |
+| GET    | `/me/communication-preferences`         | self: the effective 4 × 2 matrix with `stored` and `locked` flags                                                                                                                                                                                                                                                         |
+| PATCH  | `/me/communication-preferences`         | self (`communications.manage_preferences`); disabling operational in-app is refused by the service and the database                                                                                                                                                                                                       |
+| GET    | `/me/calendar-feeds`                    | self: feeds without tokens                                                                                                                                                                                                                                                                                                |
+| POST   | `/me/calendar-feeds`                    | self (`communications.manage_calendar_feeds`); including another person requires `view` over them (`communications.include_in_calendar_feed`, otherwise NOT_FOUND)                                                                                                                                                        |
+| POST   | `/me/calendar-feeds/{id}/revoke`        | owner only; future fetches answer 404 (SPK-COMMS-008, SPK-IAM-006)                                                                                                                                                                                                                                                        |
+| GET    | `/calendar-feeds/{token}.ics`           | public, token-authorized `text/calendar`; unknown, malformed or revoked tokens are NOT_FOUND; scope re-checked on every fetch                                                                                                                                                                                             |
+| POST   | `/webhooks/messaging/{provider}`        | public, signed receipt from the (fake) messaging provider; recorded once in the kernel inbox (202 with `duplicate`), applied by the inbox worker. The fake provider's secret is a published test constant, so the endpoint answers NOT_FOUND in production; a receipt resolves only attempts of the provider that sent it |
 
 Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Confirming a send creates an operation
@@ -172,8 +174,12 @@ dispatch creates the attempts or suppresses the notice.
 - `TEAM_MEMBERSHIP_PORT` (`TeamMembershipPort`): `membersOf`, `isMember`, `teamEntriesOf`,
   implemented by `CompetitionTeamMembership` over competition's `ROSTER_PORT` and
   `TEAM_ENTRY_QUERY_PORT` at the clock.
-- `COMMUNICATIONS_POLICY` (`communications.policy.ts`): default channels per category, delivery
-  lease and batch size, supersedable/superseding kinds, feed window, iCalendar product id.
+- `COMMUNICATIONS_POLICY` (`communications.policy.ts`): default channels per category, the
+  category of each kind (`categoryByKind`, SPK-COMMS-007: every SPK-COMMS-002 trigger is
+  operational, `renewal_opportunity` promotional, `staff_broadcast` must name its category; a
+  contradicting category is `VALIDATION_FAILED` `CATEGORY_MISMATCH`, a missing one
+  `CATEGORY_REQUIRED`; proposed split pending DEC-062), delivery lease and batch size,
+  supersedable/superseding kinds, feed window, iCalendar product id.
 - `CHANGE_NOTICE_CHECK_IMPL` (competition's `ChangeNoticeCheckPort`, `ChangeNoticeCheck`): fixture
   readiness "material change notifications" (SPK-READY-001) from this module's own evidence — the
   schedule-change notice of the fixture's scheduling event that describes its current time, and its

@@ -147,7 +147,13 @@ export type Notification = z.infer<typeof NotificationSchema>;
 
 export const ComposeNotificationBody = withCommandMeta({
   kind: NotificationKindSchema,
-  category: NotificationCategorySchema.default('operational'),
+  /**
+   * SPK-COMMS-007: essential and promotional messages are separate. The communication policy binds
+   * most kinds to a category (an essential kind is always operational, a renewal opportunity is
+   * promotional); a mismatch is refused. Kinds the policy leaves open (a staff broadcast) must name
+   * their category: there is no default.
+   */
+  category: NotificationCategorySchema.optional(),
   facilityId: z.uuid().optional(),
   subject: NotificationSubjectSchema.optional(),
   audience: AudienceSchema,

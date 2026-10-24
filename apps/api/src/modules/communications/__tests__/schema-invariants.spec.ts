@@ -16,7 +16,7 @@ import { IdentityModule, createPersonFixture } from '../../identity';
  * Integrity that matters is enforced by the database (CLAUDE.md, §4.7). Each test proves that
  * PostgreSQL rejects the violation regardless of what a service does.
  */
-describe('communications schema invariants (migration 1000)', () => {
+describe('communications schema invariants (migrations 1000-1003)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -194,6 +194,38 @@ describe('communications schema invariants (migration 1000)', () => {
       .execute();
     await insertAttempt(notificationId, recipientId); // allowed after failure
     await insertAttempt(notificationId, recipientId, { channel: 'push' }); // other channel
+  });
+
+  it('SPK-COMMS-004: an attempt or acknowledgment names a recipient of its own notification, and an acknowledgment one of that recipient’s attempts (1003)', async () => {
+    const x = await insertNotification();
+    const y = await insertNotification();
+    const recipientOfX = await insertRecipient(x);
+    const recipientOfY = await insertRecipient(y);
+    await expect(insertAttempt(x, recipientOfY)).rejects.toSatisfy(isForeignKeyViolation);
+    const attemptOfX = await insertAttempt(x, recipientOfX);
+    const attemptOfY = await insertAttempt(y, recipientOfY);
+    const acknowledge = (
+      notificationId: string,
+      recipientId: string,
+      deliveryAttemptId: string | null,
+    ) =>
+      db
+        .insertInto('notification_acknowledgments')
+        .values({
+          id: newId(),
+          organization_id: org,
+          notification_id: notificationId,
+          recipient_id: recipientId,
+          delivery_attempt_id: deliveryAttemptId,
+          acknowledged_at: now(),
+          via: 'email',
+          acknowledged_by: actor,
+          note: null,
+        })
+        .execute();
+    await expect(acknowledge(x, recipientOfY, null)).rejects.toSatisfy(isForeignKeyViolation);
+    await expect(acknowledge(x, recipientOfX, attemptOfY)).rejects.toSatisfy(isForeignKeyViolation);
+    await expect(acknowledge(x, recipientOfX, attemptOfX)).resolves.toBeDefined();
   });
 
   it('SPK-COMMS-004: delivery states are consistent with their timestamps and the in-app channel is platform-delivered', async () => {

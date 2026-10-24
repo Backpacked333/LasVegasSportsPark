@@ -1,6 +1,6 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { Inbox } from '../../../kernel';
+import { APP_CONFIG, Inbox, UnitOfWork, type AppConfig } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
   authHeaderForPerson,
@@ -13,6 +13,7 @@ import {
 } from '../../identity';
 import { CommunicationsModule } from '../communications.module';
 import { COMMUNICATIONS_POLICY, type CommunicationsPolicy } from '../communications.policy';
+import { MessagingWebhooksController } from '../controllers/webhooks.controller';
 import type { ChannelSendRequest } from '../ports';
 import {
   FAKE_MESSAGING_SIGNATURE_HEADER,
@@ -394,6 +395,47 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
     await t.app.get(Inbox).runOnce();
     expect((await attemptsByChannel(n.id))['email']?.status).toBe('delivered');
     expect((await t.http.post('/v1/webhooks/messaging/other').send(body)).status).toBe(404);
+  });
+
+  it('§4.11 / §5.2: the fake provider’s receipts, signed with a published test secret, are refused in production; a receipt resolves only attempts of the provider that sent it', async () => {
+    const n = await composeAndDispatch(t.app, system, notice());
+    await deliverQueued(t.app);
+    const a = await attemptsByChannel(n.id);
+    const { body, signature } = fakes.email.receipt(
+      { attemptId: a['email']?.id as string, organizationId: org },
+      'delivered',
+    );
+    const production = new MessagingWebhooksController(t.app.get(Inbox), {
+      ...t.app.get<AppConfig>(APP_CONFIG),
+      NODE_ENV: 'production',
+    });
+    await expect(production.receive('fake-messaging', body, signature)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    const recorded = await t.db
+      .selectFrom('inbox_events')
+      .select('id')
+      .where('provider_event_id', '=', body.id)
+      .execute();
+    expect(recorded).toEqual([]);
+    // a receipt from another provider (or for the platform-delivered in-app attempt) is unmatched
+    const worker = t.app.get(DeliveryWorker);
+    const outcome = await t.app.get(UnitOfWork).run(({ trx }) =>
+      worker.applyReceipt(
+        trx,
+        {
+          attemptId: a['email']?.id as string,
+          organizationId: org,
+          providerMessageId: a['email']?.provider_message_id as string,
+          status: 'delivered',
+          error: null,
+        },
+        newId(),
+        'another-provider',
+      ),
+    );
+    expect(outcome).toBe('unmatched');
+    expect((await attemptsByChannel(n.id))['email']?.status).toBe('provider_accepted');
   });
 
   it('SPK-UX-003 inbox: in-app notices newest first; read and acknowledge are real states; another person’s notice is not found', async () => {

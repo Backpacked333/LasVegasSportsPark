@@ -440,6 +440,7 @@ export class DeliveryWorker {
     trx: Trx,
     receipt: DeliveryReceipt,
     inboxEventId: string,
+    provider: string,
   ): Promise<'applied' | 'ignored' | 'unmatched'> {
     const current = await trx
       .selectFrom('delivery_attempts')
@@ -449,6 +450,9 @@ export class DeliveryWorker {
       .forUpdate()
       .executeTakeFirst();
     if (!current) return 'unmatched';
+    // §4.11: a receipt speaks only for attempts handed to the provider that sent it (an in-app
+    // attempt, or another provider's, is never resolved by it).
+    if (current.provider !== provider) return 'unmatched';
     if (
       current.provider_message_id !== null &&
       current.provider_message_id !== receipt.providerMessageId

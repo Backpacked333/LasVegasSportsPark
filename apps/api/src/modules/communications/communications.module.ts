@@ -181,7 +181,7 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
       async (event, ctx) => {
         if (event.eventType !== 'delivery.receipt') return;
         const receipt = DeliveryReceiptSchema.parse(event.payload);
-        await this.worker.applyReceipt(ctx.trx, receipt, event.id);
+        await this.worker.applyReceipt(ctx.trx, receipt, event.id, event.provider);
       },
     );
   }
