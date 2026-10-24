@@ -1,4 +1,5 @@
 import type { CoreTables } from './core';
+import type { AutomationTables } from './automation';
 import type { CatalogTables } from './catalog';
 import type { CommunicationsTables } from './communications';
 import type { CompetitionMatchesTables } from './competition-matches';
@@ -15,6 +16,7 @@ import type { SupportTables } from './support';
 import type { WorkforceTables } from './workforce';
 
 export * from './core';
+export * from './automation';
 export * from './catalog';
 export * from './communications';
 export * from './competition-matches';
@@ -37,6 +39,7 @@ export * from './workforce';
 export interface Database
   extends
     CoreTables,
+    AutomationTables,
     CatalogTables,
     CommunicationsTables,
     CompetitionMatchesTables,
