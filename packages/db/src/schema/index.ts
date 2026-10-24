@@ -12,7 +12,7 @@ export * from './scheduling';
 
 /**
  * The complete database type. Each module contributes its own table interfaces from
- * `./<module>.ts` and adds exactly one `extends` entry here (keeps merges conflict-free).
+ * `./<module>.ts`; run `node scripts/regenerate-registrations.mjs` after adding one.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- extension point for module tables
-export interface Database extends CoreTables, CatalogTables, FacilitiesTables, IdentityTables, SchedulingTables {}
+export interface Database
+  extends CoreTables, CatalogTables, FacilitiesTables, IdentityTables, SchedulingTables {}

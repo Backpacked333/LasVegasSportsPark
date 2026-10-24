@@ -30,10 +30,12 @@ pnpm build && pnpm openapi   # regenerate docs/api/openapi.json
   enrollment 0500s, finance 0600s, workforce 0700s, entry 0800s, facilities 0900s,
   communications 1000s, support 1100s, migration 1200s, reporting 1300s, automation 1400s.
   Applied migrations are immutable (checksum-verified); add a new file to change the schema.
-- `packages/db/src/schema/<module>.ts` — Kysely table interfaces for the module; add exactly one
-  `extends` entry to `Database` in `packages/db/src/schema/index.ts`.
+- `packages/db/src/schema/<module>.ts` — Kysely table interfaces for the module (export one
+  `<Module>Tables` interface); then run `node scripts/regenerate-registrations.mjs`, which rewrites
+  `packages/db/src/schema/index.ts` and `packages/contracts/src/api/index.ts` from the files present
+  (also the way to resolve merge conflicts in those two files).
 - `packages/contracts/src/api/<module>.ts` — zod request/response schemas registered with the
-  OpenAPI registry; add one `export * from './<module>'` line to `packages/contracts/src/api/index.ts`.
+  OpenAPI registry (picked up by the regeneration script above).
 - Import `z` from `@sportspark/contracts`, never from `zod` directly (OpenAPI extension ordering).
 
 ## Data rules (spec §4.3, §4.4, §4.7)
