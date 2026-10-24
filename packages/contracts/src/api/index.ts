@@ -10,3 +10,4 @@ export * from './finance';
 export * from './identity';
 export * from './operations';
 export * from './scheduling';
+export * from './workforce';

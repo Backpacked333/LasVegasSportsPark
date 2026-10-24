@@ -8,6 +8,7 @@ import type { FacilitiesTables } from './facilities';
 import type { FinanceTables } from './finance';
 import type { IdentityTables } from './identity';
 import type { SchedulingTables } from './scheduling';
+import type { WorkforceTables } from './workforce';
 
 export * from './core';
 export * from './catalog';
@@ -19,6 +20,7 @@ export * from './facilities';
 export * from './finance';
 export * from './identity';
 export * from './scheduling';
+export * from './workforce';
 
 /**
  * The complete database type. Each module contributes its own table interfaces from
@@ -35,4 +37,5 @@ export interface Database
     FacilitiesTables,
     FinanceTables,
     IdentityTables,
-    SchedulingTables {}
+    SchedulingTables,
+    WorkforceTables {}
