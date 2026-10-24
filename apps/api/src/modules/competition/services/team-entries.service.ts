@@ -786,7 +786,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
         version: context.ruleSet.version,
       },
       roles: roleRows.map(toTeamRole),
-      roster,
+      roster: viewer.canManage ? roster : roster.map((m) => teammateView(m, principal.personId)),
       readiness: {
         approval: context.entry.status,
         financialStatusRef: context.entry.financial_status_ref,
@@ -1166,6 +1166,21 @@ export class TeamEntriesService implements TeamEntryQueryPort {
 
 export function rosterFactsOf(count: number, rules: RuleSetContent): RosterFacts {
   return { rosterCount: count, rosterMin: rules.rosterMin, rosterMax: rules.rosterMax };
+}
+
+/**
+ * SPK-CAP-002 / SPK-DISC-004: what an ordinary teammate or guardian sees of a roster member. The
+ * free-text removal reason (written by staff or captains) is never shown, and eligibility codes
+ * such as `suspended` appear only on the viewer's own membership; staff and captains, who manage
+ * the roster, keep the full member.
+ */
+export function teammateView(member: RosterMember, viewerPersonId: string | null): RosterMember {
+  return {
+    ...member,
+    removalReason: null,
+    eligibility:
+      viewerPersonId !== null && member.personId === viewerPersonId ? member.eligibility : null,
+  };
 }
 
 export function indicatorOf(

@@ -92,8 +92,11 @@ export class ReadinessService {
     const detail = await this.fixtures.get(principal, fixtureId);
     const now = this.clock.now();
     const evaluatedAt = iso(now);
-    const at = detail.scheduledStart ? new Date(detail.scheduledStart) : now;
-    const deadline = detail.scheduledStart;
+    // The fixture's copied time until the authoritative event is read below (SPK-READY-004).
+    let scheduledStart = detail.scheduledStart;
+    let scheduledEnd = detail.scheduledEnd;
+    let at = scheduledStart ? new Date(scheduledStart) : now;
+    let deadline = scheduledStart;
     const system = systemPrincipal(organizationId, 'competition.readiness');
     // Issues remember the check that raised them, so each check's verdict is computed from its own
     // issues whatever order the checks report in.
@@ -161,6 +164,27 @@ export class ReadinessService {
           source: { type: 'event', id: event.id },
           responsibleRole: 'scheduler',
           requiredAction: 'Publish the schedule draft that holds this game.',
+        });
+      }
+      // SPK-READY-002 / SPK-READY-004: scheduling is the authority for the time. When the event
+      // moved and the fixture's copy has not caught up yet, that evidence is stale: say so, and
+      // evaluate rosters, eligibility and the deadline at the event's time, never the old one.
+      if (
+        event.scheduledStart !== detail.scheduledStart ||
+        event.scheduledEnd !== detail.scheduledEnd
+      ) {
+        scheduledStart = event.scheduledStart;
+        scheduledEnd = event.scheduledEnd;
+        at = new Date(event.scheduledStart);
+        deadline = event.scheduledStart;
+        add('schedule', {
+          code: 'schedule_out_of_sync',
+          severity: 'unknown',
+          message:
+            'The fixture still shows an earlier time than its scheduling event; it is being brought up to date.',
+          source: { type: 'event', id: event.id },
+          responsibleRole: 'league_manager',
+          requiredAction: 'Retry shortly; investigate the competition follow-up if it persists.',
         });
       }
     }
@@ -421,8 +445,8 @@ export class ReadinessService {
         ...conditionContext,
         changedAt: new Date(change.occurred_at),
         schedulingEventId: detail.schedulingEventId,
-        scheduledStart: detail.scheduledStart,
-        scheduledEnd: detail.scheduledEnd,
+        scheduledStart,
+        scheduledEnd,
       });
       for (const finding of findings) this.addCondition(add, 'notifications', finding);
     }
@@ -448,7 +472,7 @@ export class ReadinessService {
       fixtureStatus: detail.status,
       status: statusOf(issues),
       evaluatedAt,
-      scheduledStart: detail.scheduledStart,
+      scheduledStart,
       checks: checkNames.map((name) => {
         const own = issues.filter((i) => i.check === name);
         return { name, status: statusOf(own), issueCount: own.length };

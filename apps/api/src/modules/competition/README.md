@@ -266,6 +266,10 @@ identifiers only.
   instruments and notes never appear in competition responses (SPK-CAP-002). Customer-facing
   eligibility reasons (explain, invitation and roster 422 details, join requests) carry codes,
   limits and reference dates, never suspension bases, restricted record ids or computed ages.
+  Ordinary teammates and guardians (viewers who cannot manage the entry) read the roster in the
+  workspace and `GET /team-entries/{id}/roster` (also at a past `at`) without removal reasons and
+  with eligibility indicators only on their own membership (SPK-CAP-002, SPK-DISC-004,
+  `rosters.spec.ts`); captains, co-captains and staff keep the full member.
 - Pending invitations expire lazily on an acceptance attempt by the token holder.
 
 ## Behaviour notes, part 2 — verified
@@ -324,7 +328,11 @@ identifiers only.
   `blocking/warning/info/unknown`, reason, source record, responsible role, required action, last
   evaluation and deadline; the verdict is `blocked` > `unknown` > `warning` > `ready`. A missing
   RSVP is `info`; unknown evidence is never a pass. Customers see suspension, dispute, incident and
-  audit sources without their record ids (SPK-DISC-004).
+  audit sources without their record ids (SPK-DISC-004). Scheduling is the authority for the time:
+  when the event's instants differ from the fixture's copy (the `scheduling.event_changed`
+  follow-up has not run yet), readiness raises `schedule_out_of_sync` (unknown) and evaluates
+  rosters, eligibility, deadlines and change notices at the event's time (SPK-READY-002/004,
+  `readiness.spec.ts`).
 - **Discipline** (SPK-DISC-001..005): incidents and narratives are readable by league management
   only (never in result views, events or audit details); a suspension restricts eligibility only
   once approved and only within its scope; the rule set's card rules propose suspensions (red card:

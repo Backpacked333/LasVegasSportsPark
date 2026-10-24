@@ -151,6 +151,32 @@ describe('rosters, eligibility, invitations and join requests (SPK-COMP-005, SPK
     expect(
       (await t.http.get(`/v1/team-entries/${team.teamEntryId}/roster`).set(p3.header)).status,
     ).toBe(200);
+    // SPK-CAP-002 / SPK-DISC-004: an ordinary teammate never reads the removal reason or another
+    // player's eligibility codes, also not on a past roster; the captain above does
+    const asTeammate = await t.http
+      .get(`/v1/team-entries/${team.teamEntryId}/roster`)
+      .set(p3.header)
+      .query({ at: '2026-10-26T12:00:00.000Z' });
+    expect(asTeammate.status).toBe(200);
+    type Seen = { personId: string; removalReason: string | null; eligibility: unknown };
+    const seen = asTeammate.body.members as Seen[];
+    expect(seen.find((m) => m.personId === p1.personId)).toMatchObject({
+      status: 'removed',
+      removalReason: null,
+      eligibility: null,
+    });
+    expect(seen.find((m) => m.personId === p3.personId)?.eligibility).toMatchObject({
+      status: 'eligible',
+    });
+    expect(JSON.stringify(asTeammate.body)).not.toContain('left the team');
+    const workspace = await t.http.get(`/v1/team-entries/${team.teamEntryId}`).set(p3.header);
+    expect(workspace.status).toBe(200);
+    expect(
+      (workspace.body.roster as Seen[])
+        .filter((m) => m.eligibility !== null)
+        .map((m) => m.personId),
+    ).toEqual([p3.personId]);
+    expect((workspace.body.roster as Seen[]).every((m) => m.removalReason === null)).toBe(true);
     expect(
       (
         await t.http
