@@ -83,7 +83,11 @@ export function RsvpControl({ fixtureId, fixtureStatus, myResponse, onReload }: 
       </Text>
       <StatusBadge {...current} testID="rsvp-current" />
       {open ? (
-        <View accessibilityRole="radiogroup" style={styles.choices}>
+        <View
+          accessibilityRole="radiogroup"
+          accessibilityLabel="Your availability for this fixture"
+          style={styles.choices}
+        >
           {OFFERED_RSVP_STATES.map((state) => {
             const label = rsvpStatus(state).label;
             const selected = recorded === state;
@@ -132,7 +136,15 @@ export function RsvpControl({ fixtureId, fixtureStatus, myResponse, onReload }: 
         </Text>
       ) : null}
       {rsvp.error
-        ? rsvpErrorView(rsvp.error, () => lastChoice && choose(lastChoice), onReload)
+        ? rsvpErrorView(
+            rsvp.error,
+            () => lastChoice && choose(lastChoice),
+            () => {
+              // Clear the stale answer before reloading, so the reloaded state stands alone.
+              rsvp.reset();
+              onReload?.();
+            },
+          )
         : null}
       <Text style={styles.caption}>
         Your answer helps the team plan. It is not a check-in and does not affect eligibility.

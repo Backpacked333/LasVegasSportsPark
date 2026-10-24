@@ -32,6 +32,26 @@ export function needsRecovery(operation: Operation | null | undefined): boolean 
 }
 
 /**
+ * Where a pending registration's checkout stands, from the records the API links to it: the
+ * enrollment's basket (`checking_out` while the payment runs) and the basket's order
+ * (`fulfillmentStatus`). The enrollment's `lastOperationId` stays null while a checkout runs, so it
+ * cannot tell (reported API gap). `unknown` means the basket or order could not be read.
+ */
+export type CheckoutState = 'recovery_required' | 'compensated' | 'processing' | 'unknown' | null;
+
+export function checkoutStateOf(
+  basket: { status: string; orderRef: string | null } | null | undefined,
+  order: { fulfillmentStatus: string } | null | undefined,
+  readFailed: boolean,
+): CheckoutState {
+  if (order?.fulfillmentStatus === 'recovery_required') return 'recovery_required';
+  if (order?.fulfillmentStatus === 'compensated') return 'compensated';
+  if (basket?.status === 'checking_out') return 'processing';
+  if (readFailed) return 'unknown';
+  return null;
+}
+
+/**
  * Enrollment state as the customer sees it (journeys §3). The operation is the enrollment's
  * `lastOperationId` when it could be read; the placement is its placement request when it could
  * be read; `teamName` is the assigned team when known.
@@ -41,22 +61,25 @@ export function enrollmentStatus(
   options: {
     offeringName?: string | null;
     operation?: Operation | null;
+    /** From the enrollment's basket and order (see `checkoutStateOf`). */
+    checkout?: CheckoutState;
     placement?: Pick<PlacementRequest, 'status'> | null;
     teamName?: string | null;
   } = {},
 ): StatusBadgeProps {
-  const { operation, placement } = options;
+  const { operation, placement, checkout } = options;
   switch (enrollment.status) {
     case 'pending': {
-      if (operation?.status === 'recovery_required') {
+      if (operation?.status === 'recovery_required' || checkout === 'recovery_required') {
         return { tone: 'warning', label: RECOVERY_PHRASE };
       }
-      if (operation?.status === 'compensated') {
+      if (operation?.status === 'compensated' || checkout === 'compensated') {
         return { tone: 'danger', label: COMPENSATED_PHRASE };
       }
       if (
-        operation?.kind === CHECKOUT_OPERATION_KIND &&
-        (operation.status === 'pending' || operation.status === 'running')
+        checkout === 'processing' ||
+        (operation?.kind === CHECKOUT_OPERATION_KIND &&
+          (operation.status === 'pending' || operation.status === 'running'))
       ) {
         return { tone: 'pending', label: 'Payment processing' };
       }

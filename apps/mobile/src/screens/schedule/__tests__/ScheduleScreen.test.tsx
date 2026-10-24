@@ -73,21 +73,23 @@ describe('SCR-C-18 ScheduleScreen', () => {
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const day = await screen.findByTestId('day-2026-10-24');
     expect(within(day).getByRole('header', { name: 'Sat, Oct 24' })).toBeOnTheScreen();
+    // Participant names come from their own reads: wait for them (deterministic, no race).
     expect(
-      within(day).getByRole('button', {
+      await within(day).findByRole('button', {
         name: 'Junior Skills, 10:00 AM to 11:00 AM PDT. For: Sam, Confirmed',
       }),
     ).toBeOnTheScreen();
     expect(
-      within(day).getByRole('button', {
+      await within(day).findByRole('button', {
         name: 'Adult Pickup Night, 6:00 PM to 7:30 PM PDT. For: You, Booking pending',
       }),
     ).toBeOnTheScreen();
     expect(screen.getByTestId('zone-notice')).toHaveTextContent(
-      "Times are in this device's time zone (PDT). The facility's time zone is not provided to the app yet.",
+      "In the list below: Times are in this device's time zone (PDT). The facility's time zone is not provided to the app yet.",
     );
-    // The next-activity card (SCR-C-04) sits on top.
+    // The next-activity card (SCR-C-04) sits on top, with its own zone caption (SPK-SCHED-008).
     expect(await screen.findByTestId('schedule-next')).toBeOnTheScreen();
+    expect(await screen.findByTestId('schedule-next-zone')).toHaveTextContent(/time zone/);
     const request = app.fake.requests.find((r) => r.route === '/me/family-calendar');
     expect(request?.query).toEqual({
       from: '2026-10-24T07:00:00.000Z',

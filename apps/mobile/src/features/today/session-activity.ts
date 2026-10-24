@@ -19,7 +19,7 @@ import type { StatusBadgeProps } from '../../ui/StatusBadge';
 import type { ActivityCardModel } from './NextActivityCard';
 import { latestChangeForEvent } from './notices';
 import { useInbox, useSignedIn } from './queries';
-import { bookingStatus, calendarItemStatus, enrollmentStatus } from './status';
+import { bookingStatus, calendarItemStatus, checkoutStateOf, enrollmentStatus } from './status';
 import { displayZone } from './time';
 
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
@@ -89,6 +89,18 @@ export function useSessionActivity(
     request: { path: { id: e?.lastOperationId ?? '' } },
     enabled: signedIn && e?.status === 'pending' && !!e.lastOperationId,
   });
+  // The checkout's state from the linked basket and order (lastOperationId is null while a
+  // checkout runs; reported API gap).
+  const basket = useApiQuery({
+    path: '/baskets/{id}',
+    request: { path: { id: e?.basketId ?? '' } },
+    enabled: signedIn && e?.status === 'pending' && !!e.basketId,
+  });
+  const order = useApiQuery({
+    path: '/orders/{id}',
+    request: { path: { id: basket.data?.orderRef ?? '' } },
+    enabled: signedIn && e?.status === 'pending' && !!basket.data?.orderRef,
+  });
   const placement = useApiQuery({
     path: '/placement-requests/{id}',
     request: { path: { id: e?.placementRequestId ?? '' } },
@@ -127,6 +139,11 @@ export function useSessionActivity(
     status = enrollmentStatus(e, {
       offeringName,
       operation: operation.data ?? null,
+      checkout: checkoutStateOf(
+        basket.data,
+        order.data,
+        basket.error !== null || order.error !== null,
+      ),
       placement: placement.data ?? null,
       teamName: team.data?.team.name ?? null,
     });

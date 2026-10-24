@@ -18,6 +18,8 @@ export const ENROLLMENT_PENDING = '0192f1a0-0000-7000-8000-00000000d002';
 export const BOOKING = '0192f1a0-0000-7000-8000-00000000d101';
 export const EVENT = '0192f1a0-0000-7000-8000-00000000e001';
 export const OPERATION = '0192f1a0-0000-7000-8000-00000000e101';
+export const BASKET = '0192f1a0-0000-7000-8000-00000000e301';
+export const ORDER = '0192f1a0-0000-7000-8000-00000000e401';
 export const PLACEMENT = '0192f1a0-0000-7000-8000-00000000e201';
 export const FIXTURE = '0192f1a0-0000-7000-8000-00000000f101';
 export const HOME_ENTRY = '0192f1a0-0000-7000-8000-00000000f201';
@@ -346,7 +348,19 @@ export function fixtureDetail(overrides: Record<string, unknown> = {}) {
   };
 }
 
-export function teamWorkspace(name = 'Lions') {
+/** The viewer (SELF) as captain of the entry, as `GET /v1/team-entries/{id}` lists team roles. */
+export const SELF_CAPTAIN = [
+  {
+    id: '0192f1a0-0000-7000-8000-00000000f901',
+    teamEntryId: HOME_ENTRY,
+    personId: SELF,
+    role: 'captain',
+    effectiveFrom: '2026-09-01T00:00:00.000Z',
+    effectiveTo: null,
+  },
+];
+
+export function teamWorkspace(name = 'Lions', roles: unknown[] = []) {
   return {
     entry: { id: HOME_ENTRY },
     team: { id: '0192f1a0-0000-7000-8000-00000000f401', name },
@@ -359,7 +373,7 @@ export function teamWorkspace(name = 'Lions') {
     },
     division: { id: '0192f1a0-0000-7000-8000-00000000f501', name: 'Division 2' },
     ruleSet: { id: '0192f1a0-0000-7000-8000-00000000f601', name: 'Adult 7v7', version: 2 },
-    roles: [],
+    roles,
     roster: [],
     readiness: {},
     pendingInvitations: [],
@@ -429,4 +443,13 @@ export function result(overrides: Record<string, unknown> = {}) {
     updatedAt: AT,
     ...overrides,
   };
+}
+
+/** The fields of a basket and its order that tell a pending registration's checkout state. */
+export function checkoutBasket(status: string, orderRef: string | null = ORDER) {
+  return { id: BASKET, status, orderRef, lines: [], revision: 3 };
+}
+
+export function checkoutOrder(fulfillmentStatus: string) {
+  return { id: ORDER, basketId: BASKET, paymentStatus: 'paid', fulfillmentStatus };
 }

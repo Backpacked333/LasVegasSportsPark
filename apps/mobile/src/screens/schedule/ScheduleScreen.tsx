@@ -62,12 +62,18 @@ function NextCard({ item, participant }: { item: FamilyCalendarItem; participant
   const { model } = useSessionActivity(item, participant);
   if (!model) return null;
   const href = sessionHref(item);
+  // The card may show the facility's zone (from a schedule notice) while the list below uses the
+  // device's: it carries its own zone caption, as on Home (SPK-SCHED-008).
+  const notice = zoneNotice(model.zone, model.start ?? item.start);
   return (
-    <NextActivityCard
-      model={model}
-      onOpen={href ? () => router.push(href as Href) : undefined}
-      testID="schedule-next"
-    />
+    <>
+      <NextActivityCard
+        model={model}
+        onOpen={href ? () => router.push(href as Href) : undefined}
+        testID="schedule-next"
+      />
+      {notice ? <Caption testID="schedule-next-zone">{notice}</Caption> : null}
+    </>
   );
 }
 
@@ -113,7 +119,7 @@ function ScheduleContent() {
         at={oldestUpdate([...reads.map((r) => r.updatedAt), inbox.updatedAt])}
         now={now}
       />
-      {notice ? <Caption testID="zone-notice">{notice}</Caption> : null}
+      {notice ? <Caption testID="zone-notice">{`In the list below: ${notice}`}</Caption> : null}
 
       {changes.length > 0 ? (
         <Section title="Changes" testID="schedule-changes">

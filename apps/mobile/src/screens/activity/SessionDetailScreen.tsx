@@ -13,7 +13,7 @@
  *   change with old and new details. A canceled session says so with the reason.
  * - Arrival guidance is POL-046 (Operations, pending).
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -93,7 +93,10 @@ function SessionContent({
     enabled: signedIn && !!bookingId,
   });
   const owner = bookingId ? booking : enrollment;
-  const ref = refOf(sessionId, enrollment.data, booking.data);
+  // §4.10, §4.14: once the API answers NOT_FOUND or ACCESS_DENIED for the owning record, its cached
+  // copy is no longer shown.
+  const revoked = owner.error !== null && presentationForError(owner.error) === 'unavailable';
+  const ref = revoked ? null : refOf(sessionId, enrollment.data, booking.data);
   const names = usePersonNames(ref ? [ref.personId] : [], me.data);
   const activity = useSessionActivity(ref, ref ? nameOf(names, ref.personId) : '', {
     sessionBooking: booking.data,

@@ -28,6 +28,9 @@ import {
   scheduleChange,
   SELF,
   session,
+  BASKET,
+  checkoutBasket,
+  checkoutOrder,
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { HomeScreen } from '../HomeScreen';
@@ -88,10 +91,13 @@ beforeEach(() => mockPush.mockClear());
 
 describe('SCR-C-03 Home', () => {
   it('SPK-UX-003: recovery pinned first, then urgent changes, next activity, actions, invitations, results, renewals', async () => {
+    // The real shape: the API leaves lastOperationId null while a checkout runs; the state comes
+    // from the enrollment's basket and the basket's order.
     const pending = enrollment({
       id: ENROLLMENT_PENDING,
       status: 'pending',
-      lastOperationId: OPERATION,
+      lastOperationId: null,
+      basketId: BASKET,
     });
     const app = createTestApp({
       routes: routes({
@@ -108,7 +114,8 @@ describe('SCR-C-03 Home', () => {
             items: req.query.participantPersonId === CHILD ? [pending] : [],
             nextCursor: null,
           }),
-        'GET /operations/{id}': ok(operation('recovery_required')),
+        'GET /baskets/{id}': ok(checkoutBasket('fulfilled')),
+        'GET /orders/{id}': ok(checkoutOrder('recovery_required')),
       }),
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
@@ -144,6 +151,30 @@ describe('SCR-C-03 Home', () => {
     ).toBeOnTheScreen();
     expect(within(recovery).getByText(/Do not pay again/)).toBeOnTheScreen();
     expect(within(recovery).getByText('For: Sam')).toBeOnTheScreen();
+  });
+
+  it('a registration whose payment is running is "Payment processing", and one whose checkout cannot be read is not an action', async () => {
+    const running = enrollment({
+      id: ENROLLMENT_PENDING,
+      status: 'pending',
+      lastOperationId: null,
+      basketId: BASKET,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments': (req) =>
+          fakeResponse(200, {
+            items: req.query.participantPersonId === CHILD ? [running] : [],
+            nextCursor: null,
+          }),
+        'GET /baskets/{id}': ok(checkoutBasket('checking_out', null)),
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    const section = await screen.findByTestId('home-in-progress');
+    expect(within(section).getAllByLabelText(/Payment processing/).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('home-actions')).toBeNull();
+    expect(screen.queryByTestId('home-recovery')).toBeNull();
   });
 
   it('SPK-UX-004: the next-activity card shows participant, activity, place, time with zone, status and the change as old and new', async () => {

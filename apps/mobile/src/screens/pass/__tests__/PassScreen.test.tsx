@@ -86,9 +86,7 @@ describe('SCR-C-05 PassScreen', () => {
     fireEvent.press(await screen.findByRole('button', { name: 'Get my pass' }));
 
     expect(await screen.findByText(groupReference(REF_ONE))).toBeOnTheScreen();
-    expect(
-      screen.getByLabelText('Facility pass reference. Show this screen at the front desk.'),
-    ).toBeOnTheScreen();
+    expect(screen.getByLabelText(/^Facility pass reference: /)).toBeOnTheScreen();
     const post = app.fake.requests.find((r) => r.route === '/passes');
     expect(post?.body).toEqual({ holder: { kind: 'person', personId: SELF } });
     expect(post?.headers['idempotency-key']).toMatch(/^key-/);
@@ -97,6 +95,7 @@ describe('SCR-C-05 PassScreen', () => {
       reference: REF_ONE,
       issuedAt: '2026-10-24T11:00:00.000Z',
       revision: 1,
+      pendingRevoke: null,
     });
     // No name, household or child detail anywhere on the pass (§4.14).
     expect(screen.queryByText(/Alex|Morgan/)).toBeNull();
@@ -151,9 +150,86 @@ describe('SCR-C-05 PassScreen', () => {
     );
     fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
     fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
-    expect(await screen.findByLabelText('Previous pass still active')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Previous pass may still be active')).toBeOnTheScreen();
     expect(screen.getByText(/error code INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByText(groupReference(REF_TWO))).toBeOnTheScreen();
+  });
+
+  it('§4.9: an unconfirmed revoke (no answer) offers Try again, which resends the same revoke with the same key', async () => {
+    let revokes = 0;
+    const { app, store } = setup(
+      {
+        'GET /me': ok(me()),
+        'POST /passes': { status: 201, body: issued(PASS_TWO, REF_TWO) },
+        'POST /passes/{id}/revoke': () => {
+          revokes += 1;
+          if (revokes === 1) throw new TypeError('Network request failed');
+          return fakeResponse(200, { ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' });
+        },
+      },
+      { stored: STORED },
+    );
+    fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
+    expect(
+      await screen.findByText(/We could not confirm the previous pass was withdrawn/),
+    ).toBeOnTheScreen();
+    expect((await store.load(ACCOUNT))?.pendingRevoke).toEqual({ passId: PASS_ONE, revision: 1 });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    });
+    const sent = app.fake.requests.filter((r) => r.route === '/passes/{id}/revoke');
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.headers['idempotency-key']).toBe(sent[0]?.headers['idempotency-key']);
+    expect(sent[1]?.body).toEqual(sent[0]?.body);
+    expect(screen.queryByTestId('pass-revoke-unconfirmed')).toBeNull();
+    expect((await store.load(ACCOUNT))?.pendingRevoke).toBeNull();
+  });
+
+  it('never revokes the previous pass when the new one could not be saved on the device', async () => {
+    const { app, store } = setup(
+      {
+        'GET /me': ok(me()),
+        'POST /passes': { status: 201, body: issued(PASS_TWO, REF_TWO) },
+        'POST /passes/{id}/revoke': ok({ ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' }),
+      },
+      { stored: STORED },
+    );
+    store.save = jest.fn(async () => {
+      throw new Error('keychain locked');
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
+    });
+    expect(
+      await screen.findByText(/your previous pass was kept and\s+still works/),
+    ).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.route === '/passes/{id}/revoke')).toHaveLength(0);
+  });
+
+  it('§4.14: a session without an account id never reads or writes a shared pass key', async () => {
+    const store = new MemoryPassStore();
+    store.values.set('account', STORED);
+    const app = createTestApp({
+      session: { ...TEST_SESSION, accountId: null },
+      routes: { 'GET /me': ok({ ...me(), principal: { ...me().principal, accountId: null } }) },
+    });
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <app.wrapper>
+        <PassStoreContext.Provider value={store}>{children}</PassStoreContext.Provider>
+      </app.wrapper>
+    );
+    render(<PassScreen />, { wrapper: Wrapper });
+    expect(await screen.findByLabelText('Pass unavailable')).toBeOnTheScreen();
+    expect(screen.queryByText(groupReference(REF_ONE))).toBeNull();
+  });
+
+  it('SPK-UX-009: screen readers hear the reference itself, spelled out', async () => {
+    setup({ 'GET /me': ok(me()) }, { stored: STORED });
+    const reference = await screen.findByTestId('pass-reference');
+    const label = String(reference.props.accessibilityLabel);
+    expect(label).toContain(groupReference(REF_ONE).split('').join(' '));
   });
 
   it('§4.9: a retry after INTEGRATION_UNAVAILABLE reuses the idempotency key, so one pass is issued', async () => {
@@ -222,7 +298,7 @@ describe('SecurePassStore (§4.13)', () => {
       JSON.stringify(STORED),
       { keychainAccessible: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY' },
     );
-    expect(await store.load('acct-1')).toEqual(STORED);
+    expect(await store.load('acct-1')).toEqual({ ...STORED, pendingRevoke: null });
     expect(await store.load('acct-2')).toBeNull();
     await store.clear('acct-1');
     expect(await store.load('acct-1')).toBeNull();

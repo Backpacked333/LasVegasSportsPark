@@ -19,6 +19,11 @@ export interface StoredPass {
   reference: string;
   issuedAt: string;
   revision: number;
+  /**
+   * The replaced pass while its revoke is not confirmed (no answer, or a retryable code): kept so
+   * "Try again" resends the same revoke, also after a restart (§4.9).
+   */
+  pendingRevoke?: { passId: string; revision: number } | null;
 }
 
 export interface PassStore {
@@ -51,7 +56,21 @@ export function parseStoredPass(raw: string | null): StoredPass | null {
     ) {
       return null;
     }
-    return { passId: v.passId, reference: v.reference, issuedAt: v.issuedAt, revision: v.revision };
+    const pending = v.pendingRevoke;
+    const pendingRevoke =
+      pending &&
+      typeof pending === 'object' &&
+      typeof pending.passId === 'string' &&
+      typeof pending.revision === 'number'
+        ? { passId: pending.passId, revision: pending.revision }
+        : null;
+    return {
+      passId: v.passId,
+      reference: v.reference,
+      issuedAt: v.issuedAt,
+      revision: v.revision,
+      pendingRevoke,
+    };
   } catch {
     return null;
   }

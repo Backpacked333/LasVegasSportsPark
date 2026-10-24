@@ -53,6 +53,11 @@ export function SectionQueryState({
 }) {
   const now = useNow();
   const { reachable } = useConnectivity();
+  // A record the API no longer serves (NOT_FOUND, ACCESS_DENIED) is not available even when an
+  // older copy is cached (§4.10, §4.14).
+  if (read.error && presentationForError(read.error) === 'unavailable') {
+    return <StateView variant="unavailable" {...unavailable} />;
+  }
   if (read.data !== undefined) return null;
   const retry = read.refetch ? () => void read.refetch?.() : undefined;
   if (read.error) {

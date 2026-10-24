@@ -24,6 +24,9 @@ import {
   SESSION,
   SESSION_TWO,
   session,
+  BASKET,
+  checkoutBasket,
+  checkoutOrder,
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { SessionDetailScreen } from '../SessionDetailScreen';
@@ -168,8 +171,11 @@ describe('SCR-C-20 SessionDetailScreen', () => {
     renderSession(
       { sessionId: SESSION, enrollmentId: ENROLLMENT },
       {
-        'GET /enrollments/{id}': ok(enrollment({ status: 'pending', lastOperationId: OPERATION })),
-        'GET /operations/{id}': ok(operation('running')),
+        // The real shape: lastOperationId stays null while the checkout runs.
+        'GET /enrollments/{id}': ok(
+          enrollment({ status: 'pending', lastOperationId: null, basketId: BASKET }),
+        ),
+        'GET /baskets/{id}': ok(checkoutBasket('checking_out', null)),
       },
     );
     expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();

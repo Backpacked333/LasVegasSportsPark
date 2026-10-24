@@ -8,8 +8,10 @@
  * - `POST /v1/passes` issues a personal pass to the signed-in person (the API allows a person to
  *   issue their own; household passes are issued by staff only). The reference comes back once,
  *   so it is kept in the device's secure store (pass-store.ts) and shown from there, also offline.
- * - "Replace pass" issues a new pass, then revokes the old one (`POST /v1/passes/{id}/revoke`
- *   with reason and expected revision), so the person is never left without a pass.
+ * - "Replace pass" issues a new pass, saves it, then revokes the old one
+ *   (`POST /v1/passes/{id}/revoke` with reason and expected revision), so the person is never left
+ *   without a pass: when the save fails nothing is revoked; when the revoke gets no answer, the
+ *   old pass stays recorded as pending and "Try again" resends the same revoke (same key).
  * - The API offers the holder no read of a pass, so the app cannot tell whether staff revoked it;
  *   the screen says so instead of claiming the pass is valid.
  * - The scannable symbol depends on the desk scanners, which are DEC-023 (Technical lead/account
@@ -49,17 +51,21 @@ function PassContent() {
   const now = useNow();
   const store = usePassStore();
   const me = useMe();
-  const accountKey = session.session?.accountId ?? 'account';
+  // The pass is kept under the account the API names (or the session's), never under a shared
+  // key: another person signing in on this device never sees it (SPK-ENTRY-002, §4.14).
+  const accountKey = me.data?.principal.accountId ?? session.session?.accountId ?? null;
   const [stored, setStored] = useState<{ loaded: boolean; pass: StoredPass | null }>({
     loaded: false,
     pass: null,
   });
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [revokeProblem, setRevokeProblem] = useState<ApiError | null>(null);
+  const [saveProblem, setSaveProblem] = useState(false);
   const issue = useApiCommand('post', '/passes');
   const revoke = useApiCommand('post', '/passes/{id}/revoke');
 
   useEffect(() => {
+    if (!accountKey) return undefined;
     let active = true;
     store
       .load(accountKey)
@@ -72,10 +78,37 @@ function PassContent() {
 
   const personId = me.data?.principal.personId ?? null;
 
+  /** Revokes the replaced pass; the same request (same key) on every retry of this intent. */
+  const revokePrevious = useCallback(
+    async (current: StoredPass) => {
+      const pending = current.pendingRevoke;
+      if (!pending || !accountKey) return;
+      setRevokeProblem(null);
+      try {
+        await revoke.submit({
+          path: { id: pending.passId },
+          body: { reason: REPLACE_REASON, expectedRevision: pending.revision },
+        });
+      } catch (error) {
+        const e = error as ApiError;
+        if (!ALREADY_WITHDRAWN.has(e.code)) {
+          setRevokeProblem(e);
+          // The outcome is unknown or worth retrying: keep the pending revoke for "Try again".
+          if (e.keepsIntent) return;
+        }
+      }
+      const settled: StoredPass = { ...current, pendingRevoke: null };
+      await store.save(accountKey, settled).catch(() => undefined);
+      setStored({ loaded: true, pass: settled });
+    },
+    [accountKey, revoke, store],
+  );
+
   const getPass = useCallback(async () => {
-    if (!personId) return;
+    if (!personId || !accountKey) return;
     const previous = stored.pass;
     setRevokeProblem(null);
+    setSaveProblem(false);
     let issued;
     try {
       // One intent: a retry after a timeout reuses the key, so the API returns the same pass.
@@ -88,23 +121,35 @@ function PassContent() {
       reference: issued.reference,
       issuedAt: issued.pass.issuedAt,
       revision: issued.pass.revision,
+      pendingRevoke:
+        previous && previous.passId !== issued.pass.id
+          ? { passId: previous.passId, revision: previous.revision }
+          : null,
     };
-    await store.save(accountKey, next).catch(() => undefined);
+    try {
+      await store.save(accountKey, next);
+    } catch {
+      // Without a saved copy the new reference would be lost on restart (the API shows it only
+      // once), so the previous pass, the one stored here, is not revoked.
+      setSaveProblem(true);
+      setConfirmReplace(false);
+      return;
+    }
     setStored({ loaded: true, pass: next });
     setConfirmReplace(false);
-    if (previous && previous.passId !== next.passId) {
-      try {
-        await revoke.submit({
-          path: { id: previous.passId },
-          body: { reason: REPLACE_REASON, expectedRevision: previous.revision },
-        });
-      } catch (error) {
-        const e = error as ApiError;
-        if (!ALREADY_WITHDRAWN.has(e.code)) setRevokeProblem(e);
-      }
-    }
-  }, [personId, stored.pass, issue, revoke, store, accountKey]);
+    if (next.pendingRevoke) await revokePrevious(next);
+  }, [personId, accountKey, stored.pass, issue, store, revokePrevious]);
 
+  if (!accountKey) {
+    if (me.data === undefined) return <SectionQueryState read={me} label="your pass" />;
+    return (
+      <StateView
+        variant="unavailable"
+        title="Pass unavailable"
+        description="A pass needs a signed-in account. Contact the front desk."
+      />
+    );
+  }
   if (!stored.loaded) return <StateView variant="loading" label="your pass" />;
 
   const pass = stored.pass;
@@ -118,7 +163,8 @@ function PassContent() {
           <View
             style={styles.reference}
             accessible
-            accessibilityLabel="Facility pass reference. Show this screen at the front desk."
+            // Spelled out, so VoiceOver and TalkBack read the reference itself (SPK-UX-009).
+            accessibilityLabel={`Facility pass reference: ${groupReference(pass.reference).split('').join(' ')}. Show this at the front desk.`}
             testID="pass-reference"
           >
             <Text style={styles.referenceText} selectable>
@@ -227,7 +273,31 @@ function PassContent() {
           <StateView variant="error" error={issue.error} onRetry={() => void getPass()} />
         )
       ) : null}
-      {revokeProblem ? (
+      {saveProblem ? (
+        <View style={styles.pad} testID="pass-save-problem">
+          <StatusBadge tone="warning" label="New pass not saved" />
+          <Caption>
+            Your new pass could not be saved on this device, so your previous pass was kept and
+            still works. Try again, or ask the front desk.
+          </Caption>
+        </View>
+      ) : null}
+      {pass?.pendingRevoke && (!revokeProblem || revokeProblem.keepsIntent) ? (
+        <View style={styles.pad} testID="pass-revoke-unconfirmed">
+          <StatusBadge tone="warning" label="Previous pass may still be active" />
+          <Caption>
+            We could not confirm the previous pass was withdrawn
+            {revokeProblem ? ` (error code ${revokeProblem.code})` : ''}. Your new pass is ready.
+          </Caption>
+          <Button
+            label="Try again"
+            variant="secondary"
+            busy={revoke.isProcessing}
+            disabled={offline}
+            onPress={() => void revokePrevious(pass)}
+          />
+        </View>
+      ) : revokeProblem ? (
         <View style={styles.pad} testID="pass-revoke-problem">
           <StatusBadge tone="warning" label="Previous pass still active" />
           <Caption>

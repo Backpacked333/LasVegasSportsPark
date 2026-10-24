@@ -8,6 +8,8 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react-n
 import {
   AWAY_ENTRY,
   eventDetails,
+  me,
+  SELF_CAPTAIN,
   fail,
   FIXTURE,
   fixtureDetail,
@@ -48,10 +50,12 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
     'GET /fixtures/{id}/readiness': ok(readiness()),
     'GET /fixtures/{id}/results': ok([]),
     // The person may read the home entry (their team) but not the opponent's.
+    // The viewer captains the home entry (readiness detail is for captains, SCR-C-20).
     'GET /team-entries/{id}': (req) =>
       req.params.id === HOME_ENTRY
-        ? fakeResponse(200, teamWorkspace('Lions'))
+        ? fakeResponse(200, teamWorkspace('Lions', SELF_CAPTAIN))
         : fakeResponse(404, apiErrorBody('NOT_FOUND')),
+    'GET /me': ok(me()),
     'GET /me/inbox': inboxPage([MOVED]),
     ...overrides,
   };
@@ -102,6 +106,95 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(
       screen.getByText(/Lions: 6 of 10 rostered players eligible, 1 not yet known; at least 7/),
     ).toBeOnTheScreen();
+  });
+
+  it('SPK-CAP-002: a player who is not captain sees no readiness detail, and only their own side\'s availability', async () => {
+    renderFixture({
+      'GET /team-entries/{id}': (req) =>
+        req.params.id === HOME_ENTRY
+          ? fakeResponse(200, teamWorkspace('Lions'))
+          : fakeResponse(404, apiErrorBody('NOT_FOUND')),
+    });
+    expect(await screen.findByTestId('fixture-availability')).toBeOnTheScreen();
+    expect(screen.queryByTestId('fixture-readiness')).toBeNull();
+    expect(screen.queryByText(/eligible players/)).toBeNull();
+    // The opponent's answers (3 available) are not shown.
+    expect(screen.queryByText(/3 available/)).toBeNull();
+  });
+
+  it('SPK-CAP-002: a captain sees only their side and issues about it, never the opponent\'s roster issues', async () => {
+    renderFixture({
+      'GET /fixtures/{id}/readiness': ok(
+        readiness({
+          issues: [
+            ...readiness().issues,
+            {
+              code: 'ROSTER_BELOW_MINIMUM',
+              severity: 'warning',
+              message: 'Tigers have 5 eligible players; the rule set needs 7.',
+              source: { type: 'team_entry', id: AWAY_ENTRY },
+              responsibleRole: 'captain',
+              requiredAction: 'Invite or confirm another eligible player.',
+              lastEvaluatedAt: '2026-10-24T11:30:00.000Z',
+              deadline: null,
+            },
+            {
+              code: 'PLAYER_SUSPENDED',
+              severity: 'blocking',
+              message: "A player on Tigers' roster is suspended for this fixture.",
+              source: { type: 'suspension', id: '0192f1a0-0000-7000-8000-00000000fa01' },
+              responsibleRole: 'league_manager',
+              requiredAction: 'Remove the player from the lineup.',
+              lastEvaluatedAt: '2026-10-24T11:30:00.000Z',
+              deadline: null,
+            },
+          ],
+          sides: [
+            ...readiness().sides,
+            {
+              teamEntryId: AWAY_ENTRY,
+              teamName: 'Tigers',
+              entryStatus: 'approved',
+              rosterSize: 9,
+              eligiblePlayers: 5,
+              unknownPlayers: 0,
+              minimumPlayers: 7,
+            },
+          ],
+        }),
+      ),
+    });
+    expect(await screen.findByTestId('readiness-issue-0')).toBeOnTheScreen();
+    expect(screen.queryByTestId('readiness-issue-1')).toBeNull();
+    expect(screen.queryByText(/Tigers have 5/)).toBeNull();
+    expect(screen.queryByText(/suspended/)).toBeNull();
+    expect(screen.queryByText(/Tigers: 5 of 9/)).toBeNull();
+  });
+
+  it('§4.10: after a 200, a refetch answering NOT_FOUND removes the fixture and its RSVP from the screen', async () => {
+    let gone = false;
+    const app = renderFixture({
+      'GET /fixtures/{id}': () =>
+        gone
+          ? fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' }))
+          : fakeResponse(200, fixtureDetail()),
+    });
+    expect(await screen.findByRole('radio', { name: 'Available' })).toBeOnTheScreen();
+    gone = true;
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/fixtures/{id}'] });
+    });
+    expect(await screen.findByText(/This fixture is not available\./)).toBeOnTheScreen();
+    expect(screen.queryByRole('radio', { name: 'Available' })).toBeNull();
+    expect(screen.queryByTestId('fixture-card')).toBeNull();
+  });
+
+  it('SPK-UX-009: the RSVP choices are a named radio group', async () => {
+    renderFixture();
+    // The group is a container (not one accessibility element), so the radios stay focusable.
+    const group = await screen.findByLabelText('Your availability for this fixture');
+    expect(group).toHaveProp('accessibilityRole', 'radiogroup');
+    expect(within(group).getByRole('radio', { name: 'Available' })).toBeOnTheScreen();
   });
 
   it('SPK-RESULT-001: an official result, and a provisional one that does not count yet', async () => {
@@ -218,9 +311,14 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       'POST /fixtures/{id}/availability': fail(409, 'INVALID_TRANSITION'),
     });
     fireEvent.press(await screen.findByRole('radio', { name: 'Available' }));
-    fireEvent.press(await screen.findByRole('button', { name: 'Reload' }));
+    const reload = await screen.findByRole('button', { name: 'Reload' });
+    const before = reads;
+    fireEvent.press(reload);
     await act(async () => undefined);
-    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(reads).toBe(before + 1);
+    // The stale answer is cleared with the reload (no lingering "Something went wrong").
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+    expect(screen.queryByText(/Error code: INVALID_TRANSITION/)).toBeNull();
   });
 
   it('a played fixture takes no answers; offline, answering is disabled and nothing is queued', async () => {
@@ -270,6 +368,5 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       await screen.findByText('The rule set summary is shown to team members.'),
     ).toBeOnTheScreen();
     expect(screen.getByText(/Times are in this device's time zone/)).toBeOnTheScreen();
-    expect(AWAY_ENTRY).toBeDefined();
   });
 });

@@ -111,14 +111,14 @@ function RegistrationRows({
 }) {
   return (
     <View accessibilityRole="list">
-      {rows.map(({ enrollment, operation }) => {
+      {rows.map(({ enrollment, operation, checkout }) => {
         const offeringName = offeringNames.get(enrollment.offeringId) ?? 'Registration';
         return (
           <ListRow
             key={enrollment.id}
             title={offeringName}
             detail={`For: ${nameOf(names, enrollment.participantPersonId)}`}
-            status={enrollmentStatus(enrollment, { offeringName, operation })}
+            status={enrollmentStatus(enrollment, { offeringName, operation, checkout })}
             testID={`${testID}-${enrollment.id}`}
           />
         );
@@ -158,7 +158,11 @@ function HomeContent() {
 
   const calendarItems = calendar.data?.items ?? [];
   const next = nextActivity(calendarItems, now);
-  const allRegistrations = [...registrations.recovery, ...registrations.pending];
+  const allRegistrations = [
+    ...registrations.recovery,
+    ...registrations.pending,
+    ...registrations.inProgress,
+  ];
   const names = usePersonNames(
     [
       ...(next ? [next.personId] : []),
@@ -270,6 +274,16 @@ function HomeContent() {
             testID="home-registration"
           />
           <NoticeRows items={(bySection.get('actions') ?? []).slice(0, NOTICES_PER_SECTION)} />
+        </Section>
+      ) : null}
+      {registrations.inProgress.length > 0 ? (
+        <Section title="Registrations in progress" testID="home-in-progress">
+          <RegistrationRows
+            rows={registrations.inProgress}
+            names={names}
+            offeringNames={offeringNames}
+            testID="home-in-progress-row"
+          />
         </Section>
       ) : null}
       {registrations.error ? (

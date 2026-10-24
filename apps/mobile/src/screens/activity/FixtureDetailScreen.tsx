@@ -19,13 +19,15 @@
  * - Arrival guidance is POL-046 (Operations, pending); dispute submission is SCR-C-29, not in
  *   this app yet.
  */
-import type { Schema } from '@sportspark/api-client';
+import { apiQueryKey, presentationForError, type Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { NextActivityCard, type ActivityCardModel } from '../../features/today/NextActivityCard';
 import { latestChangeForEvent } from '../../features/today/notices';
-import { useInbox, useSignedIn } from '../../features/today/queries';
+import { useInbox, useMe, useSignedIn } from '../../features/today/queries';
 import { RsvpControl } from '../../features/today/RsvpControl';
 import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
 import {
@@ -89,6 +91,37 @@ export function scoreLine(result: ResultRevision, fixture: FixtureDetail): strin
   }
 }
 
+/** Issue sources that describe the fixture itself (time, place, closures), not a team's roster. */
+const FIXTURE_LEVEL_SOURCES: ReadonlySet<string> = new Set([
+  'fixture',
+  'event',
+  'resource',
+  'closure',
+  'dispute',
+]);
+
+/**
+ * What of the readiness this viewer sees (SCR-C-20 "roster readiness indicator for captains",
+ * private roster details hidden from non-captains; SPK-CAP-002). A captain of one side sees that
+ * side's counts and the issues about that side or the fixture itself; issues the API does not
+ * attribute to a side (a suspension) are left out. Everyone else sees no readiness detail.
+ */
+export function visibleReadiness(
+  readiness: Schema<'FixtureReadiness'>,
+  myEntryId: string | null,
+  isCaptain: boolean,
+): Pick<Schema<'FixtureReadiness'>, 'sides' | 'issues'> | null {
+  if (!isCaptain || !myEntryId) return null;
+  return {
+    sides: readiness.sides.filter((side) => side.teamEntryId === myEntryId),
+    issues: readiness.issues.filter(
+      (issue) =>
+        FIXTURE_LEVEL_SOURCES.has(issue.source.type) ||
+        (issue.source.type === 'team_entry' && issue.source.id === myEntryId),
+    ),
+  };
+}
+
 function FixtureContent({ fixtureId }: { fixtureId: string }) {
   const now = useNow();
   const signedIn = useSignedIn();
@@ -120,8 +153,27 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
     enabled: signedIn && !!awayEntryId,
   });
   const inbox = useInbox();
+  const me = useMe();
+  const queryClient = useQueryClient();
+  // §4.10, §4.14: once the API stops serving this fixture to the person (removed from the roster,
+  // guardian grant revoked), the cached copy is no longer shown and leaves the cache.
+  const revoked = fixture.error !== null && presentationForError(fixture.error) === 'unavailable';
+  const revokedRef = useRef(false);
+  revokedRef.current = revoked;
+  useEffect(
+    () => () => {
+      // On leaving the screen (no observer left), drop the copy the person may no longer see.
+      if (revokedRef.current) {
+        queryClient.removeQueries({
+          queryKey: apiQueryKey('/fixtures/{id}', { path: { id: fixtureId } }),
+          exact: true,
+        });
+      }
+    },
+    [queryClient, fixtureId],
+  );
 
-  const detail = fixture.data;
+  const detail = revoked ? undefined : fixture.data;
   if (!detail) {
     return (
       <SectionQueryState
@@ -158,6 +210,20 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
   };
   const notice = zoneNotice(zone, detail.scheduledStart ?? now);
   const result = results.data ? currentResult(results.data) : null;
+  const myEntryId = mine === 'home' ? homeEntryId : mine === 'away' ? awayEntryId : null;
+  const viewerId = me.data?.principal.personId ?? me.data?.person?.id ?? null;
+  const isCaptain =
+    viewerId !== null &&
+    (workspace?.roles ?? []).some(
+      (r) =>
+        r.personId === viewerId &&
+        (r.role === 'captain' || r.role === 'co_captain') &&
+        r.effectiveTo === null,
+    );
+  const ownSide = mine === 'home' ? detail.home : mine === 'away' ? away : null;
+  const shownReadiness = readiness.data
+    ? visibleReadiness(readiness.data, myEntryId, isCaptain)
+    : null;
 
   return (
     <View testID="fixture-detail">
@@ -181,54 +247,58 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         {notice ? <Caption>{notice}</Caption> : null}
       </Section>
 
-      <Section title="Team availability" testID="fixture-availability">
-        <Caption>{availabilityLine(detail.home)}</Caption>
-        {away ? <Caption>{availabilityLine(away)}</Caption> : null}
-      </Section>
+      {ownSide ? (
+        // Only the viewer's own side: the opponent's answers are not theirs to see.
+        <Section title="Team availability" testID="fixture-availability">
+          <Caption>{availabilityLine(ownSide)}</Caption>
+        </Section>
+      ) : null}
 
-      <Section title="Match readiness" testID="fixture-readiness">
-        <SectionQueryState
-          read={readiness}
-          label="match readiness"
-          unavailable={{ description: 'Match readiness is not available to you.' }}
-        />
-        {readiness.data ? (
-          <View style={styles.pad}>
-            <StatusBadge {...readinessStatus(readiness.data.status)} testID="readiness-status" />
-            <Caption>Assessed {formatWhen(readiness.data.evaluatedAt, zone.zone)}.</Caption>
-            {readiness.data.sides.map((side) => (
-              <Text key={side.teamEntryId} style={styles.body}>
-                {side.teamName}: {side.eligiblePlayers} of {side.rosterSize} rostered players
-                eligible, {side.unknownPlayers} not yet known; at least {side.minimumPlayers}{' '}
-                needed.
-              </Text>
-            ))}
-            {readiness.data.issues.length === 0 ? (
-              <Caption>No open issues.</Caption>
-            ) : (
-              <View accessibilityRole="list" style={styles.issues}>
-                {readiness.data.issues.map((issue, index) => (
-                  <View
-                    key={`${issue.code}-${index}`}
-                    style={styles.issue}
-                    accessible
-                    accessibilityLabel={`${severityStatus(issue.severity).label}. ${issue.message} Responsible: ${roleLabel(issue.responsibleRole)}. Action: ${issue.requiredAction}`}
-                    testID={`readiness-issue-${index}`}
-                  >
-                    <StatusBadge {...severityStatus(issue.severity)} />
-                    <Text style={styles.body}>{issue.message}</Text>
-                    <Text style={styles.caption}>
-                      Responsible: {roleLabel(issue.responsibleRole)}. Action:{' '}
-                      {issue.requiredAction}
-                      {issue.deadline ? ` By ${formatWhen(issue.deadline, zone.zone)}.` : ''}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-        ) : null}
-      </Section>
+      {isCaptain ? (
+        <Section title="Match readiness" testID="fixture-readiness">
+          <SectionQueryState
+            read={readiness}
+            label="match readiness"
+            unavailable={{ description: 'Match readiness is not available to you.' }}
+          />
+          {readiness.data && shownReadiness ? (
+            <View style={styles.pad}>
+              <StatusBadge {...readinessStatus(readiness.data.status)} testID="readiness-status" />
+              <Caption>Assessed {formatWhen(readiness.data.evaluatedAt, zone.zone)}.</Caption>
+              {shownReadiness.sides.map((side) => (
+                <Text key={side.teamEntryId} style={styles.body}>
+                  {side.teamName}: {side.eligiblePlayers} of {side.rosterSize} rostered players
+                  eligible, {side.unknownPlayers} not yet known; at least {side.minimumPlayers}{' '}
+                  needed.
+                </Text>
+              ))}
+              {shownReadiness.issues.length === 0 ? (
+                <Caption>No open issues.</Caption>
+              ) : (
+                <View accessibilityRole="list" style={styles.issues}>
+                  {shownReadiness.issues.map((issue, index) => (
+                    <View
+                      key={`${issue.code}-${index}`}
+                      style={styles.issue}
+                      accessible
+                      accessibilityLabel={`${severityStatus(issue.severity).label}. ${issue.message} Responsible: ${roleLabel(issue.responsibleRole)}. Action: ${issue.requiredAction}`}
+                      testID={`readiness-issue-${index}`}
+                    >
+                      <StatusBadge {...severityStatus(issue.severity)} />
+                      <Text style={styles.body}>{issue.message}</Text>
+                      <Text style={styles.caption}>
+                        Responsible: {roleLabel(issue.responsibleRole)}. Action:{' '}
+                        {issue.requiredAction}
+                        {issue.deadline ? ` By ${formatWhen(issue.deadline, zone.zone)}.` : ''}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          ) : null}
+        </Section>
+      ) : null}
 
       <Section title="Result" testID="fixture-result">
         <SectionQueryState
