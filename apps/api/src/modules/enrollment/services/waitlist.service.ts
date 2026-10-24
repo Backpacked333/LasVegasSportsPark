@@ -9,6 +9,7 @@ import {
   type ListWaitlistQuery,
   type OfferingSession,
   type Principal,
+  type RemoveWaitlistEntryInput,
   type WaitlistAcceptance,
   type WaitlistEntry,
   type WaitlistOffer,
@@ -41,6 +42,7 @@ import type { WaitlistPort } from '../enrollment.ports';
 import {
   actorSnapshot,
   enrollmentSystem,
+  hiddenFrom,
   isStaffLike,
   minutesFrom,
   organizationOf,
@@ -421,22 +423,63 @@ export class WaitlistService implements WaitlistPort {
     input: WithdrawWaitlistInput,
     correlationId: string | null,
   ): Promise<WaitlistEntry> {
+    return this.leave(principal, id, 'withdrawn', input, correlationId);
+  }
+
+  /** Staff remove an entry from the queue with a recorded reason (SPK-REG-008 status `removed`). */
+  async remove(
+    principal: Principal,
+    id: string,
+    input: RemoveWaitlistEntryInput,
+    correlationId: string | null,
+  ): Promise<WaitlistEntry> {
+    return this.leave(principal, id, 'removed', input, correlationId);
+  }
+
+  /**
+   * An entry leaves the queue: withdrawn by the participant's authority (or staff), or removed by
+   * program administration. An open offer is declined and its places go back to the pools.
+   */
+  private async leave(
+    principal: Principal,
+    id: string,
+    outcome: 'withdrawn' | 'removed',
+    input: { expectedRevision?: number; reason?: string },
+    correlationId: string | null,
+  ): Promise<WaitlistEntry> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const row = await this.loadEntry(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('waitlist_entry');
-      await this.authorization.require(principal, EnrollmentActions.joinWaitlist, {
-        type: 'waitlist_entry',
-        id,
-        organizationId,
-        subjectPersonIds: [row.participant_person_id],
-        protected: true,
-      });
+      await this.authorization.require(
+        principal,
+        outcome === 'removed' ? EnrollmentActions.manageWaitlist : EnrollmentActions.joinWaitlist,
+        {
+          type: 'waitlist_entry',
+          id,
+          organizationId,
+          subjectPersonIds: [row.participant_person_id],
+          protected:
+            outcome === 'removed'
+              ? await hiddenFrom(this.authorization, principal, EnrollmentActions.readWaitlist, {
+                  type: 'waitlist_entry',
+                  id,
+                  organizationId,
+                  subjectPersonIds: [row.participant_person_id],
+                })
+              : true,
+        },
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'waiting' && row.status !== 'offered') {
-        throw errors.invalidTransition('WaitlistEntry', row.status, 'withdraw');
+        throw errors.invalidTransition(
+          'WaitlistEntry',
+          row.status,
+          outcome === 'removed' ? 'remove' : 'withdraw',
+        );
       }
       const now = this.clock.now();
+      const reason = input.reason ?? (outcome === 'removed' ? 'removed' : 'entry_withdrawn');
       if (row.status === 'offered') {
         const open = await trx
           .selectFrom('waitlist_offers')
@@ -452,14 +495,23 @@ export class WaitlistService implements WaitlistPort {
             organizationId,
             open,
             'declined',
-            'entry_withdrawn',
+            reason,
             principal,
             correlationId,
           );
       }
       await trx
         .updateTable('waitlist_entries')
-        .set({ status: 'withdrawn', withdrawn_at: now, revision: row.revision + 1 })
+        .set(
+          outcome === 'removed'
+            ? {
+                status: 'removed',
+                removed_at: now,
+                removal_reason: reason,
+                revision: row.revision + 1,
+              }
+            : { status: 'withdrawn', withdrawn_at: now, revision: row.revision + 1 },
+        )
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
         .where('revision', '=', row.revision)
@@ -467,7 +519,10 @@ export class WaitlistService implements WaitlistPort {
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
-        action: 'enrollment.withdraw_waitlist',
+        action:
+          outcome === 'removed'
+            ? 'enrollment.remove_waitlist_entry'
+            : 'enrollment.withdraw_waitlist',
         targetType: 'waitlist_entry',
         targetId: id,
         beforeRevision: row.revision,
@@ -480,7 +535,7 @@ export class WaitlistService implements WaitlistPort {
         aggregateType: 'waitlist_entry',
         aggregateId: id,
         correlationId,
-        payload: { organizationId, waitlistEntryId: id, poolId: row.pool_id, status: 'withdrawn' },
+        payload: { organizationId, waitlistEntryId: id, poolId: row.pool_id, status: outcome },
       });
       const updated = await this.loadEntry(trx, organizationId, id);
       return redactWaitlistEntry(
@@ -508,7 +563,19 @@ export class WaitlistService implements WaitlistPort {
     poolId: string,
     correlationId: string | null,
   ): Promise<WaitlistOffer[]> {
-    const pool = await this.capacity.loadPool(trx, organizationId, poolId, true);
+    const released = await this.capacity.loadPool(trx, organizationId, poolId);
+    if (!released || !released.offering_id) return [];
+    // Lock every pool of the offering in id order — the order every hold acquires them in — so
+    // concurrent generators serialize and never deadlock against a basket holding the same pools.
+    await trx
+      .selectFrom('capacity_pools')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', released.offering_id)
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const pool = await this.capacity.loadPool(trx, organizationId, poolId);
     if (!pool || !pool.offering_id || pool.status !== 'active') return [];
     const sessionId = pool.scope_type === 'session' ? pool.scope_id : null;
     const entries = await this.waitingQuery(trx, organizationId, pool.offering_id, sessionId)

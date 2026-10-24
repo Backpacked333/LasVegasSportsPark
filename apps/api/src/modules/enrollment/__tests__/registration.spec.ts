@@ -131,7 +131,22 @@ describe('registration: applications, baskets, enrollments (SPK-REG-001..007/009
       expectedRevision: 1,
       reason: 'Please',
     });
+    // The guardian may read the application, so the denial is honest; another household's adult
+    // learns nothing about it (§4.10).
     expect(byParent.status).toBe(403);
+    const stranger = await adult(t);
+    const byStranger = await post(
+      t,
+      `/v1/applications/${id}/override-eligibility`,
+      stranger.header,
+      { expectedRevision: 1, reason: 'Please' },
+    );
+    expect(byStranger.status).toBe(404);
+    expect(byStranger.body.code).toBe('NOT_FOUND');
+    const acceptByStranger = await post(t, `/v1/applications/${id}/accept`, stranger.header, {
+      expectedRevision: 1,
+    });
+    expect(acceptByStranger.status).toBe(404);
     const ok = await post(t, `/v1/applications/${id}/override-eligibility`, programManager.header, {
       expectedRevision: 1,
       reason: 'Played up last season with coach approval',
@@ -229,6 +244,32 @@ describe('registration: applications, baskets, enrollments (SPK-REG-001..007/009
       ownerPersonId: parent.personId,
     });
     expect(foreignBasket.status).toBe(404);
+  });
+
+  it("§4.7 invariant 1: authority over a child never opens another household's basket", async () => {
+    const setup = await offering(t);
+    const otherGuardian = await adult(t);
+    // Both adults may register the child, but the basket belongs to the first household.
+    const kid = await child(t, [parent, otherGuardian]);
+    const basket = await basketWith(t, parent, []);
+    const intrusion = await post(t, `/v1/baskets/${basket.id}/lines`, otherGuardian.header, {
+      participantPersonId: kid,
+      offeringId: setup.offeringId,
+      intent: 'youth',
+    });
+    expect(intrusion.status).toBe(404);
+    expect(intrusion.body.code).toBe('NOT_FOUND');
+    expect((await t.http.get(`/v1/baskets/${basket.id}`).set(otherGuardian.header)).status).toBe(
+      404,
+    );
+    // The basket's own household adds the same child normally.
+    const added = await post(t, `/v1/baskets/${basket.id}/lines`, parent.header, {
+      participantPersonId: kid,
+      offeringId: setup.offeringId,
+      intent: 'youth',
+    });
+    expect(added.status).toBe(201);
+    expect(added.body.lines).toHaveLength(1);
   });
 
   it('SPK-AT-001: a returning parent registers two children in one all-or-nothing basket', async () => {
@@ -692,6 +733,18 @@ describe('registration: applications, baskets, enrollments (SPK-REG-001..007/009
     );
     expect(completed.status).toBe(200);
     expect(completed.body).toMatchObject({ status: 'completed', revision: 3 });
+    // A failed confirmation concerns pending enrollments only (finance compensation, §4.11).
+    await expect(
+      uow.run(({ trx }) =>
+        enrollmentPort.failConfirmation(
+          trx,
+          t.organizationId,
+          enrollmentId,
+          'late failure',
+          systemPrincipal(t.organizationId, 'finance.checkout'),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
     const cancelLate = await post(t, `/v1/enrollments/${enrollmentId}/cancel`, parent.header, {
       expectedRevision: 3,
       reason: 'moved',

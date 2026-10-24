@@ -562,6 +562,8 @@ export const TransferPreviewSchema = z
           available: z.number().int(),
         }),
       ),
+      /** Others waiting for the target offering; a transfer never skips them (DEC-006 waitlistFirst). */
+      waitlistAhead: z.number().int().min(0),
       sufficient: z.boolean(),
     }),
     eligibility: EligibilityResultSchema,
@@ -663,6 +665,12 @@ export type JoinWaitlistInput = z.infer<typeof JoinWaitlistBody>;
 
 export const WithdrawWaitlistBody = withCommandMeta({}).openapi('WithdrawWaitlistRequest');
 export type WithdrawWaitlistInput = z.infer<typeof WithdrawWaitlistBody>;
+
+/** Staff removal from a waitlist (SPK-REG-008 status `removed`): the reason is required and audited. */
+export const RemoveWaitlistEntryBody = withCommandMeta({})
+  .extend({ reason: Reason })
+  .openapi('RemoveWaitlistEntryRequest');
+export type RemoveWaitlistEntryInput = z.infer<typeof RemoveWaitlistEntryBody>;
 
 export const ListWaitlistQuery = z.object({
   offeringId: z.uuid(),
@@ -1283,6 +1291,14 @@ command(
   '/waitlist-entries/{id}/withdraw',
   'Leave a waitlist',
   WithdrawWaitlistBody,
+  WaitlistEntrySchema,
+  200,
+);
+command(
+  'post',
+  '/waitlist-entries/{id}/remove',
+  'Remove an entry from a waitlist (staff, with a reason; an open offer is declined)',
+  RemoveWaitlistEntryBody,
   WaitlistEntrySchema,
   200,
 );

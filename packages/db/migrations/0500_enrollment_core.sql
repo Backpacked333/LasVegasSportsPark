@@ -14,6 +14,8 @@
 --     simultaneous constraints acquired in id order (SPK-REG-005, SPK-AT-005);
 --   * SPK-REG-006: a hold has exactly one terminal outcome — the status and its fact agree;
 --   * SPK-REG-008: one open offer per waitlist entry; acceptance consumes it once;
+--   * §4.6: triggers refuse any transition the Enrollment, Application, Placement, Hold and
+--     SessionBooking machines (packages/contracts/src/state-machines.ts) do not allow;
 --   * §4.7 (7), SPK-AT-020: a makeup entitlement can never be redeemed beyond its limit —
 --     check (redeemed_count <= redemption_limit); redemptions are append-only;
 --   * SPK-PLACE-004: pickup bookings are session bookings with their own capacity; nothing here
@@ -782,6 +784,19 @@ begin
            revision = revision + 1
      where organization_id = new.organization_id and id = new.makeup_entitlement_id;
   else
+    -- A reversal corrects exactly one redemption of the same entitlement and booking; a
+    -- reversal of a reversal (which would hand out a second free redemption) is refused.
+    if not exists (
+      select 1 from makeup_redemptions r
+       where r.organization_id = new.organization_id
+         and r.id = new.reverses_redemption_id
+         and r.kind = 'redeem'
+         and r.makeup_entitlement_id = new.makeup_entitlement_id
+         and r.session_booking_id = new.session_booking_id
+    ) then
+      raise exception 'makeup reversal % must reverse a redemption of the same entitlement and booking', new.id
+        using errcode = 'check_violation', constraint = 'makeup_entitlements_within_limit';
+    end if;
     update makeup_entitlements
        set redeemed_count = redeemed_count - 1,
            status = case when status = 'exhausted' then 'active' else status end,
@@ -793,3 +808,61 @@ end
 $$;
 create trigger makeup_redemptions_apply after insert on makeup_redemptions
   for each row execute function makeup_redemptions_apply();
+
+-- §4.6 SessionBookingMachine: pending → confirmed | canceled | expired; confirmed → canceled.
+create or replace function session_bookings_transition_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.status = old.status then
+    return new;
+  end if;
+  if (old.status = 'pending' and new.status in ('confirmed', 'canceled', 'expired'))
+     or (old.status = 'confirmed' and new.status = 'canceled') then
+    return new;
+  end if;
+  raise exception 'session booking % cannot move from % to %', old.id, old.status, new.status
+    using errcode = 'check_violation', constraint = 'session_bookings_machine';
+end
+$$;
+create trigger session_bookings_transition_guard before update on session_bookings
+  for each row execute function session_bookings_transition_guard();
+
+-- §4.6 ApplicationMachine: draft → submitted | withdrawn; submitted → awaiting_review | accepted |
+-- declined | withdrawn; awaiting_review → accepted | declined | withdrawn; decisions are final.
+create or replace function applications_transition_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.status = old.status then
+    return new;
+  end if;
+  if (old.status = 'draft' and new.status in ('submitted', 'withdrawn'))
+     or (old.status = 'submitted' and new.status in ('awaiting_review', 'accepted', 'declined', 'withdrawn'))
+     or (old.status = 'awaiting_review' and new.status in ('accepted', 'declined', 'withdrawn')) then
+    return new;
+  end if;
+  raise exception 'application % cannot move from % to %', old.id, old.status, new.status
+    using errcode = 'check_violation', constraint = 'applications_machine';
+end
+$$;
+create trigger applications_transition_guard before update on applications
+  for each row execute function applications_transition_guard();
+
+-- §4.6 PlacementMachine: unassigned → proposed | assigned; proposed → unassigned | assigned;
+-- assigned → released; released is final.
+create or replace function placement_requests_transition_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.status = old.status then
+    return new;
+  end if;
+  if (old.status = 'unassigned' and new.status in ('proposed', 'assigned'))
+     or (old.status = 'proposed' and new.status in ('unassigned', 'assigned'))
+     or (old.status = 'assigned' and new.status = 'released') then
+    return new;
+  end if;
+  raise exception 'placement request % cannot move from % to %', old.id, old.status, new.status
+    using errcode = 'check_violation', constraint = 'placement_requests_machine';
+end
+$$;
+create trigger placement_requests_transition_guard before update on placement_requests
+  for each row execute function placement_requests_transition_guard();

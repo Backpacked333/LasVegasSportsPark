@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   EnrollmentMachine,
+  SessionBookingMachine,
   errors,
   newId,
   type CancelEnrollmentInput,
@@ -345,42 +346,96 @@ export class EnrollmentsService implements EnrollmentPort {
   // EnrollmentPort: finance confirms or fails after payment facts (§4.11 steps 7–10)
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * Converts holds to allocations atomically (§4.11 step 8): every hold is locked in id order (so two
+   * coordinators never deadlock), and when any of them is not active — expired, lapsed past its
+   * server-owned expiry, released or already committed — CAPACITY_UNAVAILABLE is thrown before
+   * anything is written. Each allocation names the record the hold was taken for.
+   */
   async commitHolds(trx: Trx, organizationId: string, holdIds: readonly string[]): Promise<Hold[]> {
+    const now = this.clock.now();
+    const ids = [...new Set(holdIds)].sort();
     const rows: HoldRow[] = [];
-    for (const holdId of holdIds) {
+    for (const holdId of ids) {
       const hold = await this.capacity.loadHold(trx, organizationId, holdId, true);
       if (!hold) throw errors.notFound('hold', holdId);
-      if (hold.status !== 'active') {
-        throw errors.capacityUnavailable(
-          `Hold ${holdId} is ${hold.status}; nothing was committed.`,
-          {
-            holdId,
-            status: hold.status,
-            poolId: hold.pool_id,
-          },
-        );
+      if (hold.status !== 'active' || this.capacity.isLapsed(hold, now)) {
+        const status = hold.status === 'active' ? 'expired' : hold.status;
+        throw errors.capacityUnavailable(`Hold ${holdId} is ${status}; nothing was committed.`, {
+          holdId,
+          status,
+          poolId: hold.pool_id,
+        });
       }
       rows.push(hold);
     }
-    const committed: HoldRow[] = [];
+    const committed = new Map<string, HoldRow>();
     for (const hold of rows) {
-      const enrollmentId =
-        hold.owner_kind === 'basket' && hold.owner_id
-          ? ((
-              await trx
-                .selectFrom('enrollments')
-                .select('id')
-                .where('organization_id', '=', organizationId)
-                .where('basket_line_id', '=', hold.owner_id)
-                .where('status', 'in', ['pending', 'confirmed'])
-                .executeTakeFirst()
-            )?.id ?? null)
-          : null;
-      committed.push(
-        await this.capacity.commitHold(trx, organizationId, hold.id, { enrollmentId }, null),
+      const target = await this.allocationTargetOf(trx, organizationId, hold);
+      committed.set(
+        hold.id,
+        await this.capacity.commitHold(trx, organizationId, hold.id, target, null),
       );
     }
-    return committed.map(toHold);
+    return holdIds
+      .filter((id, index) => holdIds.indexOf(id) === index)
+      .map((id) => toHold(committed.get(id) as HoldRow));
+  }
+
+  /** The record a hold reserves for: the line's enrollment, the booking or the placement request. */
+  private async allocationTargetOf(
+    trx: Trx,
+    organizationId: string,
+    hold: HoldRow,
+  ): Promise<{ enrollmentId?: string; sessionBookingId?: string; placementRequestId?: string }> {
+    if (hold.owner_kind === 'session_booking' && hold.owner_id) {
+      return { sessionBookingId: hold.owner_id };
+    }
+    if (hold.owner_kind === 'placement' && hold.owner_id) {
+      return { placementRequestId: hold.owner_id };
+    }
+    if (hold.owner_kind === 'basket' && hold.owner_id) {
+      const enrollment = await trx
+        .selectFrom('enrollments')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('basket_line_id', '=', hold.owner_id)
+        .where('status', 'in', ['pending', 'confirmed'])
+        .executeTakeFirst();
+      if (enrollment) return { enrollmentId: enrollment.id };
+    }
+    // A waitlist offer's hold or a staff hold reserves for nobody yet: it is accepted into a
+    // basket (or a booking) first, which moves the hold to that owner.
+    throw errors.resourceConflict(
+      `Hold ${hold.id} does not reserve for an enrollment, booking or placement yet.`,
+      { code: 'HOLD_WITHOUT_TARGET', holdId: hold.id, ownerKind: hold.owner_kind },
+    );
+  }
+
+  /**
+   * DEC-006 (proposed `waitlistFirst`): a place that came free while people wait goes to them
+   * through an offer, even before the offer handler has run, so a payment that arrives after its
+   * own hold lapsed cannot take it back (SPK-AT-006).
+   */
+  private async assertNoneWaiting(
+    trx: Trx,
+    organizationId: string,
+    scope: { offeringId: string; sessionId: string | null },
+    participantPersonId: string,
+  ): Promise<void> {
+    if (!this.evaluator.configuration.waitlistFirst) return;
+    const waiting = await this.capacity.othersWaiting(
+      trx,
+      organizationId,
+      scope,
+      participantPersonId,
+    );
+    if (waiting > 0) {
+      throw errors.capacityUnavailable(
+        'The place was released after the hold expired and is offered to the waitlist first.',
+        { ...scope, waitlistFirst: true },
+      );
+    }
   }
 
   async confirmEnrollment(
@@ -408,7 +463,7 @@ export class EnrollmentsService implements EnrollmentPort {
     const row = await this.load(trx, organizationId, enrollmentId, true);
     if (!row) throw errors.notFound('enrollment', enrollmentId);
     if (row.status === 'confirmed') return row;
-    EnrollmentMachine.next(row.status, 'confirm');
+    const confirmedStatus = EnrollmentMachine.next(row.status, 'confirm');
     if (row.source_application_id) {
       const application = await trx
         .selectFrom('applications')
@@ -433,7 +488,17 @@ export class EnrollmentsService implements EnrollmentPort {
       : [];
     const reacquire: Array<{ poolId: string; quantity: number }> = [];
     for (const hold of holds) {
-      if (hold.status === 'active') {
+      if (hold.status === 'active' && this.capacity.isLapsed(hold, now)) {
+        // The server-owned expiry has passed though its timer has not run yet: the hold's one
+        // terminal outcome is `expired` (SPK-REG-006); the place is re-acquired below only if free.
+        await this.capacity.expireHoldIfDue(
+          trx,
+          organizationId,
+          hold.id,
+          options.correlationId ?? null,
+        );
+        reacquire.push({ poolId: hold.pool_id, quantity: hold.quantity });
+      } else if (hold.status === 'active') {
         await this.capacity.commitHold(
           trx,
           organizationId,
@@ -446,12 +511,20 @@ export class EnrollmentsService implements EnrollmentPort {
       }
     }
     if (reacquire.length > 0) {
+      // SPK-AT-006: a late payment never displaces an offer (its hold counts in `held`) nor skips
+      // the queue; otherwise it is a tracked valid fulfillment of a still-free place.
+      await this.assertNoneWaiting(
+        trx,
+        organizationId,
+        { offeringId: row.offering_id, sessionId: null },
+        row.participant_person_id,
+      );
       await this.capacity.acquireCommitted(trx, organizationId, reacquire, { enrollmentId });
     }
     await trx
       .updateTable('enrollments')
       .set({
-        status: 'confirmed',
+        status: confirmedStatus,
         confirmed_at: now,
         order_ref: options.orderRef ?? row.order_ref,
         last_operation_id: options.operationId ?? row.last_operation_id,
@@ -543,6 +616,11 @@ export class EnrollmentsService implements EnrollmentPort {
     const row = await this.load(trx, organizationId, enrollmentId, true);
     if (!row) throw errors.notFound('enrollment', enrollmentId);
     if (row.status === 'canceled') return toEnrollment(row);
+    // A confirmation that failed concerns a pending enrollment only; a confirmed participation
+    // ends through cancellation with its policy and financial consequence (SPK-REG-010).
+    if (row.status !== 'pending') {
+      throw errors.invalidTransition('Enrollment', row.status, 'fail_confirmation');
+    }
     const updated = await this.cancelInTrx(
       trx,
       organizationId,
@@ -572,30 +650,48 @@ export class EnrollmentsService implements EnrollmentPort {
       .executeTakeFirst();
     if (!row) throw errors.notFound('session_booking', bookingId);
     if (row.status === 'confirmed') return toSessionBooking(row);
-    if (row.status !== 'pending')
-      throw errors.invalidTransition('SessionBooking', row.status, 'confirm');
-    if (row.hold_id) {
-      const hold = await this.capacity.loadHold(trx, organizationId, row.hold_id);
-      if (hold?.status === 'active') {
+    const status = SessionBookingMachine.next(row.status, 'confirm');
+    const reacquire: Array<{ poolId: string; quantity: number }> = [];
+    for (const hold of await this.capacity.holdsOfOwner(
+      trx,
+      organizationId,
+      'session_booking',
+      bookingId,
+    )) {
+      if (hold.status === 'active' && this.capacity.isLapsed(hold, now)) {
+        await this.capacity.expireHoldIfDue(
+          trx,
+          organizationId,
+          hold.id,
+          options.correlationId ?? null,
+        );
+        reacquire.push({ poolId: hold.pool_id, quantity: hold.quantity });
+      } else if (hold.status === 'active') {
         await this.capacity.commitHold(
           trx,
           organizationId,
-          row.hold_id,
+          hold.id,
           { sessionBookingId: bookingId },
           options.correlationId ?? null,
         );
-      } else if (hold && hold.status !== 'committed') {
-        await this.capacity.acquireCommitted(
-          trx,
-          organizationId,
-          [{ poolId: hold.pool_id, quantity: hold.quantity }],
-          { sessionBookingId: bookingId },
-        );
+      } else if (hold.status !== 'committed') {
+        reacquire.push({ poolId: hold.pool_id, quantity: hold.quantity });
       }
+    }
+    if (reacquire.length > 0) {
+      await this.assertNoneWaiting(
+        trx,
+        organizationId,
+        { offeringId: row.offering_id, sessionId: row.session_id },
+        row.participant_person_id,
+      );
+      await this.capacity.acquireCommitted(trx, organizationId, reacquire, {
+        sessionBookingId: bookingId,
+      });
     }
     await trx
       .updateTable('session_bookings')
-      .set({ status: 'confirmed', confirmed_at: now, revision: row.revision + 1 })
+      .set({ status, confirmed_at: now, revision: row.revision + 1 })
       .where('organization_id', '=', organizationId)
       .where('id', '=', bookingId)
       .where('revision', '=', row.revision)
@@ -808,7 +904,7 @@ export class EnrollmentsService implements EnrollmentPort {
     lineOutcome: 'failed' | 'released',
   ): Promise<EnrollmentRow> {
     const now = this.clock.now();
-    EnrollmentMachine.next(row.status, 'cancel');
+    const canceledStatus = EnrollmentMachine.next(row.status, 'cancel');
     const freed = await this.capacity.releaseAllocationsFor(
       trx,
       organizationId,
@@ -839,7 +935,7 @@ export class EnrollmentsService implements EnrollmentPort {
     await trx
       .updateTable('enrollments')
       .set({
-        status: 'canceled',
+        status: canceledStatus,
         canceled_at: now,
         cancellation_reason: reason,
         cancellation_policy_version_id:
@@ -981,6 +1077,15 @@ export class EnrollmentsService implements EnrollmentPort {
         constraintKind: p.constraint_kind,
         available: p.capacity - p.committed - p.held,
       }));
+      // DEC-006 (proposed `waitlistFirst`): a transfer does not skip people waiting for the target.
+      const waitlistAhead = this.evaluator.configuration.waitlistFirst
+        ? await this.capacity.othersWaiting(
+            trx,
+            organizationId,
+            { offeringId: target.offering.id, sessionId: null },
+            row.participant_person_id,
+          )
+        : 0;
       const preview: TransferPreview = {
         enrollmentId: id,
         existing: this.participation(
@@ -998,7 +1103,8 @@ export class EnrollmentsService implements EnrollmentPort {
         capacity: {
           released: released.map((r) => ({ poolId: r.pool_id, unit: r.unit })),
           required,
-          sufficient: required.every((r) => r.available >= 1),
+          waitlistAhead,
+          sufficient: waitlistAhead === 0 && required.every((r) => r.available >= 1),
         },
         eligibility: evaluation.result,
         financialConsequence: consequence,
@@ -1010,7 +1116,7 @@ export class EnrollmentsService implements EnrollmentPort {
       if (!input.commit) return preview;
 
       // ---- commit -------------------------------------------------------------------------
-      EnrollmentMachine.next(row.status, 'transfer');
+      const transferredStatus = EnrollmentMachine.next(row.status, 'transfer');
       if (!evaluation.result.eligible) {
         throw errors.eligibility('The participant is not eligible for the target offering.', {
           reasons: evaluation.result.reasons,
@@ -1032,6 +1138,12 @@ export class EnrollmentsService implements EnrollmentPort {
           {
             code: 'APPROVAL_REQUIRED',
           },
+        );
+      }
+      if (waitlistAhead > 0) {
+        throw errors.capacityUnavailable(
+          'Places of the target offering are offered to its waitlist first.',
+          { offeringId: target.offering.id, waitlistFirst: true, waitlistAhead },
         );
       }
       if (consequence.kind !== 'none' && !input.acceptConsequence) {
@@ -1077,7 +1189,7 @@ export class EnrollmentsService implements EnrollmentPort {
       await trx
         .updateTable('enrollments')
         .set({
-          status: 'transferred',
+          status: transferredStatus,
           transferred_at: now,
           transferred_to_enrollment_id: created.id,
           last_operation_id: operationId,
@@ -1097,7 +1209,7 @@ export class EnrollmentsService implements EnrollmentPort {
         await trx
           .updateTable('enrollments')
           .set({
-            status: 'confirmed',
+            status: EnrollmentMachine.next(created.status, 'confirm'),
             confirmed_at: now,
             equivalence_key: equivalence,
             transferred_from_enrollment_id: id,

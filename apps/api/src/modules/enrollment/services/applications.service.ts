@@ -36,6 +36,7 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  hiddenFrom,
   isStaffLike,
   organizationOf,
   redactApplication,
@@ -385,11 +386,23 @@ export class ApplicationsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('application');
+      // Staff-only; a customer of another household must not learn that the application exists.
       await this.authorization.require(principal, EnrollmentActions.overrideEligibility, {
         type: 'application',
         id,
         organizationId,
-        facilityId: null,
+        subjectPersonIds: [row.participant_person_id],
+        protected: await hiddenFrom(
+          this.authorization,
+          principal,
+          EnrollmentActions.readApplication,
+          {
+            type: 'application',
+            id,
+            organizationId,
+            subjectPersonIds: [row.participant_person_id],
+          },
+        ),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       const result = row.eligibility_result as unknown as EligibilityResult;
@@ -513,6 +526,18 @@ export class ApplicationsService {
         type: 'application',
         id,
         organizationId,
+        subjectPersonIds: [row.participant_person_id],
+        protected: await hiddenFrom(
+          this.authorization,
+          principal,
+          EnrollmentActions.readApplication,
+          {
+            type: 'application',
+            id,
+            organizationId,
+            subjectPersonIds: [row.participant_person_id],
+          },
+        ),
       });
       assertExpectedRevision(expectedRevision, row.revision);
       const result = row.eligibility_result as unknown as EligibilityResult;

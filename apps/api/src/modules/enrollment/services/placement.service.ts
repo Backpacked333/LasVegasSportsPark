@@ -52,6 +52,7 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  hiddenFrom,
   isStaffLike,
   minutesFrom,
   organizationOf,
@@ -301,6 +302,7 @@ export class PlacementService {
       type: 'placement_request',
       id,
       organizationId,
+      protected: await this.hidden(principal, row),
     });
     const now = this.clock.now();
     const teammates = new Set(row.requested_teammate_person_ids as string[]);
@@ -416,6 +418,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       const status = PlacementMachine.next(row.status, 'propose');
@@ -479,6 +482,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       const status = PlacementMachine.next(row.status, 'reject_proposal');
@@ -524,6 +528,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       PlacementMachine.next(row.status, 'assign');
@@ -783,6 +788,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       PlacementMachine.next(row.status, 'release');
@@ -893,6 +899,16 @@ export class PlacementService {
     if (!OPEN_ENTRY_STATES.includes(entry.status)) {
       throw errors.invalidTransition('TeamEntry', entry.status, 'place_player');
     }
+  }
+
+  /** §4.10: a customer who may not read the request learns nothing about it. */
+  private hidden(principal: Principal, row: PlacementRow): Promise<boolean> {
+    return hiddenFrom(this.authorization, principal, EnrollmentActions.readPlacement, {
+      type: 'placement_request',
+      id: row.id,
+      organizationId: row.organization_id,
+      subjectPersonIds: [row.participant_person_id],
+    });
   }
 
   private async record(

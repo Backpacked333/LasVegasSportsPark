@@ -107,8 +107,18 @@ describe('free-agent placement (SPK-PLACE-001..005, PlacementMachine)', () => {
     ).toBe(403);
     expect((await t.http.get(`/v1/placement-requests/${id}`).set(captain.header)).status).toBe(404);
     expect((await t.http.get(`/v1/placement-requests/${id}`)).status).toBe(401);
+    // Staff-only commands on the request answer NOT_FOUND to a customer who may not read it (§4.10).
     expect(
       (await t.http.get(`/v1/placement-requests/${id}/candidates`).set(captain.header)).status,
+    ).toBe(404);
+    const proposeByCaptain = await post(t, `/v1/placement-requests/${id}/propose`, captain.header, {
+      teamEntryId: openEntry,
+      expectedRevision: 1,
+    });
+    expect(proposeByCaptain.status).toBe(404);
+    // The participant may read the request but not run staff placement: ACCESS_DENIED.
+    expect(
+      (await t.http.get(`/v1/placement-requests/${id}/candidates`).set(player.header)).status,
     ).toBe(403);
     expect((await t.http.get(`/v1/placement-requests/${id}`).set(player.header)).status).toBe(200);
     const listed = await t.http

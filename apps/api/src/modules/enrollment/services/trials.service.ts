@@ -373,12 +373,27 @@ export class TrialsService {
         person,
         intent: input.intent,
       });
+      // The follow-up belongs to the family, never to the staff member who assists (SPK-REG-009):
+      // staff name the payer, or reuse the trial's payer, or the adult who registered it themselves.
+      const trialPayer = row.session_booking_id
+        ? ((
+            await trx
+              .selectFrom('session_bookings')
+              .select('payer_person_id')
+              .where('organization_id', '=', organizationId)
+              .where('id', '=', row.session_booking_id)
+              .executeTakeFirst()
+          )?.payer_person_id ?? null)
+        : null;
+      const familyRegistrant = row.assisted_by_person_id ? null : row.registered_by_person_id;
       const payerPersonId =
         input.payerPersonId ??
-        (isStaffLike(principal) ? row.registered_by_person_id : principal.personId);
+        (isStaffLike(principal) ? (trialPayer ?? familyRegistrant) : principal.personId);
       const ownerPersonId = isStaffLike(principal) ? payerPersonId : principal.personId;
       if (!ownerPersonId)
-        throw errors.validation('payerPersonId is required when staff open a follow-up.');
+        throw errors.validation('payerPersonId is required when staff open a follow-up.', {
+          path: 'payerPersonId',
+        });
       const owner = await this.evaluator.participant(trx, organizationId, ownerPersonId);
       if (owner.kind !== 'adult')
         throw errors.validation('A basket belongs to an adult household member.');

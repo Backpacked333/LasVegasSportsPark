@@ -40,7 +40,14 @@ import type {
   WaitlistOffersTable,
 } from '@sportspark/db';
 import { sql, type Selectable } from 'kysely';
-import { snapshotActor, type RequestWithContext, type Trx } from '../../kernel';
+import {
+  snapshotActor,
+  type ActionDefinition,
+  type AuthorizationService,
+  type AuthorizationTargetInput,
+  type RequestWithContext,
+  type Trx,
+} from '../../kernel';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records (§4.10). */
 export const CorrelationId = createParamDecorator(
@@ -57,6 +64,21 @@ export function organizationOf(principal: Principal): string {
 
 export function isStaffLike(principal: Principal): boolean {
   return principal.kind === 'staff' || principal.kind === 'system';
+}
+
+/**
+ * §4.10: should a denied staff-only command on a customer-private record read as NOT_FOUND? Yes
+ * for a customer who may not even read the record (another household), so its existence never
+ * leaks; a customer who may read it (their own child's) and staff get the honest ACCESS_DENIED.
+ */
+export async function hiddenFrom(
+  authorization: AuthorizationService,
+  principal: Principal,
+  readAction: ActionDefinition,
+  target: AuthorizationTargetInput,
+): Promise<boolean> {
+  if (isStaffLike(principal)) return false;
+  return !(await authorization.decide(principal, readAction, target)).allowed;
 }
 
 /** The system principal enrollment uses for its own follow-up work (outbox handlers, timers). */

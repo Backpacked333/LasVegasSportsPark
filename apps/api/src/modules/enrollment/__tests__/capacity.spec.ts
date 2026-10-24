@@ -1,13 +1,18 @@
 import { systemPrincipal } from '@sportspark/contracts';
+import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Outbox, UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { CatalogEvents, createProgramFixture } from '../../catalog';
 import {
   BASKET_PORT,
+  CAPACITY_PORT,
   ENROLLMENT_PORT,
+  WAITLIST_PORT,
   type BasketPort,
+  type CapacityPort,
   type EnrollmentPort,
+  type WaitlistPort,
 } from '../enrollment.ports';
 import {
   acknowledge,
@@ -32,6 +37,7 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
   let enrollmentPort: EnrollmentPort;
   let basketPort: BasketPort;
   const finance = () => systemPrincipal(t.organizationId, 'finance.checkout');
+  const programManagerPrincipal = () => systemPrincipal(t.organizationId, 'staff.desk');
 
   beforeAll(async () => {
     t = await enrollmentTestApp();
@@ -199,6 +205,72 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
     ).toHaveLength(1);
   });
 
+  it('§4.11 ports: finance reads the basket with price and policy basis; capacity and waitlist ports answer per organization', async () => {
+    const capacityPort = t.app.get<CapacityPort>(CAPACITY_PORT);
+    const waitlistPort = t.app.get<WaitlistPort>(WAITLIST_PORT);
+    const setup = await offering(t, {
+      basePriceMinor: 18_000,
+      capacityUnits: [{ unit: 'seats', limit: 1 }],
+    });
+    const { basket, held } = await heldBasketFor(parent, setup.offeringId, setup);
+    const enrollmentId = held.body.lines[0].enrollmentId as string;
+    const forFinance = await basketPort.getBasket(t.organizationId, basket.id);
+    expect(forFinance).toMatchObject({
+      status: 'held',
+      payerPersonId: parent.personId,
+      currency: 'USD',
+      subtotalMinor: 18_000,
+      approvalPending: false,
+    });
+    expect(forFinance!.lines[0]).toMatchObject({
+      enrollmentId,
+      price: { basePriceMinor: 18_000, currency: 'USD' },
+      policies: { requiredFormPolicyVersionIds: [setup.formPolicyVersionId] },
+    });
+    const holds = await enrollmentPort.holdsForBasket(t.organizationId, basket.id);
+    expect(holds).toEqual([expect.objectContaining({ status: 'active', basketId: basket.id })]);
+    expect(await enrollmentPort.getEnrollment(t.organizationId, enrollmentId)).toMatchObject({
+      status: 'pending',
+      basketId: basket.id,
+    });
+    // Organization scope: another organization's id answers nothing.
+    const other = await seedOrganization(t.db);
+    expect(await enrollmentPort.getEnrollment(other.organizationId, enrollmentId)).toBeNull();
+    expect(await basketPort.getBasket(other.organizationId, basket.id)).toBeNull();
+    const [seats] = await capacityPort.poolsForOffering(t.organizationId, setup.offeringId);
+    expect(seats).toMatchObject({ capacity: 1, held: 1, committed: 0, available: 0 });
+    expect(await capacityPort.getPool(other.organizationId, seats!.id)).toBeNull();
+    // A full pool refuses a hold through the port too (§4.7 invariant 3), writing nothing.
+    await expect(
+      uow.run(({ trx }) =>
+        capacityPort.acquireHolds(trx, t.organizationId, {
+          pools: [{ poolId: seats!.id, quantity: 1 }],
+          ownerKind: 'staff',
+          ownerId: null,
+          actor: programManagerPrincipal(),
+          expiresAt: new Date(t.clock.now().getTime() + 5 * MINUTE),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'CAPACITY_UNAVAILABLE', details: { available: 0 } });
+    // Releasing through the port frees the place exactly once.
+    const released = await uow.run(({ trx }) =>
+      capacityPort.releaseHold(trx, t.organizationId, holds[0]!.id, 'desk', finance()),
+    );
+    expect(released).toMatchObject({ status: 'released', releaseReason: 'desk' });
+    const again = await uow.run(({ trx }) =>
+      capacityPort.releaseHold(trx, t.organizationId, holds[0]!.id, 'desk', finance()),
+    );
+    expect(again.revision).toBe(released.revision);
+    expect((await capacityPort.getPool(t.organizationId, seats!.id))!.available).toBe(1);
+    // No one waits: offering from the pool makes nothing, and repeating it is harmless.
+    expect(
+      await uow.run(({ trx }) =>
+        waitlistPort.offerFromPool(trx, t.organizationId, seats!.id, null),
+      ),
+    ).toEqual([]);
+    expect(await waitlistPort.entriesForPool(t.organizationId, seats!.id)).toEqual([]);
+  });
+
   it('SPK-AT-006: a payment after hold expiry never displaces a valid waitlist offer', async () => {
     const setup = await offering(t, { capacityUnits: [{ unit: 'seats', limit: 1 }] });
     const late = await heldBasketFor(parent, setup.offeringId, setup);
@@ -321,6 +393,194 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
     expect(await pool(setup.offeringId)).toEqual([
       expect.objectContaining({ held: 0, committed: 1 }),
     ]);
+  });
+
+  it('SPK-AT-006 / SPK-REG-006: a lapsed hold never commits, even before its timer runs, and the waitlist comes first', async () => {
+    const setup = await offering(t, { capacityUnits: [{ unit: 'seats', limit: 1 }] });
+    const late = await heldBasketFor(parent, setup.offeringId, setup);
+    const holdId = late.held.body.holds[0].id as string;
+    const enrollmentId = late.held.body.lines[0].enrollmentId as string;
+    await uow.run(({ trx }) =>
+      basketPort.startCheckout(trx, t.organizationId, late.basket.id, 'order-lapsed', finance()),
+    );
+    const waiting = await adult(t);
+    const waitingKid = await child(t, [waiting]);
+    await acknowledge(t, setup, waitingKid, waiting.personId);
+    const joined = await post(t, '/v1/waitlist-entries', waiting.header, {
+      offeringId: setup.offeringId,
+      participantPersonId: waitingKid,
+      intent: 'youth',
+    });
+    expect(joined.status).toBe(201);
+    // The server-owned expiry passes; the worker has not run the timer yet.
+    t.clock.advance(10 * MINUTE + 1000);
+    await expect(
+      uow.run(({ trx }) => enrollmentPort.commitHolds(trx, t.organizationId, [holdId])),
+    ).rejects.toMatchObject({
+      code: 'CAPACITY_UNAVAILABLE',
+      details: { holdId, status: 'expired' },
+    });
+    // The late payment cannot take the freed place while a family waits (no offer exists yet).
+    await expect(
+      uow.run(({ trx }) =>
+        enrollmentPort.confirmEnrollment(trx, t.organizationId, enrollmentId, {
+          actor: finance(),
+          orderRef: 'order-lapsed',
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'CAPACITY_UNAVAILABLE', details: { waitlistFirst: true } });
+    // Nothing was written by the refused commands.
+    const hold = await t.db
+      .selectFrom('holds')
+      .select(['status', 'revision'])
+      .where('id', '=', holdId)
+      .executeTakeFirstOrThrow();
+    expect(hold).toEqual({ status: 'active', revision: 1 });
+    expect(
+      (
+        await t.db
+          .selectFrom('enrollments')
+          .select('status')
+          .where('id', '=', enrollmentId)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('pending');
+    // The timer runs: the hold expires (its one terminal outcome) and the waiting family is offered.
+    await drain(t);
+    expect(
+      (
+        await t.db
+          .selectFrom('holds')
+          .select('status')
+          .where('id', '=', holdId)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('expired');
+    const entry = await t.http
+      .get(`/v1/waitlist-entries/${joined.body.id as string}`)
+      .set(waiting.header);
+    expect(entry.body.status).toBe('offered');
+  });
+
+  it('SPK-REG-008: staff remove a waitlist entry with a reason; its offer is declined and the place moves on', async () => {
+    const setup = await offering(t, { capacityUnits: [{ unit: 'seats', limit: 1 }] });
+    const holder = await heldBasketFor(parent, setup.offeringId, setup);
+    const families = [await adult(t), await adult(t)];
+    const entries: string[] = [];
+    for (const family of families) {
+      const kid = await child(t, [family]);
+      await acknowledge(t, setup, kid, family.personId);
+      const joined = await post(t, '/v1/waitlist-entries', family.header, {
+        offeringId: setup.offeringId,
+        participantPersonId: kid,
+        intent: 'youth',
+      });
+      expect(joined.status).toBe(201);
+      entries.push(joined.body.id as string);
+      t.clock.advance(1000);
+    }
+    await post(t, `/v1/baskets/${holder.basket.id}/release`, parent.header, { reason: 'moved' });
+    await drain(t);
+    const first = entries[0]!;
+    expect(
+      (await t.http.get(`/v1/waitlist-entries/${first}`).set(families[0]!.header)).body.status,
+    ).toBe('offered');
+    // Another household learns nothing; the family itself may read but not remove (staff only).
+    const stranger = await adult(t);
+    expect(
+      (await post(t, `/v1/waitlist-entries/${first}/remove`, stranger.header, { reason: 'x' }))
+        .status,
+    ).toBe(404);
+    expect(
+      (
+        await post(t, `/v1/waitlist-entries/${first}/remove`, families[0]!.header, {
+          reason: 'x',
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (await post(t, `/v1/waitlist-entries/${first}/remove`, programManager.header, {})).status,
+    ).toBe(400);
+    const removed = await post(t, `/v1/waitlist-entries/${first}/remove`, programManager.header, {
+      reason: 'Registered in another group',
+    });
+    expect(removed.status).toBe(200);
+    expect(removed.body.status).toBe('removed');
+    expect(removed.body.offers.map((o: { status: string }) => o.status)).toEqual(['declined']);
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('reason')
+      .where('target_id', '=', first)
+      .where('action', '=', 'enrollment.remove_waitlist_entry')
+      .executeTakeFirstOrThrow();
+    expect(audit.reason).toBe('Registered in another group');
+    await drain(t);
+    expect(
+      (await t.http.get(`/v1/waitlist-entries/${entries[1]!}`).set(families[1]!.header)).body
+        .status,
+    ).toBe('offered');
+  });
+
+  it('SPK-REG-010 / DEC-006: a transfer preview shows the waitlist ahead and the commit never skips it', async () => {
+    const from = await offering(t, { basePriceMinor: 0 });
+    const to = await offering(t, {
+      basePriceMinor: 0,
+      capacityUnits: [{ unit: 'seats', limit: 1 }],
+    });
+    const kid = await child(t, [parent]);
+    await acknowledge(t, from, kid, parent.personId);
+    await acknowledge(t, to, kid, parent.personId);
+    const basket = await basketWith(t, parent, [
+      { participantPersonId: kid, offeringId: from.offeringId },
+    ]);
+    await post(t, `/v1/baskets/${basket.id}/hold`, parent.header, {});
+    const done = await post(t, `/v1/baskets/${basket.id}/complete`, parent.header, {});
+    const enrollmentId = done.body.lines[0].enrollmentId as string;
+    // The target is full; another family joins its waitlist, then the place frees up (the offer
+    // handler has not run yet).
+    const occupant = await adult(t);
+    const occupied = await heldBasketFor(occupant, to.offeringId, to);
+    const waiting = await adult(t);
+    const waitingKid = await child(t, [waiting]);
+    await acknowledge(t, to, waitingKid, waiting.personId);
+    expect(
+      (
+        await post(t, '/v1/waitlist-entries', waiting.header, {
+          offeringId: to.offeringId,
+          participantPersonId: waitingKid,
+          intent: 'youth',
+        })
+      ).status,
+    ).toBe(201);
+    await post(t, `/v1/baskets/${occupied.basket.id}/release`, occupant.header, {
+      reason: 'changed plans',
+    });
+    const preview = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, parent.header, {
+      targetOfferingId: to.offeringId,
+      expectedRevision: 2,
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.body.capacity).toMatchObject({ waitlistAhead: 1, sufficient: false });
+    expect(preview.body.capacity.required).toEqual([expect.objectContaining({ available: 1 })]);
+    const commit = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, parent.header, {
+      targetOfferingId: to.offeringId,
+      expectedRevision: 2,
+      commit: true,
+    });
+    expect(commit.status).toBe(409);
+    expect(commit.body).toMatchObject({
+      code: 'CAPACITY_UNAVAILABLE',
+      details: { waitlistFirst: true, waitlistAhead: 1 },
+    });
+    expect(
+      (
+        await t.db
+          .selectFrom('enrollments')
+          .select('status')
+          .where('id', '=', enrollmentId)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('confirmed');
   });
 
   it('SPK-REG-008: offers follow priority; an expired offer requeues, a decline leaves the queue', async () => {

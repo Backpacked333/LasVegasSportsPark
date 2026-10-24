@@ -1,9 +1,10 @@
 import { newId } from '@sportspark/contracts';
-import { json, seedOrganization } from '@sportspark/db';
+import { json, pgConstraintName, seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createOfferingSessionFixture } from '../../catalog';
+import { createSeasonFixture, createTeamEntryFixture } from '../../competition';
 import { createPersonFixture } from '../../identity';
 import {
   createCapacityPoolFixture,
@@ -410,6 +411,16 @@ describe('enrollment schema invariants (§4.7 invariants 2, 3, 7; §4.6 machines
         .where('id', '=', makeupId)
         .executeTakeFirstOrThrow(),
     ).toEqual({ redeemed_count: 0, status: 'active' });
+    // A reversal must correct a redemption of the same entitlement and booking: reversing the
+    // second booking's redemption from a third booking would hand out a free redemption.
+    const redemption2 = await redeem(second);
+    const sessionC = await createOfferingSessionFixture(t, {
+      offeringId: setup.offeringId,
+      scheduledStart: new Date('2026-12-29T17:00:00Z'),
+      scheduledEnd: new Date('2026-12-29T18:00:00Z'),
+    });
+    const third = await booking(sessionC);
+    expect(await rejectsWith(redeem(third, 'reversal', redemption2))).toBe(CHECK);
     let error: unknown;
     try {
       await t.db.deleteFrom('makeup_redemptions').where('id', '=', redemption).execute();
@@ -513,5 +524,142 @@ describe('enrollment schema invariants (§4.7 invariants 2, 3, 7; §4.6 machines
         .execute();
     await trial();
     expect(await rejectsWith(trial())).toBe(UNIQUE);
+  });
+
+  it('§4.6: the database refuses session booking, application and placement transitions their machines do not allow', async () => {
+    const constraintOf = async (promise: Promise<unknown>): Promise<string | undefined> => {
+      try {
+        await promise;
+      } catch (error) {
+        return pgConstraintName(error);
+      }
+      throw new Error('expected the database to reject the statement');
+    };
+    // SessionBookingMachine: canceled is final (facts consistent, so only the machine refuses).
+    const sessionId = await createOfferingSessionFixture(t, {
+      offeringId: setup.offeringId,
+      scheduledStart: new Date('2026-12-22T17:00:00Z'),
+      scheduledEnd: new Date('2026-12-22T18:00:00Z'),
+    });
+    const bookingId = await createSessionBookingFixture(t, {
+      offeringId: setup.offeringId,
+      sessionId,
+      participantPersonId: person,
+      status: 'canceled',
+      scheduledStart: new Date('2026-12-22T17:00:00Z'),
+      scheduledEnd: new Date('2026-12-22T18:00:00Z'),
+    });
+    expect(
+      await constraintOf(
+        t.db
+          .updateTable('session_bookings')
+          .set({ status: 'confirmed', confirmed_at: t.clock.now(), canceled_at: null })
+          .where('id', '=', bookingId)
+          .execute(),
+      ),
+    ).toBe('session_bookings_machine');
+
+    // ApplicationMachine: a declined application is never accepted afterwards.
+    const applicationId = newId();
+    await t.db
+      .insertInto('applications')
+      .values({
+        id: applicationId,
+        organization_id: t.organizationId,
+        offering_id: setup.offeringId,
+        participant_person_id: person,
+        intent: 'youth',
+        submitted_by: ACTOR,
+        submitted_by_person_id: null,
+        payer_person_id: null,
+        status: 'declined',
+        override: null,
+        team_entry_id: null,
+        session_id: null,
+        notes: null,
+        submitted_at: t.clock.now(),
+        decided_at: t.clock.now(),
+        decided_by: ACTOR,
+        decided_by_person_id: null,
+        decision_reason: 'test',
+        withdrawn_at: null,
+      })
+      .execute();
+    expect(
+      await constraintOf(
+        t.db
+          .updateTable('applications')
+          .set({ status: 'accepted' })
+          .where('id', '=', applicationId)
+          .execute(),
+      ),
+    ).toBe('applications_machine');
+
+    // PlacementMachine: an unassigned request is never released without an assignment, and a
+    // released request never comes back.
+    const { seasonId } = await createSeasonFixture(t);
+    const { teamEntryId } = await createTeamEntryFixture(t, {
+      seasonId,
+      captainPersonId: await createPersonFixture(t, { kind: 'adult' }),
+      teamName: 'Guard test',
+    });
+    const placementId = newId();
+    await t.db
+      .insertInto('placement_requests')
+      .values({
+        id: placementId,
+        organization_id: t.organizationId,
+        participant_person_id: person,
+        application_id: null,
+        enrollment_id: null,
+        offering_id: null,
+        season_id: seasonId,
+        preferred_competition_id: null,
+        preferred_division_id: null,
+        declared_level: null,
+        notes: null,
+        requested_by: ACTOR,
+        requested_by_person_id: null,
+        proposed_team_entry_id: null,
+        proposed_at: null,
+        proposed_by: null,
+        assigned_team_entry_id: teamEntryId,
+        assigned_at: t.clock.now(),
+        decided_by: null,
+        decided_by_person_id: null,
+        roster_membership_ref: null,
+        last_operation_id: null,
+        released_at: null,
+        release_reason: null,
+      })
+      .execute();
+    expect(
+      await constraintOf(
+        t.db
+          .updateTable('placement_requests')
+          .set({ status: 'released', released_at: t.clock.now(), release_reason: 'test' })
+          .where('id', '=', placementId)
+          .execute(),
+      ),
+    ).toBe('placement_requests_machine');
+    await t.db
+      .updateTable('placement_requests')
+      .set({ status: 'assigned' })
+      .where('id', '=', placementId)
+      .execute();
+    await t.db
+      .updateTable('placement_requests')
+      .set({ status: 'released', released_at: t.clock.now(), release_reason: 'test' })
+      .where('id', '=', placementId)
+      .execute();
+    expect(
+      await constraintOf(
+        t.db
+          .updateTable('placement_requests')
+          .set({ status: 'assigned', released_at: null })
+          .where('id', '=', placementId)
+          .execute(),
+      ),
+    ).toBe('placement_requests_machine');
   });
 });

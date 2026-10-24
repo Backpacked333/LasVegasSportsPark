@@ -4,6 +4,7 @@ import {
   DeclineWaitlistOfferBody,
   JoinWaitlistBody,
   ListWaitlistQuery,
+  RemoveWaitlistEntryBody,
   WithdrawWaitlistBody,
   z,
   type Principal,
@@ -58,6 +59,18 @@ export class WaitlistController {
     @CorrelationId() correlationId: string | null,
   ): Promise<WaitlistEntry> {
     return this.waitlist.withdraw(principal, params.id, body, correlationId);
+  }
+
+  @Post('waitlist-entries/:id/remove')
+  @HttpCode(200)
+  @Idempotent()
+  remove(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodBody(RemoveWaitlistEntryBody) body: z.infer<typeof RemoveWaitlistEntryBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<WaitlistEntry> {
+    return this.waitlist.remove(principal, params.id, body, correlationId);
   }
 
   @Get('waitlist-offers/:id')

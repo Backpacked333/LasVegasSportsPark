@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  HoldMachine,
   errors,
   newId,
   type AdjustCapacityPoolInput,
@@ -767,7 +768,18 @@ export class CapacityService implements CapacityPort {
     );
   }
 
-  /** Converts an active hold to an allocation; throws CAPACITY_UNAVAILABLE when it is no longer active. */
+  /**
+   * True when an active hold has passed its server-owned expiry (SPK-REG-006): it no longer
+   * reserves anything even if the expiry timer has not run yet, so it can never be committed.
+   */
+  isLapsed(hold: HoldRow, now: Date = this.clock.now()): boolean {
+    return hold.status === 'active' && new Date(hold.expires_at).getTime() <= now.getTime();
+  }
+
+  /**
+   * Converts an active hold to an allocation; throws CAPACITY_UNAVAILABLE (writing nothing) when
+   * it is no longer active or has passed its server-owned expiry.
+   */
   async commitHold(
     trx: Trx,
     organizationId: string,
@@ -778,9 +790,23 @@ export class CapacityService implements CapacityPort {
     const now = this.clock.now();
     const hold = await this.loadHold(trx, organizationId, holdId, true);
     if (!hold) throw errors.notFound('hold', holdId);
+    if (!HoldMachine.can(hold.status, 'commit') || this.isLapsed(hold, now)) {
+      throw errors.capacityUnavailable(
+        `The hold is ${this.isLapsed(hold, now) ? 'expired' : hold.status}; the place is no longer reserved.`,
+        {
+          holdId,
+          status: this.isLapsed(hold, now) ? 'expired' : hold.status,
+          poolId: hold.pool_id,
+        },
+      );
+    }
     const result = await trx
       .updateTable('holds')
-      .set({ status: 'committed', committed_at: now, revision: hold.revision + 1 })
+      .set({
+        status: HoldMachine.next(hold.status, 'commit'),
+        committed_at: now,
+        revision: hold.revision + 1,
+      })
       .where('organization_id', '=', organizationId)
       .where('id', '=', holdId)
       .where('status', '=', 'active')
@@ -964,7 +990,7 @@ export class CapacityService implements CapacityPort {
     await trx
       .updateTable('holds')
       .set({
-        status: 'released',
+        status: HoldMachine.next(hold.status, 'release'),
         released_at: now,
         release_reason: reason,
         revision: hold.revision + 1,
@@ -1013,7 +1039,11 @@ export class CapacityService implements CapacityPort {
     if (new Date(hold.expires_at).getTime() > now.getTime()) return null;
     await trx
       .updateTable('holds')
-      .set({ status: 'expired', expired_at: now, revision: hold.revision + 1 })
+      .set({
+        status: HoldMachine.next(hold.status, 'expire'),
+        expired_at: now,
+        revision: hold.revision + 1,
+      })
       .where('organization_id', '=', organizationId)
       .where('id', '=', holdId)
       .where('status', '=', 'active')
@@ -1053,10 +1083,10 @@ export class CapacityService implements CapacityPort {
   ): Promise<HoldRow> {
     const hold = await this.loadHold(trx, organizationId, holdId, true);
     if (!hold) throw errors.notFound('hold', holdId);
-    if (hold.status !== 'active') {
+    if (hold.status !== 'active' || this.isLapsed(hold)) {
       throw errors.capacityUnavailable(
-        `The hold is ${hold.status}; the place is no longer reserved.`,
-        { holdId, status: hold.status },
+        `The hold is ${hold.status === 'active' ? 'expired' : hold.status}; the place is no longer reserved.`,
+        { holdId, status: hold.status === 'active' ? 'expired' : hold.status },
       );
     }
     await trx

@@ -62,43 +62,54 @@ including references into identity, catalog and competition tables; editable rec
   (a terminal hold never changes; pool and quantity are fixed).
 - **SPK-REG-008:** trigger `waitlist_offers_guard` (an offer is consumed once) and one open offer
   per entry.
-- **§4.6:** trigger `enrollments_transition_guard` enforces the EnrollmentMachine; state checks list
+- **§4.6:** triggers `enrollments_transition_guard`, `applications_transition_guard`,
+  `placement_requests_transition_guard` and `session_bookings_transition_guard` refuse every
+  transition their machines do not allow (`holds_guard` does the same for holds); state checks list
   exactly the machine states (no "waitlisted" enrollment, §4.5).
 - **§4.7 invariant 7 / SPK-AT-020:** trigger `makeup_redemptions_apply` locks the entitlement,
-  refuses an inactive/expired/foreign redemption and moves the counter; `check (redeemed_count <=
+  refuses an inactive/expired/foreign redemption and a reversal that does not correct a redemption
+  of the same entitlement and booking, and moves the counter; `check (redeemed_count <=
 redemption_limit)` is the final guarantee.
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/enrollment.ts`)
 
-| Method   | Path                                                                                                      | Who (action)                                                                                                     |
-| -------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| POST/GET | `/applications`, `/applications/{id}`                                                                     | adult self or a holder of `register` (`enrollment.apply`); staff assisting; reads: `view` holders, staff readers |
-| POST     | `/applications/{id}/override-eligibility`                                                                 | program/league manager, GM, sysadmin (`enrollment.override_eligibility`) with reason; audited                    |
-| POST     | `/applications/{id}/accept`, `/decline`, `/withdraw`                                                      | review: program administration (`enrollment.review_application`); withdraw: participant authority or staff       |
-| POST/GET | `/baskets`, `/baskets/{id}`, `/baskets/{id}/lines`, `/lines/{lineId}/remove`                              | the household adult (self) or desk staff (`enrollment.manage_basket`)                                            |
-| POST     | `/baskets/{id}/hold`, `/release`, `/complete`                                                             | same; `hold` creates an operation; `complete` only for baskets that owe nothing                                  |
-| GET      | `/enrollments`, `/enrollments/{id}`, `/enrollments/{id}/cancellation-preview`                             | `view` holders (payer and registrant redacted for other adults, SPK-AT-004), staff readers                       |
-| POST     | `/enrollments/{id}/cancel`, `/transfer` (`commit=false` preview), `/complete`                             | participant authority or desk staff; complete: program administration                                            |
-| POST/GET | `/waitlist-entries`, `/waitlist-entries/{id}`, `/withdraw`                                                | participant authority (`enrollment.join_waitlist`); listing: program administration                              |
-| GET/POST | `/waitlist-offers/{id}`, `/accept`, `/decline`                                                            | participant authority                                                                                            |
-| POST/GET | `/placement-requests`, `/{id}`, `/{id}/candidates`, `/propose`, `/reject-proposal`, `/assign`, `/release` | request: participant authority; everything else league administration (`enrollment.manage_placement`)            |
-| POST/GET | `/session-bookings`, `/{id}`, `/confirm`, `/cancel`                                                       | pickup seats: participant authority (`enrollment.book_session`); session lists: staff                            |
-| POST/GET | `/makeup-entitlements`, `/{id}`, `/{id}/redeem`, `/{id}/revoke`                                           | issue/revoke: program administration and front desk; redeem: participant authority                               |
-| POST/GET | `/trial-participations`, `/{id}`, `/outcome`, `/convert`                                                  | participant authority; attendance outcomes: staff                                                                |
-| POST/GET | `/capacity-pools`, `/capacity-pools/{id}/adjust`, `/offerings/{id}/capacity-pools/sync`                   | program administration (`enrollment.manage_capacity`); staffing changes need a reason                            |
-| GET      | `/me/family-calendar?from&to`                                                                             | the acting adult: self plus every person they hold `view` over (`enrollment.read_family_calendar`)               |
+| Method   | Path                                                                                                      | Who (action)                                                                                                       |
+| -------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| POST/GET | `/applications`, `/applications/{id}`                                                                     | adult self or a holder of `register` (`enrollment.apply`); staff assisting; reads: `view` holders, staff readers   |
+| POST     | `/applications/{id}/override-eligibility`                                                                 | program/league manager, GM, sysadmin (`enrollment.override_eligibility`) with reason; audited                      |
+| POST     | `/applications/{id}/accept`, `/decline`, `/withdraw`                                                      | review: program administration (`enrollment.review_application`); withdraw: participant authority or staff         |
+| POST/GET | `/baskets`, `/baskets/{id}`, `/baskets/{id}/lines`, `/lines/{lineId}/remove`                              | the household adult (self) or desk staff (`enrollment.manage_basket`)                                              |
+| POST     | `/baskets/{id}/hold`, `/release`, `/complete`                                                             | same; `hold` creates an operation; `complete` only for baskets that owe nothing                                    |
+| GET      | `/enrollments`, `/enrollments/{id}`, `/enrollments/{id}/cancellation-preview`                             | `view` holders (payer and registrant redacted for other adults, SPK-AT-004), staff readers                         |
+| POST     | `/enrollments/{id}/cancel`, `/transfer` (`commit=false` preview), `/complete`                             | participant authority or desk staff; complete: program administration                                              |
+| POST/GET | `/waitlist-entries`, `/waitlist-entries/{id}`, `/withdraw`, `/remove`                                     | participant authority (`enrollment.join_waitlist`); listing and `remove` (reason required): program administration |
+| GET/POST | `/waitlist-offers/{id}`, `/accept`, `/decline`                                                            | participant authority                                                                                              |
+| POST/GET | `/placement-requests`, `/{id}`, `/{id}/candidates`, `/propose`, `/reject-proposal`, `/assign`, `/release` | request: participant authority; everything else league administration (`enrollment.manage_placement`)              |
+| POST/GET | `/session-bookings`, `/{id}`, `/confirm`, `/cancel`                                                       | pickup seats: participant authority (`enrollment.book_session`); session lists: staff                              |
+| POST/GET | `/makeup-entitlements`, `/{id}`, `/{id}/redeem`, `/{id}/revoke`                                           | issue/revoke: program administration and front desk; redeem: participant authority                                 |
+| POST/GET | `/trial-participations`, `/{id}`, `/outcome`, `/convert`                                                  | participant authority; attendance outcomes: staff                                                                  |
+| POST/GET | `/capacity-pools`, `/capacity-pools/{id}/adjust`, `/offerings/{id}/capacity-pools/sync`                   | program administration (`enrollment.manage_capacity`); staffing changes need a reason                              |
+| GET      | `/me/family-calendar?from&to`                                                                             | the acting adult: self plus every person they hold `view` over (`enrollment.read_family_calendar`)                 |
 
 Every consequential POST is `@Idempotent()` and zod-validated; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Customer-private records answer
-`NOT_FOUND` to anyone without authority (§4.10); organization scope comes from the token.
+`NOT_FOUND` to anyone without authority (§4.10); organization scope comes from the token. A
+staff-only command (override, review, placement, waitlist removal, makeup revocation) answers
+`NOT_FOUND` to a customer who may not read the record and `ACCESS_DENIED` to one who may (their
+own child's record) and to staff without the role. Adding a basket line needs `register` over both
+the basket's household adult and the participant, so authority over a shared child never opens
+another household's basket.
 
 ## Ports (`enrollment.ports.ts`, provided by `EnrollmentModule`)
 
 - `ENROLLMENT_PORT` (`EnrollmentPort`, finance and entry): `participationsOf` (per-child active
   enrollments and session bookings), `getEnrollment`, `holdsForBasket`, `commitHolds(trx, org,
-holdIds)` (atomic; CAPACITY_UNAVAILABLE and nothing written when any hold is not active),
-  `confirmEnrollment(trx, …)` after payment facts (commits its holds, or re-acquires a free place
-  after expiry; never displaces an offer — SPK-AT-006), `failConfirmation`, `confirmSessionBooking`.
+holdIds)` (locks in id order; CAPACITY_UNAVAILABLE and nothing written when any hold is not
+  active or has passed its server-owned expiry; each allocation names the line's enrollment, the
+  booking or the placement), `confirmEnrollment(trx, …)` after payment facts (commits its holds,
+  or re-acquires a free place after expiry while nobody waits; never displaces an offer —
+  SPK-AT-006), `failConfirmation` (pending enrollments only), `confirmSessionBooking` (same rules
+  for session seats).
 - `CAPACITY_PORT` (`CapacityPort`): `poolsForOffering`, `getPool`, `acquireHolds`, `releaseHold`.
 - `BASKET_PORT` (`BasketPort`, the finance checkout coordinator, §4.11): `getBasket` (lines with
   price snapshots and policy references), `assertPaymentPermitted` (SPK-REG-007:
@@ -155,13 +166,16 @@ Payloads carry identifiers only (§4.14).
   apart from participant, payer and signer; acknowledgments come from catalog with the real signer.
 - **Payer privacy (SPK-AT-004):** a second guardian gets DUPLICATE_ENTITLEMENT without learning who
   else registered; their reads show `payerPersonId`, registrant, basket and order as redacted.
-- **Late payment (SPK-AT-006):** a checkout whose hold expired is confirmed only by re-acquiring a
-  free place; an offer's hold counts in `held`, so the late payment gets CAPACITY_UNAVAILABLE and
-  finance compensates.
+- **Late payment (SPK-AT-006):** a hold past its server-owned expiry never commits, even before the
+  expiry timer has run (it is expired then and there). A checkout whose hold expired is confirmed
+  only by re-acquiring a free place while nobody else waits for the offering (waitlist-first,
+  DEC-006); an offer's hold counts in `held`. Otherwise the late payment gets CAPACITY_UNAVAILABLE,
+  nothing is written, and finance compensates.
 - **Transfers (SPK-REG-010):** the preview shows existing and proposed participation, dates,
-  capacity released and required, the finance consequence and approval; commit marks the old
-  enrollment `transferred` (its row, confirmation instant and released allocation stay as history)
-  and links both ways. Cancellation has the same preview (`cancellation-preview`).
+  capacity released and required, the waitlist ahead, the finance consequence and approval; commit
+  marks the old enrollment `transferred` (its row, confirmation instant and released allocation
+  stay as history) and links both ways; it never skips people waiting for the target (DEC-006).
+  Cancellation has the same preview (`cancellation-preview`).
 - **Placement (SPK-PLACE-002/003):** candidates and proposals reserve nothing; assignment
   re-evaluates eligibility, holds a team-entry roster place when one is configured, adds the roster
   row through competition's command (which evaluates again), then commits, all under one operation.
@@ -195,8 +209,11 @@ are at most 120 days.
   `catalog.session_canceled` awaits the makeup rules (DEC-003). Package-credit redemption
   (invariant 7 for packages) belongs to finance/entry.
 - Pickup organizer assignment (workforce) and attendance (entry) are other modules' records.
-- Transfers commit target capacity directly and are not subject to waitlist-first; the money side
-  of a non-`none` consequence is finance's (recorded here as a fact).
+- The money side of a non-`none` transfer or cancellation consequence is finance's (recorded here
+  as a fact); until finance registers `FINANCE_POLICY_IMPL` every consequence is `none`.
+- A session booking whose hold expired is expired by the timer even while a checkout is running
+  (baskets keep their pending enrollments for finance instead); a late booking payment is
+  compensated by finance.
 - List endpoints return one page (`nextCursor: null`); cursor pagination is pending.
 - If a process stops between placement's roster addition and its final transaction, the
   operation stays `running` until a retried assignment adopts the membership; there is no

@@ -34,6 +34,7 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  hiddenFrom,
   organizationOf,
   redactSessionBooking,
   toMakeupEntitlement,
@@ -405,6 +406,12 @@ export class MakeupsService {
         type: 'makeup_entitlement',
         id,
         organizationId,
+        protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readMakeup, {
+          type: 'makeup_entitlement',
+          id,
+          organizationId,
+          subjectPersonIds: [row.participant_person_id],
+        }),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'active')

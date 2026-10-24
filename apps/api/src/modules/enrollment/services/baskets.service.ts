@@ -256,11 +256,13 @@ export class BasketsService implements BasketPort {
         organizationId,
         input.participantPersonId,
       );
+      // Authority over the household the basket belongs to and over the participant: an adult who
+      // may register a child still cannot add lines to another household's basket (§4.7 (1)).
       await this.authorization.require(principal, EnrollmentActions.manageBasket, {
         type: 'basket',
         id: basketId,
         organizationId,
-        subjectPersonIds: [person.id],
+        subjectPersonIds: [...new Set([basket.owner_person_id, person.id])],
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, basket.revision);
