@@ -6,6 +6,7 @@ import type { CompetitionTables } from './competition';
 import type { FacilitiesTables } from './facilities';
 import type { IdentityTables } from './identity';
 import type { SchedulingTables } from './scheduling';
+import type { WorkforceTables } from './workforce';
 
 export * from './core';
 export * from './catalog';
@@ -15,6 +16,7 @@ export * from './competition';
 export * from './facilities';
 export * from './identity';
 export * from './scheduling';
+export * from './workforce';
 
 /**
  * The complete database type. Each module contributes its own table interfaces from
@@ -29,4 +31,5 @@ export interface Database
     CompetitionTables,
     FacilitiesTables,
     IdentityTables,
-    SchedulingTables {}
+    SchedulingTables,
+    WorkforceTables {}
