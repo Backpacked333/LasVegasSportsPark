@@ -4,8 +4,9 @@
  */
 import { Navigate, Route, Routes } from 'react-router';
 import { competitionRoutes } from './features/competition/routes';
+import { operationsRoutes } from './features/operations/routes';
 import { Shell } from './layout/Shell';
-import { STAFF_AREAS, WORKSPACE_PATH } from './navigation/areas';
+import { STAFF_AREAS } from './navigation/areas';
 import { AreaScreen } from './screens/area/AreaScreen';
 import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
 import { NotFoundScreen } from './screens/not-found/NotFoundScreen';
@@ -23,7 +24,6 @@ import { SupportCaseScreen } from './screens/support/SupportCaseScreen';
 import { SupportCasesScreen } from './screens/support/SupportCasesScreen';
 import { ExceptionDetailScreen } from './screens/today/ExceptionDetailScreen';
 import { TodayScreen } from './screens/today/TodayScreen';
-import { WorkspaceScreen } from './screens/workspace/WorkspaceScreen';
 import { RequireSession } from './session/RequireSession';
 import { registrationFinanceRoutes } from './features/registration-finance/routes';
 
@@ -43,6 +43,7 @@ export function AppRoutes() {
         <Route index element={<Navigate to="/today" replace />} />
         {/* Before the area placeholders: equally ranked routes match in order. */}
         {competitionRoutes()}
+        {operationsRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />
@@ -60,7 +61,6 @@ export function AppRoutes() {
         {STAFF_AREAS.filter((a) => !a.ownRoutes).map((area) => (
           <Route key={area.id} path={area.path} element={<AreaScreen area={area} />} />
         ))}
-        <Route path={WORKSPACE_PATH} element={<WorkspaceScreen />} />
         <Route path="*" element={<NotFoundScreen />} />
       </Route>
     </Routes>

@@ -26,6 +26,8 @@ pnpm --filter @sportspark/staff dev                                            #
   The API has no development seed, so the account and its staff membership must already exist.
 - `VITE_STALE_DATA_THRESHOLD_MINUTES` sets when shown data is called stale; pending DEC-032/DEC-033,
   unset by default.
+- `VITE_OFFLINE_ROSTER_MAX_AGE_MINUTES` sets the maximum roster age for queuing offline arrival and
+  attendance observations; pending DEC-033, unset by default (see `src/features/operations/README.md`).
 
 ## Commands
 
@@ -47,7 +49,7 @@ pnpm --filter @sportspark/staff dev                                            #
 | SCR-W-01 My assignments, phone-width layout (one column below 768 px); "Accept" only where the API lists it, with `expectedRevision` and an idempotency key; STALE_REVISION offers Reload. | **Verified** in jsdom (behaviour); the phone layout is CSS and needs real devices (SPK-UX-007, §6.3)    | `src/screens/workspace/__tests__/WorkspaceScreen.test.tsx` |
 | State primitives (same variants and wording as the customer app) and `StatusBadge` (glyph and text).                                                                                       | **Verified** in jsdom                                                                                   | `src/ui/__tests__/primitives.test.tsx`                     |
 | Keyboard alternative to drag (SPK-UX-009): `ReorderableList` with Move buttons, Alt+Arrow keys and announcements. No screen uses drag yet.                                                 | **Verified** in jsdom                                                                                   | same                                                       |
-| Offline banner with the age of what is shown and the actions unavailable offline (SCR-W-10, §4.15).                                                                                        | **Verified** in jsdom; the offline queue for arrival and attendance is not built                        | `src/__tests__/shell.test.tsx`                             |
+| Offline banner with the age of what is shown and the actions unavailable offline (SCR-W-10, §4.15).                                                                                        | **Verified** in jsdom; the offline queue is in `src/features/operations/README.md`                      | `src/__tests__/shell.test.tsx`                             |
 | Session in `sessionStorage` behind `SessionStore`; AUTHENTICATION_REQUIRED ends it; "Update required" replaces the dashboard.                                                              | **Verified** in jsdom. How a production staff session is held depends on DEC-018 (**Pending decision**) | same                                                       |
 | Development sign-in only in development builds.                                                                                                                                            | **Verified** (jsdom, and the build check)                                                               | `scripts/check-release-bundle.mjs`                         |
 | Managed staff sign-in with multifactor authentication for privileged staff (§4.14).                                                                                                        | **Pending decision** DEC-018 (Technical lead/account owners); the sign-in page shows the pending state  |                                                            |

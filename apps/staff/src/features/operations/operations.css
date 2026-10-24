@@ -1,0 +1,178 @@
+/*
+ * Operations screens (arrival, attendance, release, staff and officials, communications, the
+ * coach and referee workspace). Dense but readable (SPK-UX-010); targets at least 44 px; one
+ * column below 768 px so the workspace works on a phone beside a field (SPK-UX-007). Status is
+ * never colour alone: badges carry a glyph and text (SPK-UX-009).
+ */
+.ops-tabs ul {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.ops-tabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  text-decoration: none;
+}
+.ops-tabs a[aria-current='page'] {
+  font-weight: 600;
+  border-bottom: 4px solid var(--color-primary);
+}
+.ops-section {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ops-section > h3,
+.ops-section > h4 {
+  margin: 0;
+}
+.ops-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 40rem;
+}
+.ops-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ops-field input,
+.ops-field select,
+.ops-field textarea {
+  min-height: var(--touch);
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 2px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+.ops-field [aria-invalid='true'] {
+  border-color: var(--tone-danger);
+  border-style: dashed;
+}
+.ops-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch);
+}
+.ops-check input {
+  width: 24px;
+  height: 24px;
+}
+.ops-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.ops-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.ops-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.ops-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border: 2px dashed var(--tone-warning);
+  border-radius: 6px;
+  margin: var(--space-3) 0;
+}
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.ops-table th,
+.ops-table td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+.ops-table-wrap {
+  overflow-x: auto;
+}
+.ops-history {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+.ops-history li {
+  padding: var(--space-1) 0;
+}
+.ops-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: var(--space-3);
+}
+.ops-cards > li {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ops-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-3);
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ops-fieldset legend {
+  font-weight: 600;
+  padding: 0 var(--space-1);
+}
+.ops-counts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 768px) {
+  .ops-cards {
+    grid-template-columns: 1fr;
+  }
+  .ops-section {
+    padding: var(--space-3);
+  }
+  .ops-actions .button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
