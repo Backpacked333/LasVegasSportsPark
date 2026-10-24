@@ -108,6 +108,33 @@
 .track-closure {
   background: repeating-linear-gradient(-45deg, var(--tone-danger) 0 3px, transparent 3px 7px);
 }
+/* A closure not applied yet (impact preview): outlined, never filled like a closed space. */
+.track-closure-pending {
+  top: 2px;
+  bottom: 2px;
+  border: 2px dashed var(--tone-warning);
+  box-sizing: border-box;
+}
+.track-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+.track-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.track-legend .track-swatch {
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 14px;
+  border: 1px solid var(--color-border);
+}
 .facts {
   display: grid;
   grid-template-columns: max-content 1fr;

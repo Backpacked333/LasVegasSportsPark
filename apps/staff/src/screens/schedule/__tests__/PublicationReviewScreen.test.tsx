@@ -255,11 +255,99 @@ describe('SCR-S-05 PublicationReviewScreen', () => {
     });
     render(app.at('/schedule/drafts/d1/publish'));
     await user.click(await screen.findByRole('button', { name: 'Publish 1 change' }));
-    expect(await screen.findByText('Error code: NETWORK_UNAVAILABLE')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Outcome unknown' })).toBeInTheDocument();
+    expect(screen.queryByText('Nothing was published')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId('publication-result')).toBeInTheDocument();
     const [first, second] = publishes(app);
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('§4.9: after no answer, a refetched draft that shows published is shown as published, and Try again resends the first body', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /schedule-drafts/{id}': () => {
+          reads += 1;
+          return fakeResponse(
+            200,
+            reads === 1
+              ? DRAFT
+              : {
+                  ...DRAFT,
+                  status: 'published',
+                  revision: 7,
+                  publishedAt: '2026-10-24T12:05:00.000Z',
+                  publicationGroupId: 'pg-1',
+                },
+          );
+        },
+        'POST /schedule-drafts/{id}/publish': () =>
+          Promise.reject(new TypeError('Failed to fetch')),
+      }),
+    });
+    render(app.at('/schedule/drafts/d1/publish'));
+    await user.click(await screen.findByRole('button', { name: 'Publish 1 change' }));
+    expect(await screen.findByRole('heading', { name: 'Outcome unknown' })).toBeInTheDocument();
+    // The draft refetches (for example on window focus) and now says it was published.
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/schedule-drafts/{id}'] });
+    });
+    expect(await screen.findByTestId('publication-result')).toHaveTextContent(
+      /This draft was published/,
+    );
+    expect(screen.queryByText('Nothing was published')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Publish 1 change' })).toBeNull();
+    expect(publishes(app)).toHaveLength(1);
+  });
+
+  it('§4.9: Try again resends the body of the first attempt even after the draft refetched with a newer revision', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    let posts = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /schedule-drafts/{id}': () => {
+          reads += 1;
+          return fakeResponse(200, reads === 1 ? DRAFT : { ...DRAFT, revision: 7 });
+        },
+        'POST /schedule-drafts/{id}/publish': () => {
+          posts += 1;
+          if (posts === 1) return Promise.reject(new TypeError('Failed to fetch'));
+          return fakeResponse(200, PUBLICATION, { 'Idempotent-Replayed': 'true' });
+        },
+      }),
+    });
+    render(app.at('/schedule/drafts/d1/publish'));
+    await user.click(await screen.findByRole('button', { name: 'Publish 1 change' }));
+    await screen.findByRole('heading', { name: 'Outcome unknown' });
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/schedule-drafts/{id}'] });
+    });
+    await waitFor(() => expect(reads).toBe(2));
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByTestId('publication-result')).toBeInTheDocument();
+    const [first, second] = publishes(app);
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.body).toEqual({ expectedRevision: 6 });
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('INVALID_TRANSITION does not claim nothing was published; it asks to reload', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /schedule-drafts/{id}/publish': () =>
+          fakeResponse(409, apiErrorBody('INVALID_TRANSITION', { nextAction: 'reload_and_retry' })),
+      }),
+    });
+    render(app.at('/schedule/drafts/d1/publish'));
+    await user.click(await screen.findByRole('button', { name: 'Publish 1 change' }));
+    const failure = await screen.findByTestId('publish-failure');
+    expect(within(failure).queryByText('Nothing was published')).toBeNull();
+    expect(within(failure).getByText(/no longer publishable/)).toBeInTheDocument();
+    expect(within(failure).getByRole('button', { name: 'Reload' })).toBeInTheDocument();
   });
 
   it('permission restriction: ACCESS_DENIED is not available and names the permission', async () => {

@@ -14,7 +14,7 @@
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -151,16 +151,24 @@ function PublishFailure({
   const conflicts = conflictIssues(error);
   const conflicting = conflictingEventIds(error);
   const obligations = blockingObligations(error);
+  // INVALID_TRANSITION is not "nothing published": the draft may have been published by an
+  // earlier attempt whose answer was lost; the draft itself says which (checked by the caller).
   const nothingPublished =
     error.code === 'STALE_REVISION' ||
     error.code === 'RESOURCE_CONFLICT' ||
-    error.code === 'VALIDATION_FAILED' ||
-    error.code === 'INVALID_TRANSITION';
+    error.code === 'VALIDATION_FAILED';
   return (
     <section aria-labelledby="publish-failure" role="alert" data-testid="publish-failure">
       <h4 id="publish-failure">
-        {nothingPublished ? 'Nothing was published' : 'Publication did not complete'}
+        {error.outcomeUnknown || error.isOffline
+          ? 'Outcome unknown'
+          : nothingPublished
+            ? 'Nothing was published'
+            : 'Publication did not complete'}
       </h4>
+      {error.code === 'INVALID_TRANSITION' ? (
+        <p>The draft is no longer publishable in its current state. Reload to see its state.</p>
+      ) : null}
       {error.code === 'STALE_REVISION' ? (
         <p>
           The draft, or an event it changes, was edited after this review was loaded. Reload, check
@@ -214,6 +222,26 @@ function PublishFailure({
   );
 }
 
+/**
+ * The draft itself says it was published (for example by an attempt whose answer was lost and
+ * that the refetched draft now shows): never shown as a failure (SPK-SCHED-005, §4.9).
+ */
+function DraftPublished({ draft, facility }: { draft: ScheduleDraft; facility: FacilityContext }) {
+  return (
+    <section aria-labelledby="draft-published" className="state" data-testid="publication-result">
+      <h4 id="draft-published">Published</h4>
+      <StatusBadge tone="success" label="Published" />
+      <p>
+        This draft was published
+        {draft.publishedAt ? ` ${formatInstant(draft.publishedAt, facility.timezone)}` : ''}. Its{' '}
+        {draft.changes.length} change{draft.changes.length === 1 ? '' : 's'} are in the calendar; do
+        not publish them again.
+      </p>
+      <Link to="/schedule/calendar">Open the calendar</Link>
+    </section>
+  );
+}
+
 function Review({ draft, facility }: { draft: ScheduleDraft; facility: FacilityContext }) {
   const { online } = useApp();
   const queryClient = useQueryClient();
@@ -240,26 +268,42 @@ function Review({ draft, facility }: { draft: ScheduleDraft; facility: FacilityC
       .submit({ path: { id: draft.id }, body: { expectedRevision: draft.revision } })
       .then(() => refreshDraft())
       .catch(() => undefined);
-  const runPublish = () =>
+  // The body of the attempt in flight: "Try again" resends exactly it (same fingerprint, so the
+  // same Idempotency-Key), even if the draft refetched with a newer revision meanwhile (§4.9).
+  const sent = useRef<{ expectedRevision: number; reason?: string } | null>(null);
+  const sendPublish = (body: { expectedRevision: number; reason?: string }) =>
     void publish
-      .submit({
-        path: { id: draft.id },
-        body: {
-          expectedRevision: draft.revision,
-          ...(reason.trim() ? { reason: reason.trim() } : {}),
-        },
+      .submit({ path: { id: draft.id }, body })
+      .then(() => {
+        sent.current = null;
+        return refreshDraft();
       })
-      .then(() => refreshDraft())
       .catch((error: ApiError) => {
         // The API records a failed publication on the draft; show its current state.
-        if (!error.outcomeUnknown) void refreshDraft();
+        if (!error.outcomeUnknown && !error.isOffline) void refreshDraft();
       });
+  const runPublish = () => {
+    const body = {
+      expectedRevision: draft.revision,
+      ...(reason.trim() ? { reason: reason.trim() } : {}),
+    };
+    sent.current = body;
+    sendPublish(body);
+  };
+  const retryPublish = () => {
+    if (sent.current) sendPublish(sent.current);
+    else runPublish();
+  };
   const reload = () => {
+    sent.current = null;
     publish.reset();
     void refreshDraft();
   };
 
   if (publish.data) return <PublicationResult publication={publish.data} facility={facility} />;
+  if (draft.status === 'published' || draft.publicationGroupId !== null) {
+    return <DraftPublished draft={draft} facility={facility} />;
+  }
 
   const validation = draft.validationResults;
   const current =
@@ -398,7 +442,7 @@ function Review({ draft, facility }: { draft: ScheduleDraft; facility: FacilityC
           <PublishFailure
             error={publish.error}
             facility={facility}
-            onRetry={runPublish}
+            onRetry={retryPublish}
             onReload={reload}
             draftId={draft.id}
           />

@@ -69,6 +69,32 @@ export function closureCovers(
   return closed ? sharesSpace(closed, resource) : false;
 }
 
+type TrackKind = 'event' | 'buffer' | 'closure' | 'closure-pending' | 'shared';
+
+/** Names each bar kind in text, so the decorative track is never read by pattern alone. */
+const TRACK_LEGEND: readonly { kind: TrackKind; label: string }[] = [
+  { kind: 'event', label: 'Booked' },
+  { kind: 'buffer', label: 'Setup or cleanup' },
+  { kind: 'shared', label: 'Shared space in use' },
+  { kind: 'closure', label: 'Closed' },
+  { kind: 'closure-pending', label: 'Closure pending (not applied; still bookable)' },
+];
+
+export function TrackLegend() {
+  return (
+    <ul className="track-legend" aria-label="Timeline key">
+      {TRACK_LEGEND.map((l) => (
+        <li key={l.kind}>
+          <span className="track-swatch" aria-hidden="true">
+            <span className={`track-bar track-${l.kind}`} style={{ left: 0, width: '100%' }} />
+          </span>
+          {l.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Track({
   range,
   items,
@@ -78,7 +104,7 @@ function Track({
     key: string;
     start: string;
     end: string;
-    kind: 'event' | 'buffer' | 'closure' | 'shared';
+    kind: TrackKind;
   }[];
 }) {
   const from = new Date(range.start).getTime();
@@ -147,6 +173,7 @@ function ResourceRow({
   range,
   timezone,
   showTrack,
+  truncated,
 }: {
   resource: Resource;
   depth: number;
@@ -156,6 +183,8 @@ function ResourceRow({
   range: { start: string; end: string };
   timezone: string;
   showTrack: boolean;
+  /** More events exist in the range than were loaded: never claim the space is free. */
+  truncated: boolean;
 }) {
   const names = new Map(resources.map((r) => [r.id, r.name]));
   const own = events.filter((e) => e.resourceIds.includes(resource.id));
@@ -170,7 +199,11 @@ function ResourceRow({
   const parent = resource.parentResourceId ? names.get(resource.parentResourceId) : null;
   const headingId = `resource-${resource.id}`;
   const trackItems = [
-    ...covering.map((c) => ({ key: `c-${c.id}`, ...c.interval, kind: 'closure' as const })),
+    ...covering.map((c) => ({
+      key: `c-${c.id}`,
+      ...c.interval,
+      kind: c.status === 'pending' ? ('closure-pending' as const) : ('closure' as const),
+    })),
     ...blocked.map((e) => ({
       key: `s-${e.id}`,
       ...occupiedRange(e.scheduledStart, e.scheduledEnd, e.setupMinutes, e.cleanupMinutes),
@@ -257,8 +290,16 @@ function ResourceRow({
             <StatusBadge tone="neutral" label="Unavailable: shared space" />
           </li>
         ))}
-        {covering.length === 0 && own.length === 0 && blocked.length === 0 ? (
-          <li className="caption">Free for the whole range.</li>
+        {covering.every((c) => c.status === 'pending') &&
+        own.length === 0 &&
+        blocked.length === 0 ? (
+          <li className="caption">
+            {truncated
+              ? 'Nothing among the events loaded; more events exist in this range than were loaded.'
+              : covering.length > 0
+                ? 'Free for the whole range (a planned closure is not applied yet).'
+                : 'Free for the whole range.'}
+          </li>
         ) : null}
       </ul>
     </section>
@@ -423,10 +464,12 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                   ) : null}
                   {page.nextCursor ? (
                     <p className="caption" role="status">
-                      Showing the first {EVENT_LIMIT} events in this range. Choose one space or a
-                      shorter range to see the rest.
+                      Showing the first {EVENT_LIMIT} events in this range; more exist and are not
+                      shown, so a space may look free when it is not.
+                      {span === 7 ? ' Switch to the day view to see the rest.' : ''}
                     </p>
                   ) : null}
+                  {span === 1 ? <TrackLegend /> : null}
                   {closures.error ? (
                     <p className="caption">
                       Closures could not be loaded ({closures.error.code}); closed spaces may not be
@@ -444,6 +487,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                       range={range}
                       timezone={tz}
                       showTrack={span === 1}
+                      truncated={page.nextCursor !== null}
                     />
                   ))}
                   {unplaced.length > 0 && !focus ? (

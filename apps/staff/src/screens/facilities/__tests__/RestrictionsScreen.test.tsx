@@ -237,6 +237,29 @@ describe('SCR-S-42 RestrictionDetailScreen', () => {
     expect(await screen.findByText('Operation succeeded: Done')).toBeInTheDocument();
   });
 
+  it('SCR-S-42: when the closure cannot be read, the booking impact says so instead of disappearing', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /closures/{id}': () => fakeResponse(403, apiErrorBody('ACCESS_DENIED')),
+        'GET /operations/{id}': () => fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-1'));
+    const impact = await screen.findByRole('region', { name: 'Booking impact' });
+    expect(
+      await within(impact).findByText(
+        'Booking impact could not be loaded; open Closures to check for events awaiting resolution.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(impact).getByRole('link', { name: 'Open the closure' })).toHaveAttribute(
+      'href',
+      '/schedule/closures/c-1',
+    );
+    expect(
+      await screen.findByText(/operation status not available \(INTERNAL_ERROR\)/),
+    ).toBeInTheDocument();
+  });
+
   it('SPK-FAC-004: release without a passed inspection is refused and says what is missing', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

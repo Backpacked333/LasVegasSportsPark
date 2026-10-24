@@ -12,7 +12,8 @@
  * (Operations): the screen shows what has been entered, never an assumed layout.
  */
 import type { Schema } from '@sportspark/api-client';
-import { useState, type FormEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRef, useState, type FormEvent } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp } from '../../providers/AppProviders';
@@ -62,18 +63,53 @@ function listFromText(text: string): string[] {
     .filter(Boolean);
 }
 
-/** "length: 100" per line into a record (values kept as text unless numeric). */
-function recordFromLines(text: string): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const line of text.split('\n')) {
-    const at = line.indexOf(':');
-    if (at <= 0) continue;
-    const key = line.slice(0, at).trim();
-    const raw = line.slice(at + 1).trim();
-    if (!key) continue;
-    out[key] = raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : raw;
+/** A value typed as JSON (list, object, true/false/null), or null when it is not JSON. */
+function parsedJson(raw: string): { value: unknown } | null {
+  if (!/^[[{]|^(true|false|null)$/.test(raw)) return null;
+  try {
+    return { value: JSON.parse(raw) as unknown };
+  } catch {
+    return null;
   }
-  return out;
+}
+
+/**
+ * "length: 100" per line into a record (SPK-SCHED-001 inventory data). A key the record already
+ * had keeps its type: text stays text (so "07" is never turned into 7), numbers stay numbers, and
+ * lists or objects are edited as JSON. A new key is a number when numeric, JSON when it parses,
+ * otherwise text. Returns the lines that could not be read.
+ */
+function recordFromLines(
+  text: string,
+  original: Record<string, unknown>,
+): { record: Record<string, unknown>; invalid: string[] } {
+  const out: Record<string, unknown> = {};
+  const invalid: string[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    const at = line.indexOf(':');
+    const key = at > 0 ? line.slice(0, at).trim() : '';
+    if (!key) {
+      invalid.push(line.trim());
+      continue;
+    }
+    const raw = line.slice(at + 1).trim();
+    const before = Object.prototype.hasOwnProperty.call(original, key) ? original[key] : undefined;
+    if (typeof before === 'string') {
+      out[key] = raw;
+    } else if (typeof before === 'number') {
+      if (raw === '' || !Number.isFinite(Number(raw))) invalid.push(line.trim());
+      else out[key] = Number(raw);
+    } else if (before !== undefined) {
+      const json = parsedJson(raw);
+      if (json) out[key] = json.value;
+      else invalid.push(line.trim());
+    } else {
+      const json = parsedJson(raw);
+      out[key] = json ? json.value : raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : raw;
+    }
+  }
+  return { record: out, invalid };
 }
 
 function linesFromRecord(record: Record<string, unknown>): string {
@@ -93,11 +129,33 @@ function ResourceEditor({ resource, onDone }: { resource: Resource; onDone: () =
   const [setup, setSetup] = useState(String(resource.defaultSetupMinutes));
   const [cleanup, setCleanup] = useState(String(resource.defaultCleanupMinutes));
   const [status, setStatus] = useState<ResourceStatus>(resource.status);
-  const [equipment, setEquipment] = useState(resource.requiredEquipment.map(show).join(', '));
-  const [dimensions, setDimensions] = useState(linesFromRecord(resource.dimensions));
+  // Structured equipment (objects) is edited as a JSON list; plain names as a comma list.
+  const structuredEquipment = resource.requiredEquipment.some((v) => typeof v !== 'string');
+  // What the form first showed: a field the user did not change is not sent, so saving a new name
+  // never rewrites the structured inventory data (SPK-SCHED-001).
+  const shown = useRef({
+    equipment: structuredEquipment
+      ? JSON.stringify(resource.requiredEquipment)
+      : resource.requiredEquipment.map(show).join(', '),
+    dimensions: linesFromRecord(resource.dimensions),
+  });
+  const [equipment, setEquipment] = useState(shown.current.equipment);
+  const [dimensions, setDimensions] = useState(shown.current.dimensions);
+  const queryClient = useQueryClient();
   const save = useApiCommand('patch', '/resources/{id}', { invalidate: INVENTORY_KEYS });
   const setupMinutes = minutesOrNull(setup);
   const cleanupMinutes = minutesOrNull(cleanup);
+  const equipmentChanged = equipment !== shown.current.equipment;
+  const dimensionsChanged = dimensions !== shown.current.dimensions;
+  const equipmentValue = (() => {
+    if (!equipmentChanged) return null;
+    if (!structuredEquipment) return { value: listFromText(equipment) as unknown[] };
+    const json = parsedJson(equipment.trim());
+    return json && Array.isArray(json.value) ? { value: json.value as unknown[] } : 'invalid';
+  })();
+  const dimensionsValue = dimensionsChanged
+    ? recordFromLines(dimensions, resource.dimensions)
+    : null;
   const problem = !name.trim()
     ? 'Enter a name.'
     : setupMinutes === 'invalid' ||
@@ -105,7 +163,11 @@ function ResourceEditor({ resource, onDone }: { resource: Resource; onDone: () =
         setupMinutes === null ||
         cleanupMinutes === null
       ? 'Buffers are whole minutes from 0 to 1440.'
-      : null;
+      : equipmentValue === 'invalid'
+        ? 'Required equipment must stay a JSON list, for example [{"type":"goal","count":2}].'
+        : dimensionsValue && dimensionsValue.invalid.length > 0
+          ? `These dimension lines could not be read: ${dimensionsValue.invalid.join('; ')}. Keep each value's type (lists and objects as JSON).`
+          : null;
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     if (problem || typeof setupMinutes !== 'number' || typeof cleanupMinutes !== 'number') return;
@@ -119,12 +181,20 @@ function ResourceEditor({ resource, onDone }: { resource: Resource; onDone: () =
           defaultSetupMinutes: setupMinutes,
           defaultCleanupMinutes: cleanupMinutes,
           status,
-          requiredEquipment: listFromText(equipment),
-          dimensions: recordFromLines(dimensions),
+          ...(equipmentValue && equipmentValue !== 'invalid'
+            ? { requiredEquipment: equipmentValue.value }
+            : {}),
+          ...(dimensionsValue ? { dimensions: dimensionsValue.record } : {}),
         },
       })
       .then(onDone)
       .catch(() => undefined);
+  };
+  // Stale version (SPK-UX-008): re-read the inventory; the typed values stay and the next save
+  // carries the reloaded revision.
+  const reload = () => {
+    save.reset();
+    for (const queryKey of INVENTORY_KEYS) void queryClient.invalidateQueries({ queryKey });
   };
   const id = `edit-${resource.id}`;
   return (
@@ -162,7 +232,11 @@ function ResourceEditor({ resource, onDone }: { resource: Resource; onDone: () =
         <option value="restricted">restricted</option>
         <option value="closed">closed</option>
       </select>
-      <label htmlFor={`${id}-equipment`}>Required equipment (comma separated)</label>
+      <label htmlFor={`${id}-equipment`}>
+        {structuredEquipment
+          ? 'Required equipment (JSON list)'
+          : 'Required equipment (comma separated)'}
+      </label>
       <input
         id={`${id}-equipment`}
         value={equipment}
@@ -187,7 +261,12 @@ function ResourceEditor({ resource, onDone }: { resource: Resource; onDone: () =
         </Button>
       </span>
       {save.error ? (
-        <CommandError error={save.error} onRetry={() => submit()} action="Saving the space" />
+        <CommandError
+          error={save.error}
+          onRetry={() => submit()}
+          onReload={reload}
+          action="Saving the space"
+        />
       ) : null}
     </form>
   );
@@ -409,6 +488,22 @@ function Configurations({
   const toggle = useApiCommand('patch', '/resource-configurations/{id}', {
     invalidate: INVENTORY_KEYS,
   });
+  const queryClient = useQueryClient();
+  const lastToggle = useRef<{ id: string; expectedRevision: number; active: boolean } | null>(null);
+  const sendToggle = (body: { id: string; expectedRevision: number; active: boolean }) => {
+    lastToggle.current = body;
+    void toggle
+      .submit({
+        path: { id: body.id },
+        body: { expectedRevision: body.expectedRevision, active: body.active },
+      })
+      .catch(() => undefined);
+  };
+  const reloadToggle = () => {
+    toggle.reset();
+    lastToggle.current = null;
+    void queryClient.invalidateQueries({ queryKey: ['api', '/resource-configurations'] });
+  };
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     setAttempted(true);
@@ -459,12 +554,7 @@ function Configurations({
                   busy={toggle.isProcessing}
                   aria-label={`${c.active ? 'Deactivate' : 'Activate'} ${c.name}`}
                   onClick={() =>
-                    void toggle
-                      .submit({
-                        path: { id: c.id },
-                        body: { expectedRevision: c.revision, active: !c.active },
-                      })
-                      .catch(() => undefined)
+                    sendToggle({ id: c.id, expectedRevision: c.revision, active: !c.active })
                   }
                 >
                   {c.active ? 'Deactivate' : 'Activate'}
@@ -475,7 +565,14 @@ function Configurations({
         )}
       </QueryBoundary>
       {toggle.error ? (
-        <CommandError error={toggle.error} action="Changing the arrangement" />
+        <CommandError
+          error={toggle.error}
+          onRetry={() => {
+            if (lastToggle.current) sendToggle(lastToggle.current);
+          }}
+          onReload={reloadToggle}
+          action="Changing the arrangement"
+        />
       ) : null}
       <form className="form" onSubmit={submit} aria-label="Add an arrangement" noValidate>
         <label htmlFor="configuration-name">Arrangement name</label>
@@ -532,6 +629,11 @@ function OperatingHours({
   const remove = useApiCommand('delete', '/operating-hours/{id}', {
     invalidate: [['api', '/operating-hours']],
   });
+  const lastRemoved = useRef<string | null>(null);
+  const sendRemove = (hoursId: string) => {
+    lastRemoved.current = hoursId;
+    void remove.submit({ path: { id: hoursId } }).catch(() => undefined);
+  };
   const problem =
     weekday === ''
       ? 'Choose a day.'
@@ -582,9 +684,7 @@ function OperatingHours({
                       variant="secondary"
                       disabled={!online}
                       aria-label={`Remove ${label}`}
-                      onClick={() =>
-                        void remove.submit({ path: { id: h.id } }).catch(() => undefined)
-                      }
+                      onClick={() => sendRemove(h.id)}
                     >
                       Remove
                     </Button>
@@ -594,7 +694,15 @@ function OperatingHours({
           </ul>
         )}
       </QueryBoundary>
-      {remove.error ? <CommandError error={remove.error} action="Removing the window" /> : null}
+      {remove.error ? (
+        <CommandError
+          error={remove.error}
+          onRetry={() => {
+            if (lastRemoved.current) sendRemove(lastRemoved.current);
+          }}
+          action="Removing the window"
+        />
+      ) : null}
       <form className="form" onSubmit={submit} aria-label="Add operating hours" noValidate>
         <label htmlFor="hours-scope">Applies to</label>
         <select id="hours-scope" value={resourceId} onChange={(e) => setResourceId(e.target.value)}>

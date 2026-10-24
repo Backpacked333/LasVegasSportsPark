@@ -24,6 +24,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
+import { useCommandReload } from '../../features/schedule-facilities/reload';
 import {
   useFacilityById,
   type FacilityContext,
@@ -202,6 +203,7 @@ function Details({ task, facility }: { task: Task; facility: FacilityContext }) 
   const update = useApiCommand('patch', '/maintenance-tasks/{id}', {
     invalidate: [TASKS_KEY, TASK_KEY],
   });
+  const reload = useCommandReload(update.reset, [TASK_KEY]);
   const dueAt = due.date || due.time ? toInstant(due, facility.timezone) : null;
   const submit = () => {
     if (dueAt && !dueAt.ok) return;
@@ -261,7 +263,12 @@ function Details({ task, facility }: { task: Task; facility: FacilityContext }) 
         Save details
       </Button>
       {update.error ? (
-        <CommandError error={update.error} onRetry={submit} action="Saving the task" />
+        <CommandError
+          error={update.error}
+          onRetry={submit}
+          onReload={reload}
+          action="Saving the task"
+        />
       ) : null}
     </section>
   );
@@ -279,6 +286,10 @@ function Inspections({ task, facility }: { task: Task; facility: FacilityContext
   const record = useApiCommand('post', '/maintenance-tasks/{id}/inspections', {
     invalidate: [TASKS_KEY, TASK_KEY, ['api', '/maintenance-tasks/{id}/inspections']],
   });
+  const reload = useCommandReload(record.reset, [
+    TASK_KEY,
+    ['api', '/maintenance-tasks/{id}/inspections'],
+  ]);
   const submit = () => {
     setAttempted(true);
     if (!outcome) return;
@@ -375,7 +386,12 @@ function Inspections({ task, facility }: { task: Task; facility: FacilityContext
             Record inspection
           </Button>
           {record.error ? (
-            <CommandError error={record.error} onRetry={submit} action="Recording an inspection" />
+            <CommandError
+              error={record.error}
+              onRetry={submit}
+              onReload={reload}
+              action="Recording an inspection"
+            />
           ) : null}
         </div>
       ) : null}

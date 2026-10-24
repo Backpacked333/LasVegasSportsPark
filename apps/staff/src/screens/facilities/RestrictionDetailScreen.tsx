@@ -41,7 +41,19 @@ type ResolutionMode = 'cancel_affected' | 'leave_for_resolution';
 
 function OperationLine({ id }: { id: string }) {
   const op = useApiQuery({ path: '/operations/{id}', request: { path: { id } } });
-  if (!op.data) return null;
+  if (!op.data) {
+    if (op.error) {
+      return (
+        <p className="caption">
+          Last approve or release: operation status not available ({op.error.code}).{' '}
+          <Button variant="secondary" onClick={() => void op.refetch()}>
+            Try again
+          </Button>
+        </p>
+      );
+    }
+    return <StateView variant="loading" label="the last operation" />;
+  }
   const badge = OPERATION_BADGE[op.data.status];
   return (
     <p>
@@ -106,7 +118,31 @@ function InspectionGate({ taskId, facility }: { taskId: string; facility: Facili
 
 function ClosureFollowUp({ closureId }: { closureId: string }) {
   const closure = useApiQuery({ path: '/closures/{id}', request: { path: { id: closureId } } });
-  if (!closure.data) return null;
+  if (!closure.data) {
+    // SPK-UX-008: the recovery state never disappears silently when the closure cannot be read.
+    return (
+      <section aria-labelledby="closure-follow-up">
+        <h4 id="closure-follow-up">Booking impact</h4>
+        {closure.error ? (
+          closure.error.isNotFound || closure.error.isPermissionRestriction ? (
+            <StateView
+              variant="unavailable"
+              description="Booking impact could not be loaded; open Closures to check for events awaiting resolution."
+            />
+          ) : (
+            <StateView
+              variant="error"
+              error={closure.error}
+              onRetry={() => void closure.refetch()}
+            />
+          )
+        ) : (
+          <StateView variant="loading" label="the booking impact" />
+        )}
+        <Link to={`/schedule/closures/${closureId}`}>Open the closure</Link>
+      </section>
+    );
+  }
   const unresolved = closure.data.resolution?.unresolvedEventIds.length ?? 0;
   return (
     <section aria-labelledby="closure-follow-up">

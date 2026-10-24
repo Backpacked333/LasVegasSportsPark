@@ -199,6 +199,31 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
     expect(patches(app)[0]?.body).toMatchObject({ expectedRevision: 3, changes: [] });
   });
 
+  it('SPK-UX-008: when the service cannot be reached while the device is online, autosave offers Try again with the same key', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'PATCH /schedule-drafts/{id}': (request) => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new TypeError('Failed to fetch'));
+          return echoSave(request);
+        },
+      }),
+    });
+    render(app.at('/schedule/drafts/d1'));
+    await user.click(
+      await screen.findByRole('button', { name: 'Remove change 1: Move: U12 Red v Blue' }),
+    );
+    expect(await screen.findByText('Not saved: service not reachable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(patches(app)).toHaveLength(2));
+    const [first, second] = patches(app);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+    expect(second?.body).toEqual(first?.body);
+    expect(await screen.findByText(/All changes saved/)).toBeInTheDocument();
+  });
+
   it('validation failure: lists conflicts per change (SPK-SCHED-004)', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
@@ -264,6 +289,34 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
     await user.click(within(change).getByRole('button', { name: 'Rebase onto the current event' }));
     await waitFor(() => expect(patches(app)).toHaveLength(1));
     expect(patches(app)[0]?.body).toMatchObject({ name: 'Week 9 changes (v2)' });
+  });
+
+  it('SPK-SCHED-005: a rebase acknowledges one event revision; a further change to the event pauses autosave again', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'GET /events/{id}': { status: 200, body: { ...GAME, revision: 2 } } }),
+    });
+    render(app.at('/schedule/drafts/d1'));
+    const change = await screen.findByTestId('draft-change-1');
+    await user.click(
+      await within(change).findByRole('button', { name: 'Rebase onto the current event' }),
+    );
+    await waitFor(() => expect(patches(app)).toHaveLength(1));
+    expect(await screen.findByText(/All changes saved/)).toBeInTheDocument();
+    // The target event changes again elsewhere.
+    app.fake.set('GET /events/{id}', { status: 200, body: { ...GAME, revision: 3 } });
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/events/{id}'] });
+    });
+    expect(
+      await within(screen.getByTestId('draft-change-1')).findByRole('button', {
+        name: 'Rebase onto the current event',
+      }),
+    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Draft name'), ' (v3)');
+    await user.tab();
+    expect(await screen.findByText('Not saved: rebase required')).toBeInTheDocument();
+    expect(patches(app)).toHaveLength(1);
   });
 
   it('SPK-SCHED-007: a "this and future" change is previewed and adds exactly the listed events', async () => {

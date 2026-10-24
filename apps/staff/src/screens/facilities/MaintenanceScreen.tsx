@@ -23,8 +23,10 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
+import { useCommandReload } from '../../features/schedule-facilities/reload';
 import {
   FacilityGate,
   ZoneCaption,
@@ -310,8 +312,15 @@ function ReportIssueForm({ facility }: { facility: FacilityContext }) {
       </fieldset>
       <LocalDateTimeField label="Due (optional)" value={due} onChange={setDue} timeZone={tz} />
       <p className="caption">
-        Leave the due date empty to use the configured lead time for the severity.
+        Leave the due date empty to use the proposed default for the severity; the confirmation
+        shows the due time the service chose.
       </p>
+      <StateView
+        variant="pending-decision"
+        subject="Default due times per severity"
+        decisions={['DEC-001']}
+        owner="Operations"
+      />
       <label>
         <input
           type="checkbox"
@@ -362,6 +371,8 @@ function AssetRow({ asset, facility }: { asset: Asset; facility: FacilityContext
   );
   const save = useApiCommand('patch', '/assets/{id}', { invalidate: [ASSETS_KEY] });
   const retire = useApiCommand('delete', '/assets/{id}', { invalidate: [ASSETS_KEY] });
+  const reloadSave = useCommandReload(save.reset, [ASSETS_KEY]);
+  const reloadRetire = useCommandReload(retire.reset, [ASSETS_KEY]);
   const badge = ASSET_BADGE[asset.status];
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
@@ -488,10 +499,20 @@ function AssetRow({ asset, facility }: { asset: Asset; facility: FacilityContext
         </form>
       ) : null}
       {save.error ? (
-        <CommandError error={save.error} onRetry={() => submit()} action="Saving the asset" />
+        <CommandError
+          error={save.error}
+          onRetry={() => submit()}
+          onReload={reloadSave}
+          action="Saving the asset"
+        />
       ) : null}
       {retire.error ? (
-        <CommandError error={retire.error} onRetry={doRetire} action="Retiring the asset" />
+        <CommandError
+          error={retire.error}
+          onRetry={doRetire}
+          onReload={reloadRetire}
+          action="Retiring the asset"
+        />
       ) : null}
     </li>
   );
@@ -652,19 +673,39 @@ function PreventiveRow({
   const change = useApiCommand('patch', '/preventive-schedules/{id}', {
     invalidate: [['api', '/preventive-schedules']],
   });
+  const reloadChange = useCommandReload(change.reset, [['api', '/preventive-schedules']]);
   const badge = PREVENTIVE_BADGE[schedule.status];
-  const run = () =>
-    void generate.submit({ path: { id: schedule.id }, body: {} }).catch(() => undefined);
-  const setStatus = (status: 'active' | 'paused' | 'ended') =>
+  // Each generated occurrence applies a closure, so booked events in its interval are affected:
+  // the user chooses what happens to them, with no default (SCR-S-42, as the closure apply panel).
+  const [choosing, setChoosing] = useState(false);
+  const [mode, setMode] = useState<'' | 'cancel_affected' | 'leave_for_resolution'>('');
+  const [attempted, setAttempted] = useState(false);
+  const run = () => {
+    setAttempted(true);
+    if (!mode) return;
+    void generate
+      .submit({ path: { id: schedule.id }, body: { resolutionMode: mode } })
+      .then(() => {
+        setChoosing(false);
+        setAttempted(false);
+      })
+      .catch(() => undefined);
+  };
+  const [lastStatus, setLastStatus] = useState<'active' | 'paused' | 'ended' | null>(null);
+  const setStatus = (status: 'active' | 'paused' | 'ended') => {
+    setLastStatus(status);
     void change
       .submit({ path: { id: schedule.id }, body: { expectedRevision: schedule.revision, status } })
       .catch(() => undefined);
+  };
+  const modeName = `pm-generate-mode-${schedule.id}`;
   return (
     <li>
       <div className="row-text">
         <span className="row-title">{schedule.name}</span>
         <span className="caption">
-          {recurrenceText(schedule)} ({schedule.timezone}) · {schedule.taskTemplate.severity} task:{' '}
+          {recurrenceText(schedule)} ({schedule.timezone}) · Generated {schedule.leadTimeDays} day
+          {schedule.leadTimeDays === 1 ? '' : 's'} ahead · {schedule.taskTemplate.severity} task:{' '}
           {schedule.taskTemplate.issue} · Restriction: {schedule.restrictionKind}
           {schedule.lastGeneratedThrough
             ? ` · Generated through ${formatInstant(schedule.lastGeneratedThrough, facility.timezone)}`
@@ -677,15 +718,26 @@ function PreventiveRow({
             each); {generate.data.alreadyGeneratedOccurrenceIndexes.length} already existed.
           </span>
         ) : null}
+        {generate.data && generate.data.generated.length > 0 ? (
+          <ul className="list" aria-label={`Restrictions created by ${schedule.name}`}>
+            {generate.data.generated.map((g) => (
+              <li key={g.restrictionId}>
+                <Link to={`/facilities/restrictions/${g.restrictionId}`}>
+                  Restriction for occurrence {g.occurrenceIndex + 1}:{' '}
+                  {formatInstant(g.interval.start, facility.timezone)}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
       <StatusBadge tone={badge.tone} label={badge.label} />
       <span className="field-row">
         {schedule.status === 'active' ? (
           <>
             <Button
-              busy={generate.isProcessing}
-              disabled={!online}
-              onClick={run}
+              disabled={!online || choosing}
+              onClick={() => setChoosing(true)}
               aria-label={`Generate due occurrences of ${schedule.name}`}
             >
               Generate due occurrences
@@ -721,10 +773,61 @@ function PreventiveRow({
           </Button>
         ) : null}
       </span>
+      {choosing && schedule.status === 'active' ? (
+        <div className="form" role="group" aria-label={`Generate occurrences of ${schedule.name}`}>
+          <fieldset>
+            <legend>Each occurrence closes its area. Events already booked in those times:</legend>
+            <label>
+              <input
+                type="radio"
+                name={modeName}
+                checked={mode === 'cancel_affected'}
+                onChange={() => setMode('cancel_affected')}
+              />{' '}
+              Cancel them now (each sends a cancellation notice)
+            </label>
+            <label>
+              <input
+                type="radio"
+                name={modeName}
+                checked={mode === 'leave_for_resolution'}
+                onChange={() => setMode('leave_for_resolution')}
+              />{' '}
+              Leave them for resolution (they appear in the scheduler queue on Today)
+            </label>
+          </fieldset>
+          {attempted && !mode ? (
+            <p className="error-text" role="alert">
+              Choose what happens to the affected events.
+            </p>
+          ) : null}
+          <span className="field-row">
+            <Button busy={generate.isProcessing} disabled={!online} onClick={run}>
+              Generate now
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setChoosing(false);
+                setAttempted(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </span>
+        </div>
+      ) : null}
       {generate.error ? (
         <CommandError error={generate.error} onRetry={run} action="Generating occurrences" />
       ) : null}
-      {change.error ? <CommandError error={change.error} action="Changing the schedule" /> : null}
+      {change.error ? (
+        <CommandError
+          error={change.error}
+          onRetry={lastStatus ? () => setStatus(lastStatus) : undefined}
+          onReload={reloadChange}
+          action="Changing the schedule"
+        />
+      ) : null}
     </li>
   );
 }
@@ -921,8 +1024,15 @@ function PreventiveForm({ facility }: { facility: FacilityContext }) {
         <option value="limited">limited (currently closes the area like closed)</option>
       </select>
       <p className="caption">
-        How far ahead occurrences are generated uses the configured lead time.
+        How far ahead occurrences are generated uses the proposed default lead time; each schedule
+        shows the lead time the service recorded.
       </p>
+      <StateView
+        variant="pending-decision"
+        subject="Preventive maintenance lead time"
+        decisions={['DEC-001']}
+        owner="Operations"
+      />
       {attempted && problems.length > 0 ? (
         <ul className="field-issues" aria-label="Problems to correct">
           {problems.map((p) => (

@@ -27,6 +27,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
+import { useCommandReload } from '../../features/schedule-facilities/reload';
 import {
   useFacilityById,
   ZoneCaption,
@@ -309,6 +310,7 @@ function ApplyPanel({ closure, onApplied }: { closure: Closure; onApplied: (c: C
   const apply = useApiCommand('post', '/closures/{id}/apply', {
     invalidate: [CLOSURES_KEY, ['api', '/events']],
   });
+  const reload = useCommandReload(apply.reset, [CLOSURES_KEY, ['api', '/closures/{id}']]);
   const submit = () => {
     setAttempted(true);
     if (!mode) return;
@@ -352,7 +354,12 @@ function ApplyPanel({ closure, onApplied }: { closure: Closure; onApplied: (c: C
       </Button>
       {!online ? <p className="caption">Applying a closure needs a connection.</p> : null}
       {apply.error ? (
-        <CommandError error={apply.error} onRetry={submit} action="Applying the closure" />
+        <CommandError
+          error={apply.error}
+          onRetry={submit}
+          onReload={reload}
+          action="Applying the closure"
+        />
       ) : null}
     </section>
   );
@@ -364,6 +371,7 @@ function LiftPanel({ closure }: { closure: Closure }) {
   const lift = useApiCommand('post', '/closures/{id}/lift', {
     invalidate: [CLOSURES_KEY, ['api', '/closures/{id}']],
   });
+  const reloadLift = useCommandReload(lift.reset, [CLOSURES_KEY, ['api', '/closures/{id}']]);
   const restrictions = useApiQuery({
     path: '/maintenance-restrictions',
     request: { query: { facilityId: closure.facilityId } },
@@ -409,7 +417,12 @@ function LiftPanel({ closure }: { closure: Closure }) {
         </Button>
       )}
       {lift.error ? (
-        <CommandError error={lift.error} onRetry={submit} action="Lifting the closure" />
+        <CommandError
+          error={lift.error}
+          onRetry={submit}
+          onReload={reloadLift}
+          action="Lifting the closure"
+        />
       ) : null}
     </section>
   );

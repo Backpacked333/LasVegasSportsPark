@@ -198,6 +198,55 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     );
   });
 
+  it('truncated range: more events than loaded never reads as free, and the notice does not suggest choosing a space', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': page([], 'next-page'),
+        'GET /closures': { status: 200, body: [] },
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    expect(
+      await screen.findByText(/Showing the first 200 events in this range; more exist/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Choose one space/)).toBeNull();
+    expect(screen.getByTestId(`calendar-resource-${PITCH}`)).not.toHaveTextContent(
+      'Free for the whole range.',
+    );
+    expect(screen.getByTestId(`calendar-resource-${PITCH}`)).toHaveTextContent(
+      'more events exist in this range than were loaded',
+    );
+  });
+
+  it('a pending closure is drawn apart from an applied one and named in the timeline key', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': page([]),
+        'GET /closures': {
+          status: 200,
+          body: [
+            closure({
+              id: 'c-pending',
+              resourceId: PITCH,
+              status: 'pending',
+              interval: { start: '2026-10-24T15:00:00.000Z', end: '2026-10-24T17:00:00.000Z' },
+            }),
+          ],
+        },
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    const row = await screen.findByTestId(`calendar-resource-${PITCH}`);
+    expect(row.querySelector('.track-closure-pending')).not.toBeNull();
+    expect(row.querySelector('.track-closure')).toBeNull();
+    expect(row).toHaveTextContent(
+      'Free for the whole range (a planned closure is not applied yet).',
+    );
+    const key = screen.getByRole('list', { name: 'Timeline key' });
+    expect(within(key).getByText('Closure pending (not applied; still bookable)')).toBeVisible();
+    expect(within(key).getByText('Closed')).toBeVisible();
+  });
+
   it('first setup: no resources offers the resource inventory', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

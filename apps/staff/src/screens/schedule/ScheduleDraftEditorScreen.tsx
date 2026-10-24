@@ -60,6 +60,9 @@ export function draftQueryKey(id: string) {
   return apiQueryKey('/schedule-drafts/{id}', { path: { id } });
 }
 
+/** Automatic retries while the service is unreachable but the device is online. */
+const AUTOSAVE_BACKOFF_MS = [5_000, 15_000, 60_000] as const;
+
 type SaveState =
   | { kind: 'saved' }
   | { kind: 'saving' }
@@ -155,6 +158,23 @@ function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
     if (online && queued.current) void flush();
   }, [online, flush]);
 
+  // The device reports a connection but the service could not be reached (DNS, proxy, API down):
+  // retry the same snapshot with a bounded backoff, as the same intent (same key, §4.9).
+  const unreachableAttempts = useRef(0);
+  useEffect(() => {
+    if (state.kind !== 'offline' || !online) {
+      if (state.kind === 'saved') unreachableAttempts.current = 0;
+      return;
+    }
+    const delay = AUTOSAVE_BACKOFF_MS[unreachableAttempts.current];
+    if (delay === undefined) return;
+    const timer = setTimeout(() => {
+      unreachableAttempts.current += 1;
+      void flush();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [state, online, flush]);
+
   useEffect(() => {
     blockedRef.current = blocked;
     if (!blocked && queued.current) void flush();
@@ -228,6 +248,7 @@ function IssueList({ issues, label }: { issues: readonly ValidationIssue[]; labe
 function SaveStatus({
   state,
   pending,
+  online,
   draft,
   tz,
   onRetry,
@@ -236,6 +257,7 @@ function SaveStatus({
 }: {
   state: SaveState;
   pending: boolean;
+  online: boolean;
   draft: ScheduleDraft;
   tz: string;
   onRetry: () => void;
@@ -258,7 +280,18 @@ function SaveStatus({
         </p>
       );
     case 'offline':
-      return (
+      return online ? (
+        <div role="status" className="banner">
+          <StatusBadge tone="warning" label="Not saved: service not reachable" />
+          <span>
+            The service could not be reached. Your edits are kept on this page and saving is retried
+            automatically; do not close the page.
+          </span>
+          <Button variant="secondary" onClick={onRetry}>
+            Try again
+          </Button>
+        </div>
+      ) : (
         <div role="status" className="banner">
           <StatusBadge tone="warning" label="Not saved: offline" />
           <span>
@@ -342,9 +375,13 @@ function DraftEditor({
   for (const issue of draft.validationResults?.issues ?? []) {
     if (issue.code === 'stale_revision' && issue.eventId) staleTargets.add(issue.eventId);
   }
+  // A rebase acknowledges the event at the revision shown when Rebase was pressed: if the event
+  // changes again, it needs a new acknowledgment, so a draft is never silently rebased twice
+  // (SPK-SCHED-005).
+  const ackKey = (id: string) => `${id}:${targets.get(id)?.event?.revision ?? 'unknown'}`;
   // Only changes still in the working copy block saving; removing a stale change unblocks it.
   const unacknowledged = [...staleTargets].filter(
-    (id) => !acknowledged.has(id) && working.some((c) => c.targetEventId === id),
+    (id) => !acknowledged.has(ackKey(id)) && working.some((c) => c.targetEventId === id),
   );
   const autosave = useDraftAutosave(draft, unacknowledged.length > 0);
 
@@ -443,6 +480,7 @@ function DraftEditor({
         <SaveStatus
           state={autosave.state}
           pending={autosave.pending}
+          online={online}
           draft={draft}
           tz={tz}
           onRetry={autosave.retry}
@@ -499,12 +537,12 @@ function DraftEditor({
                         <StatusBadge tone="warning" label="Rebase required" />
                         The event changed since this draft captured it. Check its current details
                         above.
-                        {!acknowledged.has(change.targetEventId) && editable ? (
+                        {!acknowledged.has(ackKey(change.targetEventId)) && editable ? (
                           <Button
                             variant="secondary"
                             onClick={() => {
-                              const id = change.targetEventId as string;
-                              setAcknowledged((prev) => new Set([...prev, id]));
+                              const key = ackKey(change.targetEventId as string);
+                              setAcknowledged((prev) => new Set([...prev, key]));
                               autosave.schedule({
                                 name: name.trim() || draft.name,
                                 changes: working,

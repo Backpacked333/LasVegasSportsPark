@@ -3,8 +3,10 @@
  *
  * - ACCESS_DENIED: "Not available to you", naming the missing permission (staff see which one);
  *   protected NOT_FOUND: "not available" without implying the record exists.
- * - No answer (timeout): the change may have been made; "Try again" repeats the same intent with
- *   the same idempotency key, so it can never apply twice (§4.9).
+ * - No answer (timeout, or the connection dropped while the request was out): the change may
+ *   have been made; "Try again" repeats the same intent with the same idempotency key, so it can
+ *   never apply twice (§4.9). Commands cannot be sent while offline, so a network failure here
+ *   happened in flight and is never reported as "not sent".
  * - Validation failure: the field messages the API returned; the user's input stays in the form.
  * - Anything else: code, safe message, correlation reference and the API's recovery action
  *   (`Reload` for STALE_REVISION and INVALID_TRANSITION).
@@ -48,13 +50,16 @@ export function CommandError({ error, onRetry, onReload, action }: CommandErrorP
       />
     );
   }
-  if (error.kind === 'timeout') {
+  if (error.isOffline) {
     return (
       <section className="state" aria-live="polite" data-testid="state-outcome-unknown">
         <StatusBadge tone="warning" label="Outcome unknown" />
         <p>
-          No answer arrived in time, so the change may or may not have been made. Trying again sends
-          the same request, which the service will not apply twice.
+          {error.kind === 'timeout'
+            ? 'No answer arrived in time'
+            : 'The connection was lost before an answer arrived'}
+          , so the change may or may not have been made. Trying again sends the same request, which
+          the service will not apply twice.
         </p>
         {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
       </section>

@@ -210,13 +210,34 @@ describe('SCR-S-41 MaintenanceScreen', () => {
     expect(list).toHaveTextContent(
       'every 4 weeks on Monday from 2026-10-26, 6 times at 06:00 for 120 min',
     );
+    expect(list).toHaveTextContent('Generated 14 days ahead');
     await user.click(
       within(list).getByRole('button', {
         name: 'Generate due occurrences of Monthly turf grooming',
       }),
     );
+    // SCR-S-42: what happens to booked events is chosen explicitly, with no default.
+    const choice = within(list).getByRole('group', {
+      name: 'Generate occurrences of Monthly turf grooming',
+    });
+    await user.click(within(choice).getByRole('button', { name: 'Generate now' }));
+    expect(within(choice).getByText('Choose what happens to the affected events.')).toBeVisible();
+    expect(app.fake.requests.some((r) => r.route === '/preventive-schedules/{id}/generate')).toBe(
+      false,
+    );
+    await user.click(within(choice).getByLabelText(/Leave them for resolution/));
+    await user.click(within(choice).getByRole('button', { name: 'Generate now' }));
     expect(await within(list).findByRole('status')).toHaveTextContent(
       '1 occurrence generated (a task and a restriction each); 0 already existed.',
+    );
+    const post = app.fake.requests.find((r) => r.route === '/preventive-schedules/{id}/generate');
+    expect(post?.body).toEqual({ resolutionMode: 'leave_for_resolution' });
+    const created = within(list).getByRole('list', {
+      name: 'Restrictions created by Monthly turf grooming',
+    });
+    expect(within(created).getByRole('link')).toHaveAttribute(
+      'href',
+      '/facilities/restrictions/r-5',
     );
   });
 

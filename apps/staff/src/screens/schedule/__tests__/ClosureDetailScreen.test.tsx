@@ -287,6 +287,26 @@ describe('SCR-S-06 ClosureDetailScreen', () => {
     ).toBeInTheDocument();
   });
 
+  it('SPK-UX-008 stale version: an apply refused as STALE_REVISION offers a Reload button that re-reads the closure', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /closures/{id}/apply': () =>
+          fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' })),
+      }),
+    });
+    render(app.at('/schedule/closures/c1'));
+    await user.click(await screen.findByLabelText(/Cancel them now/));
+    await user.click(screen.getByRole('button', { name: 'Apply closure' }));
+    await screen.findByText(/Error code: STALE_REVISION/);
+    const reads = app.fake.requests.filter((r) => r.route === '/closures/{id}').length;
+    await user.click(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/closures/{id}').length).toBe(reads + 1),
+    );
+    expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull();
+  });
+
   it('a closure the viewer may not see is not available', async () => {
     const app = createTestApp({
       routes: routes({ 'GET /closures/{id}': () => fakeResponse(404, apiErrorBody('NOT_FOUND')) }),

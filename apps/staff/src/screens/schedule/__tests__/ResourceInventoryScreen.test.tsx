@@ -212,12 +212,76 @@ describe('SCR-S-07 ResourceInventoryScreen', () => {
       (r) => r.route === '/resources/{id}' && r.method === 'PATCH',
     );
     expect(patch?.params).toEqual({ id: PITCH });
-    expect(patch?.body).toMatchObject({
-      expectedRevision: 1,
-      defaultCleanupMinutes: 20,
-      dimensions: { length: 100, width: 64 },
+    expect(patch?.body).toMatchObject({ expectedRevision: 1, defaultCleanupMinutes: 20 });
+    // Unchanged structured fields are not sent (SPK-SCHED-001).
+    expect(patch?.body).not.toHaveProperty('dimensions');
+    expect(patch?.body).not.toHaveProperty('requiredEquipment');
+    // Reload is a working action that re-reads the inventory (SPK-UX-008 stale version).
+    const reads = app.fake.requests.filter((r) => r.route === '/resources').length;
+    await user.click(within(form).getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/resources').length).toBe(reads + 1),
+    );
+    expect(within(form).getByLabelText('Default cleanup minutes')).toHaveValue('20');
+  });
+
+  it('SPK-SCHED-001: renaming a space with structured equipment and dimensions leaves both out of the PATCH', async () => {
+    const user = userEvent.setup();
+    const structured = INVENTORY.map((r) =>
+      r.id === PITCH
+        ? {
+            ...r,
+            requiredEquipment: [{ type: 'goal', count: 2 }],
+            dimensions: { configurations: ['11v11', '7v7'], pitchNumber: '07' },
+          }
+        : r,
+    );
+    const app = createTestApp({
+      routes: routes({
+        'GET /resources': { status: 200, body: structured },
+        'PATCH /resources/{id}': { status: 200, body: structured[0] },
+      }),
     });
-    expect(screen.getByText('Reload')).toBeInTheDocument();
+    render(app.at('/schedule/resources'));
+    await screen.findByRole('list', { name: 'Spaces' });
+    await user.click(screen.getByRole('button', { name: 'Edit Pitch 1' }));
+    const form = screen.getByRole('form', { name: 'Edit Pitch 1' });
+    await user.clear(within(form).getByLabelText('Name'));
+    await user.type(within(form).getByLabelText('Name'), 'Pitch One');
+    await user.click(within(form).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/resources/{id}')).toBe(true),
+    );
+    const patch = app.fake.requests.find((r) => r.route === '/resources/{id}');
+    expect(patch?.body).toMatchObject({ name: 'Pitch One' });
+    expect(patch?.body).not.toHaveProperty('dimensions');
+    expect(patch?.body).not.toHaveProperty('requiredEquipment');
+  });
+
+  it('SPK-SCHED-001: an edited dimension keeps each existing value type', async () => {
+    const user = userEvent.setup();
+    const structured = INVENTORY.map((r) =>
+      r.id === PITCH ? { ...r, dimensions: { length: 100, pitchNumber: '07' } } : r,
+    );
+    const app = createTestApp({
+      routes: routes({
+        'GET /resources': { status: 200, body: structured },
+        'PATCH /resources/{id}': { status: 200, body: structured[0] },
+      }),
+    });
+    render(app.at('/schedule/resources'));
+    await screen.findByRole('list', { name: 'Spaces' });
+    await user.click(screen.getByRole('button', { name: 'Edit Pitch 1' }));
+    const form = screen.getByRole('form', { name: 'Edit Pitch 1' });
+    const field = within(form).getByLabelText(/Dimensions or supported configurations/);
+    await user.clear(field);
+    await user.type(field, 'length: 105{Enter}pitchNumber: 08');
+    await user.click(within(form).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/resources/{id}')).toBe(true),
+    );
+    const patch = app.fake.requests.find((r) => r.route === '/resources/{id}');
+    expect(patch?.body).toMatchObject({ dimensions: { length: 105, pitchNumber: '08' } });
   });
 
   it('first setup: no spaces yet explains what to add', async () => {
