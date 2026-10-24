@@ -15,21 +15,24 @@ import {
   type UpdateResourceConfigurationBody,
 } from '@sportspark/contracts';
 import {
+  isExclusionViolation,
   isUniqueViolation,
   json,
+  tstzrange,
   type Db,
   type ResourcesTable,
   type ResourceConfigurationsTable,
 } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type Selectable } from 'kysely';
 import {
   assertExpectedRevision,
   AuditWriter,
   AuthorizationService,
   UnitOfWork,
+  type Clock,
   type Trx,
 } from '../../../kernel';
-import { DATABASE } from '../../../kernel/tokens';
+import { CLOCK, DATABASE } from '../../../kernel/tokens';
 import { SchedulingActions } from '../scheduling.actions';
 import { EventWriter } from './event-writer';
 import { organizationOf } from './events.service';
@@ -40,12 +43,15 @@ type ConfigurationRow = Selectable<ResourceConfigurationsTable>;
 /**
  * Physical inventory (SPK-SCHED-001/002): resources with their whole-space/subdivision
  * relationships, conflict units, configurations and operating hours. A subdivision's units are
- * added to its parent's mapping so a whole-pitch reservation conflicts with every subdivision.
+ * added to its parent's mapping so a whole-pitch reservation conflicts with every subdivision;
+ * a whole space always keeps the units of its subdivisions, and a resource that gains units has
+ * them added to its active reservations that have not ended (§4.7 invariant 4).
  */
 @Injectable()
 export class ResourcesService {
   constructor(
     @Inject(DATABASE) private readonly db: Db,
+    @Inject(CLOCK) private readonly clock: Clock,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
@@ -76,7 +82,8 @@ export class ResourcesService {
       }
       let parent: ResourceRow | undefined;
       if (body.parentResourceId) {
-        parent = await this.loadResource(trx, organizationId, body.parentResourceId);
+        // locked: the new subdivision's unit is added to the parent's mapping and to its holds
+        parent = await this.loadResource(trx, organizationId, body.parentResourceId, true);
         if (!parent || parent.facility_id !== facility.id) {
           throw errors.validation('The parent resource must belong to the same facility.');
         }
@@ -171,6 +178,7 @@ export class ResourcesService {
         .where('revision', '=', current.revision)
         .returningAll()
         .executeTakeFirstOrThrow();
+      let unitChange: { from: string[]; to: string[] } | null = null;
       if (body.conflictUnitIds) {
         await this.assertUnitsInFacility(
           trx,
@@ -178,12 +186,23 @@ export class ResourcesService {
           current.facility_id,
           body.conflictUnitIds,
         );
+        // SPK-SCHED-002 / §4.7 invariant 4: conflictUnitIds names the resource's own units; a
+        // whole space always keeps every unit of its subdivisions, so it still conflicts with them.
+        const descendantUnits = await this.descendantUnits(trx, organizationId, resourceId);
+        const effective = [...new Set([...body.conflictUnitIds, ...descendantUnits])].sort();
+        const before = await this.unitsOf(trx, organizationId, resourceId);
         await trx
           .deleteFrom('resource_conflict_units')
           .where('organization_id', '=', organizationId)
           .where('resource_id', '=', resourceId)
           .execute();
-        await this.mapUnits(trx, organizationId, updated, body.conflictUnitIds);
+        await this.mapUnits(trx, organizationId, updated, effective);
+        unitChange = { from: before, to: effective };
+      }
+      const details: Record<string, unknown> = {};
+      if (body.status && body.status !== current.status) details['status'] = body.status;
+      if (unitChange && unitChange.from.join(',') !== unitChange.to.join(',')) {
+        details['conflictUnitIds'] = unitChange;
       }
       await this.audit.record(trx, {
         organizationId,
@@ -195,7 +214,7 @@ export class ResourcesService {
         afterRevision: updated.revision,
         reason: body.reason ?? null,
         correlationId: correlationId ?? null,
-        details: body.status && body.status !== current.status ? { status: body.status } : {},
+        details,
       });
       return this.resourceView(trx, updated);
     });
@@ -592,7 +611,12 @@ export class ResourcesService {
     }
   }
 
-  /** Maps the resource to its units and propagates them up the whole-space chain (SPK-SCHED-002). */
+  /**
+   * Maps the resource to its units and propagates them up the whole-space chain (SPK-SCHED-002).
+   * Every resource of the chain is locked (the caller holds the resource itself), and a unit it
+   * gains is added to its active reservations that have not ended, so a hold made before the
+   * inventory change still covers the space (§4.7 invariant 4).
+   */
   private async mapUnits(
     trx: Trx,
     organizationId: string,
@@ -603,8 +627,9 @@ export class ResourcesService {
     const visited = new Set<string>();
     while (current && !visited.has(current.id)) {
       visited.add(current.id);
+      const gained: string[] = [];
       for (const unitId of new Set(unitIds)) {
-        await trx
+        const inserted = await trx
           .insertInto('resource_conflict_units')
           .values({
             organization_id: organizationId,
@@ -612,12 +637,142 @@ export class ResourcesService {
             conflict_unit_id: unitId,
           })
           .onConflict((oc) => oc.doNothing())
+          .returning('conflict_unit_id')
           .execute();
+        if (inserted.length > 0) gained.push(unitId);
       }
+      await this.extendActiveReservations(trx, organizationId, current.id, gained);
       current = current.parent_resource_id
-        ? await this.loadResource(trx, organizationId, current.parent_resource_id)
+        ? await this.loadResource(trx, organizationId, current.parent_resource_id, true)
         : undefined;
     }
+  }
+
+  /**
+   * Adds the units to every active reservation of the resource whose occupied interval has not
+   * ended. Units the event already holds are skipped (an update re-maps the resource's current
+   * units too). If the space is already reserved by another event, the exclusion constraint
+   * refuses the inventory change, reported as RESOURCE_CONFLICT naming the events.
+   */
+  private async extendActiveReservations(
+    trx: Trx,
+    organizationId: string,
+    resourceId: string,
+    unitIds: string[],
+  ): Promise<void> {
+    if (unitIds.length === 0) return;
+    const reservations = await trx
+      .selectFrom('reservations')
+      .select([
+        'id',
+        'event_id',
+        sql<string>`lower(occupied)`.as('start'),
+        sql<string>`upper(occupied)`.as('end'),
+      ])
+      .where('organization_id', '=', organizationId)
+      .where('resource_id', '=', resourceId)
+      .where('status', '=', 'active')
+      .where(sql<boolean>`upper(occupied) > ${this.clock.now()}::timestamptz`)
+      .orderBy('id')
+      .execute();
+    for (const reservation of reservations) {
+      const held = await trx
+        .selectFrom('reservation_units')
+        .select('conflict_unit_id')
+        .where('organization_id', '=', organizationId)
+        .where('event_id', '=', reservation.event_id)
+        .where('status', '=', 'active')
+        .execute();
+      const heldIds = new Set(held.map((h) => h.conflict_unit_id));
+      const missing = unitIds.filter((u) => !heldIds.has(u));
+      if (missing.length === 0) continue;
+      const occupied = tstzrange(new Date(reservation.start), new Date(reservation.end));
+      const colliding = await trx
+        .selectFrom('reservation_units')
+        .select('event_id')
+        .distinct()
+        .where('organization_id', '=', organizationId)
+        .where('status', '=', 'active')
+        .where('conflict_unit_id', 'in', missing)
+        .where('event_id', '<>', reservation.event_id)
+        .where(sql<boolean>`occupied && ${occupied}`)
+        .execute();
+      if (colliding.length > 0) {
+        throw this.inventoryConflict([
+          reservation.event_id,
+          ...colliding.map((c) => c.event_id).sort(),
+        ]);
+      }
+      for (const unitId of missing) {
+        try {
+          await trx
+            .insertInto('reservation_units')
+            .values({
+              id: newId(),
+              organization_id: organizationId,
+              reservation_id: reservation.id,
+              event_id: reservation.event_id,
+              conflict_unit_id: unitId,
+              occupied,
+            })
+            .execute();
+        } catch (error) {
+          // a concurrent reservation took the space: the whole inventory change rolls back
+          if (isExclusionViolation(error)) throw this.inventoryConflict([reservation.event_id]);
+          throw error;
+        }
+      }
+    }
+  }
+
+  private inventoryConflict(eventIds: string[]): Error {
+    const conflictingEventIds = [...new Set(eventIds)];
+    return errors.resourceConflict(
+      'The inventory change would put an existing reservation on space that is already reserved.',
+      { conflicts: [], conflictingEventIds },
+    );
+  }
+
+  /** Every unit mapped to a subdivision below the resource, at any depth. */
+  private async descendantUnits(
+    trx: Trx,
+    organizationId: string,
+    resourceId: string,
+  ): Promise<string[]> {
+    const descendants: string[] = [];
+    const seen = new Set<string>([resourceId]);
+    let frontier = [resourceId];
+    while (frontier.length > 0) {
+      const children = await trx
+        .selectFrom('resources')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('parent_resource_id', 'in', frontier)
+        .execute();
+      frontier = children.map((c) => c.id).filter((id) => !seen.has(id));
+      for (const id of frontier) seen.add(id);
+      descendants.push(...frontier);
+    }
+    if (descendants.length === 0) return [];
+    const units = await trx
+      .selectFrom('resource_conflict_units')
+      .select('conflict_unit_id')
+      .distinct()
+      .where('organization_id', '=', organizationId)
+      .where('resource_id', 'in', descendants)
+      .execute();
+    return units.map((u) => u.conflict_unit_id);
+  }
+
+  private async unitsOf(trx: Trx, organizationId: string, resourceId: string): Promise<string[]> {
+    const rows = await trx
+      .selectFrom('resource_conflict_units')
+      .select('conflict_unit_id')
+      .where('organization_id', '=', organizationId)
+      .where('resource_id', '=', resourceId)
+      .orderBy('conflict_unit_id')
+      .execute();
+    return rows.map((r) => r.conflict_unit_id);
   }
 
   private async setMembers(

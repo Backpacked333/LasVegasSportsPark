@@ -152,6 +152,7 @@ export class ClosuresService implements ClosurePort {
       const next = ClosureMachine.next(closure.status, 'apply');
       const facility = await this.writer.loadFacility(trx, organizationId, closure.facility_id);
       const interval = { start: closure.start, end: closure.end };
+      await this.lockClosedUnits(trx, organizationId, closure.facility_id, closure.resource_id);
       const impact = await this.computeImpact(
         trx,
         organizationId,
@@ -341,6 +342,39 @@ export class ClosuresService implements ClosurePort {
       .orderBy('id');
     if (status) q = q.where('status', '=', status);
     return (await q.execute()).map((r) => this.view(r));
+  }
+
+  /**
+   * SPK-SCHED-009 / SPK-FAC-003 / §4.7: a closure holds no reservation rows, so applying one locks
+   * the closed area's conflict units (every unit of the facility for a facility-wide closure)
+   * FOR UPDATE, in id order, before the impact is read. A booking that has already share-locked
+   * one of them (`EventWriter.reserve`) is waited for, so its committed reservation is in the
+   * impact and is cancelled or listed for resolution; a booking that comes later waits for this
+   * transaction and then sees the active closure in its re-check.
+   */
+  private async lockClosedUnits(
+    trx: Trx,
+    organizationId: string,
+    facilityId: string,
+    resourceId: string | null,
+  ): Promise<void> {
+    let q = trx
+      .selectFrom('conflict_units')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('facility_id', '=', facilityId);
+    if (resourceId) {
+      q = q.where(
+        'id',
+        'in',
+        trx
+          .selectFrom('resource_conflict_units')
+          .select('conflict_unit_id')
+          .where('organization_id', '=', organizationId)
+          .where('resource_id', '=', resourceId),
+      );
+    }
+    await q.orderBy('id').forUpdate().execute();
   }
 
   /** Every published event holding space inside the closed area during the interval, with its owning record and parties. */

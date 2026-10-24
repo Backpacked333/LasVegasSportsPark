@@ -86,8 +86,34 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
 - Conflict detection (`conflicts/conflict-detector.ts`) gives early feedback: physical overlap on
   shared units including buffers, closures, operating hours, party overlap, required rest,
   compatible formats, resource status and configured arrangements, plus conflicts between changes
-  of the same group. The exclusion constraints remain the guarantee; a constraint failure inside a
-  savepoint is converted to the same `RESOURCE_CONFLICT`.
+  of the same group (overlap and required rest). What holds under concurrent commands (§4.7):
+  - physical overlap and party overlap: the exclusion constraints; a constraint failure inside a
+    savepoint is converted to the same `RESOURCE_CONFLICT`;
+  - closures (SPK-SCHED-009, SPK-FAC-003): closures hold no reservation rows, so
+    `EventWriter.reserve` share-locks the event's conflict units and re-checks active closures
+    after the lock, and `applyClosure` locks the closed area's units (every unit of the facility
+    for a facility-wide closure) `FOR UPDATE` before reading the impact. A booking in flight is
+    either in the impact (cancelled or left for resolution) or refused with a `closure` conflict;
+  - configured arrangements (SPK-SCHED-002): detection locks the parent resource row of every
+    requested subdivision (`FOR NO KEY UPDATE`) before reading sibling reservations, so bookings of
+    sibling subdivisions are serialized;
+  - required rest (SPK-SCHED-004): `EventWriter.reserve` takes a transaction-scoped advisory lock
+    per committed party that needs rest and re-checks the gap after it (`insufficient_rest`).
+    Commands that reserve several events (publication, series edit) take these locks up front in
+    one order (`EventWriter.lockHolds`); a deadlock that still occurs (40P01) is retried by
+    `UnitOfWork`. Verified by `__tests__/concurrency.spec.ts` under PGlite and `TEST_DATABASE_URL`.
+- Buffers (SPK-SCHED-001/003): each resource's default setup and cleanup is its turnover
+  requirement. Every write path (create, move, series create and edit, draft changes, availability)
+  holds at least the largest requirement among the resources it actually reserves; a larger
+  requested value extends it, a smaller one is raised to it. An event keeps its own buffers only
+  while it stays on the same resources.
+- Inventory (SPK-SCHED-002, §4.7 invariant 4): on `PATCH /resources/{id}`, `conflictUnitIds` names
+  the resource's own units; a whole space always keeps every unit of its subdivisions (the response
+  lists the effective set). When a resource gains units (a new subdivision, or an update), they are
+  added to its active reservations that have not ended, so an earlier whole-pitch booking still
+  covers a half created later; if that space is already reserved by another event the inventory
+  change is refused with `RESOURCE_CONFLICT`. Units a resource loses stay on its existing holds
+  (they over-conflict, which is safe), and ancestors keep units of a former mapping.
 - Publication (`ScheduleDraftsService.publish`) performs the seven SPK-SCHED-006 steps inside one
   transaction after creating the operation; a stale base revision (`STALE_REVISION`), any conflict
   or blocking obligation rolls everything back, the draft is marked `failed` with the reasons, and
@@ -109,3 +135,7 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
 - SPK-SCHED-009 financial obligations and messages are resolved by finance and communications from
   the `source_records` in the closure impact; this module names the affected events and parties only.
 - Operating-hours overlap between windows is not constrained (only duplicate start times are).
+- Pending decision: an authorized, audited override that books with less than a resource's
+  turnover requirement is not implemented (it would need an action, a contract field and a reason);
+  today a smaller requested buffer is always raised to the requirement. Raising a resource's
+  default buffer later does not change events already booked on it.

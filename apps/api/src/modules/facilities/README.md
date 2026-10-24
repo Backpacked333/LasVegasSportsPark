@@ -64,10 +64,19 @@ multi-step commands recorded as operations (`facilities.approve_restriction`,
   between this module's transactions (a nested transaction through the root database deadlocks
   under PGlite and would not be atomic on PostgreSQL either); an interruption leaves the
   restriction `approved` and `POST …/approve` resumes it (closure id recorded as soon as created).
+  Exactly one closure backs a restriction (SPK-FAC-004, SPK-AT-021): the closure id is linked under
+  the restriction's row lock, a concurrent or retried approval that created its own closure uses the
+  linked one instead (audit `facilities.restriction_closure_superseded`; its own closure stays
+  `pending`, which blocks nothing), and an approval that finds the restriction already activated
+  with that closure succeeds (`alreadyActive` on its operation). The authorized release therefore
+  lifts the only closure that blocks the area.
 - **SPK-FAC-004.** Closing a task never touches its restriction (`openRestrictionIds` says so).
   `release` requires `facilities.release_to_service`, and when the task `requires_inspection` the
   latest inspection must be `passed` (`ELIGIBILITY_FAILED`, `details.code = inspection_required`
-  otherwise). The closure is lifted through the port, then the release is recorded. A failed
+  otherwise). While a restriction on the task is open (proposed, approved or active), turning
+  `requiresInspection` off is refused the same way, so the gate cannot be removed before release;
+  any change of the requirement is audited (`details.requiresInspection { from, to }`). The
+  closure is lifted through the port, then the release is recorded. A failed
   inspection sends a resolved task back to `in_progress`; on a closed task it raises an
   operational exception. A closure lifted directly in scheduling raises
   `facilities.closure_lifted_outside_release` (outbox handler on `scheduling.closure_lifted`),
@@ -123,4 +132,6 @@ Handlers registered in `onModuleInit`: `facilities.escalate_overdue_task` (own t
   **pending** (permission matrix C.10); today the proposer approves in the same request.
 - A `proposed` restriction cannot be withdrawn and an `approved` one cannot be released before
   activation completes (`approve` resumes it); the scheduling port offers no closure withdrawal.
+  For the same reason the closure created by a superseded concurrent approval stays `pending` in
+  scheduling (inert); removing it needs a `withdrawClosure` on the closure port (scheduling owner).
 - Evidence is stored by reference only; file storage is a provider-selection gate (§5.2).

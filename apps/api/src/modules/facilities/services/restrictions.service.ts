@@ -292,14 +292,36 @@ export class RestrictionsService implements OperatingStatusPort {
         source: 'maintenance',
         correlationId: input.correlationId ?? null,
       });
-      closureId = closure.id;
-      await this.uow.run(async ({ trx }) => {
+      // SPK-FAC-004 / SPK-AT-021: exactly one closure backs a restriction. The link is made under
+      // the restriction's row lock; when a concurrent approval linked its closure first, that one
+      // is used and the closure created here stays pending (inert: only active closures block).
+      closureId = await this.uow.run(async ({ trx }) => {
+        const current = await this.reader.loadRestriction(trx, organizationId, restrictionId, true);
+        if (!current) throw errors.notFound('restriction', restrictionId);
+        if (current.scheduling_closure_id) {
+          await this.audit.record(trx, {
+            organizationId,
+            actor: principal,
+            action: 'facilities.restriction_closure_superseded',
+            targetType: 'restriction',
+            targetId: restrictionId,
+            correlationId: input.correlationId ?? null,
+            operationId,
+            details: {
+              schedulingClosureId: current.scheduling_closure_id,
+              supersededClosureId: closure.id,
+            },
+          });
+          return current.scheduling_closure_id;
+        }
+        if (current.status !== 'approved') {
+          throw errors.invalidTransition('Restriction', current.status, 'activate');
+        }
         await trx
           .updateTable('restrictions')
-          .set({ scheduling_closure_id: closureId })
+          .set({ scheduling_closure_id: closure.id })
           .where('organization_id', '=', organizationId)
           .where('id', '=', restrictionId)
-          .where('status', '=', 'approved')
           .where('scheduling_closure_id', 'is', null)
           .execute();
         await this.audit.record(trx, {
@@ -310,18 +332,30 @@ export class RestrictionsService implements OperatingStatusPort {
           targetId: restrictionId,
           correlationId: input.correlationId ?? null,
           operationId,
-          details: { schedulingClosureId: closureId },
+          details: { schedulingClosureId: closure.id },
         });
+        return closure.id;
       });
     }
-    const closure = await this.closures.getClosure(principal, closureId);
+    const linkedClosureId: string = closureId;
+    const closure = await this.closures.getClosure(principal, linkedClosureId);
     if (closure.status === 'pending') {
-      await this.closurePort.applyClosure(principal, closureId, {
-        mode: input.resolutionMode ?? this.policy.defaultResolutionMode,
-        expectedRevision: closure.revision,
-        reason: input.reason,
-        correlationId: input.correlationId ?? null,
-      });
+      try {
+        await this.closurePort.applyClosure(principal, linkedClosureId, {
+          mode: input.resolutionMode ?? this.policy.defaultResolutionMode,
+          expectedRevision: closure.revision,
+          reason: input.reason,
+          correlationId: input.correlationId ?? null,
+        });
+      } catch (error) {
+        // a concurrent approval applied the same closure first: that is the outcome we need
+        const raced =
+          DomainError.is(error) &&
+          (error.code === 'STALE_REVISION' || error.code === 'INVALID_TRANSITION');
+        if (!raced) throw error;
+        const latest = await this.closures.getClosure(principal, linkedClosureId);
+        if (latest.status !== 'active') throw error;
+      }
     } else if (closure.status !== 'active') {
       throw errors.invalidTransition('SchedulingClosure', closure.status, 'apply');
     }
@@ -331,6 +365,18 @@ export class RestrictionsService implements OperatingStatusPort {
     return this.uow.run(async ({ trx }) => {
       const current = await this.reader.loadRestriction(trx, organizationId, restrictionId, true);
       if (!current) throw errors.notFound('restriction', restrictionId);
+      if (current.status === 'active' && current.scheduling_closure_id === linkedClosureId) {
+        // a concurrent approval completed the activation with the same closure
+        await this.operations.transition(trx, operationId, 'succeeded', {
+          result: {
+            restrictionId,
+            status: current.status,
+            schedulingClosureId: linkedClosureId,
+            alreadyActive: true,
+          },
+        });
+        return this.reader.restrictionView(current);
+      }
       const next = RestrictionMachine.next(current.status, 'activate');
       await trx
         .updateTable('restrictions')

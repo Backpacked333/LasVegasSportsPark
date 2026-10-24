@@ -24,7 +24,10 @@ export interface CreateEventInput {
   format?: string | null;
   scheduledStart: string;
   scheduledEnd: string;
-  /** Defaults to the largest default buffer among the requested resources. */
+  /**
+   * At least the largest default buffer among the requested resources (their turnover
+   * requirement, SPK-SCHED-003); a larger value extends it, a smaller one is raised to it.
+   */
   setupMinutes?: number;
   cleanupMinutes?: number;
   resourceIds: string[];
@@ -42,6 +45,7 @@ export interface MoveEventInput {
   scheduledStart: string;
   scheduledEnd: string;
   resourceIds?: string[];
+  /** Kept from the event while its resources stay the same; never below the reserved resources' requirement (SPK-SCHED-003). */
   setupMinutes?: number;
   cleanupMinutes?: number;
   expectedRevision?: number;

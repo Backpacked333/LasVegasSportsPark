@@ -47,7 +47,7 @@ import {
 import { SchedulingActions } from '../scheduling.actions';
 import { SchedulePublished, type EventChangeKind } from '../scheduling.events';
 import { EventMachine, ScheduleDraftMachine } from '../scheduling.state-machines';
-import { EventWriter, type EventRow, type FacilityRow } from './event-writer';
+import { EventWriter, sameResourceSet, type EventRow, type FacilityRow } from './event-writer';
 import { organizationOf } from './events.service';
 
 type DraftRow = Selectable<ScheduleDraftsTable>;
@@ -357,6 +357,12 @@ export class ScheduleDraftsService {
 
         // 5. commit: release every targeted hold first so moves within the group never collide with their own old rows
         const publicationId = newId();
+        await this.writer.lockHolds(
+          trx,
+          organizationId,
+          facility,
+          plans.flatMap((p) => (p.proposal ? [p.proposal] : [])),
+        );
         for (const plan of plans) {
           if (plan.target) await this.writer.release(trx, organizationId, plan.target.id);
         }
@@ -819,10 +825,19 @@ export class ScheduleDraftsService {
       default_cleanup_minutes: number;
     }>,
   ): ResolvedFields | null {
-    const defaults = {
-      setupMinutes: Math.max(0, ...resources.map((r) => r.default_setup_minutes)),
-      cleanupMinutes: Math.max(0, ...resources.map((r) => r.default_cleanup_minutes)),
-    };
+    // SPK-SCHED-003: buffers follow the resources actually reserved; the target's own buffers
+    // carry over only while it stays on the same resources, never below their requirement.
+    const sameResources =
+      !!target &&
+      sameResourceSet(
+        resources.map((r) => r.id),
+        target.resource_ids,
+      );
+    const buffers = this.writer.effectiveBuffers(resources, {
+      setupMinutes: proposed.setupMinutes ?? (sameResources ? target?.setup_minutes : undefined),
+      cleanupMinutes:
+        proposed.cleanupMinutes ?? (sameResources ? target?.cleanup_minutes : undefined),
+    });
     const kind = proposed.kind ?? target?.kind;
     const title = proposed.title ?? target?.title;
     if (!kind || !title) return null;
@@ -844,8 +859,8 @@ export class ScheduleDraftsService {
       format: proposed.format === undefined ? (target?.format ?? null) : proposed.format,
       scheduledStart: onlyResources && target ? new Date(target.scheduled_start) : scheduledStart,
       scheduledEnd: onlyResources && target ? new Date(target.scheduled_end) : scheduledEnd,
-      setupMinutes: proposed.setupMinutes ?? target?.setup_minutes ?? defaults.setupMinutes,
-      cleanupMinutes: proposed.cleanupMinutes ?? target?.cleanup_minutes ?? defaults.cleanupMinutes,
+      setupMinutes: buffers.setupMinutes,
+      cleanupMinutes: buffers.cleanupMinutes,
       resourceIds: resources.map((r) => r.id),
       commitments: proposed.commitments ?? (target ? this.writer.commitmentsOf(target) : []),
       sourceType: proposed.sourceType ?? target?.source_type ?? null,

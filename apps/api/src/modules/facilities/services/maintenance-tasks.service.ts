@@ -241,6 +241,17 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
       if (current.status === 'closed') {
         throw errors.invalidTransition('MaintenanceTask', 'closed', body.status ?? 'update');
       }
+      if (current.requires_inspection && body.requiresInspection === false) {
+        // SPK-FAC-004: an inspection that remains required cannot be dropped while it gates the
+        // release of an open restriction (the task row is locked, so no restriction slips past).
+        const open = await this.reader.openRestrictionIds(trx, organizationId, taskId);
+        if (open.length > 0) {
+          throw errors.eligibility(
+            'The inspection requirement cannot be removed while a restriction on this task is open; record the inspection, then release.',
+            { code: 'inspection_required', taskId, openRestrictionIds: open },
+          );
+        }
+      }
       const now = this.clock.now();
       const changes: MaintenanceTaskChange[] = [];
       let status: MaintenanceTaskStatus = current.status;
@@ -360,7 +371,19 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
         afterRevision: updated.revision,
         reason: body.reason ?? null,
         correlationId: correlationId ?? null,
-        details: { changes, status, openRestrictionIds },
+        details: {
+          changes,
+          status,
+          openRestrictionIds,
+          ...(updated.requires_inspection !== current.requires_inspection
+            ? {
+                requiresInspection: {
+                  from: current.requires_inspection,
+                  to: updated.requires_inspection,
+                },
+              }
+            : {}),
+        },
       });
       await this.outbox.enqueue(trx, MaintenanceTaskUpdated, {
         organizationId,

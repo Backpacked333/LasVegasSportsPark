@@ -576,4 +576,121 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
       }),
     ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
   });
+
+  it('SPK-FAC-004 / SPK-AT-021: concurrent approvals apply exactly one closure and the authorized release reopens the area', async () => {
+    const interval = { start: at('2026-12-05', '08:00'), end: at('2026-12-05', '12:00') };
+    const proposed = await restrictions.create(operator, {
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      kind: 'closed',
+      interval,
+      reason: 'Concurrent approval',
+      approve: false,
+    });
+    const results = await Promise.allSettled([
+      restrictions.approve(operator, proposed.id, {}),
+      restrictions.approve(manager, proposed.id, {}),
+    ]);
+    const outcomes = results.map((r) =>
+      r.status === 'fulfilled' ? r.value.status : (r.reason as { code?: string }).code,
+    );
+    expect(outcomes).toContain('active');
+    // a second approval either joins the activation or finds the restriction already active
+    for (const o of outcomes) expect(['active', 'INVALID_TRANSITION']).toContain(o);
+    const maintenanceClosures = (status: 'active' | 'lifted') =>
+      t.db
+        .selectFrom('closures')
+        .select('id')
+        .where('resource_id', '=', pitch.southHalfId)
+        .where('reason', '=', 'Concurrent approval')
+        .where('status', '=', status)
+        .execute();
+    const active = await maintenanceClosures('active');
+    expect(active).toHaveLength(1);
+    const restriction = await restrictions.get(operator, proposed.id);
+    expect(restriction).toMatchObject({ status: 'active', schedulingClosureId: active[0]?.id });
+    await restrictions.release(operator, proposed.id, { reason: 'done' });
+    expect(await maintenanceClosures('active')).toHaveLength(0);
+    const reopened = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.southHalfId],
+      start: at('2026-12-05', '09:00'),
+      end: at('2026-12-05', '10:00'),
+    });
+    expect(reopened.status).toBe('published');
+  });
+
+  it('SPK-FAC-004: the inspection requirement cannot be dropped while a restriction on the task is open', async () => {
+    const reported = await post('/v1/maintenance-tasks', {
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      issue: 'Sprinkler head broken',
+      severity: 'high',
+    });
+    expect(reported.status, JSON.stringify(reported.body)).toBe(201);
+    const assigned = await patch(`/v1/maintenance-tasks/${reported.body.id}`, {
+      assignedOwnerPersonId: operator.personId,
+      requiresInspection: true,
+      expectedRevision: 1,
+    });
+    expect(assigned.status).toBe(200);
+    const restricted = await post('/v1/maintenance-restrictions', {
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      taskId: reported.body.id,
+      kind: 'closed',
+      interval: { start: at('2026-12-06', '08:00'), end: at('2026-12-06', '12:00') },
+      reason: 'Sprinkler repair',
+    });
+    expect(restricted.status, JSON.stringify(restricted.body)).toBe(201);
+    const managerAuth = await t.authHeader(manager);
+    const waived = await patch(
+      `/v1/maintenance-tasks/${reported.body.id}`,
+      { requiresInspection: false, expectedRevision: assigned.body.revision },
+      managerAuth,
+    );
+    expect(waived.status, JSON.stringify(waived.body)).toBe(422);
+    expect(waived.body).toMatchObject({
+      code: 'ELIGIBILITY_FAILED',
+      details: { code: 'inspection_required', openRestrictionIds: [restricted.body.id] },
+    });
+    const task = await t.http.get(`/v1/maintenance-tasks/${reported.body.id}`).set(auth);
+    expect(task.body).toMatchObject({ requiresInspection: true, revision: assigned.body.revision });
+    const blocked = await post(
+      `/v1/maintenance-restrictions/${restricted.body.id}/release`,
+      { reason: 'repaired' },
+      managerAuth,
+    );
+    expect(blocked.status).toBe(422);
+    expect(blocked.body.details.code).toBe('inspection_required');
+    const inspected = await post(`/v1/maintenance-tasks/${reported.body.id}/inspections`, {
+      outcome: 'passed',
+    });
+    expect(inspected.status, JSON.stringify(inspected.body)).toBe(201);
+    const released = await post(
+      `/v1/maintenance-restrictions/${restricted.body.id}/release`,
+      { reason: 'repaired and inspected' },
+      managerAuth,
+    );
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    // with no restriction open the requirement may change, and the change is audited
+    const current = await t.http.get(`/v1/maintenance-tasks/${reported.body.id}`).set(auth);
+    const cleared = await patch(`/v1/maintenance-tasks/${reported.body.id}`, {
+      requiresInspection: false,
+      expectedRevision: current.body.revision,
+    });
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('target_id', '=', reported.body.id)
+      .where('action', '=', 'facilities.maintenance_task_updated')
+      .orderBy('occurred_at', 'desc')
+      .orderBy('id', 'desc')
+      .execute();
+    expect(audit.map((a) => a.details)).toContainEqual(
+      expect.objectContaining({ requiresInspection: { from: true, to: false } }),
+    );
+  });
 });
