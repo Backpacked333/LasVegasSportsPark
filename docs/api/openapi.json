@@ -26837,6 +26837,1649 @@
           "data"
         ]
       },
+      "ImportBatch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceSystem": {
+            "type": "string"
+          },
+          "snapshotTakenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "transformationVersion": {
+            "type": "string"
+          },
+          "declaredChecksum": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "declaredRowCount": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "checksum": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rowCount": {
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportBatchStatus"
+          },
+          "extraction": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "controlTotals": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "plannedCounts": {
+            "$ref": "#/components/schemas/ImportOutcomeCounts"
+          },
+          "outcomeCounts": {
+            "$ref": "#/components/schemas/ImportOutcomeCounts"
+          },
+          "validationSummary": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "exceptions": {
+            "type": "object",
+            "properties": {
+              "open": {
+                "type": "integer"
+              },
+              "decided": {
+                "type": "integer"
+              },
+              "withdrawn": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "open",
+              "decided",
+              "withdrawn"
+            ]
+          },
+          "sameChecksumBatchIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "validatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "applyStartedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "appliedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "appliedOperationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "abortedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "abortReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "submittedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "sourceSystem",
+          "snapshotTakenAt",
+          "receivedAt",
+          "transformationVersion",
+          "declaredChecksum",
+          "declaredRowCount",
+          "checksum",
+          "rowCount",
+          "status",
+          "extraction",
+          "controlTotals",
+          "plannedCounts",
+          "outcomeCounts",
+          "validationSummary",
+          "exceptions",
+          "sameChecksumBatchIds",
+          "validatedAt",
+          "reviewedAt",
+          "applyStartedAt",
+          "appliedAt",
+          "appliedOperationId",
+          "abortedAt",
+          "abortReason",
+          "submittedBy",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ImportBatchStatus": {
+        "type": "string",
+        "enum": [
+          "received",
+          "validated",
+          "reviewed",
+          "applied",
+          "aborted"
+        ]
+      },
+      "ImportOutcomeCounts": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer"
+          },
+          "matched": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "exception": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created",
+          "matched",
+          "updated",
+          "skipped",
+          "exception"
+        ]
+      },
+      "CreateImportBatchRequest": {
+        "type": "object",
+        "properties": {
+          "sourceSystem": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+          },
+          "snapshotTakenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "transformationVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "rowCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 200000
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/ExtractionProvenance"
+          },
+          "controlTotals": {
+            "$ref": "#/components/schemas/ControlTotals"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StagedRow"
+            },
+            "maxItems": 2000,
+            "default": []
+          },
+          "csv": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CsvDocument"
+            },
+            "maxItems": 17,
+            "default": []
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "sourceSystem",
+          "snapshotTakenAt",
+          "transformationVersion",
+          "controlTotals"
+        ],
+        "additionalProperties": false
+      },
+      "ExtractionProvenance": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "extractedBy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "default": {},
+        "additionalProperties": false
+      },
+      "ControlTotals": {
+        "type": "object",
+        "properties": {
+          "counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "default": {}
+          },
+          "amounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ControlTotalAmount"
+            },
+            "maxItems": 100,
+            "default": []
+          }
+        },
+        "additionalProperties": false
+      },
+      "ControlTotalAmount": {
+        "type": "object",
+        "properties": {
+          "entityType": {
+            "type": "string",
+            "enum": [
+              "open_obligation",
+              "credit",
+              "order",
+              "refund"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "totalMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entityType",
+          "currency",
+          "totalMinor"
+        ],
+        "additionalProperties": false
+      },
+      "StagedRow": {
+        "type": "object",
+        "properties": {
+          "entityType": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "externalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "entityType",
+          "externalId",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "ImportEntityType": {
+        "type": "string",
+        "enum": [
+          "person",
+          "household",
+          "relationship_evidence",
+          "account",
+          "program",
+          "season",
+          "team",
+          "roster",
+          "future_schedule",
+          "attendance_history",
+          "result",
+          "order",
+          "open_obligation",
+          "credit",
+          "refund",
+          "document",
+          "communication_preference"
+        ]
+      },
+      "CsvDocument": {
+        "type": "object",
+        "properties": {
+          "entityType": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500000
+          }
+        },
+        "required": [
+          "entityType",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "AppendImportRowsRequest": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StagedRow"
+            },
+            "maxItems": 2000,
+            "default": []
+          },
+          "csv": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CsvDocument"
+            },
+            "maxItems": 17,
+            "default": []
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "entityType": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "externalId": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "payloadHash": {
+            "type": "string"
+          },
+          "plannedOutcome": {
+            "$ref": "#/components/schemas/ImportRowOutcome"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ImportRowOutcome"
+          },
+          "mappingId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "internalId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportReason"
+            }
+          },
+          "appliedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "batchId",
+          "sequence",
+          "entityType",
+          "externalId",
+          "payload",
+          "payloadHash",
+          "plannedOutcome",
+          "outcome",
+          "mappingId",
+          "internalId",
+          "reasons",
+          "appliedAt"
+        ]
+      },
+      "ImportRowOutcome": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "created",
+          "matched",
+          "updated",
+          "skipped",
+          "exception",
+          null
+        ]
+      },
+      "ImportReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {}
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "ValidateImportBatchRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReviewImportBatchRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ],
+        "additionalProperties": false
+      },
+      "ApplyImportBatchRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "AbortImportBatchRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "ImportException": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rowId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entityType": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "externalId": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ImportExceptionKind"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "validation",
+              "apply"
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportReason"
+            }
+          },
+          "reviewOwnerRole": {
+            "type": "string",
+            "enum": [
+              "front_desk",
+              "league_manager",
+              "program_manager",
+              "scheduler",
+              "finance_operator",
+              "facilities_operator",
+              "general_manager",
+              "system_administrator",
+              "support_operator",
+              "coach",
+              "official"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "decided",
+              "withdrawn"
+            ]
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ImportExceptionDecision"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/ImportExceptionResolution"
+          },
+          "decisionReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ActorSnapshot"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            ]
+          },
+          "decidedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "batchId",
+          "rowId",
+          "entityType",
+          "externalId",
+          "kind",
+          "phase",
+          "reasons",
+          "reviewOwnerRole",
+          "status",
+          "decision",
+          "resolution",
+          "decisionReason",
+          "decidedBy",
+          "decidedAt",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "ImportExceptionKind": {
+        "type": "string",
+        "enum": [
+          "ambiguous_relationship",
+          "ambiguous_balance",
+          "conflict",
+          "validation"
+        ]
+      },
+      "ImportExceptionDecision": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "accept",
+          "reject",
+          "defer",
+          null
+        ]
+      },
+      "ImportExceptionResolution": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantPermission"
+            },
+            "minItems": 1
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "DecideImportExceptionRequest": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ImportExceptionDecision"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/ImportExceptionResolution"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "decision",
+          "expectedRevision",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "ExternalMapping": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceSystem": {
+            "type": "string"
+          },
+          "entityType": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "externalId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "linked"
+            ]
+          },
+          "internalId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "firstSeenBatchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lastSeenBatchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provenance": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "linkedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "sourceSystem",
+          "entityType",
+          "externalId",
+          "status",
+          "internalId",
+          "firstSeenBatchId",
+          "lastSeenBatchId",
+          "provenance",
+          "linkedAt",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "MigrationReconciliationReport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "generatedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "balanced",
+              "discrepancy"
+            ]
+          },
+          "levels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "$ref": "#/components/schemas/ReconciliationLevel"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "balanced",
+                    "discrepancy"
+                  ]
+                },
+                "checked": {
+                  "type": "integer"
+                },
+                "discrepancyCount": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "level",
+                "status",
+                "checked",
+                "discrepancyCount"
+              ]
+            }
+          },
+          "discrepancyCount": {
+            "type": "integer"
+          },
+          "requiredAreas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationArea"
+            }
+          },
+          "approvalStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "superseded"
+            ]
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationReconciliationApproval"
+            }
+          },
+          "discrepancies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationDiscrepancy"
+            }
+          },
+          "supersededByReportId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "batchId",
+          "generatedAt",
+          "generatedBy",
+          "status",
+          "levels",
+          "discrepancyCount",
+          "requiredAreas",
+          "approvalStatus",
+          "approvals",
+          "discrepancies",
+          "supersededByReportId",
+          "revision"
+        ]
+      },
+      "ReconciliationLevel": {
+        "type": "string",
+        "enum": [
+          "control_totals",
+          "record_identity",
+          "relationships",
+          "operational_outcomes"
+        ]
+      },
+      "ReconciliationArea": {
+        "type": "string",
+        "enum": [
+          "identity",
+          "participation",
+          "schedule",
+          "finance"
+        ]
+      },
+      "MigrationReconciliationApproval": {
+        "type": "object",
+        "properties": {
+          "area": {
+            "$ref": "#/components/schemas/ReconciliationArea"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected"
+            ]
+          },
+          "approverPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "approverRole": {
+            "type": "string",
+            "enum": [
+              "front_desk",
+              "league_manager",
+              "program_manager",
+              "scheduler",
+              "finance_operator",
+              "facilities_operator",
+              "general_manager",
+              "system_administrator",
+              "support_operator",
+              "coach",
+              "official"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "acknowledgedDiscrepancies": {
+            "type": "integer"
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "area",
+          "decision",
+          "approverPersonId",
+          "approverRole",
+          "reason",
+          "acknowledgedDiscrepancies",
+          "decidedAt"
+        ]
+      },
+      "MigrationDiscrepancy": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "level": {
+            "$ref": "#/components/schemas/ReconciliationLevel"
+          },
+          "area": {
+            "$ref": "#/components/schemas/ReconciliationArea"
+          },
+          "entityType": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "code": {
+            "type": "string"
+          },
+          "externalId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "internalId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "expected": {},
+          "actual": {},
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "differenceMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "countDifference": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "level",
+          "area",
+          "entityType",
+          "code",
+          "externalId",
+          "internalId",
+          "currency",
+          "differenceMinor",
+          "countDifference",
+          "details"
+        ]
+      },
+      "GenerateMigrationReconciliationRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApproveMigrationReconciliationRequest": {
+        "type": "object",
+        "properties": {
+          "area": {
+            "$ref": "#/components/schemas/ReconciliationArea"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected"
+            ]
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "area",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "AuthorityAssignment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recordCategory": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          },
+          "authoritativeSystem": {
+            "$ref": "#/components/schemas/AuthoritativeSystem"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effectiveTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "approvedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          },
+          "supersedesAssignmentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "endedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "endReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "recordCategory",
+          "scope",
+          "authoritativeSystem",
+          "effectiveFrom",
+          "effectiveTo",
+          "reason",
+          "policyReferences",
+          "approvedBy",
+          "supersedesAssignmentId",
+          "endedAt",
+          "endReason",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "AuthorityScope": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "organization"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "facility"
+                ]
+              },
+              "facilityId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "facilityId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "program"
+                ]
+              },
+              "programId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "programId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "competition"
+                ]
+              },
+              "competitionId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "competitionId"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "AuthoritativeSystem": {
+        "type": "string",
+        "enum": [
+          "legacy",
+          "sportspark"
+        ]
+      },
+      "CreateAuthorityAssignmentRequest": {
+        "type": "object",
+        "properties": {
+          "recordCategory": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          },
+          "authoritativeSystem": {
+            "$ref": "#/components/schemas/AuthoritativeSystem"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "supersedes": {
+            "type": "object",
+            "properties": {
+              "assignmentId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "assignmentId",
+              "expectedRevision"
+            ],
+            "additionalProperties": false
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "recordCategory",
+          "authoritativeSystem",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "EndAuthorityAssignmentRequest": {
+        "type": "object",
+        "properties": {
+          "effectiveTo": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "AuthorityMatrix": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "facilityId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "programId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "competitionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorityResolution"
+            }
+          }
+        },
+        "required": [
+          "at",
+          "facilityId",
+          "programId",
+          "competitionId",
+          "entries"
+        ]
+      },
+      "AuthorityResolution": {
+        "type": "object",
+        "properties": {
+          "recordCategory": {
+            "$ref": "#/components/schemas/ImportEntityType"
+          },
+          "authoritativeSystem": {
+            "$ref": "#/components/schemas/AuthoritativeSystem"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "assignment",
+              "default",
+              "conflict"
+            ]
+          },
+          "assignmentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          },
+          "effectiveFrom": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "effectiveTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "recordCategory",
+          "authoritativeSystem",
+          "basis",
+          "assignmentId",
+          "scope",
+          "effectiveFrom",
+          "effectiveTo"
+        ]
+      },
       "Operation": {
         "type": "object",
         "properties": {
@@ -54637,6 +56280,1757 @@
           },
           "401": {
             "description": "Signature invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches": {
+      "post": {
+        "summary": "Stage a source snapshot as an import batch (neutral JSON/CSV staging contract, §5.3/§5.4)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateImportBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List import batches",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "required": false,
+            "name": "sourceSystem",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ImportBatchStatus"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ImportBatch"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{id}": {
+      "get": {
+        "summary": "Read an import batch with its counts",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{id}/rows": {
+      "post": {
+        "summary": "Append a chunk of staged rows to a received batch",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendImportRowsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List staged rows with outcomes",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ImportEntityType"
+            },
+            "required": false,
+            "name": "entityType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ImportRowOutcome"
+            },
+            "required": false,
+            "name": "outcome",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ImportRowOutcome"
+            },
+            "required": false,
+            "name": "plannedOutcome",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ImportRow"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{id}/validate": {
+      "post": {
+        "summary": "Seal and dry-run the batch: planned outcomes; ambiguity and conflicts enter review queues (§5.4)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateImportBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{id}/review": {
+      "post": {
+        "summary": "Complete the review once every exception is decided",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewImportBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{id}/apply": {
+      "post": {
+        "summary": "Apply the batch through the owning modules (idempotent per external id; never charges or notifies, §5.4, SPK-AT-024)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyImportBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{id}/abort": {
+      "post": {
+        "summary": "Abort a batch before any apply started",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AbortImportBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-exceptions": {
+      "get": {
+        "summary": "Import review queue (ambiguous relationships and balances, conflicts, validation errors)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "batchId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "decided",
+                "withdrawn"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ImportExceptionKind"
+            },
+            "required": false,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "front_desk",
+                "league_manager",
+                "program_manager",
+                "scheduler",
+                "finance_operator",
+                "facilities_operator",
+                "general_manager",
+                "system_administrator",
+                "support_operator",
+                "coach",
+                "official"
+              ]
+            },
+            "required": false,
+            "name": "reviewOwnerRole",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ImportException"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-exceptions/{id}/decide": {
+      "post": {
+        "summary": "Record a review decision (accept, reject or defer) with a reason",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideImportExceptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportException"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/external-mappings": {
+      "get": {
+        "summary": "Look up external identifiers mapped to internal records",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "required": false,
+            "name": "sourceSystem",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ImportEntityType"
+            },
+            "required": false,
+            "name": "entityType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "externalId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "internalId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExternalMapping"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-batches/{id}/reconciliation-reports": {
+      "post": {
+        "summary": "Reconcile an applied batch at the four §5.5 levels (discrepancies are never netted)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateMigrationReconciliationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationReconciliationReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-reconciliation-reports/{id}": {
+      "get": {
+        "summary": "Read a reconciliation report with its discrepancies and approvals",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationReconciliationReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import-reconciliation-reports/{id}/approvals": {
+      "post": {
+        "summary": "Approve or reject one area of a reconciliation report (finance, participation, schedule, identity)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveMigrationReconciliationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationReconciliationReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authority-assignments": {
+      "get": {
+        "summary": "List the authority matrix assignments (§5.6)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ImportEntityType"
+            },
+            "required": false,
+            "name": "recordCategory",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "at",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuthorityAssignment"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Assign or transfer the authoritative system for a record category and scope (one authority per instant, §4.7 invariant 11)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAuthorityAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorityAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authority-assignments/{id}": {
+      "get": {
+        "summary": "Read an authority assignment",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorityAssignment"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authority-assignments/{id}/end": {
+      "post": {
+        "summary": "End an authority assignment (never retroactively)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndAuthorityAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorityAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the record category is still maintained in the legacy system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/authority-matrix": {
+      "get": {
+        "summary": "Resolve the authoritative system for every record category at a scope and instant",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "at",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "programId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "competitionId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorityMatrix"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
             "content": {
               "application/json": {
                 "schema": {
