@@ -27,7 +27,7 @@ import { SchedulingActions } from '../scheduling.actions';
 import type { EventChangeKind } from '../scheduling.events';
 import { localDateOf, localTimeOf, resolveLocal } from '../time/local-time';
 import { materializeOccurrences } from '../time/recurrence';
-import { EventWriter, type EventRow } from './event-writer';
+import { EventWriter, sameResourceSet, type EventRow } from './event-writer';
 import { organizationOf } from './events.service';
 
 type SeriesRow = Selectable<EventSeriesTable>;
@@ -70,7 +70,8 @@ export class EventSeriesService {
         facility.id,
         body.resourceIds,
       );
-      const buffers = this.writer.defaultBuffers(resources);
+      // SPK-SCHED-003: the reserved resources' turnover requirement is the minimum buffer
+      const buffers = this.writer.effectiveBuffers(resources, body);
       const policy = this.writer.policyFor(facility);
       const occurrences = materializeOccurrences(body.recurrence, {
         localStartTime: body.localStartTime,
@@ -87,8 +88,7 @@ export class EventSeriesService {
         throw errors.validation('The recurrence rule produces no occurrences.');
       }
       const commitments = (body.commitments ?? []).map((c) => PartyCommitmentSchema.parse(c));
-      const setupMinutes = body.setupMinutes ?? buffers.setupMinutes;
-      const cleanupMinutes = body.cleanupMinutes ?? buffers.cleanupMinutes;
+      const { setupMinutes, cleanupMinutes } = buffers;
       const resourceIds = resources.map((r) => r.id);
       const proposals: ProposedEvent[] = occurrences.map((o) => ({
         key: `occurrence:${o.occurrenceIndex}`,
@@ -220,13 +220,16 @@ export class EventSeriesService {
       });
       assertExpectedRevision(body.expectedRevision, series.revision);
       const now = this.clock.now();
-      const all = await trx
+      // A committing edit locks its occurrences before conflict detection takes the arrangement
+      // locks, the same order as a direct move (event row first), so the two cannot deadlock.
+      let allQuery = trx
         .selectFrom('events')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('series_id', '=', seriesId)
-        .orderBy('occurrence_index')
-        .execute();
+        .orderBy('occurrence_index');
+      if (!body.preview) allQuery = allQuery.forUpdate();
+      const all = await allQuery.execute();
       const inScope = (e: EventRow): boolean => {
         if (e.status === 'canceled') return false;
         if (new Date(e.scheduled_end).getTime() <= now.getTime()) return false; // played/attended history keeps its identity
@@ -257,6 +260,33 @@ export class EventSeriesService {
       const policy = {
         nonexistent: series.nonexistent_policy,
         ambiguous: series.ambiguous_policy,
+      };
+      // SPK-SCHED-003: buffers follow the resources actually reserved; current buffers carry over
+      // only while an occurrence stays on the same resources, never below their requirement.
+      const resourcesById = new Map<string, Awaited<ReturnType<EventWriter['loadResources']>>>();
+      const resourcesOf = async (ids: string[]) => {
+        const cacheKey = [...new Set(ids)].sort().join(',');
+        let rows = resourcesById.get(cacheKey);
+        if (!rows) {
+          rows = await this.writer.loadResources(trx, organizationId, facility.id, ids);
+          resourcesById.set(cacheKey, rows);
+        }
+        return rows;
+      };
+      const buffersFor = async (
+        currentResourceIds: string[],
+        current: { setup_minutes: number; cleanup_minutes: number },
+      ) => {
+        const reserved = resources ?? (await resourcesOf(currentResourceIds));
+        const same = sameResourceSet(
+          reserved.map((r) => r.id),
+          currentResourceIds,
+        );
+        return this.writer.effectiveBuffers(reserved, {
+          setupMinutes: body.changes.setupMinutes ?? (same ? current.setup_minutes : undefined),
+          cleanupMinutes:
+            body.changes.cleanupMinutes ?? (same ? current.cleanup_minutes : undefined),
+        });
       };
 
       const plans: Array<{
@@ -296,12 +326,13 @@ export class EventSeriesService {
         const scheduledStart = resolved.instant;
         const scheduledEnd = new Date(scheduledStart.getTime() + duration * 60_000);
         const resourceIds = resources ? resources.map((r) => r.id) : event.resource_ids;
+        const buffers = await buffersFor(event.resource_ids, event);
         const proposal = this.writer.proposalOf(event, {
           key: event.id,
           scheduledStart,
           scheduledEnd,
-          setupMinutes: body.changes.setupMinutes ?? event.setup_minutes,
-          cleanupMinutes: body.changes.cleanupMinutes ?? event.cleanup_minutes,
+          setupMinutes: buffers.setupMinutes,
+          cleanupMinutes: buffers.cleanupMinutes,
           resourceIds,
         });
         const timeChanged =
@@ -355,6 +386,7 @@ export class EventSeriesService {
         proposals,
         targets.map((t) => t.id),
       );
+      await this.writer.lockHolds(trx, organizationId, facility, proposals);
       for (const plan of plans) await this.writer.release(trx, organizationId, plan.event.id);
       for (const plan of plans) {
         const event = plan.event;
@@ -421,10 +453,15 @@ export class EventSeriesService {
           seriesUpdate.local_start_time = body.changes.localStartTime;
         if (body.changes.durationMinutes)
           seriesUpdate.duration_minutes = body.changes.durationMinutes;
-        if (body.changes.setupMinutes !== undefined)
-          seriesUpdate.setup_minutes = body.changes.setupMinutes;
-        if (body.changes.cleanupMinutes !== undefined)
-          seriesUpdate.cleanup_minutes = body.changes.cleanupMinutes;
+        if (
+          resources ||
+          body.changes.setupMinutes !== undefined ||
+          body.changes.cleanupMinutes !== undefined
+        ) {
+          const buffers = await buffersFor(series.resource_ids, series);
+          seriesUpdate.setup_minutes = buffers.setupMinutes;
+          seriesUpdate.cleanup_minutes = buffers.cleanupMinutes;
+        }
         if (resources) seriesUpdate.resource_ids = resources.map((r) => r.id);
         if (body.changes.cancel) seriesUpdate.status = 'ended';
       }

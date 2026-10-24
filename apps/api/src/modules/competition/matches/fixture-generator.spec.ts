@@ -318,4 +318,93 @@ describe('fixture generator (SPK-FIX-001..004)', () => {
       }
     }
   });
+  it('SPK-FIX-004 / SPK-AT-011: a resource holds one game at a time, turnover included; start times closer than a match are flexibility, not capacity, so optimality is never claimed over a double booking', () => {
+    type Game = NonNullable<ReturnType<typeof generateFixtures>['proposal']>['games'][number];
+    const overlaps = (games: Game[], buffers: { setup: number; cleanup: number }) => {
+      const placed = games.filter((g) => g.scheduledStart && g.scheduledEnd && g.resourceId);
+      const span = (g: Game) => [
+        new Date(g.scheduledStart as string).getTime() - buffers.setup * 60_000,
+        new Date(g.scheduledEnd as string).getTime() + buffers.cleanup * 60_000,
+      ];
+      const found: string[] = [];
+      for (let i = 0; i < placed.length; i += 1) {
+        for (let j = i + 1; j < placed.length; j += 1) {
+          const a = placed[i] as Game;
+          const b = placed[j] as Game;
+          if (a.resourceId !== b.resourceId) continue;
+          const [as, ae] = span(a) as [number, number];
+          const [bs, be] = span(b) as [number, number];
+          if (as < be && bs < ae) found.push(`${a.key} vs ${b.key}`);
+        }
+      }
+      return found;
+    };
+    const resourceId = newId();
+    const fourTeams = [newId(), newId(), newId(), newId()].sort();
+    // Saturday 09:00 and 09:30 with a 60-minute match on one pitch
+    const close = generateFixtures(
+      input({
+        teamEntryIds: fourTeams,
+        opponentFrequency: 1,
+        gamesPerTeam: 3,
+        minimumRestMinutes: 0,
+        allowedStartTimes: [
+          { weekday: 6, time: '09:00' },
+          { weekday: 6, time: '09:30' },
+        ],
+        resourceIds: [resourceId],
+      }),
+      settings,
+      frozen,
+    );
+    expect(['feasible', 'proven_optimal']).toContain(close.outcome);
+    expect(close.completeness.complete).toBe(true);
+    expect(overlaps(close.proposal?.games ?? [], { setup: 0, cleanup: 0 })).toEqual([]);
+
+    // hourly starts, a 60-minute match and 10 minutes of cleanup: back-to-back games would collide
+    const turnover = generateFixtures(
+      input({
+        teamEntryIds: fourTeams,
+        opponentFrequency: 1,
+        gamesPerTeam: 3,
+        minimumRestMinutes: 0,
+        allowedStartTimes: [
+          { weekday: 6, time: '09:00' },
+          { weekday: 6, time: '10:00' },
+          { weekday: 6, time: '11:00' },
+        ],
+        resourceIds: [resourceId],
+        resourceBuffers: { [resourceId]: { setupMinutes: 0, cleanupMinutes: 10 } },
+      }),
+      settings,
+      frozen,
+    );
+    expect(['feasible', 'proven_optimal']).toContain(turnover.outcome);
+    expect(overlaps(turnover.proposal?.games ?? [], { setup: 0, cleanup: 10 })).toEqual([]);
+
+    // three start times 20 minutes apart hold one 60-minute game per day: 2 Saturdays, 6 games
+    const short = generateFixtures(
+      input({
+        teamEntryIds: fourTeams,
+        opponentFrequency: 1,
+        gamesPerTeam: 3,
+        minimumRestMinutes: 0,
+        startsOn: '2027-01-04',
+        endsOn: '2027-01-16',
+        allowedStartTimes: [
+          { weekday: 6, time: '09:00' },
+          { weekday: 6, time: '09:20' },
+          { weekday: 6, time: '09:40' },
+        ],
+        resourceIds: [resourceId],
+      }),
+      settings,
+      frozen,
+    );
+    expect(short.outcome).toBe('proven_infeasible');
+    expect(short.proposal).toBeNull();
+    expect(short.explanation.hardViolations).toEqual([
+      expect.objectContaining({ constraint: 'capacity', message: '6 games, capacity for 2.' }),
+    ]);
+  });
 });

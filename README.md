@@ -52,7 +52,7 @@ the API and the test suite run real PostgreSQL in-process through PGlite.
 ```bash
 pnpm install
 pnpm verify                 # format check, lint, typecheck, tests
-AUTH_LOCAL_SECRET=$(openssl rand -hex 32) pnpm --filter @sportspark/api dev
+NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) pnpm --filter @sportspark/api dev
 curl localhost:3000/v1/health
 ```
 

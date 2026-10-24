@@ -20,7 +20,8 @@ import {
 } from '../../../kernel';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
-import { organizationOf, toOfferingSession } from '../catalog.shared';
+import { relaxedStaffingRatios, requiredStaffFor } from '../catalog.policy';
+import { capacityUnitsOf, organizationOf, toOfferingSession } from '../catalog.shared';
 import { EDITABLE_PUBLICATION_STATES, OfferingSessionMachine } from '../catalog.state-machines';
 import { OfferingsService } from './offerings.service';
 
@@ -62,6 +63,9 @@ export class SessionsService {
           'add_session',
         );
       }
+      const overrideStaffing = body.capacityOverride
+        ? await this.checkCapacityOverride(principal, offering, body)
+        : null;
       const latest = await trx
         .selectFrom('offering_sessions')
         .select((eb) => eb.fn.max('sequence').as('sequence'))
@@ -107,7 +111,9 @@ export class SessionsService {
         afterRevision: row.revision,
         reason: body.reason ?? null,
         correlationId,
-        details: { offeringId, sequence },
+        details: overrideStaffing
+          ? { offeringId, sequence, capacityOverride: body.capacityOverride, ...overrideStaffing }
+          : { offeringId, sequence },
       });
       await this.outbox.enqueue(trx, CatalogEvents.sessionCreated, {
         organizationId,
@@ -120,11 +126,71 @@ export class SessionsService {
           scheduledStart: new Date(row.scheduled_start).toISOString(),
           scheduledEnd: new Date(row.scheduled_end).toISOString(),
           schedulingEventId: row.scheduling_event_id,
+          capacityOverride: body.capacityOverride ?? null,
         },
         correlationId,
       });
       return toOfferingSession(row);
     });
+  }
+
+  /**
+   * SPK-YOUTH-002: a session capacity override is commercial capacity (enrollment holds session
+   * places against it instead of the offering's units), so it is offering configuration: it needs
+   * the offering manager's authority, follows the camp-group publication rule, and an override that
+   * raises the staffing requirement, removes or relaxes a staffing ratio, or adds unstaffed places
+   * to a staffed offering needs an explicit reason. Overrides are not re-validated at publication,
+   * so the rule applies in every editable state.
+   */
+  private async checkCapacityOverride(
+    principal: Principal,
+    offering: {
+      id: string;
+      organization_id: string;
+      facility_id: string;
+      capacity_units: unknown[];
+    },
+    body: CreateOfferingSessionInput,
+  ) {
+    const override = body.capacityOverride ?? [];
+    await this.authorization.require(principal, CatalogActions.manageOfferings, {
+      type: 'offering',
+      id: offering.id,
+      organizationId: offering.organization_id,
+      facilityId: offering.facility_id,
+    });
+    if (
+      override.some((u) => u.unit === 'camp_group_places' && (!u.groupSize || !u.staffingRatio))
+    ) {
+      throw errors.validation(
+        'Camp group places require a group size and a staffing ratio (SPK-YOUTH-002).',
+        { path: 'capacityOverride' },
+      );
+    }
+    const base = capacityUnitsOf(offering);
+    const requiredStaffOffering = requiredStaffFor(base);
+    const requiredStaffOverride = requiredStaffFor(override);
+    const ratiosRelaxed = relaxedStaffingRatios(base, override);
+    const unstaffedUnits =
+      requiredStaffOffering > 0 ? override.filter((u) => !u.staffingRatio).map((u) => u.unit) : [];
+    if (
+      (requiredStaffOverride > requiredStaffOffering ||
+        ratiosRelaxed.length > 0 ||
+        unstaffedUnits.length > 0) &&
+      !body.reason
+    ) {
+      throw errors.validation(
+        "This session capacity override bypasses the offering's staffing requirement; provide a reason confirming staffing is arranged (SPK-YOUTH-002).",
+        {
+          path: 'reason',
+          requiredStaffOffering,
+          requiredStaffOverride,
+          ratiosRelaxed,
+          unstaffedUnits,
+        },
+      );
+    }
+    return { requiredStaffOffering, requiredStaffOverride, ratiosRelaxed, unstaffedUnits };
   }
 
   async cancel(

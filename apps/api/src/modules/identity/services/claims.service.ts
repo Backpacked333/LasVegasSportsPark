@@ -18,6 +18,7 @@ import {
   DATABASE,
   Outbox,
   UnitOfWork,
+  ensureUpdated,
   snapshotActor,
   type Clock,
   type Trx,
@@ -76,8 +77,9 @@ export class ClaimsService {
     return runInTransaction(this.uow, async ({ trx }) => {
       const subject = await this.loadPerson(trx, organizationId, subjectPersonId);
       if (!subject) throw errors.protectedNotFound('person');
+      // §4.10: the target is the person, so a denial reads exactly like a missing person.
       await this.authorization.require(principal, IdentityActions.issueClaim, {
-        type: 'claim',
+        type: 'person',
         organizationId,
         subjectPersonIds: [subjectPersonId],
         protected: true,
@@ -165,11 +167,14 @@ export class ClaimsService {
     const accountId = principal.accountId;
     if (!organizationId || !accountId) throw errors.authenticationRequired();
     const outcome = await runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9, SPK-IAM-002: locked, so a second concurrent claimant waits and then finds the claim
+      // already accepted (one token, one acceptance).
       const claim = await trx
         .selectFrom('claims')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('token_hash', '=', hashToken(token))
+        .forUpdate()
         .executeTakeFirst();
       if (!claim) throw errors.protectedNotFound('claim');
       const now = this.clock.now();
@@ -195,12 +200,15 @@ export class ClaimsService {
           personId = claim.subject_person_id;
         } else if (account.person_id === null) {
           try {
-            await trx
+            const linked = await trx
               .updateTable('accounts')
               .set({ person_id: claim.subject_person_id, revision: account.revision + 1 })
               .where('id', '=', account.id)
               .where('revision', '=', account.revision)
-              .execute();
+              .executeTakeFirst();
+            ensureUpdated(linked.numUpdatedRows, () =>
+              errors.staleRevision(account.revision, account.revision + 1),
+            );
           } catch (error) {
             if (isUniqueViolation(error)) {
               throw errors.resourceConflict('This person already has an active account.');
@@ -277,7 +285,7 @@ export class ClaimsService {
         grants = result.grants.map((g) => toAccessGrant(g, result.relationship.status, now));
       }
 
-      await trx
+      const accepted = await trx
         .updateTable('claims')
         .set({
           status: next,
@@ -288,7 +296,10 @@ export class ClaimsService {
         })
         .where('id', '=', claim.id)
         .where('revision', '=', claim.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(accepted.numUpdatedRows, () =>
+        errors.staleRevision(claim.revision, claim.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -392,12 +403,15 @@ export class ClaimsService {
     correlationId: string | null,
   ): Promise<void> {
     const next = ClaimMachine.next(claim.status, 'expire');
-    await trx
+    const expired = await trx
       .updateTable('claims')
       .set({ status: next, revision: claim.revision + 1 })
       .where('id', '=', claim.id)
       .where('revision', '=', claim.revision)
-      .execute();
+      .executeTakeFirst();
+    ensureUpdated(expired.numUpdatedRows, () =>
+      errors.staleRevision(claim.revision, claim.revision + 1),
+    );
     await this.audit.record(trx, {
       organizationId: claim.organization_id,
       actor: principal,

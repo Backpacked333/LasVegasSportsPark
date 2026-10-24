@@ -9,11 +9,12 @@ import type { Db } from '@sportspark/db';
 import { CLOCK, DATABASE, currentTransaction, type Clock, type Trx } from '../../../kernel';
 import { PeopleService } from '../../identity';
 import {
-  countRoster,
   loadEntryContext,
   openRosterRow,
+  peakRosterCounts,
   personSeasonMemberships,
   rosterRowsEffectiveAt,
+  rosterRowsOverlapping,
   statusAt,
   type EntryContext,
   type Reader,
@@ -28,6 +29,7 @@ import {
 } from '../competition.shared';
 import {
   SUSPENSION_CHECK_PORT,
+  type ActiveSuspension,
   type EligibilityPort,
   type EvaluatePlayerOptions,
   type SuspensionCheckPort,
@@ -195,14 +197,16 @@ export class EligibilityService implements EligibilityPort {
       });
     }
 
-    // Roster limits from the rule set (SPK-COMP-002 "Roster limits").
-    const rows = (await rosterRowsEffectiveAt(db, organizationId, entry.id, at)).filter(
-      (r) => !existing || r.person_id !== personId,
-    );
-    const counts = countRoster(rows);
+    // Roster limits from the rule set (SPK-COMP-002 "Roster limits"). A new membership holds its
+    // place from `at` onwards (its row is open-ended), so it is checked against the busiest instant
+    // of that interval: rows starting later (future-dated additions) count as well (SPK-COMP-005).
+    // The limits apply to additions only; an existing membership is never re-counted against them.
+    const counts = existing
+      ? null
+      : peakRosterCounts(await rosterRowsOverlapping(db, organizationId, entry.id, at), at);
     if (
+      counts &&
       ROSTER_LIMIT_STATUSES.includes(membershipStatus) &&
-      !existing &&
       counts.limited >= rules.rosterMax
     ) {
       add({
@@ -225,8 +229,8 @@ export class EligibilityService implements EligibilityPort {
           requiredAction: 'Add the player as a regular roster member if eligible.',
         });
       } else if (
+        counts &&
         rules.roster.guestMaxConcurrent !== null &&
-        !existing &&
         counts.guests >= rules.roster.guestMaxConcurrent
       ) {
         add({
@@ -266,6 +270,8 @@ export class EligibilityService implements EligibilityPort {
     }
 
     // Multi-team restrictions within the season (SPK-COMP-005 "respect competition restrictions").
+    // An addition counts every other membership effective at any instant from `at` on, so neither a
+    // later membership elsewhere nor a backdated addition slips past the limits.
     const others = await personSeasonMemberships(
       db,
       organizationId,
@@ -273,6 +279,7 @@ export class EligibilityService implements EligibilityPort {
       season.id,
       at,
       entry.id,
+      { overlapping: !existing },
     );
     const limit = rules.multiTeamRestrictions.maxEntriesPerSeason;
     if (limit !== null && others.length + 1 > limit) {
@@ -313,14 +320,28 @@ export class EligibilityService implements EligibilityPort {
       });
     }
 
-    // Suspension status (SPK-CAP-004, SPK-AT-013): the discipline port is authoritative.
-    const suspensions = await this.suspensions.activeSuspensions(
-      organizationId,
-      personId,
-      at,
-      { competitionId: season.competition_id, seasonId: season.id, teamEntryId: entry.id },
-      trx,
-    );
+    // Suspension status (SPK-CAP-004, SPK-AT-013): the discipline port is authoritative. A new
+    // membership dated before now is on the current roster too, so it is also checked now: a
+    // backdated addition never places a currently suspended player on the roster.
+    const scope = {
+      competitionId: season.competition_id,
+      seasonId: season.id,
+      teamEntryId: entry.id,
+    };
+    const now = this.clock.now();
+    const instants = !existing && at.getTime() < now.getTime() ? [at, now] : [at];
+    const suspensions: ActiveSuspension[] = [];
+    for (const instant of instants) {
+      for (const suspension of await this.suspensions.activeSuspensions(
+        organizationId,
+        personId,
+        instant,
+        scope,
+        trx,
+      )) {
+        if (!suspensions.some((s) => s.id === suspension.id)) suspensions.push(suspension);
+      }
+    }
     for (const suspension of suspensions) {
       add({
         code: 'suspended',

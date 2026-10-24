@@ -11,7 +11,7 @@ import {
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
-import { toHousehold } from '../identity.shared';
+import { staffAuthorityApplies, toHousehold } from '../identity.shared';
 
 /**
  * Households (SPK-IAM-001, §4.5). A household is a convenience grouping: membership is never
@@ -33,7 +33,14 @@ export class HouseholdsService {
   ): Promise<Household> {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
-    const selfService = principal.kind === 'customer';
+    // A staff role that covers the command, not staff kind alone (SPK-IAM acceptance example 3):
+    // anyone else creates a household for themselves and becomes its first member.
+    const selfService = !(await staffAuthorityApplies(
+      this.authorization,
+      principal,
+      IdentityActions.createHousehold,
+      organizationId,
+    ));
     if (selfService && !principal.personId) {
       throw errors.accessDenied('Link your account to a person before creating a household.');
     }
@@ -95,7 +102,16 @@ export class HouseholdsService {
         .where('id', '=', householdId)
         .executeTakeFirst();
       if (!household) throw errors.protectedNotFound('household');
-      if (principal.kind === 'customer') {
+      // Only a staff role that covers the command skips the membership check; a staff member
+      // acting as a parent adds people only to households they belong to (SPK-IAM-001, §4.5).
+      if (
+        !(await staffAuthorityApplies(
+          this.authorization,
+          principal,
+          IdentityActions.addHouseholdMember,
+          organizationId,
+        ))
+      ) {
         const member = principal.personId
           ? await trx
               .selectFrom('household_memberships')

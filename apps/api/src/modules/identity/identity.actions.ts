@@ -109,7 +109,8 @@ export const IdentityActions = defineActions({
   },
   revokeAccess: {
     id: 'identity.revoke_access',
-    description: 'Revoke a grant (staff, the grant holder, or the guardian who created the child)',
+    description:
+      'Revoke a grant (staff, the grant holder, or the creator-guardian for a delegate they invited)',
     staffRoles: [
       'program_manager',
       'league_manager',
@@ -122,7 +123,8 @@ export const IdentityActions = defineActions({
   },
   createInvitation: {
     id: 'identity.create_invitation',
-    description: 'Invite someone to hold permissions over a person or household',
+    description:
+      'Invite someone to hold permissions over a person or household (staff, or a guardian)',
     staffRoles: SUPPORT_STAFF,
     subjectPermission: 'view',
     requirements: ['SPK-IAM-004'],

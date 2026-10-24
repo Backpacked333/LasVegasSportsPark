@@ -29,9 +29,9 @@ import { isRestrictViolation } from './support';
 
 /**
  * Integrity that matters is enforced by the database (§4.7): each test writes the violating row
- * directly and expects the constraint, index or trigger of migration 0450 to reject it.
+ * directly and expects the constraint, index or trigger of migration 0450 (or 0451) to reject it.
  */
-describe('competition matches schema invariants (migration 0450)', () => {
+describe('competition matches schema invariants (migrations 0450 and 0451)', () => {
   let t: TestDatabase;
   let db: Db;
   let ctx: CompetitionFixtureContext & IdentityFixtureContext;
@@ -155,6 +155,99 @@ describe('competition matches schema invariants (migration 0450)', () => {
     await expect(
       db.deleteFrom('result_revisions').where('id', '=', correctionId).execute(),
     ).rejects.toSatisfy(isRestrictViolation);
+  });
+
+  it('§4.7 invariant 9 / SPK-RESULT-004 (migration 0451): supersession keeps the actor and the chain; person ids, review facts and pointers are frozen, pointers stay within the fixture, and only an official row is superseded', async () => {
+    const { fixtureId } = await fixtureWithTeams();
+    const other = await fixtureWithTeams();
+    const otherRevisionId = await createResultRevisionFixture(ctx, {
+      fixtureId: other.fixtureId,
+      status: 'official',
+    });
+    const captain = await createPersonFixture(ctx, { kind: 'adult' });
+    const officialId = await createResultRevisionFixture(ctx, { fixtureId, status: 'official' });
+    const correctionId = await createResultRevisionFixture(ctx, {
+      fixtureId,
+      status: 'submitted',
+      revisionNo: 2,
+      supersedesRevisionId: officialId,
+    });
+    const supersede = {
+      status: 'superseded' as const,
+      superseded_at: clock.now(),
+      superseded_by: actor,
+      superseded_by_revision_id: correctionId,
+      revision: 2,
+    };
+    const attempt = (set: Record<string, unknown>) =>
+      db
+        .updateTable('result_revisions')
+        .set({ ...supersede, ...set })
+        .where('id', '=', officialId)
+        .execute()
+        .then(
+          () => 'accepted',
+          (e: unknown) => pgConstraintName(e) ?? String(e),
+        );
+    // the actor's person ids, the review facts and the chain pointer are frozen
+    for (const set of [
+      { published_by_person_id: captain },
+      { submitted_by_person_id: captain },
+      { returned_at: clock.now(), returned_by: actor, return_reason: 'rewritten' },
+      { supersedes_revision_id: otherRevisionId },
+      { superseded_by_revision_id: null },
+    ]) {
+      expect(await attempt(set)).toBe('result_revisions_official_immutable');
+    }
+    // the pointer to the superseding revision stays within the fixture, and never names the row
+    expect(await attempt({ superseded_by_revision_id: otherRevisionId })).toBe(
+      'result_revisions_superseded_by_same_fixture',
+    );
+    expect(await attempt({ superseded_by_revision_id: officialId })).toBe(
+      'result_revisions_not_superseded_by_self',
+    );
+    await expect(
+      createResultRevisionFixture(ctx, {
+        fixtureId: other.fixtureId,
+        status: 'draft',
+        revisionNo: 2,
+        supersedesRevisionId: officialId,
+      }),
+    ).rejects.toSatisfy(isForeignKeyViolation);
+    // a submitted row never skips publication on its way to history
+    const { fixtureId: third } = await fixtureWithTeams();
+    const submittedId = await createResultRevisionFixture(ctx, {
+      fixtureId: third,
+      status: 'submitted',
+    });
+    const skipped = await db
+      .updateTable('result_revisions')
+      .set({
+        status: 'superseded',
+        published_at: clock.now(),
+        published_by: actor,
+        superseded_at: clock.now(),
+        superseded_by: actor,
+      })
+      .where('id', '=', submittedId)
+      .execute()
+      .then(
+        () => 'accepted',
+        (e: unknown) => pgConstraintName(e),
+      );
+    expect(skipped).toBe('result_revisions_supersede_official_only');
+    // the permitted supersession still succeeds
+    expect(await attempt({})).toBe('accepted');
+    const row = await db
+      .selectFrom('result_revisions')
+      .select(['status', 'superseded_by_revision_id', 'published_by_person_id'])
+      .where('id', '=', officialId)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({
+      status: 'superseded',
+      superseded_by_revision_id: correctionId,
+      published_by_person_id: null,
+    });
   });
 
   it('result facts agree with the state: published instants, submission instants, forfeiting entry and scores', async () => {

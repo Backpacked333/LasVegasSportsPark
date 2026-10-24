@@ -244,6 +244,123 @@ describe('staff composition flow (SPK-COMMS-002/003/006, §4.9 commands)', () =>
     expect(await attemptsOf(t.db, org, composed.body.id)).toHaveLength(0);
   });
 
+  describe('facility scope (§4.14 object-level authorization, SPK-COMMS-006)', () => {
+    let second: string;
+    let scopedAuth: { Authorization: string };
+    beforeAll(async () => {
+      second = newId();
+      await t.db
+        .insertInto('facilities')
+        .values({
+          id: second,
+          organization_id: org,
+          slug: `annex-${second}`,
+          name: 'Annex',
+          timezone: 'America/Los_Angeles',
+          address: null,
+        })
+        .execute();
+      const scoped = await createStaffMemberFixture(t, {
+        roles: ['front_desk'],
+        facilityIds: [t.facilityId],
+      });
+      scopedAuth = await authHeaderForPerson(t, scoped.personId);
+    });
+
+    it('§4.14 / SPK-COMMS-004: a facility-scoped reader lists organization-wide notices and those of their own facilities, never another facility’s', async () => {
+      const elsewhere = await post(
+        '/v1/notifications',
+        composeBody({ facilityId: second, title: 'Annex private notes' }),
+      );
+      const orgWide = await post('/v1/notifications', composeBody({ title: 'Org-wide notes' }));
+      const own = await post(
+        '/v1/notifications',
+        composeBody({ facilityId: t.facilityId, title: 'Main complex notes' }),
+      );
+      for (const r of [elsewhere, orgWide, own]) expect(r.status).toBe(201);
+      const listed = async (auth: { Authorization: string }) => {
+        const res = await t.http.get('/v1/notifications?limit=100').set(auth);
+        expect(res.status).toBe(200);
+        return res.body.items.map((i: { id: string }) => i.id);
+      };
+      const scopedIds = await listed(scopedAuth);
+      expect(scopedIds).toContain(orgWide.body.id);
+      expect(scopedIds).toContain(own.body.id);
+      expect(scopedIds).not.toContain(elsewhere.body.id);
+      expect(
+        (await t.http.get(`/v1/notifications/${elsewhere.body.id}`).set(scopedAuth)).status,
+      ).toBe(403);
+      expect(
+        (await t.http.get(`/v1/notifications?facilityId=${second}`).set(scopedAuth)).status,
+      ).toBe(403);
+      // an unscoped reader still sees all three
+      const unscopedIds = await listed(staff);
+      for (const r of [elsewhere, orgWide, own]) expect(unscopedIds).toContain(r.body.id);
+    });
+
+    it('SPK-COMMS-006: a facility-scoped composer cannot address another facility’s staff, whatever the notification’s own facility says', async () => {
+      const broadcast = (overrides: object) =>
+        composeBody({ kind: 'staff_broadcast', protected: false, ...overrides });
+      const omitted = await post(
+        '/v1/notifications',
+        broadcast({ audience: { staffRoles: ['scheduler'], facilityId: second } }),
+        scopedAuth,
+      );
+      expect(omitted.status).toBe(403);
+      expect(omitted.body.code).toBe('ACCESS_DENIED');
+      const mismatched = await post(
+        '/v1/notifications',
+        broadcast({
+          facilityId: t.facilityId,
+          audience: { staffRoles: ['scheduler'], facilityId: second },
+        }),
+        scopedAuth,
+      );
+      expect(mismatched.status).toBe(403);
+      const ownFacility = await post(
+        '/v1/notifications',
+        broadcast({ audience: { staffRoles: ['scheduler'], facilityId: t.facilityId } }),
+        scopedAuth,
+      );
+      expect(ownFacility.status).toBe(201);
+    });
+
+    it('SPK-COMMS-006: a facility-scoped composer cannot broadcast a staff role across every facility; subject audiences are unaffected', async () => {
+      const everywhere = await post(
+        '/v1/notifications',
+        composeBody({
+          kind: 'staff_broadcast',
+          protected: false,
+          audience: { staffRoles: ['scheduler'] },
+        }),
+        scopedAuth,
+      );
+      expect(everywhere.status).toBe(403);
+      expect(everywhere.body.code).toBe('ACCESS_DENIED');
+      const family = await post('/v1/notifications', composeBody(), scopedAuth);
+      expect(family.status).toBe(201);
+    });
+
+    it('SPK-COMMS-006: send and preview authorize the stored audience facility too', async () => {
+      // composed by an organization-wide composer for the annex's schedulers
+      const composed = await post(
+        '/v1/notifications',
+        composeBody({
+          kind: 'staff_broadcast',
+          protected: false,
+          audience: { staffRoles: ['scheduler'], facilityId: second },
+        }),
+      );
+      expect(composed.status).toBe(201);
+      const id = composed.body.id as string;
+      expect((await t.http.get(`/v1/notifications/${id}/recipients`).set(scopedAuth)).status).toBe(
+        403,
+      );
+      expect((await post(`/v1/notifications/${id}/send`, {}, scopedAuth)).status).toBe(403);
+      expect((await post(`/v1/notifications/${id}/send`, {})).status).toBe(200);
+    });
+  });
+
   it('GET /notifications lists newest first with status and kind filters and a cursor', async () => {
     const list = await t.http.get('/v1/notifications?limit=2&status=suppressed').set(staff);
     expect(list.status).toBe(200);

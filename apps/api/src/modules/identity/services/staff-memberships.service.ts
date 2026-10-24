@@ -18,6 +18,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  ensureUpdated,
   snapshotActor,
   type Clock,
   type Trx,
@@ -131,11 +132,13 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       organizationId,
     });
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9: locked so concurrent changes to one membership are serialized.
       const current = await trx
         .selectFrom('staff_memberships')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
+        .forUpdate()
         .executeTakeFirst();
       if (!current) throw errors.notFound('staff_membership', id);
       assertExpectedRevision(input.expectedRevision, current.revision);
@@ -155,7 +158,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       ) {
         throw errors.validation('effectiveTo must be after effectiveFrom.');
       }
-      await trx
+      const updated = await trx
         .updateTable('staff_memberships')
         .set({
           roles: input.roles ?? current.roles,
@@ -165,7 +168,10 @@ export class StaffMembershipsService implements StaffDirectoryPort {
         })
         .where('id', '=', id)
         .where('revision', '=', current.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(updated.numUpdatedRows, () =>
+        errors.staleRevision(current.revision, current.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -208,11 +214,13 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       organizationId,
     });
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9: locked so concurrent changes to one membership are serialized.
       const current = await trx
         .selectFrom('staff_memberships')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
+        .forUpdate()
         .executeTakeFirst();
       if (!current) throw errors.notFound('staff_membership', id);
       assertExpectedRevision(input.expectedRevision, current.revision);
@@ -222,7 +230,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
         current.effective_to && new Date(current.effective_to).getTime() < now.getTime()
           ? current.effective_to
           : now;
-      await trx
+      const ended = await trx
         .updateTable('staff_memberships')
         .set({
           status: next,
@@ -233,7 +241,10 @@ export class StaffMembershipsService implements StaffDirectoryPort {
         })
         .where('id', '=', id)
         .where('revision', '=', current.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(ended.numUpdatedRows, () =>
+        errors.staleRevision(current.revision, current.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,

@@ -2,9 +2,33 @@ import { Injectable } from '@nestjs/common';
 import type { DomainEvent } from '@sportspark/contracts';
 import type { Trx } from '../database/unit-of-work';
 
+/**
+ * What an outbox or inbox handler receives. The handler also runs inside the transaction context
+ * (`currentTransaction()` is `trx`), so ports and `UnitOfWork.reader()` read through it.
+ */
 export interface HandlerContext {
   trx: Trx;
   attempt: number;
+  /**
+   * Best-effort hook run after the handler's consumption transaction commits (for example to
+   * nudge a worker); never on rollback, and not when the event was already consumed. Durable
+   * follow-up MUST go through the outbox in the same transaction; after-commit hooks are not durable.
+   */
+  afterCommit(hook: () => void | Promise<void>): void;
+}
+
+/** Runs after-commit hooks outside any transaction context; a failing hook is logged, never thrown. */
+export async function runAfterCommitHooks(
+  hooks: Array<() => void | Promise<void>>,
+  onError: (error: unknown) => void,
+): Promise<void> {
+  for (const hook of hooks) {
+    try {
+      await hook();
+    } catch (error) {
+      onError(error);
+    }
+  }
 }
 
 export type EventHandler<TPayload = unknown> = (

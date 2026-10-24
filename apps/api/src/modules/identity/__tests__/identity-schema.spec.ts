@@ -25,7 +25,7 @@ import {
  * Integrity invariants are enforced by the database, not only by services (§4.7). Each test
  * inserts the violating row directly through Kysely and expects the constraint to reject it.
  */
-describe('identity schema invariants (migration 0100)', () => {
+describe('identity schema invariants (migrations 0100-0103)', () => {
   let t: TestDatabase;
   let db: Db;
   let ctx: IdentityFixtureContext;
@@ -297,6 +297,229 @@ describe('identity schema invariants (migration 0100)', () => {
         .values(row({ token_hash: 'hash-3', scope_person_id: null }))
         .execute(),
     ).rejects.toSatisfy(isCheckViolation);
+  });
+
+  it('SPK-IAM-004 / §4.3: invitation subjects are an append-only snapshot inside one organization', async () => {
+    const people = await createOrganizationPeople(ctx);
+    const invitationId = newId();
+    await db
+      .insertInto('invitations')
+      .values({
+        id: invitationId,
+        organization_id: ctx.organizationId,
+        invited_by: actor,
+        invited_by_person_id: people.adult.personId,
+        recipient_person_id: null,
+        recipient_contact_kind: 'email',
+        recipient_contact_value: 'snapshot@example.test',
+        scope_type: 'person',
+        scope_person_id: people.child.personId,
+        scope_household_id: null,
+        relationship_kind: 'delegate',
+        requested_permissions: ['view'],
+        token_hash: `hash-${newId()}`,
+        expires_at: ctx.clock.now(),
+        accepted_at: null,
+        accepted_by_person_id: null,
+        revoked_at: null,
+        revoked_by: null,
+        revocation_reason: null,
+      })
+      .execute();
+    const subject = (organizationId: string, invitation: string, personId: string) =>
+      db
+        .insertInto('invitation_subjects')
+        .values({ organization_id: organizationId, invitation_id: invitation, person_id: personId })
+        .execute();
+    await subject(ctx.organizationId, invitationId, people.child.personId);
+    await expect(
+      subject(ctx.organizationId, invitationId, people.child.personId),
+    ).rejects.toSatisfy(isUniqueViolation);
+    // another organization's person, or this invitation under another organization's id
+    const foreign = await createPersonFixture(ctx, {
+      kind: 'child',
+      organizationId: otherOrg.organizationId,
+    });
+    await expect(subject(ctx.organizationId, invitationId, foreign)).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    await expect(subject(otherOrg.organizationId, invitationId, foreign)).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    // the snapshot is what the inviter authorized: it cannot be widened by editing or removed
+    const other = await createPersonFixture(ctx, { kind: 'child' });
+    await expect(
+      db
+        .updateTable('invitation_subjects')
+        .set({ person_id: other })
+        .where('invitation_id', '=', invitationId)
+        .execute(),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      db.deleteFrom('invitation_subjects').where('invitation_id', '=', invitationId).execute(),
+    ).rejects.toThrow(/append-only/);
+  });
+
+  it('SPK-IAM-005: a suspension window needs a suspension and must end after it starts', async () => {
+    const people = await createOrganizationPeople(ctx, { guardianPermissions: ['view'] });
+    const grantId = people.guardianGrants.view as string;
+    const reviewId = newId();
+    await db
+      .insertInto('access_reviews')
+      .values({
+        id: reviewId,
+        organization_id: ctx.organizationId,
+        subject_person_id: people.child.personId,
+        opened_by: actor,
+        opened_by_person_id: null,
+        reason: 'dispute',
+        owner_role: 'support_operator',
+        owner_person_id: null,
+        effective_from: ctx.clock.now(),
+        effective_to: null,
+        escalated_at: null,
+        decided_at: null,
+        closed_at: null,
+        outcome: null,
+      })
+      .execute();
+    const now = ctx.clock.now();
+    await expect(
+      db
+        .updateTable('access_grants')
+        .set({ suspended_until: new Date(now.getTime() + 3600_000) })
+        .where('id', '=', grantId)
+        .execute(),
+    ).rejects.toSatisfy(isCheckViolation);
+    await expect(
+      db
+        .updateTable('access_grants')
+        .set({
+          suspended_at: now,
+          suspended_by_review_id: reviewId,
+          suspended_until: new Date(now.getTime() - 1),
+        })
+        .where('id', '=', grantId)
+        .execute(),
+    ).rejects.toSatisfy(isCheckViolation);
+    await db
+      .updateTable('access_grants')
+      .set({
+        suspended_at: now,
+        suspended_by_review_id: reviewId,
+        suspended_until: new Date(now.getTime() + 3600_000),
+      })
+      .where('id', '=', grantId)
+      .execute();
+  });
+
+  it('SPK-IAM-005 / §4.6: each review holds at most one unended suspension of a grant, inside one organization, ended once and never rewritten', async () => {
+    const people = await createOrganizationPeople(ctx, { guardianPermissions: ['view'] });
+    const grantId = people.guardianGrants.view as string;
+    const review = async (organizationId: string, subjectPersonId: string) => {
+      const id = newId();
+      await db
+        .insertInto('access_reviews')
+        .values({
+          id,
+          organization_id: organizationId,
+          subject_person_id: subjectPersonId,
+          opened_by: actor,
+          opened_by_person_id: null,
+          reason: 'dispute',
+          owner_role: 'support_operator',
+          owner_person_id: null,
+          effective_from: ctx.clock.now(),
+          effective_to: null,
+          escalated_at: null,
+          decided_at: null,
+          closed_at: null,
+          outcome: null,
+        })
+        .execute();
+      return id;
+    };
+    const a = await review(ctx.organizationId, people.child.personId);
+    const b = await review(ctx.organizationId, people.child.personId);
+    const now = ctx.clock.now();
+    const suspend = (reviewId: string, organizationId = ctx.organizationId) =>
+      db
+        .insertInto('access_grant_suspensions')
+        .values({
+          id: newId(),
+          organization_id: organizationId,
+          grant_id: grantId,
+          review_id: reviewId,
+          restrict_decision_id: null,
+          reason: 'dispute',
+          suspended_at: now,
+          suspended_until: null,
+          ended_at: null,
+          end_decision_id: null,
+        })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+    const first = await suspend(a);
+    // a second review restricting the same grant is its own fact
+    await suspend(b);
+    await expect(suspend(a)).rejects.toSatisfy(isUniqueViolation);
+    // the grant belongs to another organization than the suspension
+    const foreignChild = await createPersonFixture(ctx, {
+      kind: 'child',
+      organizationId: otherOrg.organizationId,
+    });
+    const foreignReview = await review(otherOrg.organizationId, foreignChild);
+    await expect(suspend(foreignReview, otherOrg.organizationId)).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    // an end needs the decision that ended it
+    await expect(
+      db
+        .updateTable('access_grant_suspensions')
+        .set({ ended_at: now })
+        .where('id', '=', first.id)
+        .execute(),
+    ).rejects.toSatisfy(isCheckViolation);
+    await expect(
+      db
+        .updateTable('access_grant_suspensions')
+        .set({ suspended_until: new Date(now.getTime() + 3600_000) })
+        .where('id', '=', first.id)
+        .execute(),
+    ).rejects.toThrow(/append-only/);
+    const decisionId = newId();
+    await db
+      .insertInto('access_review_decisions')
+      .values({
+        id: decisionId,
+        organization_id: ctx.organizationId,
+        review_id: a,
+        sequence: 1,
+        kind: 'lift',
+        decided_by: actor,
+        note: null,
+        effective_from: now,
+        effective_to: null,
+      })
+      .execute();
+    await db
+      .updateTable('access_grant_suspensions')
+      .set({ ended_at: now, end_decision_id: decisionId })
+      .where('id', '=', first.id)
+      .execute();
+    // ended once: the row is final, and history is never deleted
+    await expect(
+      db
+        .updateTable('access_grant_suspensions')
+        .set({ ended_at: new Date(now.getTime() + 1) })
+        .where('id', '=', first.id)
+        .execute(),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      db.deleteFrom('access_grant_suspensions').where('id', '=', first.id).execute(),
+    ).rejects.toThrow(/append-only/);
+    // once ended, the review may restrict the grant again
+    await suspend(a);
   });
 
   it('SPK-IAM-007: person merges are append-only and a person can be merged at most once', async () => {

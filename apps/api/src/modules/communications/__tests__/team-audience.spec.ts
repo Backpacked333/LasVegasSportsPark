@@ -12,6 +12,7 @@ import {
   createAccountFixture,
   createOrganizationPeople,
   createPersonFixture,
+  createRelationshipFixture,
   type OrganizationPeople,
 } from '../../identity';
 import {
@@ -171,6 +172,143 @@ describe('team audiences (SPK-COMMS-003 via competition roster port, SPK-COMMS-0
     await deliverQueued(t.app);
     expect(fakes.push.sent.some((r) => r.personId === adultPlayer)).toBe(false);
     expect(fakes.push.sent.some((r) => r.personId === captain)).toBe(true);
+  });
+
+  describe('guardians reached through a child on the roster (invariant 10, SPK-COMMS-003)', () => {
+    let seasonId: string;
+    beforeAll(async () => {
+      seasonId = (await createSeasonFixture(t, {})).seasonId;
+    });
+
+    /** A fresh team entry with an adult captain and the given child members on the roster. */
+    async function team(children: string[]) {
+      const captainId = await createPersonFixture(t, { kind: 'adult' });
+      await createAccountFixture(t, { personId: captainId });
+      const { teamEntryId: id } = await createTeamEntryFixture(t, {
+        seasonId,
+        captainPersonId: captainId,
+      });
+      await addRosterMemberFixture(t, { teamEntryId: id, personId: captainId });
+      for (const child of children) {
+        await addRosterMemberFixture(t, { teamEntryId: id, personId: child });
+      }
+      return id;
+    }
+    async function family(childCount = 1) {
+      const guardian = await createPersonFixture(t, { kind: 'adult' });
+      await createAccountFixture(t, { personId: guardian });
+      const children: string[] = [];
+      const grants: string[] = [];
+      for (let i = 0; i < childCount; i += 1) {
+        const child = await createPersonFixture(t, { kind: 'child' });
+        const { grantIds } = await createRelationshipFixture(t, {
+          actorPersonId: guardian,
+          subjectPersonId: child,
+          permissions: ['view', 'receive_messages'],
+        });
+        children.push(child);
+        grants.push(grantIds.receive_messages as string);
+      }
+      return { guardian, children, grants };
+    }
+    const removeFromRoster = async (entryId: string, personId: string) => {
+      const res = await t.http
+        .post(`/v1/team-entries/${entryId}/roster`)
+        .set(staff)
+        .set('Idempotency-Key', key())
+        .send({ changes: [{ action: 'remove', personId, reason: 'left the team' }] });
+      expect(res.status).toBe(200);
+    };
+    const protectedTeamNotice = (teamEntryIds: string[]) =>
+      notifications.composeAndQueue(system, {
+        kind: 'result_published',
+        audience: { teamEntryIds },
+        title: 'Match report (roster only)',
+        body: 'Private match notes for the roster.',
+        protected: true,
+      });
+
+    it('invariant 10 / SPK-COMMS-003: the guardian of a child removed from the roster after a protected team notice was queued is revoked at dispatch and nothing is sent to them', async () => {
+      const { guardian, children } = await family();
+      const entry = await team(children);
+      const notice = await protectedTeamNotice([entry]);
+      expect(await recipientFor(notice.id, guardian)).toMatchObject({
+        status: 'pending',
+        resolved_basis: 'receive_messages',
+      });
+      await removeFromRoster(entry, children[0] as string);
+      await dispatchOutbox(t.app);
+      await deliverQueued(t.app);
+      expect(await recipientFor(notice.id, guardian)).toMatchObject({
+        status: 'revoked',
+        revocation_reason: 'authority_revoked_before_dispatch',
+      });
+      const removed = await recipientFor(notice.id, guardian);
+      const attempts = await attemptsOf(t.db, org, notice.id);
+      expect(attempts.filter((a) => a.recipient_id === removed?.id)).toHaveLength(0);
+      expect(fakes.push.sent.some((r) => r.personId === guardian)).toBe(false);
+    });
+
+    it('invariant 10 / SPK-COMMS-003: the guardian of a child removed after dispatch but before the external hand-off gets no provider call; the in-app delivery is not recalled', async () => {
+      const { guardian, children } = await family();
+      const entry = await team(children);
+      const notice = await protectedTeamNotice([entry]);
+      await dispatchOutbox(t.app);
+      expect((await recipientFor(notice.id, guardian))?.status).toBe('authorized');
+      await removeFromRoster(entry, children[0] as string);
+      const summary = await deliverQueued(t.app);
+      expect(summary.revoked).toBeGreaterThan(0);
+      const recipient = await recipientFor(notice.id, guardian);
+      expect(recipient).toMatchObject({
+        status: 'revoked',
+        revocation_reason: 'authority_revoked_before_handoff',
+      });
+      const mine = (await attemptsOf(t.db, org, notice.id)).filter(
+        (a) => a.recipient_id === recipient?.id,
+      );
+      expect(mine.find((a) => a.channel === 'in_app')).toMatchObject({ status: 'delivered' });
+      for (const attempt of mine.filter((a) => a.channel !== 'in_app')) {
+        expect(attempt).toMatchObject({ status: 'failed', failure_code: 'RECIPIENT_REVOKED' });
+      }
+      expect(fakes.push.sent.some((r) => r.personId === guardian)).toBe(false);
+    });
+
+    it('SPK-COMMS-003: a guardian whose children are on two of the audience’s teams stays authorized (each child is re-checked against every audience team)', async () => {
+      const { guardian, children } = await family(2);
+      const first = await team([children[0] as string]);
+      const second = await team([children[1] as string]);
+      const notice = await protectedTeamNotice([first, second]);
+      expect((await recipientFor(notice.id, guardian))?.subject_person_ids.sort()).toEqual(
+        [...children].sort(),
+      );
+      await dispatchOutbox(t.app);
+      await deliverQueued(t.app);
+      expect((await recipientFor(notice.id, guardian))?.status).toBe('authorized');
+      expect(fakes.push.sent.some((r) => r.personId === guardian)).toBe(true);
+    });
+
+    it('invariant 10 / SPK-IAM-006: an adult player who is also the guardian of a child on the same team loses the notice when the receive_messages grant goes, even though their own basis is team_member', async () => {
+      const { guardian, children, grants } = await family();
+      const entry = await team(children);
+      await addRosterMemberFixture(t, { teamEntryId: entry, personId: guardian });
+      const notice = await protectedTeamNotice([entry]);
+      const before = await recipientFor(notice.id, guardian);
+      expect(before?.resolved_basis).toBe('team_member');
+      expect(before?.subject_person_ids.sort()).toEqual([guardian, children[0]].sort());
+      await t.db
+        .updateTable('access_grants')
+        .set({
+          revoked_at: t.clock.now(),
+          revoked_by: JSON.stringify({ kind: 'system' }),
+          revocation_reason: 'test',
+        })
+        .where('id', '=', grants[0] as string)
+        .execute();
+      await dispatchOutbox(t.app);
+      await deliverQueued(t.app);
+      expect((await recipientFor(notice.id, guardian))?.status).toBe('revoked');
+      expect(fakes.push.sent.some((r) => r.personId === guardian)).toBe(false);
+    });
   });
 
   it('SPK-COMMS-008: a player’s private feed includes the events their team entry is committed to', async () => {

@@ -73,6 +73,32 @@ describe('unit of work, audit, and operational exceptions', () => {
     expect(after).toBeUndefined();
   });
 
+  it('work that outlives a unit of work reads through the root database, not its finished transaction', async () => {
+    const uow = t.app.get(UnitOfWork);
+    let resume!: () => void;
+    const resumed = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const later: { continuation?: Promise<{ current: boolean; reader: boolean; rows: number }> } =
+      {};
+    await uow.run(async () => {
+      // e.g. a worker nudge scheduled from inside a command
+      later.continuation = resumed.then(async () => {
+        const reader = uow.reader();
+        const rows = await reader.selectFrom('organizations').select('id').execute();
+        return {
+          current: currentTransaction() !== undefined,
+          reader: reader === t.db,
+          rows: rows.length,
+        };
+      });
+    });
+    resume();
+    const result = await later.continuation;
+    expect(result).toMatchObject({ current: false, reader: true });
+    expect(result?.rows).toBeGreaterThan(0);
+  });
+
   it('writes audit records with a principal snapshot inside the transaction', async () => {
     const uow = t.app.get(UnitOfWork);
     const audit = t.app.get(AuditWriter);

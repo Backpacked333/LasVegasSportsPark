@@ -1,4 +1,4 @@
-import { newId } from '@sportspark/contracts';
+import { newId, type Principal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
@@ -148,6 +148,36 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
       basePriceMinor: 17_000,
     });
     t.clock.set('2026-10-23T12:00:00Z');
+  });
+
+  it('SPK-PAY-002: a new price rule never starts in the past, even where no rule exists yet', async () => {
+    const offering = await createOfferingFixture(t, {
+      responsibleManagerPersonId: managerPersonId,
+      publicationState: 'draft',
+      basePriceMinor: null,
+    });
+    const create = (body: Record<string, unknown>) =>
+      t.http
+        .post(`/v1/offerings/${offering.offeringId}/price-rules`)
+        .set(finance)
+        .set('Idempotency-Key', key())
+        .send({ basePriceMinor: 9_000, currency: 'USD', ...body });
+    const retroactive = await create({ effectiveFrom: '2026-01-01T00:00:00Z' });
+    expect(retroactive.status).toBe(400);
+    expect(retroactive.body.details).toMatchObject({ path: 'effectiveFrom' });
+    const boundedPast = await create({
+      effectiveFrom: '2026-09-01T00:00:00Z',
+      effectiveTo: '2027-06-01T00:00:00Z',
+    });
+    expect(boundedPast.status).toBe(400);
+    expect(
+      await pricing.effectivePriceRule(
+        t.organizationId,
+        offering.offeringId,
+        new Date('2026-03-01T00:00:00Z'),
+      ),
+    ).toBeNull();
+    expect((await create({ effectiveFrom: '2026-10-23T12:00:00Z' })).status).toBe(201);
   });
 
   it('SPK-PAY-003: finance defines discounts; codes are unique; revisions and lifecycle are enforced', async () => {
@@ -392,5 +422,173 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
       'catalog.discount_redeemed',
       'catalog.discount_released',
     ]);
+  });
+
+  describe('per-person redemption limit (SPK-PAY-003)', () => {
+    const actor = (): Principal => ({
+      kind: 'staff',
+      organizationId: t.organizationId,
+      accountId: null,
+      personId: financePersonId,
+      staffRoles: ['finance_operator'],
+      facilityIds: [],
+      sessionId: null,
+      actorLabel: 'finance',
+    });
+    const input = (
+      discountDefinitionId: string,
+      referenceId: string,
+      personId: string | null | undefined,
+    ) => ({
+      discountDefinitionId,
+      referenceType: 'order',
+      referenceId,
+      personId,
+      amountMinor: 500,
+      currency: 'USD',
+      actor: actor(),
+    });
+    const settle = <T>(p: Promise<T>) =>
+      p.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    /** Lets the second checkout run into the lock the first one holds (PostgreSQL only). */
+    const overlap = () =>
+      t.database.concurrent
+        ? new Promise((resolve) => setTimeout(resolve, 300))
+        : Promise.resolve();
+    const ledger = async (discountDefinitionId: string) => ({
+      entries: await t.db
+        .selectFrom('discount_redemption_entries')
+        .select(['kind', 'reference_id', 'person_id', 'amount_minor', 'currency'])
+        .where('organization_id', '=', t.organizationId)
+        .where('discount_definition_id', '=', discountDefinitionId)
+        .execute(),
+      counter: (
+        await t.db
+          .selectFrom('discount_redemptions')
+          .select('redeemed_count')
+          .where('organization_id', '=', t.organizationId)
+          .where('discount_definition_id', '=', discountDefinitionId)
+          .executeTakeFirstOrThrow()
+      ).redeemed_count,
+    });
+
+    it('SPK-PAY-003: the per-person limit holds when two checkouts for the same participant overlap', async () => {
+      const id = await createDiscountFixture(t, { perPersonLimit: 1, redemptionLimit: null });
+      const payer = (await createOrganizationPeople(t)).adult.personId;
+      let redeemed!: () => void;
+      const firstRedeemed = new Promise<void>((resolve) => (redeemed = resolve));
+      const first = settle(
+        uow.run(async ({ trx }) => {
+          const out = await pricing.redeemDiscount(
+            trx,
+            t.organizationId,
+            input(id, newId(), payer),
+          );
+          redeemed();
+          await overlap(); // the first checkout is still open when the second one redeems
+          return out;
+        }),
+      );
+      await firstRedeemed;
+      const second = settle(
+        uow.run(({ trx }) =>
+          pricing.redeemDiscount(trx, t.organizationId, input(id, newId(), payer)),
+        ),
+      );
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.ok).toBe(true);
+      expect(b.ok).toBe(false);
+      expect(b.ok ? null : b.error).toMatchObject({
+        code: 'RESOURCE_CONFLICT',
+        details: { code: 'DISCOUNT_PER_PERSON_LIMIT' },
+      });
+      const after = await ledger(id);
+      expect(after.entries.filter((e) => e.kind === 'redeem')).toHaveLength(1);
+      expect(after.counter).toBe(1);
+
+      // a burst of simultaneous checkouts still redeems exactly once for the participant
+      const burstId = await createDiscountFixture(t, { perPersonLimit: 1, redemptionLimit: null });
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          settle(
+            uow.run(({ trx }) =>
+              pricing.redeemDiscount(trx, t.organizationId, input(burstId, newId(), payer)),
+            ),
+          ),
+        ),
+      );
+      expect(results.filter((r) => r.ok)).toHaveLength(1);
+      const burst = await ledger(burstId);
+      expect(burst.entries).toHaveLength(1);
+      expect(burst.counter).toBe(1);
+    });
+
+    it('SPK-PAY-003: a release restores the allowance of the participant who redeemed and mirrors the redemption', async () => {
+      const id = await createDiscountFixture(t, { perPersonLimit: 1, redemptionLimit: null });
+      const child = (await createOrganizationPeople(t)).child.personId;
+      const ref = newId();
+      const redeem = (referenceId: string, personId: string) =>
+        uow.run(({ trx }) =>
+          pricing.redeemDiscount(trx, t.organizationId, input(id, referenceId, personId)),
+        );
+      expect(await redeem(ref, child)).toMatchObject({ replayed: false });
+      // the release names no participant: the allowance still goes back to the child
+      expect(
+        await uow.run(({ trx }) =>
+          pricing.releaseDiscount(trx, t.organizationId, {
+            discountDefinitionId: id,
+            referenceType: 'order',
+            referenceId: ref,
+            actor: actor(),
+          }),
+        ),
+      ).toMatchObject({ replayed: false });
+      const { entries } = await ledger(id);
+      const redeemRow = entries.find((e) => e.kind === 'redeem');
+      const releaseRow = entries.find((e) => e.kind === 'release');
+      expect(releaseRow).toMatchObject({
+        reference_id: ref,
+        person_id: child,
+        amount_minor: redeemRow?.amount_minor,
+        currency: redeemRow?.currency,
+      });
+      expect(Number(releaseRow?.amount_minor)).toBe(500);
+      expect(releaseRow?.currency).toBe('USD');
+      expect(await redeem(newId(), child)).toMatchObject({ replayed: false });
+    });
+
+    it('SPK-PAY-003: a release naming a different participant is refused and changes no allowance', async () => {
+      const id = await createDiscountFixture(t, { perPersonLimit: 1, redemptionLimit: null });
+      const people = await createOrganizationPeople(t);
+      const ref = newId();
+      await uow.run(({ trx }) =>
+        pricing.redeemDiscount(trx, t.organizationId, input(id, ref, people.child.personId)),
+      );
+      await expect(
+        uow.run(({ trx }) =>
+          pricing.releaseDiscount(trx, t.organizationId, input(id, ref, people.adult.personId)),
+        ),
+      ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', details: { path: 'personId' } });
+      const after = await ledger(id);
+      expect(after.entries.map((e) => e.kind)).toEqual(['redeem']);
+      expect(after.counter).toBe(1);
+      // the child is still blocked; the named adult gained no extra use
+      await expect(
+        uow.run(({ trx }) =>
+          pricing.redeemDiscount(trx, t.organizationId, input(id, newId(), people.child.personId)),
+        ),
+      ).rejects.toMatchObject({ details: { code: 'DISCOUNT_PER_PERSON_LIMIT' } });
+      await uow.run(({ trx }) =>
+        pricing.redeemDiscount(trx, t.organizationId, input(id, newId(), people.adult.personId)),
+      );
+      await expect(
+        uow.run(({ trx }) =>
+          pricing.redeemDiscount(trx, t.organizationId, input(id, newId(), people.adult.personId)),
+        ),
+      ).rejects.toMatchObject({ details: { code: 'DISCOUNT_PER_PERSON_LIMIT' } });
+    });
   });
 });

@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { isSerializationFailure, type Database, type Db } from '@sportspark/db';
 import type { IsolationLevel, Transaction } from 'kysely';
 import { DATABASE } from '../tokens';
+import { currentCommitFence } from './commit-fence';
 import { currentTransaction, runWithTransaction } from './transaction-context';
 
 export type Trx = Transaction<Database>;
@@ -46,19 +47,25 @@ export class UnitOfWork {
     let attempt = 0;
     for (;;) {
       const hooks: Array<() => void | Promise<void>> = [];
+      let onCommitted: (() => void) | undefined;
       try {
         let builder = this.db.transaction();
         if (options.isolationLevel) builder = builder.setIsolationLevel(options.isolationLevel);
         const result = await builder.execute((trx) =>
-          runWithTransaction(trx, () =>
-            fn({
+          runWithTransaction(trx, async () => {
+            const value = await fn({
               trx,
               afterCommit: (hook) => {
                 hooks.push(hook);
               },
-            }),
-          ),
+            });
+            // §4.9: inside an idempotent request, record on its key (atomically with this commit)
+            // that the command changed data, or abort if a retry has taken the key over.
+            onCommitted = await currentCommitFence()?.beforeCommit(trx);
+            return value;
+          }),
         );
+        onCommitted?.();
         for (const hook of hooks) {
           try {
             await hook();

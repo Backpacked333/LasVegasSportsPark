@@ -218,6 +218,21 @@ export class PoliciesService implements PolicyPort {
             path: 'effectiveTo',
           });
         }
+        // SPK-PAY-002, §4.4: retirement only shortens the approved window from now on. A past
+        // effectiveTo would exclude instants at which records already cited this version; a later
+        // one would extend what was approved.
+        if (effectiveTo.getTime() < now.getTime()) {
+          throw errors.validation('effectiveTo must not be in the past.', { path: 'effectiveTo' });
+        }
+        if (
+          current.effective_to !== null &&
+          effectiveTo.getTime() > new Date(current.effective_to).getTime()
+        ) {
+          throw errors.validation(
+            'effectiveTo must not extend the approved effective window; approve a new version instead.',
+            { path: 'effectiveTo' },
+          );
+        }
       }
       const updated = await trx
         .updateTable('policy_versions')

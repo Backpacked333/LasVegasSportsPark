@@ -12,6 +12,7 @@ import {
   type Invitation,
   type Person,
   type PersonMerge,
+  type Principal,
   type Relationship,
   type StaffMembership,
   type StaffRole,
@@ -32,7 +33,7 @@ import type {
   StaffMembershipsTable,
 } from '@sportspark/db';
 import { sql, type Selectable } from 'kysely';
-import type { RequestWithContext } from '../../kernel';
+import type { ActionDefinition, AuthorizationService, RequestWithContext } from '../../kernel';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records. */
 export const CorrelationId = createParamDecorator(
@@ -102,17 +103,55 @@ export function isWithinEffectiveDates(row: Effectivity, now: Date): boolean {
 export interface GrantEffectivityRow extends Effectivity {
   revoked_at: Date | string | null;
   suspended_at: Date | string | null;
+  /**
+   * End of a temporary restriction (SPK-IAM-005, migration 0102). Null or absent: the suspension
+   * lasts until a `lift` decision.
+   */
+  suspended_until?: Date | string | null;
 }
 
-/** SPK-IAM-003/006: a grant confers authority only while unrevoked, unsuspended and within dates. */
+/** SPK-IAM-005: a suspension holds from `suspended_at` until `suspended_until` (or a lift). */
+export function isSuspendedAt(
+  grant: Pick<GrantEffectivityRow, 'suspended_at' | 'suspended_until'>,
+  now: Date,
+): boolean {
+  if (grant.suspended_at === null) return false;
+  const until = grant.suspended_until ?? null;
+  return until === null || new Date(until).getTime() > now.getTime();
+}
+
+/** SPK-IAM-003/005/006: a grant confers authority only while unrevoked, unsuspended and within dates. */
 export function isGrantEffective(
   grant: GrantEffectivityRow,
   relationshipStatus: 'active' | 'suspended' | 'ended',
   now: Date,
 ): boolean {
-  if (grant.revoked_at !== null || grant.suspended_at !== null) return false;
+  if (grant.revoked_at !== null || isSuspendedAt(grant, now)) return false;
   if (relationshipStatus !== 'active') return false;
   return isWithinEffectiveDates(grant, now);
+}
+
+/**
+ * SPK-IAM-001/003 and acceptance example 3 (a coach who is also a parent receives each permission
+ * only in its proper scope): true only when a staff role of the principal covers the action in
+ * this organization, or the principal is the system. A staff principal whose roles do not cover
+ * the action is treated like any other person, so their own self and guardian authority applies
+ * and nothing more. Services branch on this, never on `principal.kind`.
+ */
+export async function staffAuthorityApplies(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  action: ActionDefinition,
+  organizationId: string,
+): Promise<boolean> {
+  if (principal.kind === 'system') return principal.organizationId === organizationId;
+  if (principal.kind !== 'staff') return false;
+  // No subjects and no team entry: decide() can only allow on the staff-role basis.
+  const decision = await authorization.decide(principal, action, {
+    type: action.id,
+    organizationId,
+  });
+  return decision.allowed;
 }
 
 export function normalizeContactValue(kind: 'email' | 'phone', value: string): string {

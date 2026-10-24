@@ -30,6 +30,7 @@ import {
   assertKindMatchesDateOfBirth,
   normalizeContactValue,
   personColumns,
+  staffAuthorityApplies,
   toContactPoint,
   toPerson,
   type PersonRow,
@@ -67,14 +68,18 @@ export class PeopleService implements PersonDirectoryPort {
 
     let source: 'staff' | 'self_service' = 'staff';
     let createdByPersonId: string | null = null;
-    if (principal.kind === 'staff' || principal.kind === 'system') {
-      await this.authorization.require(principal, IdentityActions.createPerson, {
-        type: 'person',
+    if (
+      !(await staffAuthorityApplies(
+        this.authorization,
+        principal,
+        IdentityActions.createPerson,
         organizationId,
-      });
-    } else {
-      // Self-service: an adult customer may create a child record they will be guardian of.
-      // Guardian verification policy is an operator decision (§6.6); the default allows this.
+      ))
+    ) {
+      // Self-service: an adult may create a child record they will be guardian of. This is open
+      // to any person, including a staff member whose roles do not cover creating people (a coach
+      // who is also a parent, SPK-IAM acceptance example 3). Guardian verification policy is an
+      // operator decision (§6.6); the default allows this.
       if (input.kind !== 'child') {
         throw errors.accessDenied(
           'Customers may only create child records for themselves to manage.',
@@ -181,7 +186,16 @@ export class PeopleService implements PersonDirectoryPort {
       const dateOfBirth =
         input.dateOfBirth === undefined ? current.date_of_birth : input.dateOfBirth;
       assertKindMatchesDateOfBirth(current.kind, dateOfBirth, this.clock.now());
-      if (principal.kind === 'customer' && input.status !== undefined) {
+      // A staff role that covers person updates, not staff kind alone (SPK-IAM-001).
+      if (
+        input.status !== undefined &&
+        !(await staffAuthorityApplies(
+          this.authorization,
+          principal,
+          IdentityActions.updatePerson,
+          organizationId,
+        ))
+      ) {
         throw errors.accessDenied('Only staff may change a person status.');
       }
       const result = await trx
@@ -241,7 +255,17 @@ export class PeopleService implements PersonDirectoryPort {
         subjectPersonIds: [personId],
         protected: true,
       });
-      if (input.verified && principal.kind !== 'staff' && principal.kind !== 'system') {
+      // Verified contacts address invitations and claims, so only a staff role that covers this
+      // command may record one, never staff kind alone (SPK-IAM-001/002).
+      if (
+        input.verified &&
+        !(await staffAuthorityApplies(
+          this.authorization,
+          principal,
+          IdentityActions.addContactPoint,
+          organizationId,
+        ))
+      ) {
         throw errors.accessDenied('Only staff may record a contact point as verified.');
       }
       const id = await this.insertContactPoint(trx, organizationId, personId, input);

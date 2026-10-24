@@ -1,4 +1,5 @@
 import { newId } from '@sportspark/contracts';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
@@ -293,6 +294,88 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
     expect((await t.http.get('/v1/offerings?organization=no-such-org')).status).toBe(404);
   });
 
+  it('SPK-CAT-004 / SPK-PAY-001: publication refuses a registration window that no price rule covers', async () => {
+    const now = t.clock.now().getTime();
+    const day = 86_400_000;
+    const iso = (ms: number) => new Date(ms).toISOString();
+    // fixture window: [now - 1 day, now + 30 days)
+    const draft = async () =>
+      (
+        await createOfferingFixture(t, {
+          responsibleManagerPersonId: managerPersonId,
+          publicationState: 'draft',
+          basePriceMinor: null,
+        })
+      ).offeringId;
+    const price = (id: string, from: number, to: number | null = null) =>
+      t.http
+        .post(`/v1/offerings/${id}/price-rules`)
+        .set(finance)
+        .set('Idempotency-Key', key())
+        .send({
+          effectiveFrom: iso(from),
+          ...(to === null ? {} : { effectiveTo: iso(to) }),
+          basePriceMinor: 9_000,
+          currency: 'USD',
+        });
+    const publish = (id: string) =>
+      t.http.post(`/v1/offerings/${id}/publish`).set(pm).set('Idempotency-Key', key()).send({});
+    const gapOf = (res: {
+      body: { details?: { problems?: { code: string; message: string }[] } };
+    }) => (res.body.details?.problems ?? []).filter((p) => p.code === 'price_rule_gap');
+
+    // a rule that starts after registration is already open leaves the opening days unpriced
+    const late = await draft();
+    expect((await price(late, now + 5 * day)).status).toBe(201);
+    const lateRes = await publish(late);
+    expect(lateRes.status).toBe(400);
+    expect(lateRes.body.details.problems.map((p: { code: string }) => p.code)).toEqual([
+      'price_rule_gap',
+    ]);
+    expect(gapOf(lateRes)[0]?.message).toContain(iso(now));
+
+    // a bounded rule that ends before registration closes leaves the rest of the window unpriced
+    const bounded = await draft();
+    expect((await price(bounded, now, now + 3 * day)).status).toBe(201);
+    const boundedRes = await publish(bounded);
+    expect(boundedRes.status).toBe(400);
+    expect(gapOf(boundedRes)[0]?.message).toContain(iso(now + 3 * day));
+    for (const id of [late, bounded]) {
+      expect(
+        (
+          await t.db
+            .selectFrom('offerings')
+            .select('publication_state')
+            .where('id', '=', id)
+            .executeTakeFirstOrThrow()
+        ).publication_state,
+      ).toBe('draft');
+    }
+
+    // an early-bird window followed by an open-ended successor covers the whole window
+    const earlyBird = await draft();
+    expect((await price(earlyBird, now, now + 3 * day)).status).toBe(201);
+    expect((await price(earlyBird, now + 3 * day)).status).toBe(201);
+    expect((await publish(earlyBird)).status).toBe(200);
+
+    // widening the window of a published offering past its price coverage is refused too
+    const widened = await draft();
+    expect((await price(widened, now, now + 40 * day)).status).toBe(201);
+    const published = await publish(widened);
+    expect(published.status).toBe(200);
+    const patch = (expectedRevision: number) =>
+      t.http
+        .patch(`/v1/offerings/${widened}`)
+        .set(pm)
+        .set('Idempotency-Key', key())
+        .send({ expectedRevision, registrationClosesAt: iso(now + 60 * day) });
+    const tooWide = await patch(published.body.staff.revision as number);
+    expect(tooWide.status).toBe(400);
+    expect(gapOf(tooWide)[0]?.message).toContain(iso(now + 40 * day));
+    expect((await price(widened, now + 40 * day)).status).toBe(201);
+    expect((await patch(published.body.staff.revision as number)).status).toBe(200);
+  });
+
   it('SPK-CAT-004: registration opening, pausing and closing are distinct from publication', async () => {
     const fixture = await createOfferingFixture(t, {
       responsibleManagerPersonId: managerPersonId,
@@ -399,17 +482,19 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
       staff: { copiedFromOfferingId: source.offeringId, revision: 1, publishedAt: null },
     });
     const newId_ = copied.body.id as string;
-    expect(new Date(copied.body.registrationOpensAt).getTime()).toBe(
-      new Date(
-        (await t.http.get(`/v1/offerings/${source.offeringId}`).set(pm)).body.registrationOpensAt,
-      ).getTime() +
-        91 * 86_400_000,
-    );
+    // shifted by 91 calendar days in facility-local time (SPK-SCHED-008): the source opens at
+    // 2026-10-22 05:00 PDT, the copy at 2027-01-21 05:00 PST
+    expect(
+      (await t.http.get(`/v1/offerings/${source.offeringId}`).set(pm)).body.registrationOpensAt,
+    ).toBe('2026-10-22T12:00:00.000Z');
+    expect(copied.body.registrationOpensAt).toBe('2027-01-21T13:00:00.000Z');
     const sessions = await t.http.get(`/v1/offerings/${newId_}/sessions`).set(pm);
     expect(sessions.body).toHaveLength(1); // the canceled session is not copied
     expect(sessions.body[0]).toMatchObject({
       sequence: 1,
-      scheduledStart: '2027-04-11T17:00:00.000Z',
+      // 09:00 PST on 10 January stays 09:00 local (PDT) on 11 April
+      scheduledStart: '2027-04-11T16:00:00.000Z',
+      scheduledEnd: '2027-04-11T17:00:00.000Z',
       schedulingEventId: null,
       status: 'scheduled',
     });
@@ -427,6 +512,86 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
     const sourceAfter = await t.http.get(`/v1/offerings/${source.offeringId}`).set(pm);
     expect(sourceAfter.body.publicationState).toBe('registration_open');
     expect(sourceAfter.body.staff.revision).toBe(1);
+  });
+
+  it('SPK-SCHED-008: copying across a daylight-saving change keeps facility-local wall-clock times and records nonexistent times explicitly', async () => {
+    // facility zone: America/Los_Angeles (DST starts 2027-03-14, ends 2027-11-07)
+    const copyWithSession = async (
+      startsOn: string,
+      endsOn: string,
+      session: [string, string],
+      copyStartsOn: string,
+    ) => {
+      const source = await createOfferingFixture(t, {
+        responsibleManagerPersonId: managerPersonId,
+        publicationState: 'registration_open',
+        startsOn,
+        endsOn,
+      });
+      await createOfferingSessionFixture(t, {
+        offeringId: source.offeringId,
+        scheduledStart: new Date(session[0]),
+        scheduledEnd: new Date(session[1]),
+      });
+      const copied = await t.http
+        .post(`/v1/offerings/${source.offeringId}/copy`)
+        .set(pm)
+        .set('Idempotency-Key', key())
+        .send({ startsOn: copyStartsOn, copySessions: true });
+      expect(copied.status).toBe(201);
+      const id = copied.body.id as string;
+      const [copiedSession] = (await t.http.get(`/v1/offerings/${id}/sessions`).set(pm)).body;
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select('details')
+        .where('action', '=', 'catalog.offering_copied')
+        .where('target_id', '=', id)
+        .executeTakeFirstOrThrow();
+      return {
+        session: copiedSession as { id: string; scheduledStart: string; scheduledEnd: string },
+        details: audit.details as { dstResolutions: unknown[] },
+      };
+    };
+
+    // winter to spring (spring forward): 09:00 PST -> 09:00 PDT, one hour long
+    const spring = await copyWithSession(
+      '2027-01-10',
+      '2027-03-07',
+      ['2027-01-10T17:00:00Z', '2027-01-10T18:00:00Z'],
+      '2027-04-11',
+    );
+    expect(spring.session).toMatchObject({
+      scheduledStart: '2027-04-11T16:00:00.000Z',
+      scheduledEnd: '2027-04-11T17:00:00.000Z',
+    });
+    expect(spring.details.dstResolutions).toEqual([]);
+
+    // summer to winter (fall back): 09:00 PDT -> 09:00 PST, 90 minutes long
+    const fall = await copyWithSession(
+      '2027-09-12',
+      '2027-10-31',
+      ['2027-09-12T16:00:00Z', '2027-09-12T17:30:00Z'],
+      '2027-11-14',
+    );
+    expect(fall.session).toMatchObject({
+      scheduledStart: '2027-11-14T17:00:00.000Z',
+      scheduledEnd: '2027-11-14T18:30:00.000Z',
+    });
+
+    // 02:30 local does not exist on 2027-03-14: it is shifted forward to 03:30 PDT and recorded
+    const gap = await copyWithSession(
+      '2027-03-07',
+      '2027-03-07',
+      ['2027-03-07T10:30:00Z', '2027-03-07T11:30:00Z'],
+      '2027-03-14',
+    );
+    expect(gap.session).toMatchObject({
+      scheduledStart: '2027-03-14T10:30:00.000Z',
+      scheduledEnd: '2027-03-14T11:30:00.000Z',
+    });
+    expect(gap.details.dstResolutions).toEqual([
+      { field: 'scheduledStart', sessionId: gap.session.id, resolution: 'shifted_forward' },
+    ]);
   });
 
   it('SPK-YOUTH-002: raising capacity that increases the staffing requirement needs an explicit reason', async () => {
@@ -492,13 +657,36 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
         reason: 'Third coach confirmed for the camp week',
       },
     });
-    // lowering capacity needs no reason; a camp unit without a ratio cannot be published
+    // lowering capacity needs no reason; dropping the ratio does, and a camp unit without a ratio
+    // cannot be published
     const lowered = await t.http
       .patch(`/v1/offerings/${id}`)
       .set(pm)
       .set('Idempotency-Key', key())
-      .send({ expectedRevision: 2, capacityUnits: [{ unit: 'camp_group_places', limit: 12 }] });
+      .send({
+        expectedRevision: 2,
+        capacityUnits: [
+          {
+            unit: 'camp_group_places',
+            limit: 12,
+            groupSize: 12,
+            staffingRatio: { participantsPerStaff: 12 },
+          },
+        ],
+      });
     expect(lowered.status).toBe(200);
+    const unrated = (reason?: string) =>
+      t.http
+        .patch(`/v1/offerings/${id}`)
+        .set(pm)
+        .set('Idempotency-Key', key())
+        .send({
+          expectedRevision: 3,
+          capacityUnits: [{ unit: 'camp_group_places', limit: 12 }],
+          ...(reason ? { reason } : {}),
+        });
+    expect((await unrated()).status).toBe(400);
+    expect((await unrated('Ratio to be confirmed with the camp director')).status).toBe(200);
     const publish = await t.http
       .post(`/v1/offerings/${id}/publish`)
       .set(pm)
@@ -508,6 +696,180 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
     expect(publish.body.details.problems.map((p: { code: string }) => p.code)).toContain(
       'staffing_requirement_missing',
     );
+  });
+
+  it('SPK-YOUTH-002: removing or relaxing a staffing ratio while raising capacity needs an explicit reason', async () => {
+    const patch = (id: string, capacityUnits: unknown[], reason?: string) =>
+      t.http
+        .patch(`/v1/offerings/${id}`)
+        .set(pm)
+        .set('Idempotency-Key', key())
+        .send({ expectedRevision: 1, capacityUnits, ...(reason ? { reason } : {}) });
+    const audit = async (id: string) =>
+      await t.db
+        .selectFrom('audit_records')
+        .select(['reason', 'details'])
+        .where('action', '=', 'catalog.offering_updated')
+        .where('target_id', '=', id)
+        .executeTakeFirstOrThrow();
+
+    // dropping the ratio while multiplying the limit lowers the computed requirement (2 -> 0)
+    const seats = (
+      await createOfferingFixture(t, {
+        responsibleManagerPersonId: managerPersonId,
+        kind: 'camp',
+        publicationState: 'registration_open',
+        capacityUnits: [{ unit: 'seats', limit: 20, staffingRatio: { participantsPerStaff: 10 } }],
+      })
+    ).offeringId;
+    const silent = await patch(seats, [{ unit: 'seats', limit: 200 }]);
+    expect(silent.status).toBe(400);
+    expect(silent.body.details).toMatchObject({
+      path: 'reason',
+      requiredStaffBefore: 2,
+      requiredStaffAfter: 0,
+      ratiosRelaxed: ['seats'],
+    });
+    const explicit = await patch(
+      seats,
+      [{ unit: 'seats', limit: 200 }],
+      'Drop-in format approved by the director',
+    );
+    expect(explicit.status).toBe(200);
+    expect(await audit(seats)).toMatchObject({
+      reason: 'Drop-in format approved by the director',
+      details: { requiredStaffBefore: 2, requiredStaffAfter: 0, ratiosRelaxed: ['seats'] },
+    });
+
+    // swapping camp group places for unstaffed seats dodges the camp publication rule otherwise
+    const camp = (
+      await createOfferingFixture(t, {
+        responsibleManagerPersonId: managerPersonId,
+        kind: 'camp',
+        publicationState: 'registration_open',
+        capacityUnits: [
+          {
+            unit: 'camp_group_places',
+            limit: 20,
+            groupSize: 10,
+            staffingRatio: { participantsPerStaff: 5 },
+          },
+        ],
+      })
+    ).offeringId;
+    const swapped = await patch(camp, [{ unit: 'seats', limit: 200 }]);
+    expect(swapped.status).toBe(400);
+    expect(swapped.body.details).toMatchObject({ ratiosRelaxed: ['camp_group_places'] });
+    expect((await t.http.get(`/v1/offerings/${camp}`).set(pm)).body.capacity).toEqual([
+      { unit: 'camp_group_places', limit: 20 },
+    ]);
+    expect(
+      (await patch(camp, [{ unit: 'seats', limit: 200 }], 'Converted to an open day')).status,
+    ).toBe(200);
+  });
+
+  it("SPK-YOUTH-002: a session capacity override cannot silently bypass the offering's staffing requirement", async () => {
+    const id = (
+      await createOfferingFixture(t, {
+        responsibleManagerPersonId: managerPersonId,
+        kind: 'camp',
+        publicationState: 'registration_open',
+        capacityUnits: [
+          {
+            unit: 'camp_group_places',
+            limit: 20,
+            groupSize: 10,
+            staffingRatio: { participantsPerStaff: 5 },
+          },
+        ],
+      })
+    ).offeringId;
+    let day = 12;
+    const session = (
+      auth: { Authorization: string },
+      capacityOverride: unknown[],
+      reason?: string,
+    ) => {
+      day += 1;
+      return t.http
+        .post(`/v1/offerings/${id}/sessions`)
+        .set(auth)
+        .set('Idempotency-Key', key())
+        .send({
+          scheduledStart: `2027-01-${day}T17:00:00Z`,
+          scheduledEnd: `2027-01-${day}T18:00:00Z`,
+          capacityOverride,
+          ...(reason ? { reason } : {}),
+        });
+    };
+    const bypass = [{ unit: 'session_seats', limit: 500 }];
+
+    // capacity is offering configuration: a scheduler may add sessions but not override capacity
+    expect((await session(scheduler, bypass, 'Big day')).status).toBe(403);
+    const silent = await session(pm, bypass);
+    expect(silent.status).toBe(400);
+    expect(silent.body.details).toMatchObject({
+      path: 'reason',
+      requiredStaffOffering: 4,
+      requiredStaffOverride: 0,
+      ratiosRelaxed: ['camp_group_places'],
+      unstaffedUnits: ['session_seats'],
+    });
+    const noGroup = await session(
+      pm,
+      [{ unit: 'camp_group_places', limit: 10, staffingRatio: { participantsPerStaff: 5 } }],
+      'Half day',
+    );
+    expect(noGroup.status).toBe(400);
+    expect(noGroup.body.details).toMatchObject({ path: 'capacityOverride' });
+    // an override inside the staffing requirement needs no reason
+    expect(
+      (
+        await session(pm, [
+          {
+            unit: 'camp_group_places',
+            limit: 10,
+            groupSize: 10,
+            staffingRatio: { participantsPerStaff: 5 },
+          },
+        ])
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await t.db
+          .selectFrom('offering_sessions')
+          .select('id')
+          .where('offering_id', '=', id)
+          .execute()
+      ).length,
+    ).toBe(1);
+
+    const explicit = await session(pm, bypass, 'Open day: volunteers cover supervision');
+    expect(explicit.status).toBe(201);
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['reason', 'details'])
+      .where('action', '=', 'catalog.session_created')
+      .where('target_id', '=', explicit.body.id)
+      .executeTakeFirstOrThrow();
+    expect(audit).toMatchObject({
+      reason: 'Open day: volunteers cover supervision',
+      details: {
+        capacityOverride: bypass,
+        requiredStaffOffering: 4,
+        requiredStaffOverride: 0,
+        ratiosRelaxed: ['camp_group_places'],
+      },
+    });
+    const event = await t.db
+      .selectFrom('outbox_events')
+      .select('payload')
+      .where('event_type', '=', 'catalog.session_created')
+      .where('aggregate_id', '=', id)
+      .where(sql<boolean>`payload->>'sessionId' = ${explicit.body.id as string}`)
+      .executeTakeFirstOrThrow();
+    expect(event.payload).toMatchObject({ capacityOverride: bypass });
   });
 
   it('§4.4 Session: sessions follow the offering lifecycle and their own cancellation', async () => {

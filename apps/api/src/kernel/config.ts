@@ -2,13 +2,25 @@ import os from 'node:os';
 import { z } from '@sportspark/contracts';
 
 /**
+ * The `AUTH_LOCAL_SECRET` value once published in `.env.example`. Anyone can read it, so a host
+ * configured with it would accept tokens minted by anyone (§4.14 protected secret storage).
+ */
+export const PUBLISHED_EXAMPLE_SECRET = 'change-me-to-at-least-32-random-characters';
+
+/**
  * Typed runtime configuration. Secrets arrive through the environment (never committed).
  * Security boundary: the local HS256 identity provider is for development and automated tests only
  * and refuses to boot in production; a managed identity provider is a provider-selection gate (§5.2).
+ * `NODE_ENV` has no default: the production guards (local identity, `/v1/dev/tokens`, automatic
+ * migration, PGlite) all key on it, so a host that forgot to set it must fail closed, not boot as
+ * development (§4.14).
  */
 export const ConfigSchema = z
   .object({
-    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    NODE_ENV: z.enum(['development', 'test', 'production'], {
+      error:
+        'NODE_ENV must be set explicitly to development, test or production (the local identity provider, /v1/dev/tokens and automatic migration are refused only when it is production)',
+    }),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     APP_VERSION: z.string().default('0.1.0'),
     DATABASE_URL: z.string().min(1).optional(),
@@ -31,6 +43,12 @@ export const ConfigSchema = z
     OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
     OUTBOX_LOCK_LEASE_SECONDS: z.coerce.number().int().min(5).default(60),
     IDEMPOTENCY_TTL_HOURS: z.coerce.number().int().min(1).default(24),
+    /**
+     * How long a claimed idempotency key stays reserved for the request that claimed it (§4.9).
+     * After it lapses, a retry may take the key over, but only when the first request committed
+     * nothing. It must exceed the longest-running idempotent request.
+     */
+    IDEMPOTENCY_LEASE_SECONDS: z.coerce.number().int().min(5).default(120),
     LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
   })
   .superRefine((cfg, ctx) => {
@@ -48,6 +66,13 @@ export const ConfigSchema = z
           code: 'custom',
           path: ['AUTH_LOCAL_SECRET'],
           message: 'AUTH_LOCAL_SECRET (>= 32 chars) is required when AUTH_MODE=local',
+        });
+      } else if (cfg.AUTH_LOCAL_SECRET === PUBLISHED_EXAMPLE_SECRET) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_LOCAL_SECRET'],
+          message:
+            'AUTH_LOCAL_SECRET is the published example value; generate a private one (for example: openssl rand -hex 32)',
         });
       }
     }

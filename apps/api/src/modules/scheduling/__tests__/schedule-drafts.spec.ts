@@ -279,6 +279,46 @@ describe('schedule drafts and publication (SPK-SCHED-005/006, SPK-FIX-005, SPK-A
     expect(edited.body).toMatchObject({ status: 'editing', validationResults: null });
   });
 
+  it('SPK-SCHED-004: required rest holds between two changes of the same draft, in validation and at publication', async () => {
+    const team = newId();
+    const draft = await openDraft('rest within the group', [
+      createChange(
+        at('2026-11-05', '10:00'),
+        at('2026-11-05', '11:00'),
+        [pitch.northHalfId],
+        'first game',
+        { commitments: [teamCommitment(team)] },
+      ),
+      // 30 minutes later on the other half: the 60-minute rest is not met
+      createChange(
+        at('2026-11-05', '11:30'),
+        at('2026-11-05', '12:30'),
+        [pitch.southHalfId],
+        'second game',
+        { commitments: [teamCommitment(team, 'away_team')] },
+      ),
+    ]);
+    const res = await t.http
+      .post(`/v1/schedule-drafts/${draft.id}/validate`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.validationResults.ok).toBe(false);
+    expect(res.body.validationResults.issues).toEqual([
+      expect.objectContaining({
+        code: 'insufficient_rest',
+        changeSequence: 1,
+        detail: expect.objectContaining({ changeSequences: [1, 2] }),
+      }),
+    ]);
+    const before = await countEvents();
+    const published = await publish(draft.id, key(), { expectedRevision: res.body.revision });
+    expect(published.status).toBe(409);
+    expect(published.body.code).toBe('RESOURCE_CONFLICT');
+    expect(await countEvents()).toBe(before);
+  });
+
   it('SPK-SCHED-006: publication commits creates, moves and cancels in one group with notices, published revisions and an operation', async () => {
     const toMove = await createScheduledEvent(events, {
       organizationId: org,

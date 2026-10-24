@@ -17,7 +17,7 @@ continuing identity from season entry", §4.6 Result machine, §4.7 invariants 8
 SPK-AT-002/003/010/011/013/014.
 
 **Migration range:** `packages/db/migrations/0400_competition_*.sql` … `0499` (part 1 uses `0400`,
-part 2 uses `0450`).
+part 2 uses `0450`; `0451` tightens the result history guard).
 
 **Depends on:** identity (`PeopleService` for minimal person facts, date of birth for age
 eligibility, verified contact points for contact invitations), scheduling (`EVENT_SCHEDULING_PORT`
@@ -104,7 +104,12 @@ publication instant unchanged), makes superseded rows immutable and refuses ever
 invariant 9); standings projections are append-only; suspension terms (period or count, named
 competitions, approval before `active`, never more served than counted); one rule-set proposal per
 person, fixture and rule; one open appeal per target; composite `(organization_id, …)` foreign keys
-on every reference.
+on every reference. Migration `0451_competition_result_history_guard.sql` (same test file) also
+freezes, when an official row is superseded, its actor person ids, return (review) facts, the
+pointer to what it superseded, organization and creation time, and requires it to name the
+superseding revision; both chain pointers must name a revision of the same fixture (composite
+foreign keys on `(organization_id, fixture_id, …)`), never the row itself; only an official row can
+become superseded. Publication authority itself is enforced by the publish action, not the database.
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/competition.ts`)
 
@@ -226,6 +231,19 @@ identifiers only.
   limit), substitutes/guests allowed, required league approval, multi-team restrictions
   (entries per season, same division, cross division), suspensions through the port
   (SPK-AT-013) and, for a fixture, the opposing roster and overlapping scheduled fixtures.
+- Rosters (SPK-COMP-005, `services/roster.service.ts`): an addition or removal takes effect now or
+  at a later instant. A change dated before now rewrites the roster of matches already played, so
+  a captain cannot make one (`VALIDATION_FAILED`, `retroactive_roster_change`); league staff can,
+  only with the command `reason`, and the audit records it as a correction (`retroactive: true`,
+  `recordedAt`, `correctionReason`). A completed or archived season takes no roster change at all
+  (`INVALID_TRANSITION`): its rosters are history. An addition is evaluated over the whole interval
+  its open-ended row covers: the roster and guest limits at the busiest instant from its effective
+  instant on (future-dated rows count), the multi-team restrictions against every other membership
+  effective at any instant from then on, and suspensions at its effective instant and, when that is
+  in the past, now. Additions of one person within a season are serialized by a transaction-scoped
+  advisory lock, so two captains adding the same player to two entries at once cannot both pass the
+  multi-team restrictions (tested on PostgreSQL). Removing a player from a withdrawn entry, effective
+  now or later, stays allowed.
 - Renewal (SPK-AT-003, SPK-CAP-005) creates a new entry for the same continuing team, prefilled from
   the prior entry and returning prior players as suggestions; the prior season's rows are not
   touched (tested byte-identical) and nothing is charged.
@@ -240,8 +258,11 @@ identifiers only.
   (if any), make the revision official, move the fixture through its machine
   (played/forfeit/abandoned), serve match-count suspensions (only for a match that took place, and
   only suspensions approved before kickoff), propose the rule set's card suspensions, progress the
-  bracket (first result of a playoff game: winner recorded, fed slots filled), recompute the league
-  standings (playoff games never count), audit and outbox.
+  bracket (the first result of a playoff game with a winner, or the correction that decides a game
+  whose official result had none: winner recorded, empty fed slots filled), recompute the league
+  standings (playoff games never count), audit and outbox. A bracket node links only a fixture
+  without a published result: a published league result counts in the standings, so linking it is
+  refused (`fixture_result_published`); create the playoff fixture for the node.
 - **Corrections** (SPK-RESULT-004, SPK-AT-014): a correction is a new revision; the superseded row
   keeps its scores, actor, reason and publication instant. When it would touch published history —
   a playoff game whose node or downstream nodes are published, or a league game whose corrected
@@ -250,7 +271,12 @@ identifiers only.
   correction stays submitted. League management decides: publishing with `reviewExceptionId` (the
   open task of that correction) applies the correction and resolves the task, leaving the published
   bracket as history and naming the affected nodes and games in the event; returning the correction
-  resolves the task too.
+  resolves the task too. A correction that changes the winner or loser of a playoff game also waits
+  for review when a node fed by the game has recorded a winner or has its fixture (its sides were set
+  from the old outcome). Otherwise — the game's node and the nodes it feeds are unpublished and
+  nobody acts on them yet — the correction is published and revises the progression: the node's
+  winner and each fed slot that still holds the previous entry take the new outcome, audited as
+  `progress_revised` with the previous and next outcome.
 - **Standings** (`matches/standings.calculator.ts`): points, forfeit scores and points from the
   season's rule-set version; cancellations, postponements, disputes and abandonments below the
   rule set's minimum do not count; tiebreakers in rule-set order, each step explained
@@ -259,15 +285,21 @@ identifiers only.
 - **Fixture generation** (`matches/fixture-generator.ts`): circle-method round robin repeated per
   opponent frequency with alternating venues, one bye per team per cycle for odd counts; greedy
   placement over seeded candidate orderings into slots (allowed start times × dates outside
-  blackouts × required resources) under hard constraints (one game per slot, no team overlap,
-  minimum rest, round order, every preference marked `hard`); soft preferences are scored and
-  reported separately (SPK-FIX-003). Outcomes are honest (SPK-FIX-004): `proven_optimal` only when
-  the penalty is zero, `proven_infeasible` only for a counting proof (slots, playable days, hard
-  availability), otherwise `feasible` or `no_proposal_within_limit` ("infeasibility is not
-  proven"). The completeness validator reports missing, duplicate and excess games, unscheduled
-  games, opponent frequency, invalid byes and playoff requirements with remaining obligations
-  (SPK-FIX-002). SPK-AT-010 is verified with five teams in a double round robin: 20 games, 10 bye
-  records (two per team, one per cycle), complete.
+  blackouts × required resources) under hard constraints (a resource holds one game at a time,
+  its setup and cleanup turnover included — the resources' scheduling defaults, as publication
+  counts them; no team overlap, minimum rest, round order, every preference marked `hard`); soft
+  preferences are scored and reported separately (SPK-FIX-003). Outcomes are honest (SPK-FIX-004):
+  `proven_optimal` only when the penalty is zero, `proven_infeasible` only for a counting proof
+  (capacity — non-overlapping occupied intervals per resource, so start times closer than a match
+  are flexibility, not capacity — playable days, hard availability), otherwise `feasible` or
+  `no_proposal_within_limit` ("infeasibility is not proven"). A proposal that breaks a hard
+  constraint is kept on the run for explanation only: it creates no fixtures and opens no draft. A
+  real (non-dry) run holds the division row while it checks for existing fixtures and creates its
+  own, so two specifications of one division generated at once never create two fixture sets
+  (tested on PostgreSQL). The completeness validator reports missing, duplicate and excess games,
+  unscheduled games, opponent frequency, invalid byes and playoff requirements with remaining
+  obligations (SPK-FIX-002). SPK-AT-010 is verified with five teams in a double round robin: 20
+  games, 10 bye records (two per team, one per cycle), complete.
 - **Readiness** (`services/readiness.service.ts`, SPK-READY-001..004): derived on every read from
   scheduling (published event, resource status, active closures), part 1 (entry approval, effective
   rosters, eligibility with suspensions), the registered checks (officials), the forms, finance and
@@ -280,9 +312,10 @@ identifiers only.
   only (never in result views, events or audit details); a suspension restricts eligibility only
   once approved and only within its scope; the rule set's card rules propose suspensions (red card:
   `redCardSuspensionMatches`; reaching a multiple of `yellowAccumulationThreshold` in the season:
-  `yellowAccumulationSuspensionMatches`), once per person, fixture and rule; overturning a decision
-  ends the suspensions it created; appeals mark the appealed suspension (or the decision's
-  suspensions) pending, granted or denied.
+  `yellowAccumulationSuspensionMatches`, once per threshold crossing in the season, so a correction
+  of an earlier fixture never proposes a crossing again), once per person, fixture and rule;
+  overturning a decision ends the suspensions it created; appeals mark the appealed suspension (or
+  the decision's suspensions) pending, granted or denied.
 - **Disputes** (SPK-RESULT-005): the window is the rule set's `protestDeadlineHours` from the
   official publication (else the scheduled end); a dispute never changes a result by itself — a
   `correction_required` consequence is carried out by a correction revision citing the dispute.
@@ -293,6 +326,9 @@ identifiers only.
   configuration a league manager starts from; evaluation always reads the season's rule-set version.
 - A co-captain does not satisfy captain checks (`coCaptainMayActAsCaptain: false`).
 - A team captain must be an adult (pending the guardian/child-account policy).
+- Only league staff (league manager, general manager, system administrator) may date a roster
+  change before now, with a reason (SPK-COMP-005 keeps effective dates; who may correct a past
+  roster is not specified).
 - Invitation lifetime 7 days (`TEAM_INVITATION_DEFAULT_HOURS`); the raw token is returned once to
   the inviter because no messaging provider is selected (§5.2).
 - The `tentative` RSVP state is accepted (DEC-064 pending).
@@ -335,6 +371,8 @@ identifiers only.
   withdrawal command); a decided consequence is not executed automatically.
 - Fixture specifications are immutable once created (no PATCH): define a new one. The generator is
   a seeded greedy search, not an exact solver, so `proven_optimal` is claimed only at zero penalty.
+  It treats each required resource independently: a specification naming both a pitch and one of
+  its halves could place two games on shared ground, which publication validation then refuses.
 - `GET /seasons/{id}/standings` without `divisionId` for a season with divisions computes a
   season-wide table from all divisions.
 - Evidence is a list of references; uploads are not stored here.

@@ -51,8 +51,16 @@ interface ResourceRow {
 
 /**
  * Application-level conflict detection (SPK-SCHED-002/003/004). It gives early, explanatory
- * feedback naming the conflicting event ids; the exclusion constraints in migration 0300 remain
- * the final guarantee (§4.7).
+ * feedback naming the conflicting event ids. What the database guarantees (§4.7):
+ * - physical overlap of conflict units and party overlap: the exclusion constraints in migration
+ *   0300;
+ * - closures (SPK-SCHED-009, SPK-FAC-003): `EventWriter.reserve` share-locks the event's conflict
+ *   units and re-checks active closures after the lock, while `ClosuresService.applyClosure`
+ *   locks the closed area's units FOR UPDATE before it reads the impact;
+ * - configured arrangements between sibling subdivisions (SPK-SCHED-002): `detect` serializes on
+ *   the parent resource row before it reads sibling reservations;
+ * - required rest (SPK-SCHED-004): `EventWriter.reserve` takes a per-party advisory lock and
+ *   re-checks the rest gap after the lock.
  */
 @Injectable()
 export class ConflictDetector {
@@ -70,6 +78,7 @@ export class ConflictDetector {
     const ignoreIds = [...ignore];
 
     const resourceIds = [...new Set(proposals.flatMap((p) => p.resourceIds))];
+    if (resourceIds.length > 0) await this.lockArrangements(trx, organizationId, resourceIds);
     const resources = new Map<string, ResourceRow>();
     const unitsByResource = new Map<string, string[]>();
     if (resourceIds.length > 0) {
@@ -210,38 +219,14 @@ export class ConflictDetector {
         }
 
         // closures of the facility or of any resource sharing a unit (SPK-SCHED-009, SPK-FAC-003)
-        const closures = await trx
-          .selectFrom('closures')
-          .select(['id', 'resource_id'])
-          .where('organization_id', '=', organizationId)
-          .where('facility_id', '=', facility.id)
-          .where('status', '=', 'active')
-          .where(sql<boolean>`during && ${tstzrange(occupied.start, occupied.end)}`)
-          .where((eb) =>
-            eb.or([
-              eb('resource_id', 'is', null),
-              eb(
-                'resource_id',
-                'in',
-                eb
-                  .selectFrom('resource_conflict_units')
-                  .select('resource_id')
-                  .where('organization_id', '=', organizationId)
-                  .where('conflict_unit_id', 'in', units),
-              ),
-            ]),
-          )
-          .execute();
-        for (const closure of closures) {
-          push('error', {
-            code: 'closure',
-            message: closure.resource_id
-              ? 'The space is closed during the interval.'
-              : 'The facility is closed during the interval.',
-            closureId: closure.id,
-            resourceId: closure.resource_id ?? undefined,
-            conflictingEventIds: [],
-          });
+        for (const detail of await this.activeClosures(
+          trx,
+          organizationId,
+          facility.id,
+          units,
+          occupied,
+        )) {
+          push('error', detail);
         }
       }
 
@@ -408,27 +393,127 @@ export class ConflictDetector {
             }
           }
         }
-        if (overlapScheduled) {
-          for (const ca of a.commitments) {
-            if (
-              b.commitments.some((cb) => cb.partyType === ca.partyType && cb.partyId === ca.partyId)
-            ) {
-              conflicts.push({
-                key: a.key,
-                severity: 'error',
-                detail: {
-                  code: 'party_overlap',
-                  message: `The ${ca.partyType} is committed to two overlapping changes in this group.`,
-                  party: { partyType: ca.partyType, partyId: ca.partyId },
-                  conflictingEventIds: [b.eventId].filter((id): id is string => !!id),
-                  changeSequences: sequences,
-                },
-              });
-            }
+        for (const ca of a.commitments) {
+          if (
+            !b.commitments.some((cb) => cb.partyType === ca.partyType && cb.partyId === ca.partyId)
+          ) {
+            continue;
+          }
+          if (overlapScheduled) {
+            conflicts.push({
+              key: a.key,
+              severity: 'error',
+              detail: {
+                code: 'party_overlap',
+                message: `The ${ca.partyType} is committed to two overlapping changes in this group.`,
+                party: { partyType: ca.partyType, partyId: ca.partyId },
+                conflictingEventIds: [b.eventId].filter((id): id is string => !!id),
+                changeSequences: sequences,
+              },
+            });
+            continue;
+          }
+          // SPK-SCHED-004: required rest also holds between two changes of the same group
+          const rest = options.policy.requiredRestMinutes[ca.partyType] ?? 0;
+          const gap = Math.max(
+            a.scheduledStart.getTime() - b.scheduledEnd.getTime(),
+            b.scheduledStart.getTime() - a.scheduledEnd.getTime(),
+          );
+          if (gap < rest * 60_000) {
+            conflicts.push({
+              key: a.key,
+              severity: 'error',
+              detail: {
+                code: 'insufficient_rest',
+                message: `The ${ca.partyType} needs ${rest} minutes of rest between two changes in this group.`,
+                party: { partyType: ca.partyType, partyId: ca.partyId },
+                conflictingEventIds: [b.eventId].filter((id): id is string => !!id),
+                changeSequences: sequences,
+              },
+            });
           }
         }
       }
     }
     return conflicts;
+  }
+
+  /**
+   * Active closures of the facility, or of any resource sharing one of the units, that overlap the
+   * occupied interval (SPK-SCHED-009, SPK-FAC-003). `EventWriter.reserve` calls it again after it
+   * has share-locked the units, so a closure applied while a booking was in flight is seen.
+   */
+  async activeClosures(
+    trx: Trx,
+    organizationId: string,
+    facilityId: string,
+    unitIds: string[],
+    occupied: { start: Date; end: Date },
+  ): Promise<ConflictDetail[]> {
+    if (unitIds.length === 0) return [];
+    const closures = await trx
+      .selectFrom('closures')
+      .select(['id', 'resource_id'])
+      .where('organization_id', '=', organizationId)
+      .where('facility_id', '=', facilityId)
+      .where('status', '=', 'active')
+      .where(sql<boolean>`during && ${tstzrange(occupied.start, occupied.end)}`)
+      .where((eb) =>
+        eb.or([
+          eb('resource_id', 'is', null),
+          eb(
+            'resource_id',
+            'in',
+            eb
+              .selectFrom('resource_conflict_units')
+              .select('resource_id')
+              .where('organization_id', '=', organizationId)
+              .where('conflict_unit_id', 'in', unitIds),
+          ),
+        ]),
+      )
+      .orderBy('id')
+      .execute();
+    return closures.map((closure) => ({
+      code: 'closure' as const,
+      message: closure.resource_id
+        ? 'The space is closed during the interval.'
+        : 'The facility is closed during the interval.',
+      closureId: closure.id,
+      resourceId: closure.resource_id ?? undefined,
+      conflictingEventIds: [],
+    }));
+  }
+
+  /**
+   * SPK-SCHED-002 / §4.7: configured arrangements have no database constraint (two halves never
+   * share a conflict unit), so bookings of sibling subdivisions are serialized on their parent
+   * resource row. The lock is held until commit; under READ COMMITTED the sibling-reservation
+   * reads below then see the reservations of a sibling booking that committed first. FOR NO KEY
+   * UPDATE leaves the FOR KEY SHARE taken by foreign keys (whole-space reservations) unblocked, and
+   * the sorted order keeps concurrent commands from deadlocking on each other.
+   */
+  private async lockArrangements(
+    trx: Trx,
+    organizationId: string,
+    resourceIds: string[],
+  ): Promise<void> {
+    const parents = await trx
+      .selectFrom('resources')
+      .select('parent_resource_id')
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', resourceIds)
+      .where('parent_resource_id', 'is not', null)
+      .execute();
+    const parentIds = [...new Set(parents.map((p) => p.parent_resource_id as string))].sort();
+    if (parentIds.length === 0) return;
+    await trx
+      .selectFrom('resources')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', parentIds)
+      .orderBy('id')
+      .forNoKeyUpdate()
+      .execute();
   }
 }

@@ -126,6 +126,103 @@ describe('AuthorizationService (§4.14, SPK-IAM-003)', () => {
     ).toBe(false);
   });
 
+  it('SPK-IAM-001/003: a coach who is also a parent receives each permission only in its proper scope', async () => {
+    const facilityA = newId();
+    const facilityB = newId();
+    const CoachActions = defineActions({
+      readEvent: {
+        id: 'test.read_event_as_coach',
+        description: 'read an event (coaches by role, guardians by relationship)',
+        staffRoles: ['coach'],
+        allowSelf: true,
+        subjectPermission: 'view',
+      },
+    });
+    const coachParent = staffPrincipal(org, ['coach'], { facilityIds: [facilityA] });
+    const svc = service([[coachParent.personId!, child, 'view']]);
+    // Outside the coach's facility, the guardian grant still applies to their own child.
+    expect(
+      await svc.decide(coachParent, CoachActions.readEvent, {
+        type: 'event',
+        organizationId: org,
+        facilityId: facilityB,
+        subjectPersonIds: [child],
+        protected: true,
+      }),
+    ).toEqual({ allowed: true, basis: 'relationship:view' });
+    // ...and gives nothing over someone else's child: the coach role does not stretch to facility B.
+    const strangerChild = newId();
+    expect(
+      await svc.decide(coachParent, CoachActions.readEvent, {
+        type: 'event',
+        organizationId: org,
+        facilityId: facilityB,
+        subjectPersonIds: [strangerChild],
+        protected: true,
+      }),
+    ).toMatchObject({ allowed: false, reason: 'facility scope mismatch', protectedRecord: true });
+    await expect(
+      svc.require(coachParent, CoachActions.readEvent, {
+        type: 'event',
+        organizationId: org,
+        facilityId: facilityB,
+        subjectPersonIds: [strangerChild],
+        protected: true,
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      svc.require(coachParent, CoachActions.readEvent, {
+        type: 'event',
+        organizationId: org,
+        facilityId: facilityB,
+        subjectPersonIds: [strangerChild],
+      }),
+    ).rejects.toMatchObject({ code: 'ACCESS_DENIED' });
+    // Inside the coach's facility, the coach role applies to any participant.
+    expect(
+      await svc.decide(coachParent, CoachActions.readEvent, {
+        type: 'event',
+        organizationId: org,
+        facilityId: facilityA,
+        subjectPersonIds: [strangerChild],
+      }),
+    ).toEqual({ allowed: true, basis: 'staff role' });
+  });
+
+  it('SPK-IAM-003: a facility-scoped staff member keeps self authority, and team authority, at another facility', async () => {
+    const facilityA = newId();
+    const facilityB = newId();
+    const scoped = staffPrincipal(org, ['front_desk', 'league_manager'], {
+      facilityIds: [facilityA],
+    });
+    const team = newId();
+    const svc = service([], [[scoped.personId!, team]]);
+    expect(
+      await svc.decide(scoped, Actions.viewSchedule, {
+        type: 'schedule',
+        organizationId: org,
+        facilityId: facilityB,
+        subjectPersonIds: [scoped.personId!],
+      }),
+    ).toEqual({ allowed: true, basis: 'self' });
+    expect(
+      await svc.decide(scoped, Actions.manageTeam, {
+        type: 'team_entry',
+        organizationId: org,
+        facilityId: facilityB,
+        teamEntryId: team,
+      }),
+    ).toEqual({ allowed: true, basis: 'team_role:captain' });
+    expect(
+      await svc.decide(scoped, Actions.manageTeam, {
+        type: 'team_entry',
+        organizationId: org,
+        facilityId: facilityB,
+        teamEntryId: newId(),
+      }),
+    ).toMatchObject({ allowed: false, reason: 'facility scope mismatch' });
+  });
+
   it('one permission never implies another: view does not allow collect', async () => {
     const parent = customerPrincipal(org);
     const svc = service([[parent.personId!, child, 'view']]);

@@ -67,6 +67,13 @@ export class PriceRulesService {
       const now = this.clock.now();
       const effectiveFrom = new Date(body.effectiveFrom);
       const effectiveTo = body.effectiveTo ? new Date(body.effectiveTo) : null;
+      // SPK-PAY-002: a new rule never prices instants that have already passed, in any branch.
+      if (effectiveFrom.getTime() < now.getTime()) {
+        throw errors.validation(
+          'effectiveFrom must be at or after now; historical prices are never rewritten (SPK-PAY-002).',
+          { path: 'effectiveFrom' },
+        );
+      }
 
       const overlapping = await trx
         .selectFrom('price_rules')
@@ -87,7 +94,6 @@ export class PriceRulesService {
         first &&
         first.effective_to === null &&
         effectiveTo === null &&
-        effectiveFrom.getTime() >= now.getTime() &&
         effectiveFrom.getTime() > new Date(first.effective_from).getTime()
       ) {
         // An open-ended successor closes the current open-ended rule where it begins (never in

@@ -31,7 +31,10 @@ export class ScheduleNotices {
   ) {}
 
   async onEventChanged(trx: Trx, event: DomainEvent<EventChangedPayload>): Promise<void> {
-    await this.entries.upsertFromEventChange(trx, event);
+    // SPK-COMMS-005 / §4.12: a newer change of this event was already projected and noticed, and
+    // its notice carries the current details; a late older change must neither suppress it nor
+    // follow a cancellation, so it composes nothing.
+    if ((await this.entries.applyEventChange(trx, event)) === 'stale') return;
     const payload = event.payload;
     const kind = noticeKindFor(payload);
     if (!kind) return;

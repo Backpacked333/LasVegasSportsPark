@@ -1,6 +1,7 @@
 import { defineEvent, z, type DomainEvent } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../../testing/test-app';
+import { currentTransaction } from '../database/transaction-context';
 import { UnitOfWork } from '../database/unit-of-work';
 import { EventHandlerRegistry } from '../outbox/event-handler.registry';
 import { Outbox } from '../outbox/outbox';
@@ -216,6 +217,95 @@ describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)', () =>
     expect((await dispatcher.runOnce()).claimed).toBe(0);
     t.clock.advance(6000);
     expect(await dispatcher.runOnce()).toMatchObject({ claimed: 1, dispatched: 1 });
+  });
+
+  it('§4.12: handlers run in the transaction context, so ports and the reader see their own writes', async () => {
+    const Probe = defineEvent('test.context_probe', z.object({ slug: z.string() }));
+    const seen: Array<Record<string, boolean>> = [];
+    let continuation: Promise<{ current: boolean; reader: boolean; readOk: boolean }> | null = null;
+    let resume!: () => void;
+    const resumed = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    registry.on(Probe.type, 'context_probe', async (event, ctx) => {
+      const { slug } = event.payload as { slug: string };
+      await ctx.trx
+        .insertInto('organizations')
+        .values({ id: event.id, slug, name: 'probe' })
+        .execute();
+      const own = await uow
+        .reader()
+        .selectFrom('organizations')
+        .select('id')
+        .where('slug', '=', slug)
+        .executeTakeFirst();
+      seen.push({
+        current: currentTransaction() === ctx.trx,
+        reader: uow.reader() === ctx.trx,
+        ownWrite: own !== undefined,
+      });
+      // Work that outlives the handler (a worker nudge) must not use its finished transaction.
+      continuation = resumed.then(async () => {
+        const reader = uow.reader();
+        const row = await reader
+          .selectFrom('organizations')
+          .select('id')
+          .where('slug', '=', slug)
+          .executeTakeFirst();
+        return {
+          current: currentTransaction() !== undefined,
+          reader: reader === t.db,
+          readOk: !!row,
+        };
+      });
+    });
+    await uow.run((ctx) =>
+      outbox.enqueue(ctx.trx, Probe, {
+        organizationId: t.organizationId,
+        aggregateType: 'probe',
+        aggregateId: 'ctx',
+        payload: { slug: 'outbox-ctx-probe' },
+      }),
+    );
+    expect(await dispatcher.runOnce()).toMatchObject({ claimed: 1, dispatched: 1 });
+    expect(seen).toEqual([{ current: true, reader: true, ownWrite: true }]);
+    resume();
+    expect(await continuation).toEqual({ current: false, reader: true, readOk: true });
+  });
+
+  it('§4.12: after-commit hooks run only after the handler committed, never on a failed attempt or a replay', async () => {
+    const Hooked = defineEvent('test.hooked', z.object({ n: z.number() }));
+    const hooks: string[] = [];
+    let failNext = true;
+    registry.on(Hooked.type, 'hooked', async (_event, ctx) => {
+      ctx.afterCommit(() => {
+        hooks.push(`attempt-${ctx.attempt}`);
+      });
+      if (failNext) {
+        failNext = false;
+        throw new Error('transient');
+      }
+    });
+    const event = await uow.run((ctx) =>
+      outbox.enqueue(ctx.trx, Hooked, {
+        organizationId: t.organizationId,
+        aggregateType: 'hooked',
+        aggregateId: 'h1',
+        payload: { n: 1 },
+      }),
+    );
+    expect(await dispatcher.runOnce()).toMatchObject({ retried: 1 });
+    expect(hooks).toEqual([]);
+    t.clock.advance(retryDelayMs(1) + 1);
+    expect(await dispatcher.runOnce()).toMatchObject({ dispatched: 1 });
+    expect(hooks).toEqual(['attempt-2']);
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', locked_until: null })
+      .where('id', '=', event.id)
+      .execute();
+    expect(await dispatcher.runOnce()).toMatchObject({ dispatched: 1 });
+    expect(hooks).toEqual(['attempt-2']);
   });
 
   it('events without handlers are dispatched (facts are recorded even before consumers exist)', async () => {

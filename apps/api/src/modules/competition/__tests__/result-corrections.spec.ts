@@ -489,4 +489,290 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
       servedFixtureIds: [g4],
     });
   });
+  async function draftNode(division: string, body: object) {
+    const res = await post(`/seasons/${season.seasonId}/bracket-nodes`, leagueManager, {
+      divisionId: division,
+      ...body,
+    });
+    expect(res.status).toBe(201);
+    return res.body as { id: string; revision: number };
+  }
+
+  async function bracketRow(id: string) {
+    return t.db
+      .selectFrom('bracket_nodes')
+      .select(['home_entry_id', 'away_entry_id', 'winner_entry_id'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+  }
+
+  it('SPK-RESULT-004 / SPK-COMP-001: a correction that changes the winner of a playoff game nobody downstream acts on yet revises the bracket (audited); a score-only correction leaves it; a first result without a winner progresses once it is corrected to a decided one', async () => {
+    const division = await createDivisionFixture(t, { seasonId: season.seasonId, name: 'Cup A' });
+    const [p, q, r, s2] = [
+      await teamOf('Pumas', division),
+      await teamOf('Quails', division),
+      await teamOf('Ravens', division),
+      await teamOf('Sharks', division),
+    ] as [Team, Team, Team, Team];
+    const sf1 = await fixture(p, q, division);
+    const sf2 = await fixture(r, s2, division);
+    const semi1 = await draftNode(division, {
+      round: 1,
+      slot: 1,
+      home: { kind: 'seed', seed: 1 },
+      away: { kind: 'seed', seed: 4 },
+      homeEntryId: p.teamEntryId,
+      awayEntryId: q.teamEntryId,
+      fixtureId: sf1,
+    });
+    const semi2 = await draftNode(division, {
+      round: 1,
+      slot: 2,
+      home: { kind: 'seed', seed: 2 },
+      away: { kind: 'seed', seed: 3 },
+      homeEntryId: r.teamEntryId,
+      awayEntryId: s2.teamEntryId,
+      fixtureId: sf2,
+    });
+    const final = await draftNode(division, {
+      round: 2,
+      slot: 1,
+      home: { kind: 'winner_of', nodeId: semi1.id },
+      away: { kind: 'winner_of', nodeId: semi2.id },
+    });
+
+    // P 1–0 Q progresses P; the correction 0–1 makes Q the winner and revises both nodes
+    const first = await played(sf1, 1, 0);
+    expect(first.progressedBracketNodeIds.sort()).toEqual([semi1.id, final.id].sort());
+    const flipped = await publish(
+      await submit(sf1, {
+        classification: 'completed',
+        homeScore: 0,
+        awayScore: 1,
+        reason: 'Scores were entered the wrong way round.',
+      }),
+    );
+    expect(flipped.status).toBe(200);
+    expect(flipped.body).toMatchObject({ published: true, reviewExceptionId: null });
+    expect(flipped.body.progressedBracketNodeIds.sort()).toEqual([semi1.id, final.id].sort());
+    expect((await bracketRow(semi1.id)).winner_entry_id).toBe(q.teamEntryId);
+    expect((await bracketRow(final.id)).home_entry_id).toBe(q.teamEntryId);
+    const revisedAudit = (
+      await t.db
+        .selectFrom('audit_records')
+        .select(['target_id', 'details'])
+        .where('target_id', 'in', [semi1.id, final.id])
+        .execute()
+    ).filter((a) => (a.details as { operation?: string }).operation === 'progress_revised');
+    expect(revisedAudit.map((a) => a.target_id).sort()).toEqual([semi1.id, final.id].sort());
+    expect(revisedAudit[0]?.details).toMatchObject({
+      previousOutcome: { winnerEntryId: p.teamEntryId, loserEntryId: q.teamEntryId },
+      nextOutcome: { winnerEntryId: q.teamEntryId, loserEntryId: p.teamEntryId },
+    });
+    // a score-only correction keeps the winner and the bracket
+    const scoreOnly = await publish(
+      await submit(sf1, {
+        classification: 'completed',
+        homeScore: 0,
+        awayScore: 2,
+        reason: 'A second goal was confirmed.',
+      }),
+    );
+    expect(scoreOnly.body).toMatchObject({ published: true, progressedBracketNodeIds: [] });
+    expect(await bracketRow(final.id)).toMatchObject({ home_entry_id: q.teamEntryId });
+
+    // a disputed first result has no winner; the decided correction then progresses the bracket
+    const disputed = await publish(await submit(sf2, { classification: 'disputed' }));
+    expect(disputed.status).toBe(200);
+    expect(disputed.body.progressedBracketNodeIds).toEqual([]);
+    const decided = await publish(
+      await submit(sf2, {
+        classification: 'completed',
+        homeScore: 2,
+        awayScore: 0,
+        reason: 'The dispute was resolved for the home side.',
+      }),
+    );
+    expect(decided.body).toMatchObject({ published: true, reviewExceptionId: null });
+    expect(decided.body.progressedBracketNodeIds.sort()).toEqual([semi2.id, final.id].sort());
+    expect((await bracketRow(semi2.id)).winner_entry_id).toBe(r.teamEntryId);
+    expect(await bracketRow(final.id)).toMatchObject({
+      home_entry_id: q.teamEntryId,
+      away_entry_id: r.teamEntryId,
+    });
+  });
+
+  it('SPK-RESULT-004 / SPK-COMP-001: a winner change that a later node already acts on (it has its fixture) waits for management review and rewrites nothing; on a published node a disputed first result progresses once the reviewed correction decides it', async () => {
+    const division = await createDivisionFixture(t, { seasonId: season.seasonId, name: 'Cup B' });
+    const [p, q, r] = [
+      await teamOf('Panthers', division),
+      await teamOf('Quokkas', division),
+      await teamOf('Rhinos', division),
+    ] as [Team, Team, Team];
+    const sf = await fixture(p, q, division);
+    const semi = await draftNode(division, {
+      round: 1,
+      slot: 1,
+      home: { kind: 'seed', seed: 1 },
+      away: { kind: 'seed', seed: 4 },
+      homeEntryId: p.teamEntryId,
+      awayEntryId: q.teamEntryId,
+      fixtureId: sf,
+    });
+    expect((await played(sf, 1, 0)).progressedBracketNodeIds).toEqual([semi.id]);
+    // the final is scheduled with the semi-final winner: its sides follow the old outcome
+    const finalFixture = await fixture(p, r, division);
+    const final = await draftNode(division, {
+      round: 2,
+      slot: 1,
+      home: { kind: 'winner_of', nodeId: semi.id },
+      away: { kind: 'seed', seed: 2 },
+      homeEntryId: p.teamEntryId,
+      awayEntryId: r.teamEntryId,
+      fixtureId: finalFixture,
+    });
+    const flip = await publish(
+      await submit(sf, {
+        classification: 'completed',
+        homeScore: 0,
+        awayScore: 1,
+        reason: 'Scores were entered the wrong way round.',
+      }),
+    );
+    expect(flip.status).toBe(200);
+    expect(flip.body).toMatchObject({ published: false, progressedBracketNodeIds: [] });
+    const task = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'details'])
+      .where('id', '=', flip.body.reviewExceptionId)
+      .executeTakeFirstOrThrow();
+    expect(task.category).toBe('competition.result_correction_review');
+    expect(task.details).toMatchObject({
+      affectedBracketNodeIds: [final.id],
+      affectedFixtureIds: [finalFixture],
+    });
+    expect((await bracketRow(semi.id)).winner_entry_id).toBe(p.teamEntryId);
+    expect((await bracketRow(final.id)).home_entry_id).toBe(p.teamEntryId);
+
+    // published semi-final whose first result was disputed: the reviewed decision fills the bracket
+    const sf3 = await fixture(q, r, division);
+    const semi3 = await node({
+      divisionId: division,
+      round: 1,
+      slot: 2,
+      home: { kind: 'seed', seed: 2 },
+      away: { kind: 'seed', seed: 3 },
+      homeEntryId: q.teamEntryId,
+      awayEntryId: r.teamEntryId,
+      fixtureId: sf3,
+    });
+    const final3 = await draftNode(division, {
+      round: 3,
+      slot: 1,
+      home: { kind: 'winner_of', nodeId: semi3.id },
+      away: { kind: 'seed', seed: 1 },
+    });
+    expect((await publish(await submit(sf3, { classification: 'disputed' }))).status).toBe(200);
+    const correction = await submit(sf3, {
+      classification: 'completed',
+      homeScore: 3,
+      awayScore: 1,
+      reason: 'The dispute was resolved for the home side.',
+    });
+    const waiting = await publish(correction);
+    expect(waiting.body.published).toBe(false);
+    const approved = await publish(correction, {
+      reviewExceptionId: waiting.body.reviewExceptionId,
+    });
+    expect(approved.status).toBe(200);
+    expect(approved.body.published).toBe(true);
+    expect(approved.body.progressedBracketNodeIds.sort()).toEqual([semi3.id, final3.id].sort());
+    expect((await bracketRow(semi3.id)).winner_entry_id).toBe(q.teamEntryId);
+    expect((await bracketRow(final3.id)).home_entry_id).toBe(q.teamEntryId);
+  });
+
+  it('SPK-RESULT-004 / §4.7 invariant 9: a fixture whose result is published counts in the league table and cannot be linked to a bracket node', async () => {
+    const division = await createDivisionFixture(t, {
+      seasonId: season.seasonId,
+      name: 'League C',
+    });
+    const [w, x, y, z] = [
+      await teamOf('Wolves', division),
+      await teamOf('Xenops', division),
+      await teamOf('Yaks', division),
+      await teamOf('Zebras', division),
+    ] as [Team, Team, Team, Team];
+    const league = await fixture(w, z, division);
+    const official = (await played(league, 5, 0)).revision.id as string;
+    const linked = await post(`/seasons/${season.seasonId}/bracket-nodes`, leagueManager, {
+      divisionId: division,
+      round: 1,
+      slot: 1,
+      home: { kind: 'seed', seed: 1 },
+      away: { kind: 'seed', seed: 4 },
+      homeEntryId: w.teamEntryId,
+      awayEntryId: z.teamEntryId,
+      fixtureId: league,
+    });
+    expect(linked.status).toBe(400);
+    expect(linked.body.details).toMatchObject({ code: 'fixture_result_published' });
+    const next = await played(await fixture(x, y, division), 1, 0);
+    expect(next.standings.sourceResultIds).toHaveLength(2);
+    expect(next.standings.sourceResultIds).toContain(official);
+    const nodes = await t.db
+      .selectFrom('bracket_nodes')
+      .select('id')
+      .where('fixture_id', '=', league)
+      .execute();
+    expect(nodes).toEqual([]);
+  });
+  it('SPK-DISC-003 / SPK-RESULT-004: yellow accumulation is proposed once per threshold crossing in the season; correcting an earlier cautioned fixture (score only, or adding a yellow below the next multiple) proposes nothing again, and the next multiple still does', async () => {
+    const division = await createDivisionFixture(t, { seasonId: season.seasonId, name: 'Cards' });
+    const g = await teamOf('Gulls', division);
+    const h = await teamOf('Herons', division);
+    const yellow = (minute: number) => ({
+      personId: g.player.personId,
+      teamEntryId: g.teamEntryId,
+      kind: 'yellow',
+      minute,
+    });
+    const accumulation = async () =>
+      t.db
+        .selectFrom('suspensions')
+        .select(['id', 'source_fixture_id'])
+        .where('subject_person_id', '=', g.player.personId)
+        .where('source_kind', '=', 'yellow_accumulation')
+        .execute();
+    const correct = async (fixtureId: string, body: object) => {
+      const res = await publish(
+        await submit(fixtureId, { classification: 'completed', reason: 'Card review.', ...body }),
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.published).toBe(true);
+      return res.body as { proposedSuspensionIds: string[] };
+    };
+    // threshold 2 (this season's rule set): the second yellow of the season is the first crossing
+    const f1 = await fixture(g, h, division);
+    expect((await played(f1, 1, 0, { cards: [yellow(10)] })).proposedSuspensionIds).toEqual([]);
+    const f2 = await fixture(h, g, division);
+    expect((await played(f2, 0, 0, { cards: [yellow(20)] })).proposedSuspensionIds).toHaveLength(1);
+    expect(await accumulation()).toEqual([expect.objectContaining({ source_fixture_id: f2 })]);
+    // corrections of the earlier fixture: the score only, then a second yellow (3 < 4)
+    expect(
+      (await correct(f1, { homeScore: 2, awayScore: 0, cards: [yellow(10)] }))
+        .proposedSuspensionIds,
+    ).toEqual([]);
+    expect(
+      (await correct(f1, { homeScore: 2, awayScore: 0, cards: [yellow(10), yellow(70)] }))
+        .proposedSuspensionIds,
+    ).toEqual([]);
+    expect(await accumulation()).toHaveLength(1);
+    // the fourth yellow reaches the next multiple: a second crossing, proposed once
+    const f3 = await fixture(g, h, division);
+    expect((await played(f3, 1, 1, { cards: [yellow(5)] })).proposedSuspensionIds).toHaveLength(1);
+    expect(
+      (await correct(f3, { homeScore: 2, awayScore: 1, cards: [yellow(5)] })).proposedSuspensionIds,
+    ).toEqual([]);
+    expect((await accumulation()).map((r) => r.source_fixture_id).sort()).toEqual([f2, f3].sort());
+  });
 });

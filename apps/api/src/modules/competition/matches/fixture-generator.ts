@@ -21,9 +21,11 @@ import type {
  * 1. Round robin by the circle method, repeated `opponentFrequency` times with alternating venues;
  *    an odd team count gets one bye per team per cycle.
  * 2. Games are placed into candidate slots (allowed start times × dates outside blackouts ×
- *    required resources) under the hard constraints: one game per slot, a team plays once at a
- *    time, minimum rest, rounds in order for every team, and every fairness preference marked
- *    `hard`. Soft preferences are scored and reported (SPK-FIX-003: visibly distinct).
+ *    required resources) under the hard constraints: a resource holds one game at a time
+ *    (including its setup and cleanup turnover, as the scheduling conflict detector counts it), a
+ *    team plays once at a time, minimum rest, rounds in order for every team, and every fairness
+ *    preference marked `hard`. Soft preferences are scored and reported (SPK-FIX-003: visibly
+ *    distinct).
  * 3. Several seeded candidate orderings are tried within the search limits; the best valid one is
  *    the proposal. Outcomes are honest (SPK-FIX-004): `proven_optimal` only when the penalty is
  *    provably minimal (zero), `proven_infeasible` only for a proof (capacity, dates, preferences
@@ -47,6 +49,11 @@ export interface GeneratorInput {
   allowedStartTimes: AllowedStartTime[];
   matchDurationMinutes: number;
   resourceIds: string[];
+  /**
+   * Turnover each resource needs around a game (scheduling's default setup and cleanup); a game
+   * occupies its resource over [start − setup, end + cleanup). Missing resources default to none.
+   */
+  resourceBuffers?: Record<string, { setupMinutes: number; cleanupMinutes: number }>;
   fairnessPreferences: FairnessPreference[];
   playoffStructure: PlayoffStructure | null;
   /** Facility-local wall clock to instant (DST-aware); null when the time does not exist. */
@@ -76,6 +83,9 @@ interface Slot {
   start: Date;
   end: Date;
   resourceId: string;
+  /** The interval the game holds its resource, turnover included (epoch milliseconds). */
+  occupiedStart: number;
+  occupiedEnd: number;
   isEarly: boolean;
   isLate: boolean;
 }
@@ -177,6 +187,7 @@ function buildSlots(input: GeneratorInput): Slot[] {
         if (!start) return;
         const end = new Date(start.getTime() + input.matchDurationMinutes * 60_000);
         for (const resourceId of input.resourceIds) {
+          const buffers = input.resourceBuffers?.[resourceId];
           slots.push({
             index: slots.length,
             date,
@@ -184,6 +195,8 @@ function buildSlots(input: GeneratorInput): Slot[] {
             start,
             end,
             resourceId,
+            occupiedStart: start.getTime() - (buffers?.setupMinutes ?? 0) * 60_000,
+            occupiedEnd: end.getTime() + (buffers?.cleanupMinutes ?? 0) * 60_000,
             isEarly: position === 0 && times.length > 1,
             isLate: position === times.length - 1 && times.length > 1,
           });
@@ -197,6 +210,36 @@ function buildSlots(input: GeneratorInput): Slot[] {
     s.index = i;
   });
   return slots;
+}
+
+/** Whether the slot's resource is already held at an overlapping time (one game per resource). */
+function resourceBusy(occupied: Map<string, Array<[number, number]>>, slot: Slot): boolean {
+  return (occupied.get(slot.resourceId) ?? []).some(
+    ([start, end]) => start < slot.occupiedEnd && slot.occupiedStart < end,
+  );
+}
+
+/**
+ * Games the slots can hold at most: per resource, the largest set of pairwise non-overlapping
+ * occupied intervals (earliest end first is optimal for interval scheduling), summed over the
+ * resources. Overlapping start times on one resource are flexibility, not extra capacity.
+ */
+function slotCapacity(slots: Slot[]): number {
+  const byResource = new Map<string, Slot[]>();
+  for (const slot of slots) {
+    byResource.set(slot.resourceId, [...(byResource.get(slot.resourceId) ?? []), slot]);
+  }
+  let capacity = 0;
+  for (const list of byResource.values()) {
+    let lastEnd = Number.NEGATIVE_INFINITY;
+    for (const slot of [...list].sort((a, b) => a.occupiedEnd - b.occupiedEnd)) {
+      if (slot.occupiedStart >= lastEnd) {
+        capacity += 1;
+        lastEnd = slot.occupiedEnd;
+      }
+    }
+  }
+  return capacity;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -341,7 +384,7 @@ function assign(
 ): Candidate {
   const states = new Map<string, TeamState>();
   for (const id of input.teamEntryIds) states.set(id, { games: [] });
-  const used = new Set<number>();
+  const occupied = new Map<string, Array<[number, number]>>();
   const assignments: Assignment[] = [];
   const noConsecutiveHard = preference(input, 'no_consecutive_games')?.hard ?? false;
   const rounds = groupRounds(games);
@@ -361,7 +404,7 @@ function assign(
       let best: { slot: Slot; score: number } | null = null;
       let considered = 0;
       for (const slot of slots) {
-        if (used.has(slot.index)) continue;
+        if (resourceBusy(occupied, slot)) continue;
         if (!feasibleForTeam(input, home, game.homeEntryId, slot, game.round, noConsecutiveHard)) {
           continue;
         }
@@ -381,7 +424,10 @@ function assign(
         assignments.push({ game, slot: null });
         continue;
       }
-      used.add(best.slot.index);
+      occupied.set(best.slot.resourceId, [
+        ...(occupied.get(best.slot.resourceId) ?? []),
+        [best.slot.occupiedStart, best.slot.occupiedEnd],
+      ]);
       home.games.push({
         slot: best.slot,
         round: game.round,
@@ -816,15 +862,16 @@ export function generateFixtures(
   const { games } = roundRobin(input.teamEntryIds, input.opponentFrequency);
   const realGames = games.filter((g) => g.awayEntryId !== null);
   const slots = buildSlots(input);
+  const capacity = slotCapacity(slots);
 
-  if (slots.length < realGames.length) {
+  if (capacity < realGames.length) {
     return infeasible(
-      `${realGames.length} games need slots but only ${slots.length} slot(s) exist between ${input.startsOn} and ${input.endsOn} on ${input.resourceIds.length} resource(s) outside blackouts.`,
+      `${realGames.length} games need slots but at most ${capacity} game(s) fit between ${input.startsOn} and ${input.endsOn} on ${input.resourceIds.length} resource(s) outside blackouts (one game per resource at a time, turnover included).`,
       [
         {
           constraint: 'capacity',
           hard: true,
-          message: `${realGames.length} games, ${slots.length} slots.`,
+          message: `${realGames.length} games, capacity for ${capacity}.`,
           gameKeys: realGames.map((g) => g.key),
         },
       ],

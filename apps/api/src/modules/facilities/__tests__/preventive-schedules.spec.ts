@@ -1,6 +1,8 @@
 import { newId, type Principal } from '@sportspark/contracts';
+import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
+import { createPersonFixture } from '../../identity';
 import {
   at,
   ClosuresService,
@@ -13,6 +15,7 @@ import { FacilitiesModule } from '../facilities.module';
 import { PreventiveSchedulesService } from '../services/preventive-schedules.service';
 import { RestrictionsService } from '../services/restrictions.service';
 import { createPreventiveSchedule } from '../testing/facilities-fixtures';
+import { keepFakePrincipals } from './support';
 
 describe('preventive maintenance schedules (SPK-FAC-005)', () => {
   let t: TestApp;
@@ -26,7 +29,11 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
   let auth: { Authorization: string };
 
   beforeAll(async () => {
-    t = await createTestApp({ imports: [FacilitiesModule], clockStart: '2026-10-19T12:00:00Z' });
+    t = await createTestApp({
+      imports: [FacilitiesModule],
+      clockStart: '2026-10-19T12:00:00Z',
+      configure: keepFakePrincipals(() => t),
+    });
     schedules = t.app.get(PreventiveSchedulesService);
     restrictions = t.app.get(RestrictionsService);
     events = t.app.get(EventsService);
@@ -185,6 +192,54 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
     expect(south.status).toBe('published');
     const schedule = await t.http.get(`/v1/preventive-schedules/${scheduleId}`).set(auth);
     expect(schedule.body.lastGeneratedThrough).toBe('2026-11-10T00:00:00.000Z');
+  });
+
+  it('SPK-FAC-002 / §4.3: a preventive template names only an active adult person of the organization as owner', async () => {
+    const other = await seedOrganization(t.db);
+    const foreign = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: other.organizationId,
+    });
+    const owner = await createPersonFixture(t, { kind: 'adult' });
+    const body = (assignedOwnerPersonId: string) => ({
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      name: 'Net inspection',
+      recurrence: { frequency: 'daily', startDate: '2026-10-22', count: 1 },
+      localStartTime: '06:00',
+      durationMinutes: 60,
+      taskTemplate: { issue: 'Inspect nets', severity: 'low', assignedOwnerPersonId },
+    });
+    for (const personId of [foreign, newId()]) {
+      const refused = await post('/v1/preventive-schedules', body(personId));
+      expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+      expect(refused.body).toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: { path: 'taskTemplate.assignedOwnerPersonId' },
+      });
+    }
+    const created = await post('/v1/preventive-schedules', body(owner));
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const edited = await t.http
+      .patch(`/v1/preventive-schedules/${created.body.id}`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({
+        expectedRevision: created.body.revision,
+        taskTemplate: { issue: 'Inspect nets', severity: 'low', assignedOwnerPersonId: foreign },
+      });
+    expect(edited.status, JSON.stringify(edited.body)).toBe(400);
+    const generated = await post(`/v1/preventive-schedules/${created.body.id}/generate`, {
+      through: '2026-10-23T00:00:00Z',
+    });
+    expect(generated.status, JSON.stringify(generated.body)).toBe(200);
+    expect(generated.body.generated).toHaveLength(1);
+    const task = await t.db
+      .selectFrom('maintenance_tasks')
+      .select(['status', 'assigned_owner_person_id'])
+      .where('id', '=', generated.body.generated[0].taskId)
+      .executeTakeFirstOrThrow();
+    expect(task).toEqual({ status: 'assigned', assigned_owner_person_id: owner });
   });
 
   it('a paused or ended schedule generates nothing; status and revision are guarded', async () => {

@@ -75,6 +75,13 @@ export interface ChangeNotice {
 
 let savepointCounter = 0;
 
+/** Whether two resource-id lists name the same set of resources. */
+export function sameResourceSet(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((id) => right.has(id));
+}
+
 /**
  * Transactional primitives shared by the direct scheduling port, series and publication: insert
  * events, hold and release reservations/units/commitments, and enqueue change notices. Callers
@@ -143,10 +150,28 @@ export class EventWriter {
   }
 
   /** Buffers default to the largest default among the requested resources (SPK-SCHED-003). */
-  defaultBuffers(resources: ResourceRow[]): { setupMinutes: number; cleanupMinutes: number } {
+  defaultBuffers(
+    resources: Array<Pick<ResourceRow, 'default_setup_minutes' | 'default_cleanup_minutes'>>,
+  ): { setupMinutes: number; cleanupMinutes: number } {
     return {
       setupMinutes: Math.max(0, ...resources.map((r) => r.default_setup_minutes)),
       cleanupMinutes: Math.max(0, ...resources.map((r) => r.default_cleanup_minutes)),
+    };
+  }
+
+  /**
+   * SPK-SCHED-001/003: each resource's default setup and cleanup is its turnover requirement, so
+   * the buffers actually held are at least the largest default among the reserved resources. A
+   * larger requested value extends them; a smaller one is raised to the requirement.
+   */
+  effectiveBuffers(
+    resources: Array<Pick<ResourceRow, 'default_setup_minutes' | 'default_cleanup_minutes'>>,
+    requested: { setupMinutes?: number | null; cleanupMinutes?: number | null } = {},
+  ): { setupMinutes: number; cleanupMinutes: number } {
+    const floor = this.defaultBuffers(resources);
+    return {
+      setupMinutes: Math.max(requested.setupMinutes ?? 0, floor.setupMinutes),
+      cleanupMinutes: Math.max(requested.cleanupMinutes ?? 0, floor.cleanupMinutes),
     };
   }
 
@@ -220,6 +245,9 @@ export class EventWriter {
   async reserve(trx: Trx, event: EventRow, facility: FacilityRow): Promise<void> {
     const resourceIds = event.resource_ids;
     const commitments = this.commitmentsOf(event);
+    // §4.7 invariant 4: the resource rows are share-locked before their unit mapping is read, so an
+    // inventory change that adds units (and extends existing holds) is either seen here or sees us.
+    await this.lockResources(trx, event.organization_id, resourceIds);
     const units =
       resourceIds.length === 0
         ? []
@@ -229,11 +257,37 @@ export class EventWriter {
             .where('organization_id', '=', event.organization_id)
             .where('resource_id', 'in', resourceIds)
             .execute();
-    const occupied = tstzrange(
-      new Date(new Date(event.scheduled_start).getTime() - event.setup_minutes * 60_000),
-      new Date(new Date(event.scheduled_end).getTime() + event.cleanup_minutes * 60_000),
+    const occupiedStart = new Date(
+      new Date(event.scheduled_start).getTime() - event.setup_minutes * 60_000,
     );
+    const occupiedEnd = new Date(
+      new Date(event.scheduled_end).getTime() + event.cleanup_minutes * 60_000,
+    );
+    const occupied = tstzrange(occupiedStart, occupiedEnd);
     const scheduled = tstzrange(event.scheduled_start, event.scheduled_end);
+
+    // SPK-SCHED-009 / SPK-FAC-003: closures hold no reservation rows, so a closure applied after
+    // detection is caught here. The share locks wait for an apply that holds the units FOR UPDATE;
+    // the re-check is a new statement and therefore sees a closure that committed meanwhile.
+    const unitIds = [...new Set(units.map((u) => u.conflict_unit_id))].sort();
+    await this.lockUnits(trx, event.organization_id, unitIds);
+    const closures = await this.detector.activeClosures(
+      trx,
+      event.organization_id,
+      facility.id,
+      unitIds,
+      { start: occupiedStart, end: occupiedEnd },
+    );
+    // SPK-SCHED-004: the rest gap has no exclusion constraint; the per-party lock serializes
+    // commands for the same party and the re-check after it sees a commitment committed meanwhile.
+    await this.lockParties(trx, event.organization_id, facility, commitments);
+    const tooClose = await this.restViolations(trx, event, facility, commitments);
+    const rechecked = [...closures, ...tooClose].map((detail) => ({
+      key: event.id,
+      severity: 'error' as const,
+      detail,
+    }));
+    if (rechecked.length > 0) throw this.conflictError(rechecked);
     savepointCounter += 1;
     const savepoint = sql.id(`reserve_${savepointCounter}`);
     await sql`savepoint ${savepoint}`.execute(trx);
@@ -304,6 +358,136 @@ export class EventWriter {
             conflictingEventIds: [],
           });
     }
+  }
+
+  /**
+   * Takes, up front and in one global order, every lock `reserve` takes for the given events, so a
+   * command that reserves several events (publication, series edit) cannot deadlock with another
+   * one that takes the same locks in a different order. `reserve` re-acquires them as a no-op.
+   */
+  async lockHolds(
+    trx: Trx,
+    organizationId: string,
+    facility: FacilityRow,
+    holds: Array<{ resourceIds: string[]; commitments: PartyCommitment[] }>,
+  ): Promise<void> {
+    const resourceIds = [...new Set(holds.flatMap((h) => h.resourceIds))];
+    await this.lockResources(trx, organizationId, resourceIds);
+    if (resourceIds.length > 0) {
+      const units = await trx
+        .selectFrom('resource_conflict_units')
+        .select('conflict_unit_id')
+        .where('organization_id', '=', organizationId)
+        .where('resource_id', 'in', resourceIds)
+        .execute();
+      await this.lockUnits(trx, organizationId, [...new Set(units.map((u) => u.conflict_unit_id))]);
+    }
+    await this.lockParties(
+      trx,
+      organizationId,
+      facility,
+      holds.flatMap((h) => h.commitments),
+    );
+  }
+
+  private async lockResources(
+    trx: Trx,
+    organizationId: string,
+    resourceIds: string[],
+  ): Promise<void> {
+    const ids = [...new Set(resourceIds)].sort();
+    if (ids.length === 0) return;
+    await trx
+      .selectFrom('resources')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', ids)
+      .orderBy('id')
+      .forShare()
+      .execute();
+  }
+
+  private async lockUnits(trx: Trx, organizationId: string, unitIds: string[]): Promise<void> {
+    const ids = [...new Set(unitIds)].sort();
+    if (ids.length === 0) return;
+    await trx
+      .selectFrom('conflict_units')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', ids)
+      .orderBy('id')
+      .forShare()
+      .execute();
+  }
+
+  /** Transaction-scoped advisory lock per committed party that needs rest (SPK-SCHED-004). */
+  private async lockParties(
+    trx: Trx,
+    organizationId: string,
+    facility: FacilityRow,
+    commitments: PartyCommitment[],
+  ): Promise<void> {
+    const rest = this.policyFor(facility).requiredRestMinutes;
+    const keys = [
+      ...new Set(
+        commitments
+          .filter((c) => (rest[c.partyType] ?? 0) > 0)
+          .map((c) => `scheduling.party:${organizationId}:${c.partyType}:${c.partyId}`),
+      ),
+    ].sort();
+    for (const key of keys) {
+      await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(trx);
+    }
+  }
+
+  /** Active commitments of the same parties closer than the required rest (not overlapping: the exclusion constraint covers those). */
+  private async restViolations(
+    trx: Trx,
+    event: EventRow,
+    facility: FacilityRow,
+    commitments: PartyCommitment[],
+  ) {
+    const rest = this.policyFor(facility).requiredRestMinutes;
+    const start = new Date(event.scheduled_start).getTime();
+    const end = new Date(event.scheduled_end).getTime();
+    const details: DetectedConflict['detail'][] = [];
+    const seen = new Set<string>();
+    for (const c of commitments) {
+      const minutes = rest[c.partyType] ?? 0;
+      const party = `${c.partyType}:${c.partyId}`;
+      if (minutes <= 0 || seen.has(party)) continue;
+      seen.add(party);
+      const rows = await trx
+        .selectFrom('event_commitments')
+        .select([
+          'event_id',
+          sql<string>`lower(occupied)`.as('start'),
+          sql<string>`upper(occupied)`.as('end'),
+        ])
+        .where('organization_id', '=', event.organization_id)
+        .where('status', '=', 'active')
+        .where('party_type', '=', c.partyType)
+        .where('party_id', '=', c.partyId)
+        .where('event_id', '<>', event.id)
+        .where(
+          sql<boolean>`occupied && ${tstzrange(
+            new Date(start - minutes * 60_000),
+            new Date(end + minutes * 60_000),
+          )}`,
+        )
+        .execute();
+      const close = rows.filter(
+        (r) => !(new Date(r.start).getTime() < end && start < new Date(r.end).getTime()),
+      );
+      if (close.length === 0) continue;
+      details.push({
+        code: 'insufficient_rest',
+        message: `The ${c.partyType} needs ${minutes} minutes of rest between commitments.`,
+        party: { partyType: c.partyType, partyId: c.partyId },
+        conflictingEventIds: [...new Set(close.map((r) => r.event_id))].sort(),
+      });
+    }
+    return details;
   }
 
   /** Releases every active reservation, unit and commitment of the event (frees the units). */

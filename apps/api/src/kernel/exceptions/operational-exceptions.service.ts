@@ -6,6 +6,7 @@ import { AuditWriter } from '../audit/audit.writer';
 import { defineActions } from '../authorization/actions';
 import { AuthorizationService } from '../authorization/authorization.service';
 import type { Clock } from '../clock';
+import { ensureUpdated } from '../database/revision';
 import type { Trx } from '../database/unit-of-work';
 import { CLOCK, DATABASE } from '../tokens';
 
@@ -119,10 +120,13 @@ export class OperationalExceptions {
       correlationId?: string;
     } = {},
   ): Promise<void> {
+    // §4.9, §4.7 invariant 9: lock the row so the revision and state checks run against the
+    // current row, and a concurrent transition can never be audited without having happened.
     const current = await trx
       .selectFrom('operational_exceptions')
       .select(['organization_id', 'facility_id', 'status', 'revision'])
       .where('id', '=', id)
+      .forUpdate()
       .executeTakeFirst();
     if (!current) throw errors.notFound('exception', id);
     await this.authorization.require(principal, ExceptionActions.manage, {
@@ -144,7 +148,7 @@ export class OperationalExceptions {
       throw errors.invalidTransition('OperationalException', current.status, to);
     }
     const now = this.clock.now();
-    await trx
+    const updated = await trx
       .updateTable('operational_exceptions')
       .set({
         status: to,
@@ -154,9 +158,13 @@ export class OperationalExceptions {
         closed_at: to === 'closed' ? now : undefined,
         resolution: options.resolution ? json(options.resolution) : undefined,
       })
+      .where('organization_id', '=', current.organization_id)
       .where('id', '=', id)
       .where('revision', '=', current.revision)
-      .execute();
+      .executeTakeFirst();
+    ensureUpdated(updated.numUpdatedRows, () =>
+      errors.staleRevision(options.expectedRevision ?? current.revision, current.revision + 1),
+    );
     await this.audit.record(trx, {
       organizationId: current.organization_id,
       actor: principal,
