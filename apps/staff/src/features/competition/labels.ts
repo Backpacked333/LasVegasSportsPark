@@ -49,6 +49,17 @@ export const SEASON_TRANSITIONS: Record<
   archived: [],
 };
 
+/**
+ * Lifecycle moves that cannot be undone (`archived` is terminal; a completed season cannot reopen):
+ * the screen asks for confirmation and a reason for the audit record before sending them.
+ */
+export const IRREVERSIBLE_MOVES: Readonly<Record<string, string>> = {
+  archived:
+    'Archiving cannot be undone. Fixtures, entries and results become read-only and stay in the history.',
+  completed:
+    'Completing the season cannot be undone. Results and standings stay; no new fixtures can be played.',
+};
+
 /** CompetitionMachine transitions (§4.6). */
 export const COMPETITION_TRANSITIONS: Record<
   Schema<'CompetitionStatus'>,

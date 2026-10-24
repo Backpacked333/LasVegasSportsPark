@@ -145,8 +145,11 @@ export function SolverRunView({
               </li>
             ))}
           </ul>
-        ) : (
+        ) : run.proposal !== null &&
+          (run.outcome === 'feasible' || run.outcome === 'proven_optimal') ? (
           <p>No hard constraint is violated by this proposal.</p>
+        ) : (
+          <p>No proposal to check against the constraints.</p>
         )}
         {explanation.preferenceScores.length > 0 ? (
           <div className="table-scroll">

@@ -18,7 +18,14 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { useApp } from '../../providers/AppProviders';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError } from '../../features/competition/CommandError';
-import { keys, PendingNote, SuccessNote, useRefetch } from '../../features/competition/feedback';
+import {
+  keys,
+  PageButtons,
+  PendingNote,
+  SuccessNote,
+  useCursorStack,
+  useRefetch,
+} from '../../features/competition/feedback';
 import {
   NumberField,
   SelectField,
@@ -243,9 +250,17 @@ function GroupCard({ group }: { group: PoolGroup }) {
 function OfferingGroups({ offeringId }: { offeringId: string }) {
   const offering = useApiQuery({ path: '/offerings/{id}', request: { path: { id: offeringId } } });
   const pools = useApiQuery({ path: '/capacity-pools', request: { query: { offeringId } } });
+  const pages = useCursorStack();
   const enrollments = useApiQuery({
     path: '/enrollments',
-    request: { query: { offeringId, status: 'confirmed', limit: 100 } },
+    request: {
+      query: {
+        offeringId,
+        status: 'confirmed',
+        limit: 100,
+        ...(pages.cursor ? { cursor: pages.cursor } : {}),
+      },
+    },
   });
   const units = offering.data?.staff?.capacityUnits ?? [];
   return (
@@ -305,27 +320,36 @@ function OfferingGroups({ offeringId }: { offeringId: string }) {
         <QueryBoundary
           query={enrollments}
           label="enrollments"
-          isEmpty={(data) => data.items.length === 0}
+          isEmpty={(data) => data.items.length === 0 && pages.depth === 0}
           empty={{
             title: 'No unplaced children',
             description: 'Children with a confirmed enrollment in this offering appear here.',
           }}
         >
           {(data) => (
-            <ul className="list" aria-label="Enrolled children">
-              {data.items.map((enrollment) => (
-                <li key={enrollment.id}>
-                  <div className="row-text">
-                    <span className="row-title">
-                      <PersonName personId={enrollment.participantPersonId} />
-                    </span>
-                    <span className="caption">
-                      Enrollment {enrollment.status} · Group: not recorded
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="list" aria-label="Enrolled children">
+                {data.items.map((enrollment) => (
+                  <li key={enrollment.id}>
+                    <div className="row-text">
+                      <span className="row-title">
+                        <PersonName personId={enrollment.participantPersonId} />
+                      </span>
+                      <span className="caption">
+                        Enrollment {enrollment.status} · Group: not recorded
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <PageButtons
+                what="enrolled children"
+                depth={pages.depth}
+                nextCursor={data.nextCursor}
+                onNext={pages.next}
+                onPrevious={pages.previous}
+              />
+            </>
           )}
         </QueryBoundary>
       </section>
@@ -382,7 +406,9 @@ export function YouthGroupsScreen() {
               ? `Offerings could not be loaded (${offerings.error.code}).`
               : offerings.data && offerings.data.items.length === 0
                 ? 'No offering matches.'
-                : undefined
+                : offerings.data?.nextCursor
+                  ? 'More offerings exist than are listed; choose an offering kind to narrow the list.'
+                  : undefined
           }
         />
       </div>

@@ -136,6 +136,23 @@ describe('SCR-S-13 brackets (SPK-COMP-001 bracket progression, SPK-AT-014)', () 
     expect(screen.getByText(/depends on DEC-078/)).toBeInTheDocument();
   });
 
+  it('SCR-S-13: an acknowledged correction review keeps the node under review and offers no Publish', async () => {
+    const node = bracketNode({ published: false, revision: 4 });
+    const app = createTestApp({
+      routes: {
+        ...base,
+        'GET /seasons/{id}/bracket-nodes': ok([node]),
+        'GET /exceptions': ok(page([reviewTask({ status: 'acknowledged' })])),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/standings`));
+    const round1 = await screen.findByRole('list', { name: 'Round 1' });
+    expect(await within(round1).findByText('Under review')).toBeInTheDocument();
+    expect(within(round1).queryByRole('button', { name: /Publish bracket node/ })).toBeNull();
+    const request = app.fake.requests.find((r) => r.route === '/exceptions');
+    expect(request?.query['status']).toBeUndefined();
+  });
+
   it('publishes a bracket node with the expected revision', async () => {
     const user = userEvent.setup();
     const node = bracketNode({ published: false, revision: 4 });
@@ -167,5 +184,6 @@ describe('SCR-S-13 brackets (SPK-COMP-001 bracket progression, SPK-AT-014)', () 
     expect(
       await screen.findByText(/whether a node is under review is unknown/),
     ).toBeInTheDocument();
+    expect(screen.getByText('Review status unknown')).toBeInTheDocument();
   });
 });

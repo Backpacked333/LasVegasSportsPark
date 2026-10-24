@@ -185,6 +185,7 @@ describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
     expect(within(reasons).getByText(/Resolved by: League manager/)).toBeInTheDocument();
     expect(within(form).getByText(/Error code: ELIGIBILITY_FAILED/)).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+      expectedRevision: workspace.entry.revision,
       changes: [{ action: 'add', personId: ID.child, status: 'substitute' }],
     });
     // The input is kept for the user to correct.
@@ -232,6 +233,11 @@ describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
     await user.type(within(form).getByLabelText(/^Reason/), 'Moved away.');
     await user.click(within(form).getByRole('button', { name: 'Remove from the roster' }));
     expect(await within(form).findByText('This record changed')).toBeInTheDocument();
+    // SCR-S-17: the change carries the team entry revision, so a concurrent edit is refused.
+    expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toMatchObject({
+      expectedRevision: workspace.entry.revision,
+      changes: [{ action: 'remove', personId: expect.any(String), reason: 'Moved away.' }],
+    });
     await user.click(within(form).getByRole('button', { name: 'Reload' }));
     await waitFor(() =>
       expect(

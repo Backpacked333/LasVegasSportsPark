@@ -250,6 +250,19 @@ function ProposeSuspensionForm() {
           },
         },
       })
+      .then(() => {
+        // The intent is complete: clear the form so a second click cannot propose a duplicate
+        // suspension under a new key (§4.9).
+        setSubject('');
+        setBasis('');
+        setScope('');
+        setCompetitionIds([]);
+        setFrom('');
+        setTo('');
+        setMatchCount('');
+        setCriteria('');
+        setErrors({});
+      })
       .catch(() => undefined);
   };
 

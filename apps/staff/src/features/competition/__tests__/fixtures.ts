@@ -543,6 +543,8 @@ export function person(id: string, givenName: string, familyName: string) {
     givenName,
     familyName,
     dateOfBirth: '2016-05-04',
+    // PersonDetail carries contact points; staff name reads keep only the name (§4.14).
+    contactPoints: [{ id: `${id.slice(0, 30)}ff`, kind: 'email', value: 'guardian@example.test' }],
     status: 'active',
     mergedIntoPersonId: null,
     revision: 1,

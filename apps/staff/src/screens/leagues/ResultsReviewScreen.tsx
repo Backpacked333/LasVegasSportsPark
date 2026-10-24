@@ -12,7 +12,7 @@
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
@@ -25,12 +25,18 @@ import {
   parseWholeNumber,
 } from '../../features/competition/fields';
 import { formatInstant, shortRef } from '../../features/competition/format';
-import { RESULT_CLASSIFICATION, RESULT_STATUS } from '../../features/competition/labels';
+import {
+  RESULT_CLASSIFICATION,
+  RESULT_STATUS,
+  humanizeCode,
+} from '../../features/competition/labels';
+import { PersonName } from '../../features/competition/names';
 import { LeaguesNav } from '../../features/competition/nav';
 import { OperationStatus } from '../../features/competition/OperationStatus';
 import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { isUuid } from '../../ui/RecordRef';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { fixtureTitle } from './FixtureScreen';
 
@@ -264,20 +270,56 @@ function ReturnAction({ revision }: { revision: Revision }) {
   );
 }
 
-function CorrectionForm({ fixture, hasOfficial }: { fixture: Fixture; hasOfficial: boolean }) {
+type ResultFormMode = 'new' | 'correction' | 'resubmit';
+
+/**
+ * Enter a result, a correction of the official one, or resubmit a revision returned for
+ * correction (SPK-RESULT-001, SPK-RESULT-004). A correction or resubmission starts from the
+ * revision it replaces: classification, scores, forfeit, abandonment and notes are prefilled, and
+ * its cards are carried over unchanged unless the user removes one, so a score-only correction
+ * never drops the card record (fair-play points read the cards). A correction answering a dispute
+ * names it (SPK-RESULT-005).
+ */
+function ResultForm({
+  fixture,
+  mode,
+  base,
+  disputeId,
+  onDone,
+}: {
+  fixture: Fixture;
+  mode: ResultFormMode;
+  base: Revision | null;
+  disputeId: string | null;
+  onDone?: () => void;
+}) {
   const submitResult = useApiCommand('post', '/fixtures/{id}/results', { invalidate: RESULT_KEYS });
-  const [classification, setClassification] = useState('');
-  const [home, setHome] = useState('');
-  const [away, setAway] = useState('');
-  const [forfeiting, setForfeiting] = useState('');
-  const [minutePlayed, setMinutePlayed] = useState('');
-  const [abandonReason, setAbandonReason] = useState('');
-  const [notes, setNotes] = useState('');
-  const [reason, setReason] = useState('');
+  const resubmit = useApiCommand('post', '/results/{id}/submit', { invalidate: RESULT_KEYS });
+  const command = mode === 'resubmit' ? resubmit : submitResult;
+  const [classification, setClassification] = useState<string>(base?.classification ?? '');
+  const [home, setHome] = useState(base?.homeScore !== null && base ? String(base.homeScore) : '');
+  const [away, setAway] = useState(base?.awayScore !== null && base ? String(base.awayScore) : '');
+  const [forfeiting, setForfeiting] = useState(base?.forfeitingEntryId ?? '');
+  const [minutePlayed, setMinutePlayed] = useState(
+    base?.details.abandonment ? String(base.details.abandonment.minutePlayed) : '',
+  );
+  const [abandonReason, setAbandonReason] = useState(base?.details.abandonment?.reason ?? '');
+  const [notes, setNotes] = useState(base?.details.notes ?? '');
+  const [cards, setCards] = useState(
+    (base?.details.cards ?? []).map(({ personId, teamEntryId, kind, minute }) => ({
+      personId,
+      teamEntryId,
+      kind,
+      minute,
+    })),
+  );
+  const [reason, setReason] = useState(mode === 'resubmit' ? (base?.reason ?? '') : '');
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const apiErrors = fieldErrorsOf(submitResult.error);
+  const apiErrors = fieldErrorsOf(command.error);
   const err = (key: string) => errors[key] ?? apiErrors[key];
   const needsScores = classification === 'completed' || classification === 'forfeit';
+  const needsReason = mode === 'correction';
+  const answersDispute = mode === 'correction' && disputeId !== null;
 
   const submit = () => {
     const next: Record<string, string> = {};
@@ -289,43 +331,68 @@ function CorrectionForm({ fixture, hasOfficial }: { fixture: Fixture; hasOfficia
     if (classification === 'forfeit' && !forfeiting)
       next.forfeitingEntryId = 'Choose who forfeited.';
     const minute = parseWholeNumber(minutePlayed);
-    if (classification === 'abandoned' && (minute === null || !abandonReason.trim()))
-      next.abandonment = 'Enter the minute reached and why the match was abandoned.';
-    if (hasOfficial && !reason.trim()) next.reason = 'A correction needs a reason.';
+    if (
+      classification === 'abandoned' &&
+      (minute === null || minute < 0 || minute > 200 || !abandonReason.trim())
+    )
+      next.abandonment = 'Enter the minute reached (0 to 200) and why the match was abandoned.';
+    if (needsReason && !reason.trim()) next.reason = 'A correction needs a reason.';
     setErrors(next);
     if (Object.keys(next).length > 0) return;
-    void submitResult
-      .submit({
-        path: { id: fixture.id },
-        body: {
-          classification: classification as Classification,
-          ...(needsScores && homeScore !== null ? { homeScore } : {}),
-          ...(needsScores && awayScore !== null ? { awayScore } : {}),
-          ...(classification === 'forfeit' ? { forfeitingEntryId: forfeiting } : {}),
-          ...(classification === 'abandoned' && minute !== null
-            ? { abandonment: { minutePlayed: minute, reason: abandonReason.trim() } }
-            : {}),
-          ...(notes.trim() ? { notes: notes.trim() } : {}),
-          ...(reason.trim() ? { reason: reason.trim() } : {}),
-        },
-      })
-      .catch(() => undefined);
+    const body = {
+      classification: classification as Classification,
+      ...(needsScores && homeScore !== null ? { homeScore } : {}),
+      ...(needsScores && awayScore !== null ? { awayScore } : {}),
+      ...(classification === 'forfeit' ? { forfeitingEntryId: forfeiting } : {}),
+      ...(classification === 'abandoned' && minute !== null
+        ? { abandonment: { minutePlayed: minute, reason: abandonReason.trim() } }
+        : {}),
+      ...(cards.length > 0 || (base?.details.cards.length ?? 0) > 0 ? { cards } : {}),
+      ...(notes.trim() ? { notes: notes.trim() } : {}),
+      ...(reason.trim() ? { reason: reason.trim() } : {}),
+      ...(answersDispute && disputeId ? { disputeId } : {}),
+    };
+    const sent =
+      mode === 'resubmit' && base
+        ? resubmit.submit({
+            path: { id: base.id },
+            body: { ...body, expectedRevision: base.revision },
+          })
+        : submitResult.submit({ path: { id: fixture.id }, body });
+    void sent.then(() => onDone?.()).catch(() => undefined);
   };
 
   const sides = [
     { value: fixture.home.entryId, label: fixture.home.teamName },
     ...(fixture.away ? [{ value: fixture.away.entryId, label: fixture.away.teamName }] : []),
   ];
+  const teamOf = (entryId: string) =>
+    entryId === fixture.home.entryId
+      ? fixture.home.teamName
+      : entryId === fixture.away?.entryId
+        ? fixture.away.teamName
+        : 'another team';
+  const label =
+    mode === 'resubmit'
+      ? 'Resubmit the returned result'
+      : mode === 'correction'
+        ? 'Submit a correction'
+        : 'Submit a result';
   return (
     <form
       className="form"
       noValidate
-      aria-label={hasOfficial ? 'Submit a correction' : 'Submit a result'}
+      aria-label={label}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
+      {answersDispute && disputeId ? (
+        <p>
+          <StatusBadge tone="info" label={`Answers dispute ${shortRef(disputeId)}`} />
+        </p>
+      ) : null}
       <SelectField
         label="Classification"
         required
@@ -380,8 +447,36 @@ function CorrectionForm({ fixture, hasOfficial }: { fixture: Fixture; hasOfficia
           />
         </fieldset>
       ) : null}
+      {base && base.details.cards.length > 0 ? (
+        <fieldset>
+          <legend>Cards carried over from revision {base.revisionNo}</legend>
+          {cards.length === 0 ? (
+            <p className="caption">
+              All cards removed: this revision will record no cards (fair-play points change).
+            </p>
+          ) : (
+            <ul className="list" aria-label="Cards in this revision">
+              {cards.map((card, index) => (
+                <li key={`${card.personId}-${card.kind}-${card.minute ?? 'none'}-${index}`}>
+                  <span>
+                    {humanizeCode(card.kind)} card, <PersonName personId={card.personId} /> (
+                    {teamOf(card.teamEntryId)})
+                    {card.minute !== null ? `, minute ${card.minute}` : ''}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setCards((current) => current.filter((_, i) => i !== index))}
+                  >
+                    Remove this card
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </fieldset>
+      ) : null}
       <TextAreaField label="Notes" value={notes} onChange={setNotes} />
-      {hasOfficial ? (
+      {needsReason ? (
         <TextAreaField
           label="Reason for the correction"
           required
@@ -392,14 +487,18 @@ function CorrectionForm({ fixture, hasOfficial }: { fixture: Fixture; hasOfficia
         />
       ) : null}
       <div className="actions">
-        <CommandButton type="submit" busy={submitResult.isProcessing}>
-          {hasOfficial ? 'Submit the correction for review' : 'Submit the result for review'}
+        <CommandButton type="submit" busy={command.isProcessing}>
+          {mode === 'resubmit'
+            ? 'Resubmit for review'
+            : mode === 'correction'
+              ? 'Submit the correction for review'
+              : 'Submit the result for review'}
         </CommandButton>
       </div>
-      {submitResult.status === 'success' && submitResult.data ? (
-        <SuccessNote>{`Revision ${submitResult.data.revisionNo} ${submitResult.data.status}`}</SuccessNote>
+      {command.status === 'success' && command.data ? (
+        <SuccessNote>{`Revision ${command.data.revisionNo} ${command.data.status}`}</SuccessNote>
       ) : null}
-      <CommandError error={submitResult.error} onRetry={submit} />
+      <CommandError error={command.error} onRetry={submit} />
     </form>
   );
 }
@@ -416,6 +515,7 @@ function RevisionCard({
   reviewTaskId: string | null;
 }) {
   const badge = RESULT_STATUS[revision.status];
+  const [resubmitting, setResubmitting] = useState(false);
   return (
     <li aria-labelledby={`revision-${revision.id}`}>
       <div className="row-text">
@@ -458,6 +558,28 @@ function RevisionCard({
           <span className="caption">Notes: {revision.details.notes}</span>
         ) : null}
       </div>
+      {revision.status === 'draft' ? (
+        <div className="panel" data-testid={`returned-${revision.id}`}>
+          <StatusBadge tone="warning" label="Returned for correction" />
+          {revision.returnReason ? <p>What needs correcting: {revision.returnReason}</p> : null}
+          <Button
+            variant="secondary"
+            aria-expanded={resubmitting}
+            onClick={() => setResubmitting((o) => !o)}
+          >
+            {resubmitting ? 'Close' : 'Correct and resubmit'}
+          </Button>
+          {resubmitting ? (
+            <ResultForm
+              fixture={fixture}
+              mode="resubmit"
+              base={revision}
+              disputeId={null}
+              onDone={() => setResubmitting(false)}
+            />
+          ) : null}
+        </div>
+      ) : null}
       {revision.status === 'submitted' ? (
         <div className="actions">
           <PublishAction
@@ -485,6 +607,9 @@ function reviewTaskFor(
 
 export function ResultsReviewScreen() {
   const { fixtureId = '' } = useParams();
+  const [search] = useSearchParams();
+  const disputeParam = search.get('disputeId');
+  const disputeId = disputeParam && isUuid(disputeParam) ? disputeParam : null;
   const fixture = useApiQuery({ path: '/fixtures/{id}', request: { path: { id: fixtureId } } });
   const results = useApiQuery({
     path: '/fixtures/{id}/results',
@@ -519,10 +644,12 @@ export function ResultsReviewScreen() {
             );
           }
           const ordered = [...revisions].sort((a, b) => b.revisionNo - a.revisionNo);
-          const hasOfficial = revisions.some((r) => r.status === 'official');
+          const official = revisions.find((r) => r.status === 'official') ?? null;
+          const hasOfficial = official !== null;
           const inProgress = revisions.some(
             (r) => r.status === 'submitted' || r.status === 'draft',
           );
+          const returned = revisions.some((r) => r.status === 'draft');
           return (
             <>
               {ordered.length === 0 ? (
@@ -565,12 +692,19 @@ export function ResultsReviewScreen() {
                     {entering ? 'Close' : hasOfficial ? 'Start a correction' : 'Enter the result'}
                   </Button>
                   {entering ? (
-                    <CorrectionForm fixture={fixtureData} hasOfficial={hasOfficial} />
+                    <ResultForm
+                      fixture={fixtureData}
+                      mode={hasOfficial ? 'correction' : 'new'}
+                      base={official}
+                      disputeId={disputeId}
+                    />
                   ) : null}
                 </section>
               ) : (
                 <p className="caption">
-                  A revision is already in progress; publish or return it before another one.
+                  {returned
+                    ? 'A returned revision is waiting to be corrected and resubmitted before another one.'
+                    : 'A submitted revision is waiting; publish or return it before another one.'}
                 </p>
               )}
             </>

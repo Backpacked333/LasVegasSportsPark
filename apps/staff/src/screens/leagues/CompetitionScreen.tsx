@@ -13,13 +13,14 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError, fieldErrorsOf } from '../../features/competition/CommandError';
-import { keys, SuccessNote, useRefetch } from '../../features/competition/feedback';
+import { ConfirmMove, keys, SuccessNote, useRefetch } from '../../features/competition/feedback';
 import { SelectField, TextField } from '../../features/competition/fields';
 import { formatDateOnly, localInputToIso } from '../../features/competition/format';
 import {
   COMPETITION_KIND,
   COMPETITION_STATUS,
   COMPETITION_TRANSITIONS,
+  IRREVERSIBLE_MOVES,
   SEASON_STATUS,
   SPORT_FORMAT,
 } from '../../features/competition/labels';
@@ -37,16 +38,27 @@ function CompetitionLifecycle({ competition }: { competition: Competition }) {
   });
   const reload = useRefetch(['/competitions/{id}']);
   const [pending, setPending] = useState<Competition['status'] | null>(null);
-  const move = (to: Competition['status']) => {
+  const [confirming, setConfirming] = useState<Competition['status'] | null>(null);
+  const [reason, setReason] = useState('');
+  const move = (to: Competition['status'], why?: string) => {
     setPending(to);
     void update
       .submit({
         path: { id: competition.id },
-        body: { expectedRevision: competition.revision, status: to },
+        body: {
+          expectedRevision: competition.revision,
+          status: to,
+          ...(why ? { reason: why } : {}),
+        },
+      })
+      .then(() => {
+        setConfirming(null);
+        setReason('');
       })
       .catch(() => undefined);
   };
   const transitions = COMPETITION_TRANSITIONS[competition.status];
+  const confirmLabel = transitions.find((t) => t.to === confirming)?.label;
   return (
     <div className="actions">
       {transitions.map((t) => (
@@ -54,11 +66,22 @@ function CompetitionLifecycle({ competition }: { competition: Competition }) {
           key={t.to}
           variant="secondary"
           busy={update.isProcessing && pending === t.to}
-          onClick={() => move(t.to)}
+          onClick={() => (IRREVERSIBLE_MOVES[t.to] ? setConfirming(t.to) : move(t.to))}
         >
           {t.label}
         </CommandButton>
       ))}
+      {confirming && confirmLabel ? (
+        <ConfirmMove
+          label={confirmLabel}
+          consequence={IRREVERSIBLE_MOVES[confirming] ?? ''}
+          reason={reason}
+          onReason={setReason}
+          busy={update.isProcessing}
+          onConfirm={() => move(confirming, reason.trim() || undefined)}
+          onCancel={() => setConfirming(null)}
+        />
+      ) : null}
       {update.status === 'success' && update.data ? (
         <SuccessNote>{`Competition ${update.data.status}`}</SuccessNote>
       ) : null}

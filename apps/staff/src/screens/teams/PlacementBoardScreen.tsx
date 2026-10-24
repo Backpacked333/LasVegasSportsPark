@@ -16,7 +16,14 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError, ReasonList } from '../../features/competition/CommandError';
-import { keys, PendingNote, SuccessNote, useRefetch } from '../../features/competition/feedback';
+import {
+  keys,
+  PageButtons,
+  PendingNote,
+  SuccessNote,
+  useCursorStack,
+  useRefetch,
+} from '../../features/competition/feedback';
 import { SelectField, TextAreaField } from '../../features/competition/fields';
 import { formatInstant } from '../../features/competition/format';
 import { PLACEMENT_STATUS, weekdayName } from '../../features/competition/labels';
@@ -324,9 +331,18 @@ export function PlacementBoardScreen() {
   const { seasonId = '' } = useParams();
   const [status, setStatus] = useState<PlacementStatus | ''>('unassigned');
   const { byId } = useSeasonEntries(seasonId);
+  // Every entrant is reachable: pages follow the API cursor (SPK-PLACE-001, §4.5).
+  const pages = useCursorStack();
   const requests = useApiQuery({
     path: '/placement-requests',
-    request: { query: { seasonId, limit: 50, ...(status ? { status } : {}) } },
+    request: {
+      query: {
+        seasonId,
+        limit: 50,
+        ...(status ? { status } : {}),
+        ...(pages.cursor ? { cursor: pages.cursor } : {}),
+      },
+    },
   });
   return (
     <section aria-labelledby="placement-title">
@@ -337,14 +353,17 @@ export function PlacementBoardScreen() {
       <SelectField
         label="Placement state"
         value={status}
-        onChange={(v) => setStatus(v as PlacementStatus | '')}
+        onChange={(v) => {
+          setStatus(v as PlacementStatus | '');
+          pages.reset();
+        }}
         options={Object.entries(PLACEMENT_STATUS).map(([value, b]) => ({ value, label: b.label }))}
         placeholder="All states"
       />
       <QueryBoundary
         query={requests}
         label="placement requests"
-        isEmpty={(data) => data.items.length === 0}
+        isEmpty={(data) => data.items.length === 0 && pages.depth === 0}
         empty={{
           title: status === 'unassigned' ? 'No unplaced entrants' : 'No placement requests',
           description:
@@ -359,9 +378,13 @@ export function PlacementBoardScreen() {
                 <RequestCard key={request.id} request={request} entries={byId} />
               ))}
             </ul>
-            {data.nextCursor ? (
-              <p className="caption">More requests exist; narrow the list by state.</p>
-            ) : null}
+            <PageButtons
+              what="placement requests"
+              depth={pages.depth}
+              nextCursor={data.nextCursor}
+              onNext={pages.next}
+              onPrevious={pages.previous}
+            />
           </>
         )}
       </QueryBoundary>

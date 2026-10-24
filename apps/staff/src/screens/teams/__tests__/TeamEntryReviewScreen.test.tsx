@@ -143,6 +143,36 @@ describe('SCR-S-16 TeamEntryReviewScreen (SPK-COMP-004)', () => {
     expect(screen.getByText(/Error code: CAPACITY_UNAVAILABLE/)).toBeInTheDocument();
   });
 
+  it('Try again repeats the command that timed out, even after another form is opened', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'POST /team-entries/{id}/approve': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('network down');
+          return new Response(JSON.stringify(teamEntry({ status: 'approved' })), { status: 200 });
+        },
+      },
+    });
+    render(app.at(`/teams/seasons/${ID.season}/entries`));
+    await user.click(await screen.findByRole('button', { name: 'Approve' }));
+    const form = screen.getByRole('form', { name: 'Approve the entry' });
+    await user.click(within(form).getByRole('button', { name: 'Approve the entry' }));
+    expect(await screen.findByText('Outcome not known yet')).toBeInTheDocument();
+    // Opening the decline form does not turn "Try again" into a decline.
+    await user.click(screen.getByRole('button', { name: 'Decline' }));
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Entry approved')).toBeInTheDocument();
+    const posts = app.fake.requests.filter((r) => r.method === 'POST');
+    expect(posts.map((r) => r.route)).toEqual([
+      '/team-entries/{id}/approve',
+      '/team-entries/{id}/approve',
+    ]);
+    expect(posts[1]?.headers['idempotency-key']).toBe(posts[0]?.headers['idempotency-key']);
+  });
+
   it('shows the list as not available to an account without the permission', async () => {
     const app = createTestApp({
       routes: {

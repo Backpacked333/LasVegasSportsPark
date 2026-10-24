@@ -79,7 +79,9 @@ function DisputeActions({ dispute }: { dispute: Dispute }) {
 
   if (dispute.status === 'decided' || dispute.status === 'withdrawn') {
     return dispute.publicationConsequence === 'correction_required' ? (
-      <Link to={`/leagues/fixtures/${dispute.fixtureId}/results`}>Submit the correction</Link>
+      <Link to={`/leagues/fixtures/${dispute.fixtureId}/results?disputeId=${dispute.id}`}>
+        Submit the correction
+      </Link>
     ) : null;
   }
   return (

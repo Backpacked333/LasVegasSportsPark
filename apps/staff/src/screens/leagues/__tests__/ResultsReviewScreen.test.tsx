@@ -15,6 +15,7 @@ import {
   ok,
   operation,
   page,
+  person,
   resultRevision,
   reviewTask,
   standings,
@@ -253,24 +254,45 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
     });
   });
 
-  it('asks for a classification before submitting a correction (validation failure)', async () => {
+  it('asks for a classification before submitting the first result (validation failure)', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
+      routes: { ...routes([]), 'POST /fixtures/{id}/results': created(resultRevision()) },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    await user.click(await screen.findByRole('button', { name: 'Enter the result' }));
+    const form = screen.getByRole('form', { name: 'Submit a result' });
+    await user.click(within(form).getByRole('button', { name: 'Submit the result for review' }));
+    expect(within(form).getByText('Choose how the match ended.')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  it('SPK-RESULT-004: a correction starts from the official result and carries its cards unchanged', async () => {
+    const user = userEvent.setup();
+    const card = { personId: ID.person, teamEntryId: ID.entryRed, kind: 'yellow', minute: 34 };
+    const withCards = { ...official, details: { ...official.details, cards: [card] } };
+    const app = createTestApp({
       routes: {
-        ...routes([official]),
+        ...routes([withCards]),
+        'GET /people/{id}': ok(person(ID.person, 'Robin', 'Reyes')),
         'POST /fixtures/{id}/results': created(correction),
       },
     });
     render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
     await user.click(await screen.findByRole('button', { name: 'Start a correction' }));
     const form = screen.getByRole('form', { name: 'Submit a correction' });
+    // Prefilled from the official revision.
+    expect(within(form).getByLabelText(/^Classification/)).toHaveValue('completed');
+    expect(within(form).getByLabelText(/^Red score/)).toHaveValue('3');
+    const carried = within(form).getByRole('list', { name: 'Cards in this revision' });
+    expect(await within(carried).findByText(/Robin Reyes/)).toBeInTheDocument();
     await user.click(
       within(form).getByRole('button', { name: 'Submit the correction for review' }),
     );
-    expect(within(form).getByText('Choose how the match ended.')).toBeInTheDocument();
     expect(within(form).getByText('A correction needs a reason.')).toBeInTheDocument();
-    await user.selectOptions(within(form).getByLabelText(/^Classification/), 'completed');
+    await user.clear(within(form).getByLabelText(/^Red score/));
     await user.type(within(form).getByLabelText(/^Red score/), '2');
+    await user.clear(within(form).getByLabelText(/^Blue score/));
     await user.type(within(form).getByLabelText(/^Blue score/), '2');
     await user.type(
       within(form).getByLabelText(/^Reason for the correction/),
@@ -284,7 +306,70 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
       classification: 'completed',
       homeScore: 2,
       awayScore: 2,
+      cards: [card],
       reason: 'Score sheet showed 2-2.',
+    });
+  });
+
+  it('SPK-RESULT-005: a correction opened from a decided dispute names the dispute it answers', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { ...routes([official]), 'POST /fixtures/{id}/results': created(correction) },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results?disputeId=${ID.dispute}`));
+    await user.click(await screen.findByRole('button', { name: 'Start a correction' }));
+    const form = screen.getByRole('form', { name: 'Submit a correction' });
+    expect(within(form).getByText(/^Answers dispute/)).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(/^Reason for the correction/), 'Dispute upheld.');
+    await user.click(
+      within(form).getByRole('button', { name: 'Submit the correction for review' }),
+    );
+    await within(form).findByText('Revision 2 submitted');
+    expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toMatchObject({
+      disputeId: ID.dispute,
+    });
+  });
+
+  it('SPK-RESULT-001: a revision returned for correction is resubmitted with POST /results/{id}/submit', async () => {
+    const user = userEvent.setup();
+    const returned = resultRevision({
+      id: ID.result1,
+      status: 'draft',
+      returnReason: 'Home score is wrong',
+      revision: 3,
+    });
+    const app = createTestApp({
+      routes: {
+        ...routes([returned]),
+        'POST /results/{id}/submit': ok({ ...returned, status: 'submitted', revision: 4 }),
+      },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    const card = await screen.findByTestId(`returned-${ID.result1}`);
+    expect(within(card).getByText('Returned for correction')).toBeInTheDocument();
+    expect(
+      within(card).getByText('What needs correcting: Home score is wrong'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'A returned revision is waiting to be corrected and resubmitted before another one.',
+      ),
+    ).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: 'Correct and resubmit' }));
+    const form = within(card).getByRole('form', { name: 'Resubmit the returned result' });
+    await user.clear(within(form).getByLabelText(/^Red score/));
+    await user.type(within(form).getByLabelText(/^Red score/), '4');
+    await user.click(within(form).getByRole('button', { name: 'Resubmit for review' }));
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/results/{id}/submit')).toBe(true),
+    );
+    const post = app.fake.requests.find((r) => r.route === '/results/{id}/submit');
+    expect(post?.params).toEqual({ id: ID.result1 });
+    expect(post?.body).toEqual({
+      classification: 'completed',
+      homeScore: 4,
+      awayScore: 1,
+      expectedRevision: 3,
     });
   });
 

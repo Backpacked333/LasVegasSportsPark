@@ -104,9 +104,21 @@ function ExplainEligibility({ entryId, member }: { entryId: string; member: Memb
   );
 }
 
-function RemoveMember({ entryId, member }: { entryId: string; member: Member }) {
+/**
+ * Roster changes carry the team entry's revision (SCR-S-17): two staff editing the same roster at
+ * once get STALE_REVISION and "Reload" instead of a silent lost update.
+ */
+function RemoveMember({
+  entryId,
+  entryRevision,
+  member,
+}: {
+  entryId: string;
+  entryRevision: number;
+  member: Member;
+}) {
   const change = useApiCommand('post', '/team-entries/{id}/roster', { invalidate: ROSTER_KEYS });
-  const reload = useRefetch(['/team-entries/{id}/roster']);
+  const reload = useRefetch(['/team-entries/{id}/roster', '/team-entries/{id}']);
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [effectiveTo, setEffectiveTo] = useState('');
@@ -122,6 +134,7 @@ function RemoveMember({ entryId, member }: { entryId: string; member: Member }) 
       .submit({
         path: { id: entryId },
         body: {
+          expectedRevision: entryRevision,
           changes: [
             {
               action: 'remove',
@@ -188,7 +201,7 @@ function RemoveMember({ entryId, member }: { entryId: string; member: Member }) 
 
 function AddMember({ workspace }: { workspace: Workspace }) {
   const change = useApiCommand('post', '/team-entries/{id}/roster', { invalidate: ROSTER_KEYS });
-  const reload = useRefetch(['/team-entries/{id}/roster']);
+  const reload = useRefetch(['/team-entries/{id}/roster', '/team-entries/{id}']);
   const [person, setPerson] = useState('');
   const [status, setStatus] = useState('');
   const [from, setFrom] = useState('');
@@ -208,6 +221,7 @@ function AddMember({ workspace }: { workspace: Workspace }) {
       .submit({
         path: { id: workspace.entry.id },
         body: {
+          expectedRevision: workspace.entry.revision,
           changes: [
             {
               action: 'add',
@@ -409,7 +423,13 @@ export function RosterScreen() {
                       {member.status === 'active' ||
                       member.status === 'guest' ||
                       member.status === 'substitute' ? (
-                        <RemoveMember entryId={entryId} member={member} />
+                        workspace.data ? (
+                          <RemoveMember
+                            entryId={entryId}
+                            entryRevision={workspace.data.entry.revision}
+                            member={member}
+                          />
+                        ) : null
                       ) : null}
                     </div>
                   </li>

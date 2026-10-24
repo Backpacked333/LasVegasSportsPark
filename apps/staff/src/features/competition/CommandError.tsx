@@ -134,14 +134,13 @@ export function CommandError({ error, onRetry, onReload }: CommandErrorProps) {
   if (error.isOffline) {
     return (
       <section className="state" aria-live="polite" data-testid="state-outcome-unknown">
-        <StatusBadge
-          tone="warning"
-          label={error.kind === 'timeout' ? 'Outcome not known yet' : 'Not sent: no connection'}
-        />
+        {/* Commands are not sent while offline (CommandButton), so a network failure here
+            happened in flight: the outcome is unknown, never "not sent" (§4.9). */}
+        <StatusBadge tone="warning" label="Outcome not known yet" />
         <p>
           {error.kind === 'timeout'
             ? 'No answer arrived in time, so the change may or may not have been made. Trying again is safe: it cannot be applied twice.'
-            : 'The service could not be reached. Trying again is safe: it cannot be applied twice.'}
+            : 'The connection was lost before an answer arrived; the change may or may not have been made. Trying again is safe: it cannot be applied twice.'}
         </p>
         <p className="caption">Error code: {error.code}</p>
         {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}

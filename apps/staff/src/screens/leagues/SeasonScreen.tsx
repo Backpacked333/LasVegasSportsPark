@@ -13,10 +13,20 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError, fieldErrorsOf } from '../../features/competition/CommandError';
-import { keys, PendingNote, SuccessNote, useRefetch } from '../../features/competition/feedback';
+import {
+  ConfirmMove,
+  keys,
+  PendingNote,
+  SuccessNote,
+  useRefetch,
+} from '../../features/competition/feedback';
 import { NumberField, TextField, parseWholeNumber } from '../../features/competition/fields';
 import { formatDateOnly, formatInstant, shortRef } from '../../features/competition/format';
-import { SEASON_STATUS, SEASON_TRANSITIONS } from '../../features/competition/labels';
+import {
+  IRREVERSIBLE_MOVES,
+  SEASON_STATUS,
+  SEASON_TRANSITIONS,
+} from '../../features/competition/labels';
 import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
 import { RuleSetLabel } from '../../features/competition/names';
 import { PENDING } from '../../features/competition/pending';
@@ -33,24 +43,46 @@ function SeasonLifecycle({ season }: { season: Season }) {
   });
   const reload = useRefetch(['/seasons/{id}']);
   const [pending, setPending] = useState<Season['status'] | null>(null);
-  const move = (to: Season['status']) => {
+  const [confirming, setConfirming] = useState<Season['status'] | null>(null);
+  const [reason, setReason] = useState('');
+  const move = (to: Season['status'], why?: string) => {
     setPending(to);
     void update
-      .submit({ path: { id: season.id }, body: { expectedRevision: season.revision, status: to } })
+      .submit({
+        path: { id: season.id },
+        body: { expectedRevision: season.revision, status: to, ...(why ? { reason: why } : {}) },
+      })
+      .then(() => {
+        setConfirming(null);
+        setReason('');
+      })
       .catch(() => undefined);
   };
+  const transitions = SEASON_TRANSITIONS[season.status];
+  const confirmLabel = transitions.find((t) => t.to === confirming)?.label;
   return (
     <div className="actions">
-      {SEASON_TRANSITIONS[season.status].map((t) => (
+      {transitions.map((t) => (
         <CommandButton
           key={t.to}
           variant="secondary"
           busy={update.isProcessing && pending === t.to}
-          onClick={() => move(t.to)}
+          onClick={() => (IRREVERSIBLE_MOVES[t.to] ? setConfirming(t.to) : move(t.to))}
         >
           {t.label}
         </CommandButton>
       ))}
+      {confirming && confirmLabel ? (
+        <ConfirmMove
+          label={confirmLabel}
+          consequence={IRREVERSIBLE_MOVES[confirming] ?? ''}
+          reason={reason}
+          onReason={setReason}
+          busy={update.isProcessing}
+          onConfirm={() => move(confirming, reason.trim() || undefined)}
+          onCancel={() => setConfirming(null)}
+        />
+      ) : null}
       {update.status === 'success' && update.data ? (
         <SuccessNote>{`Season ${update.data.status}`}</SuccessNote>
       ) : null}

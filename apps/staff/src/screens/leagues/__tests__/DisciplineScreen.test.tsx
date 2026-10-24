@@ -198,6 +198,10 @@ describe('SCR-S-12 DisciplineScreen (SPK-DISC-001 to SPK-DISC-004)', () => {
         completionCriteria: 'Serve two matches.',
       },
     });
+    // After success the form is cleared, so a second click cannot propose a duplicate (§4.9).
+    expect(within(form).getByLabelText(/^Person reference/)).toHaveValue('');
+    await user.click(within(form).getByRole('button', { name: 'Propose the suspension' }));
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(1);
   });
 
   it('renders restricted lists as not available to a viewer without discipline authority', async () => {

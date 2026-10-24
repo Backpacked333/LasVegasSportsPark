@@ -35,13 +35,31 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
   const reject = useApiCommand('post', '/team-entries/{id}/reject', { invalidate: ENTRY_KEYS });
   const withdraw = useApiCommand('post', '/team-entries/{id}/withdraw', { invalidate: ENTRY_KEYS });
   const reload = useRefetch(['/team-entries']);
-  const [mode, setMode] = useState<'approve' | 'reject' | 'withdraw' | null>(null);
+  type Kind = 'approve' | 'reject' | 'withdraw';
+  const [mode, setMode] = useState<Kind | null>(null);
+  // The command last sent: only its error and result are shown, and "Try again" repeats it (same
+  // key), whatever form is open now.
+  const [last, setLast] = useState<Kind | null>(null);
   const [divisionId, setDivisionId] = useState(entry.divisionId ?? '');
   const [note, setNote] = useState('');
-  const [reason, setReason] = useState('');
+  // Decline and withdraw keep separate reasons: a reason typed for one never goes with the other.
+  const [reasons, setReasons] = useState<Record<'reject' | 'withdraw', string>>({
+    reject: '',
+    withdraw: '',
+  });
   const [error, setError] = useState<string | null>(null);
+  const commands = { approve, reject, withdraw };
+  const start = (kind: Kind) => {
+    if (last !== kind) {
+      for (const other of ['approve', 'reject', 'withdraw'] as const) {
+        if (other !== kind) commands[other].reset();
+      }
+    }
+    setLast(kind);
+  };
 
-  const doApprove = () =>
+  const doApprove = () => {
+    start('approve');
     void approve
       .submit({
         path: { id: entry.id },
@@ -52,7 +70,9 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
         },
       })
       .catch(() => undefined);
+  };
   const doReasoned = (kind: 'reject' | 'withdraw') => {
+    const reason = reasons[kind];
     if (!reason.trim()) {
       setError(
         kind === 'reject' ? 'A decline needs a reason the captain will see.' : 'Give a reason.',
@@ -60,6 +80,7 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
       return;
     }
     setError(null);
+    start(kind);
     const options = {
       path: { id: entry.id },
       body: { expectedRevision: entry.revision, reason: reason.trim() },
@@ -73,7 +94,8 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
     withdraw.reset();
     reload();
   };
-  const success = approve.data ?? reject.data ?? withdraw.data;
+  const success = last ? commands[last].data : undefined;
+  const failure = last ? commands[last].error : null;
 
   if (entry.status === 'rejected' || entry.status === 'withdrawn') return null;
   return (
@@ -136,8 +158,13 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
           <TextAreaField
             label="Reason"
             required
-            value={reason}
-            onChange={setReason}
+            value={reasons[mode === 'reject' ? 'reject' : 'withdraw']}
+            onChange={(value) =>
+              setReasons((current) => ({
+                ...current,
+                [mode === 'reject' ? 'reject' : 'withdraw']: value,
+              }))
+            }
             error={error}
           />
           <CommandButton
@@ -151,10 +178,8 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
       ) : null}
       {success ? <SuccessNote>{`Entry ${success.status}`}</SuccessNote> : null}
       <CommandError
-        error={approve.error ?? reject.error ?? withdraw.error}
-        onRetry={() =>
-          mode === 'approve' ? doApprove() : doReasoned(mode === 'reject' ? 'reject' : 'withdraw')
-        }
+        error={failure}
+        onRetry={last ? () => (last === 'approve' ? doApprove() : doReasoned(last)) : undefined}
         onReload={onReload}
       />
     </div>

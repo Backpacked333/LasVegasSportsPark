@@ -54,6 +54,27 @@ describe('SCR-S-08 SeasonScreen (SPK-COMP-003)', () => {
     expect(patch?.headers['idempotency-key']).toMatch(/^key-/);
   });
 
+  it('archiving asks for confirmation, names the consequence and sends the reason (irreversible)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { ...routes, 'PATCH /seasons/{id}': ok(season({ status: 'archived' })) },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}`));
+    await user.click(await screen.findByRole('button', { name: 'Archive' }));
+    const confirm = screen.getByRole('group', { name: 'Confirm: Archive' });
+    expect(within(confirm).getByText(/Archiving cannot be undone/)).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.method === 'PATCH')).toBe(false);
+    await user.type(within(confirm).getByLabelText(/^Reason/), 'Season cancelled by the league.');
+    await user.click(within(confirm).getByRole('button', { name: 'Confirm: Archive' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.method === 'PATCH')?.body).toEqual({
+        expectedRevision: season().revision,
+        status: 'archived',
+        reason: 'Season cancelled by the league.',
+      }),
+    );
+  });
+
   it('reports STALE_REVISION with "Reload", which fetches the current season', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
@@ -89,7 +110,8 @@ describe('SCR-S-08 SeasonScreen (SPK-COMP-003)', () => {
     });
     render(app.at(`/leagues/seasons/${ID.season}`));
     await user.click(await screen.findByRole('button', { name: 'Open the season' }));
-    expect(await screen.findByText('Not sent: no connection')).toBeInTheDocument();
+    expect(await screen.findByText('Outcome not known yet')).toBeInTheDocument();
+    expect(screen.queryByText(/Not sent/)).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(calls).toBe(2));
     const keys = app.fake.requests

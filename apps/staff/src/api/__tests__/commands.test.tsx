@@ -14,7 +14,9 @@ import { useApiCommand } from '../useApiCommand';
 const ID = '0192f1a0-0000-7000-8000-000000000501';
 
 function keysOf(app: ReturnType<typeof createTestApp>, route: string) {
-  return app.fake.requests.filter((r) => r.route === route).map((r) => r.headers['idempotency-key']);
+  return app.fake.requests
+    .filter((r) => r.route === route)
+    .map((r) => r.headers['idempotency-key']);
 }
 
 describe('useApiCommand (§4.9)', () => {

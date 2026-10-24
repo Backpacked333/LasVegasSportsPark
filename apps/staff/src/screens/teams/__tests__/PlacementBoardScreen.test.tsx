@@ -88,11 +88,48 @@ describe('SCR-S-18 PlacementBoardScreen (SPK-PLACE-001 to SPK-PLACE-003)', () =>
     expect(within(list).getByText('Tuesday 18:00 to 21:00')).toBeInTheDocument();
     expect(within(list).getByText('Intermediate')).toBeInTheDocument();
     expect(screen.queryByText(/2016-05-04/)).toBeNull();
+    // §4.14: the name read keeps only the name; no date of birth or contact reaches the cache.
+    const cached = JSON.stringify(
+      app.queryClient
+        .getQueryCache()
+        .getAll()
+        .map((q) => q.state.data),
+    );
+    expect(cached).not.toContain('2016-05-04');
+    expect(cached).not.toContain('guardian@example.test');
     expect(app.fake.requests.find((r) => r.route === '/placement-requests')?.query).toMatchObject({
       seasonId: ID.season,
       status: 'unassigned',
     });
     expect(screen.getByText(/depends on DEC-031, DEC-051/)).toBeInTheDocument();
+  });
+
+  it('SPK-PLACE-001: pages through every placement request with the API cursor', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /placement-requests': (req: { query: Record<string, string> }) =>
+          new Response(
+            JSON.stringify(
+              req.query.cursor === 'p-2'
+                ? page([request({ id: ID.child, declaredLevel: 'Beginner' })])
+                : page([request()], 'p-2'),
+            ),
+            { status: 200 },
+          ),
+      },
+    });
+    render(app.at(`/teams/seasons/${ID.season}/placement`));
+    await screen.findByRole('list', { name: 'Placement requests' });
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('Beginner')).toBeInTheDocument();
+    expect(
+      app.fake.requests.some(
+        (r) => r.route === '/placement-requests' && r.query['cursor'] === 'p-2',
+      ),
+    ).toBe(true);
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeInTheDocument();
   });
 
   it('shows candidates with reasons and capacity, stating that a recommendation reserves nothing', async () => {

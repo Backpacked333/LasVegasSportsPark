@@ -208,13 +208,17 @@ function Bracket({
     path: '/seasons/{id}/bracket-nodes',
     request: { path: { id: seasonId }, query: { ...(divisionId ? { divisionId } : {}) } },
   });
+  // No status filter: the API returns open and acknowledged tasks, and an acknowledged correction
+  // review is still undecided (SCR-S-13 recovery state "under review").
   const reviews = useApiQuery({
     path: '/exceptions',
-    request: { query: { queue: 'league_manager', status: 'open', limit: 100 } },
+    request: { query: { queue: 'league_manager', limit: 100 } },
   });
+  const reviewUnknown = reviews.data === undefined;
   const underReview = new Set<string>();
   for (const task of reviews.data?.items ?? []) {
     if (task.category !== RESULT_REVIEW_CATEGORY) continue;
+    if (task.status !== 'open' && task.status !== 'acknowledged') continue;
     const ids = task.details.affectedBracketNodeIds;
     if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') underReview.add(id);
   }
@@ -272,6 +276,8 @@ function Bracket({
                         <span>
                           {underReview.has(node.id) ? (
                             <StatusBadge tone="danger" label="Under review" />
+                          ) : reviewUnknown ? (
+                            <StatusBadge tone="neutral" label="Review status unknown" />
                           ) : null}{' '}
                           <StatusBadge
                             tone={node.published ? 'success' : 'pending'}
@@ -282,7 +288,18 @@ function Bracket({
                           <Link to={`/leagues/fixtures/${node.fixtureId}`}>Open the fixture</Link>
                         ) : null}
                       </div>
-                      {!node.published ? <PublishNode node={node} /> : null}
+                      {!node.published && underReview.has(node.id) ? (
+                        <p className="caption">
+                          A correction review touches this node; publish it after the review is
+                          decided.
+                        </p>
+                      ) : !node.published && reviewUnknown ? (
+                        <p className="caption">
+                          Publishing waits until the review tasks can be checked.
+                        </p>
+                      ) : !node.published ? (
+                        <PublishNode node={node} />
+                      ) : null}
                     </li>
                   ))}
               </ul>
