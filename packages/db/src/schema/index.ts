@@ -1,11 +1,13 @@
 import type { CoreTables } from './core';
 import type { CatalogTables } from './catalog';
+import type { CompetitionTables } from './competition';
 import type { FacilitiesTables } from './facilities';
 import type { IdentityTables } from './identity';
 import type { SchedulingTables } from './scheduling';
 
 export * from './core';
 export * from './catalog';
+export * from './competition';
 export * from './facilities';
 export * from './identity';
 export * from './scheduling';
@@ -15,4 +17,10 @@ export * from './scheduling';
  * `./<module>.ts`; run `node scripts/regenerate-registrations.mjs` after adding one.
  */
 export interface Database
-  extends CoreTables, CatalogTables, FacilitiesTables, IdentityTables, SchedulingTables {}
+  extends
+    CoreTables,
+    CatalogTables,
+    CompetitionTables,
+    FacilitiesTables,
+    IdentityTables,
+    SchedulingTables {}

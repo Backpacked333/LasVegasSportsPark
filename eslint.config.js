@@ -35,6 +35,13 @@ module.exports = tseslint.config(
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
+    files: ['**/*.mjs'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: { console: 'readonly', process: 'readonly' },
+    },
+  },
+  {
     // NestJS constructor injection relies on emitDecoratorMetadata: classes used only as parameter
     // types must stay value imports, so the type-import rule is disabled for the API.
     files: ['apps/**/*.ts'],

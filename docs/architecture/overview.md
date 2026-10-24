@@ -83,7 +83,7 @@ modes agree.
 | identity       | —                                          | principal resolver, relationship authority    |
 | catalog        | identity                                   | —                                             |
 | scheduling     | — (facilities table in core)               | — (offers FIXTURE_OBLIGATION_IMPL hook)       |
-| competition    | identity, scheduling                       | team authority                                |
+| competition    | identity, scheduling                       | team authority; outbox handler syncing fixtures with `scheduling.event_changed` |
 | workforce      | identity, scheduling, competition          | —                                             |
 | facilities     | scheduling                                 | outbox handlers (due timers, lifted closures) |
 | communications | identity                                   | outbox handlers for notices                   |
