@@ -54,8 +54,9 @@ registers the principal resolver and relationship authority (`PRINCIPAL_RESOLVER
 `RELATIONSHIP_AUTHORITY_IMPL`): a verified `(issuer, subject)` maps to an active account, its
 person and the staff memberships in effect at the clock; a relationship permission is exactly an
 unrevoked, unsuspended, currently effective `access_grants` row on an active relationship (see
-`apps/api/src/modules/identity/README.md`). The competition module registers team authority. Where
-a registration is absent the kernel falls back to deny-all.
+`apps/api/src/modules/identity/README.md`). The competition module registers team authority and
+scheduling's fixture-obligation check. Where a registration is absent the kernel falls back to
+deny-all.
 
 Two kernel limitations are worked around inside the identity module and documented in its README:
 `*_IMPL` tokens must be `useValue` providers (Nest probes the kernel's lazy proxy during
@@ -78,22 +79,22 @@ modes agree.
 
 ## Module map (spec §4.2)
 
-| Module         | Depends on                        | Registers with kernel                                                                                          |
-| -------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| identity       | —                                 | principal resolver, relationship authority                                                                     |
-| catalog        | identity                          | —                                                                                                              |
-| scheduling     | — (facilities table in core)      | — (offers FIXTURE_OBLIGATION_IMPL hook)                                                                        |
-| competition    | identity, scheduling              | team authority; outbox handler syncing fixtures with `scheduling.event_changed`                                |
-| workforce      | identity, scheduling, competition | —                                                                                                              |
-| facilities     | scheduling                        | outbox handlers (due timers, lifted closures)                                                                  |
-| communications | identity, scheduling, competition | outbox handlers (dispatch, schedule notices, revoked grants); inbox handler for messaging receipts             |
-| enrollment     | identity, catalog, competition    | outbox handlers (hold expiry, waitlist offers, makeup expiry, catalog capacity sync); FINANCE_POLICY_IMPL hook |
-| finance        | identity, catalog, enrollment     | inbox handlers for payment provider events                                                                     |
-| entry          | identity, enrollment, scheduling  | —                                                                                                              |
-| support        | identity (+ reads everything)     | —                                                                                                              |
-| migration      | all                               | —                                                                                                              |
-| reporting      | all (read models)                 | —                                                                                                              |
-| automation     | all (through commands)            | —                                                                                                              |
+| Module         | Depends on                                 | Registers with kernel                                                                              |
+| -------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| identity       | —                                          | principal resolver, relationship authority                                                         |
+| catalog        | identity                                   | —                                                                                                  |
+| scheduling     | — (facilities table in core)               | — (offers FIXTURE_OBLIGATION_IMPL hook)                                                            |
+| competition    | identity, scheduling                       | team authority, fixture obligations; outbox handler syncing fixtures (`scheduling.event_changed`)  |
+| workforce      | identity, scheduling, competition          | —                                                                                                  |
+| facilities     | scheduling                                 | outbox handlers (due timers, lifted closures)                                                      |
+| communications | identity, scheduling, competition          | outbox handlers (dispatch, schedule notices, revoked grants); inbox handler for messaging receipts |
+| enrollment     | identity, catalog, competition, scheduling | outbox handlers (hold expiry, waitlist offers, makeup expiry); FINANCE_POLICY_IMPL hook            |
+| finance        | identity, catalog, enrollment              | inbox handlers for payment provider events                                                         |
+| entry          | identity, enrollment, scheduling           | —                                                                                                  |
+| support        | identity (+ reads everything)              | —                                                                                                  |
+| migration      | all                                        | —                                                                                                  |
+| reporting      | all (read models)                          | —                                                                                                  |
+| automation     | all (through commands)                     | —                                                                                                  |
 
 Each module directory has a README naming its owned records and specification sections.
 

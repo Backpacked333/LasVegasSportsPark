@@ -1,6 +1,7 @@
 import type { CoreTables } from './core';
 import type { CatalogTables } from './catalog';
 import type { CommunicationsTables } from './communications';
+import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
 import type { EnrollmentTables } from './enrollment';
 import type { FacilitiesTables } from './facilities';
@@ -10,6 +11,7 @@ import type { SchedulingTables } from './scheduling';
 export * from './core';
 export * from './catalog';
 export * from './communications';
+export * from './competition-matches';
 export * from './competition';
 export * from './enrollment';
 export * from './facilities';
@@ -25,6 +27,7 @@ export interface Database
     CoreTables,
     CatalogTables,
     CommunicationsTables,
+    CompetitionMatchesTables,
     CompetitionTables,
     EnrollmentTables,
     FacilitiesTables,
