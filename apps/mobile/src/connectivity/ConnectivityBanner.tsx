@@ -1,24 +1,48 @@
 /**
  * SCR-C-40 Connectivity and stale-data banner (SPK-UX-001 "Clear connectivity and stale-data
- * states", SPK-UX-008, §4.15 "Show cached-data age prominently", §6.2 "Poor connectivity").
+ * states", SPK-UX-008, §4.15 "Show cached-data age prominently", §6.2 "Poor connectivity",
+ * "App backgrounding during payment").
  *
- * States: ready (online, fresh: hidden); offline (age of what is shown, actions that need a
- * connection); stale (online, shown data older than the configured threshold, which is pending
- * DEC-032/DEC-033 and absent by default); processing (refreshing after reconnecting or returning
- * to the app). Recovery of an interrupted payment is the checkout screens' job (SCR-C-15): they
- * refetch their operation on foreground through the same query layer.
+ * States, most serious first:
+ * - offline: the age of what is shown and the actions that need a connection (nothing is queued:
+ *   no payment, registration, RSVP or account change is ever "saved for later", §4.15);
+ * - processing: "Back online. Refreshing" while what is on screen refetches after reconnecting;
+ * - degraded: the device is online but the service could not refresh what is shown (no response,
+ *   or the API answered INTEGRATION_UNAVAILABLE, RATE_LIMITED or INTERNAL_ERROR): the age of what
+ *   is shown, the error code and "Try again";
+ * - success: "Back online. Updated <age>" for a minute after the refresh finished;
+ * - stale: online, but shown data is older than the configured threshold. The threshold is
+ *   pending DEC-032/DEC-033 and absent by default, so by default data is never called stale;
+ * - ready: online and fresh, the banner is hidden.
+ *
+ * Foreground refresh after an interrupted registration or payment is the query layer's
+ * (`focusManager` on AppState, AppProviders); a registration found in recovery is pinned on Home
+ * (SCR-C-03) and its outcome belongs to the checkout outcome screen (SCR-C-15).
  */
-import { formatAge } from '@sportspark/api-client';
+import { ApiError, formatAge } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { receivedAtOf } from '../api/useApiQuery';
 import { useApp, useConnectivity, useNow } from '../providers/AppProviders';
+import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
 import { colors, spacing, type } from '../ui/theme';
 
 /** Actions the customer app never performs offline (§4.15: no payments, no capacity commitments). */
 export const OFFLINE_UNAVAILABLE_ACTIONS = ['registration', 'payment', 'RSVP', 'account changes'];
+
+/** How long "Back online. Updated …" stays after a reconnect refresh. */
+export const REFRESHED_NOTICE_MS = 60_000;
+
+/** Failures that mean "the service could not refresh this", not "this is not yours to see". */
+export const DEGRADED_CODES: ReadonlySet<string> = new Set([
+  'NETWORK_UNAVAILABLE',
+  'TIMEOUT',
+  'INTEGRATION_UNAVAILABLE',
+  'RATE_LIMITED',
+  'INTERNAL_ERROR',
+]);
 
 /** Receipt time of the oldest data currently on screen (queries with observers). */
 function useOldestShownData(): number | null {
@@ -36,18 +60,43 @@ function useOldestShownData(): number | null {
   );
 }
 
+/** The error code of the first on-screen query whose data could not be refreshed, if any. */
+function useRefreshFailure(): string | null {
+  const cache = useQueryClient().getQueryCache();
+  return useSyncExternalStore(
+    (onChange) => cache.subscribe(onChange),
+    () => {
+      for (const q of cache.findAll({ type: 'active' })) {
+        const error = q.state.error;
+        if (
+          q.state.data !== undefined &&
+          error instanceof ApiError &&
+          DEGRADED_CODES.has(error.code)
+        ) {
+          return error.code;
+        }
+      }
+      return null;
+    },
+  );
+}
+
 export function ConnectivityBanner() {
   const { reachable } = useConnectivity();
   const { services } = useApp();
   const now = useNow(15_000);
   const oldest = useOldestShownData();
+  const failure = useRefreshFailure();
   const queryClient = useQueryClient();
   const wasOffline = useRef(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
 
   useEffect(() => {
-    if (reachable === false) wasOffline.current = true;
-    else if (reachable === true && wasOffline.current) {
+    if (reachable === false) {
+      wasOffline.current = true;
+      setRefreshedAt(null);
+    } else if (reachable === true && wasOffline.current) {
       wasOffline.current = false;
       setReconnecting(true);
     }
@@ -59,7 +108,10 @@ export function ConnectivityBanner() {
   useEffect(() => {
     if (!reconnecting) return undefined;
     const check = () => {
-      if (queryClient.isFetching() === 0) setReconnecting(false);
+      if (queryClient.isFetching() === 0) {
+        setReconnecting(false);
+        setRefreshedAt(services.now().getTime());
+      }
     };
     const unsubscribe = queryClient.getQueryCache().subscribe(check);
     const id = setTimeout(check, 0);
@@ -67,9 +119,10 @@ export function ConnectivityBanner() {
       unsubscribe();
       clearTimeout(id);
     };
-  }, [reconnecting, queryClient]);
+  }, [reconnecting, queryClient, services]);
 
   const age = oldest !== null ? formatAge(oldest, now) : null;
+  const refreshNow = () => void queryClient.refetchQueries({ type: 'active' });
 
   if (reachable === false) {
     return (
@@ -96,12 +149,39 @@ export function ConnectivityBanner() {
     );
   }
 
+  if (failure) {
+    return (
+      <View
+        style={styles.banner}
+        accessibilityRole="alert"
+        accessibilityLiveRegion="polite"
+        testID="connectivity-banner"
+      >
+        <StatusBadge tone="warning" label="Some information could not be refreshed" />
+        <Text style={styles.text}>
+          {age ? `Showing information from ${age}. ` : ''}The service did not answer (error code{' '}
+          {failure}). Actions that need the service may fail until it does.
+        </Text>
+        <Button label="Try again" variant="secondary" onPress={refreshNow} />
+      </View>
+    );
+  }
+
+  if (refreshedAt !== null && now.getTime() - refreshedAt < REFRESHED_NOTICE_MS) {
+    return (
+      <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
+        <StatusBadge tone="success" label={`Back online. Updated ${formatAge(refreshedAt, now)}`} />
+      </View>
+    );
+  }
+
   const threshold = services.config.staleDataThresholdMs;
   if (threshold !== null && oldest !== null && now.getTime() - oldest > threshold) {
     return (
       <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
         <StatusBadge tone="warning" label="Some information may be out of date" />
         <Text style={styles.text}>Updated {age}.</Text>
+        <Button label="Refresh" variant="secondary" onPress={refreshNow} />
       </View>
     );
   }

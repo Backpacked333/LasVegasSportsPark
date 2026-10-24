@@ -14,6 +14,9 @@ export function RootNavigator() {
         <Stack.Screen name="pass" options={{ title: 'Facility pass' }} />
         <Stack.Screen name="inbox" options={{ title: 'Notifications' }} />
         <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
+        <Stack.Screen name="family-calendar" options={{ title: 'Family calendar' }} />
+        <Stack.Screen name="fixtures/[id]" options={{ title: 'Fixture' }} />
+        <Stack.Screen name="sessions/[sessionId]" options={{ title: 'Activity' }} />
         <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
       </Stack>
     </UpdateGate>
