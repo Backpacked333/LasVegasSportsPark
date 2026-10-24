@@ -3,6 +3,7 @@
  * and referee workspace (SPK-UX-007), sign-in, and a not-available page for unknown paths.
  */
 import { Navigate, Route, Routes } from 'react-router';
+import { competitionRoutes } from './features/competition/routes';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS, WORKSPACE_PATH } from './navigation/areas';
 import { AreaScreen } from './screens/area/AreaScreen';
@@ -37,6 +38,8 @@ export function AppRoutes() {
         }
       >
         <Route index element={<Navigate to="/today" replace />} />
+        {/* Before the area placeholders: equally ranked routes match in order. */}
+        {competitionRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />

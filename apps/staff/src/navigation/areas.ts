@@ -41,6 +41,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/leagues',
     screenIds: 'SCR-S-08 to SCR-S-13',
     purpose: 'Competitions, seasons, divisions, fixtures, readiness, results, disputes, standings.',
+    ownRoutes: true,
   },
   {
     id: 'programs',
@@ -55,6 +56,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/teams',
     screenIds: 'SCR-S-16 to SCR-S-19',
     purpose: 'Team entries, rosters, placement board, youth groups.',
+    ownRoutes: true,
   },
   {
     id: 'people',
