@@ -41874,7 +41874,7 @@
         }
       },
       "get": {
-        "summary": "List the sessions of an offering",
+        "summary": "List the sessions of an offering; readers who are not catalog staff get the child-safe view (no cancel reason, scheduling event id or capacity staffing internals, §4.14)",
         "tags": [
           "Catalog"
         ],

@@ -357,6 +357,48 @@ describe('catalog schema invariants (migrations 0200, 0201)', () => {
     ).rejects.toSatisfy(isCheckViolation);
   });
 
+  it('SPK-REG-009: the database refuses rewriting acknowledgment signer evidence, reopening a withdrawal and deleting', async () => {
+    const policy = await createPolicyVersionFixture(t, { kind: 'form' });
+    const adult = await createPersonFixture(t, { kind: 'adult' });
+    const child = await createPersonFixture(t, { kind: 'child' });
+    const other = await createPersonFixture(t, { kind: 'adult' });
+    const id = await createAcknowledgmentFixture(t, {
+      subjectPersonId: child,
+      policyVersionId: policy,
+      signedByPersonId: adult,
+    });
+    const rewrite = (values: Record<string, unknown>) =>
+      db
+        .updateTable('acknowledgments')
+        .set(values as never)
+        .where('id', '=', id)
+        .execute();
+    for (const values of [
+      { signed_at: new Date('2000-01-01T00:00:00Z') },
+      { evidence: json({ forged: true }) },
+      { signed_by_person_id: other },
+      { recorded_by_kind: 'system' },
+      { basis: 'self', signed_by_person_id: child },
+    ]) {
+      await expect(rewrite(values)).rejects.toThrow(/cannot be rewritten/);
+    }
+    await expect(db.deleteFrom('acknowledgments').where('id', '=', id).execute()).rejects.toThrow(
+      /append-only/,
+    );
+    // the one allowed change: active -> withdrawn, final
+    await rewrite({ status: 'withdrawn', withdrawn_at: t.clock.now(), withdrawn_reason: 'test' });
+    await expect(
+      rewrite({ status: 'active', withdrawn_at: null, withdrawn_reason: null }),
+    ).rejects.toThrow(/withdrawal is final/);
+    await expect(rewrite({ withdrawn_reason: 'changed' })).rejects.toThrow(/withdrawal is final/);
+    const row = await db
+      .selectFrom('acknowledgments')
+      .select(['status', 'signed_by_person_id'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ status: 'withdrawn', signed_by_person_id: adult });
+  });
+
   it('SPK-REG-009: one active acknowledgment per (subject, policy); a staff recorder is never the signer', async () => {
     const policy = await createPolicyVersionFixture(t, { kind: 'form' });
     const adult = await createPersonFixture(t, { kind: 'adult' });

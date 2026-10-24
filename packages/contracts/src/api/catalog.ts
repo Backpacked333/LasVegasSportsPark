@@ -391,6 +391,11 @@ export const RecordAcknowledgmentBody = withCommandMeta({
   policyVersionId: z.uuid(),
   /** Required when a staff actor records the acknowledgment; defaults to the acting customer. */
   signedByPersonId: z.uuid().optional(),
+  /**
+   * Staff only (SPK-REG-009): when a paper form signed earlier is entered later. Never in the
+   * future, never before the policy version, and only with `evidence`; a customer's signature is
+   * timestamped by the server.
+   */
   signedAt: Instant.optional(),
   evidence: z.record(z.string(), z.unknown()).default({}),
 }).openapi('RecordAcknowledgmentRequest');
@@ -1113,7 +1118,7 @@ command(
 );
 query(
   '/offerings/{id}/sessions',
-  'List the sessions of an offering',
+  'List the sessions of an offering; readers who are not catalog staff get the child-safe view (no cancel reason, scheduling event id or capacity staffing internals, §4.14)',
   null,
   z.array(OfferingSessionSchema),
   {
