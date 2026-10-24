@@ -137,6 +137,28 @@ describe('inventory changes keep whole-space holds covering their subdivisions (
     t.clock.set(new Date('2026-10-19T12:00:00Z'));
   });
 
+  it('SPK-SCHED-002 / §4.7 invariant 4: replacing a resource units keeps its holds, so one slot is never booked twice', async () => {
+    const field = await resource({ kind: 'pitch', name: 'Field 12' });
+    const fresh = await unit('Field 12 resurfaced');
+    const first = await book(field.id, '2026-11-09');
+    expect(first.status).toBe('published');
+    expect(await outcome(book(field.id, '2026-11-09'))).toBe('RESOURCE_CONFLICT');
+    const remapped = await patch(`/v1/resources/${field.id}`, {
+      expectedRevision: field.revision,
+      conflictUnitIds: [fresh],
+    });
+    expect(remapped.status, JSON.stringify(remapped.body)).toBe(200);
+    expect(remapped.body.conflictUnitIds).toEqual([fresh]);
+    expect(await outcome(book(field.id, '2026-11-09'))).toBe('RESOURCE_CONFLICT');
+    const active = await t.db
+      .selectFrom('reservations')
+      .select('event_id')
+      .where('resource_id', '=', field.id)
+      .where('status', '=', 'active')
+      .execute();
+    expect(active.map((r) => r.event_id)).toEqual([first.id]);
+  });
+
   it('SPK-SCHED-002 / §4.7 invariant 4: a subdivision added after a whole-pitch booking cannot be booked over it', async () => {
     const field = await resource({ kind: 'pitch', name: 'Field 9' });
     const whole = await book(field.id, '2026-11-07');

@@ -7,10 +7,12 @@ preventive maintenance schedules
 Restriction), §4.8 `POST /v1/maintenance-restrictions`, SPK-AT-021, SPK-UX-006 (overdue
 escalation)
 
-**Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999`
+**Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999` (present: `0900`,
+`0901_facilities_task_owner_fk`)
 
-**Depends on:** scheduling (closure port, resources public API). Restrictions create scheduling
-closures through the scheduling authority; this module never writes scheduling tables (§4.2).
+**Depends on:** scheduling (closure port, resources public API) and identity
+(`PERSON_DIRECTORY_PORT`, to check assigned task owners). Restrictions create scheduling closures
+through the scheduling authority; this module never writes scheduling or identity tables (§4.2).
 
 **Status: implemented** (verified by `apps/api/src/modules/facilities/__tests__` and
 `facilities.state-machines.spec.ts`). Pending decisions are listed at the end.
@@ -25,8 +27,16 @@ closures through the scheduling authority; this module never writes scheduling t
 | `restrictions`         | Affected area `resource_id` (whole pitch or subdivision), optional asset/task, kind `closed / limited`, `tstzrange during`, status `proposed → approved → active → released`, approval and release facts (check-constrained to the state), `scheduling_closure_id` (composite FK to closures), `affected_conflict_unit_ids` derived from scheduling at activation |
 | `preventive_schedules` | Recurrence in facility-local time + zone, task template, restriction kind, lead time, status `active / paused / ended`                                                                                                                                                                                                                                            |
 
+Assigned owner (SPK-FAC-002, §4.3): a task PATCH, a reported or generated task and a preventive
+schedule's `taskTemplate.assignedOwnerPersonId` accept only an active adult person of the
+organization (checked through `PERSON_DIRECTORY_PORT`; otherwise VALIDATION_FAILED with the path),
+and migration `0901` adds the composite foreign key `(organization_id, assigned_owner_person_id)`
+to `persons`. A template whose owner later becomes inactive fails generation with that error
+until the template is edited. Facilities API tests keep the fake principals through
+`__tests__/support.ts`, because importing IdentityModule brings its principal resolver.
+
 Invariants enforced by the database: composite `(organization_id, id)` foreign keys everywhere
-(including the closure reference); one closure backs at most one restriction; a task carries at
+(including the closure reference and the assigned owner); one closure backs at most one restriction; a task carries at
 most one unreleased restriction; a preventive schedule materializes each occurrence's task and
 restriction at most once; `active` needs a closure, `released` needs who/when/which closure.
 

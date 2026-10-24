@@ -7,7 +7,8 @@ invitations, claims, staff memberships, disputed-access reviews, duplicate candi
 (`Person.householdId` cannot determine authority), §4.14, SPK-AT-004, SPK-AT-025
 
 **Migration range:** `packages/db/migrations/0100_identity_core.sql` … `0199` (present: `0100`,
-`0101_identity_invitation_subjects`, `0102_identity_suspension_window`)
+`0101_identity_invitation_subjects`, `0102_identity_suspension_window`,
+`0103_identity_grant_suspensions`)
 
 **Status: implemented** (verified by `apps/api/src/modules/identity/__tests__` and the unit specs
 next to the code). Statements below are verified unless marked proposed or pending.
@@ -38,6 +39,7 @@ Both are registered as `useValue` handles bound in `onModuleInit` (see "Kernel l
 | `relationships`                             | actor→subject capacity (guardian/delegate/caregiver/self_managed), status active/suspended/ended, one live row per (actor, subject, kind)                                                                       |
 | `access_grants`                             | one row per permission; 4-column deferred FK to the relationship (same two people); GiST exclusion forbids overlapping unrevoked grants per permission; revoke/suspend keep the row                             |
 | `access_grants.suspended_until` (0102)      | end of a temporary restriction; null until lifted; check: needs a suspension and ends after it starts                                                                                                           |
+| `access_grant_suspensions` (0103)           | one row per review and grant it restricts (window, reason, the decisions that made and ended it); partial unique: one unended row per (grant, review); ended once, never edited or deleted (guard trigger)      |
 | `invitations`                               | inviter (with the authority `basis` used: `staff_role` or `delegated`), recipient (person or contact), scope (person or household), requested + granted permissions, token hash, expiry, acceptance, revocation |
 | `invitation_subjects` (0101)                | the people an invitation covers, fixed at issue; composite FKs to the invitation and the person; append-only                                                                                                    |
 | `claims`                                    | self/guardian claim tokens for staff-created participants; acceptance links an account or creates guardianship without a new person                                                                             |
@@ -67,7 +69,7 @@ and `touch_updated_at`; append-only tables carry `forbid_mutation`.
 | `POST /access-grants/{id}/revoke`                            | staff role; the grant holder for their own grant; the creator-guardian only for a delegate or caregiver they invited, and only while they hold effective authority over the child                                                                                                                                    |
 | `POST /invitations`, `/{id}/accept`, `/{id}/revoke`          | staff role, or a guardian delegating only permissions held as guardian (proposed default, DEC-089); subjects fixed at issue; acceptance re-checks the inviter (staff role still held, or permissions still held as guardian) and drops the rest; recipient and scope errors never reveal another household's records |
 | `POST /staff-memberships`, `PATCH /{id}`, `POST /{id}/end`   | system_administrator only                                                                                                                                                                                                                                                                                            |
-| `POST /access-reviews`, `GET /{id}`, `POST /{id}/decisions`  | open: holders of `view`/staff; decide: general_manager, system_administrator, support_operator; a closed review still takes `lift`                                                                                                                                                                                   |
+| `POST /access-reviews`, `GET /{id}`, `POST /{id}/decisions`  | open: holders of `view`/staff; decide: general_manager, system_administrator, support_operator; a closed review still takes `lift`; `restrict`/`lift` record and end only this review's suspensions (a grant another review restricts stays suspended)                                                               |
 | `POST /duplicate-candidates`, `/{id}/merge`, `/{id}/dismiss` | flag: record staff; merge: system_administrator (never a child survivor of an adult); dismiss: GM/sysadmin/support                                                                                                                                                                                                   |
 | `POST /dev/tokens`                                           | public, exists only with `AUTH_MODE=local` outside production (NOT_FOUND otherwise)                                                                                                                                                                                                                                  |
 
@@ -85,6 +87,16 @@ ended, not transferred; self-service relationships over the survivor end and the
 self-service creator privilege is cleared; the summary (`moved`) reports each count so staff can
 re-establish legitimate access through a claim or a staff grant. A child record cannot survive an
 adult.
+
+Several reviews may restrict the same grant (SPK-IAM-005, §4.6): each `restrict` records its own
+row in `access_grant_suspensions`, and `lift` ends only the deciding review's rows. A grant is
+suspended while any unended row is in force (closed reviews included: closing never lifts). The
+`access_grants.suspended_at`, `suspended_until`, `suspended_by_review_id` and `suspension_reason`
+columns are the projection of the rows in force (earliest start, latest end, the review whose
+restriction lasts longest), rewritten under the grant's row lock; restrict and lift lock the grants
+in id order, so a lift racing another review's restriction never clears it
+(`__tests__/access-reviews.spec.ts`, `identity-concurrency.spec.ts`, `identity-schema.spec.ts`).
+`identity.access_restriction_lifted` lists only the grants that are no longer suspended.
 
 ## Ports (for other modules)
 

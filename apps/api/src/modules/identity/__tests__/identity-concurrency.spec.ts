@@ -215,6 +215,54 @@ describe('identity commands under concurrency (§4.9, SPK-IAM-002, SPK-IAM-004)'
     expect(decisions.map((d) => d.sequence)).toEqual([1]);
   });
 
+  it('SPK-IAM-005 / §4.6: a lift on one review racing a restriction by another leaves the grant suspended', async () => {
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const header = await authHeaderForPerson(t, support.personId);
+    for (let round = 0; round < 3; round += 1) {
+      const people = await createOrganizationPeople(t, { guardianPermissions: ['collect'] });
+      const collect = people.guardianGrants.collect as string;
+      const open = async () => {
+        const opened = await t.http
+          .post('/v1/access-reviews')
+          .set(header)
+          .set('Idempotency-Key', key())
+          .send({ subjectPersonId: people.child.personId, reason: 'custody dispute' });
+        expect(opened.status).toBe(201);
+        return opened.body.id as string;
+      };
+      const decide = (reviewId: string, body: Record<string, unknown>) =>
+        t.http
+          .post(`/v1/access-reviews/${reviewId}/decisions`)
+          .set(header)
+          .set('Idempotency-Key', key())
+          .send(body);
+      const a = await open();
+      const b = await open();
+      expect((await decide(a, { kind: 'restrict', grantIds: [collect] })).status).toBe(201);
+      const [lift, restrict] = await Promise.all([
+        decide(a, { kind: 'lift' }),
+        decide(b, { kind: 'restrict', grantIds: [collect] }),
+      ]);
+      expect(lift.status).toBe(201);
+      expect(restrict.status).toBe(201);
+      expect(restrict.body.decisions[0].affectedGrantIds).toEqual([collect]);
+      expect(
+        await authority.hasPermission(
+          t.organizationId,
+          people.adult.personId,
+          people.child.personId,
+          'collect',
+        ),
+      ).toBe(false);
+      const grant = await t.db
+        .selectFrom('access_grants')
+        .select('suspended_by_review_id')
+        .where('id', '=', collect)
+        .executeTakeFirstOrThrow();
+      expect(grant.suspended_by_review_id).toBe(b);
+    }
+  });
+
   it('§4.9: concurrent notes without an expected revision both succeed, in sequence', async () => {
     const people = await createOrganizationPeople(t);
     const gm = await createStaffMemberFixture(t, { roles: ['general_manager'] });

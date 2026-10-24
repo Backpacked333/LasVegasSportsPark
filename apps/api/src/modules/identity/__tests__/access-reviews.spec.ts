@@ -285,6 +285,134 @@ describe('disputed access reviews (SPK-IAM-005)', () => {
     }
   });
 
+  /** Two reviews over the same child, each owned by its own support operator (SPK-IAM-005). */
+  async function twoReviews(permissions: ('view' | 'collect')[] = ['view', 'collect']) {
+    const people = await createOrganizationPeople(t, { guardianPermissions: permissions });
+    const open = async () => {
+      const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+      const header = await authHeaderForPerson(t, support.personId);
+      const opened = await t.http
+        .post('/v1/access-reviews')
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ subjectPersonId: people.child.personId, reason: 'custody dispute' });
+      expect(opened.status).toBe(201);
+      const id = opened.body.id as string;
+      const decide = (body: Record<string, unknown>) =>
+        t.http
+          .post(`/v1/access-reviews/${id}/decisions`)
+          .set(header)
+          .set('Idempotency-Key', key())
+          .send(body);
+      return { id, decide };
+    };
+    const can = (permission: 'view' | 'collect') =>
+      authority.hasPermission(
+        t.organizationId,
+        people.adult.personId,
+        people.child.personId,
+        permission,
+      );
+    const suspendedBy = async (grantId: string) =>
+      (
+        await t.db
+          .selectFrom('access_grants')
+          .select('suspended_by_review_id')
+          .where('id', '=', grantId)
+          .executeTakeFirstOrThrow()
+      ).suspended_by_review_id;
+    const liftedEvents = (reviewId: string) =>
+      t.db
+        .selectFrom('outbox_events')
+        .select('payload')
+        .where('event_type', '=', 'identity.access_restriction_lifted')
+        .where('aggregate_id', '=', reviewId)
+        .execute();
+    return { people, a: await open(), b: await open(), can, suspendedBy, liftedEvents };
+  }
+
+  it('SPK-IAM-005 / §4.6: lifting one review keeps a grant suspended while another review still restricts it', async () => {
+    const { people, a, b, can, suspendedBy, liftedEvents } = await twoReviews();
+    const grants = [people.guardianGrants.view, people.guardianGrants.collect].sort();
+    const restrictA = await a.decide({ kind: 'restrict', actorPersonId: people.adult.personId });
+    expect(restrictA.status).toBe(201);
+    expect(restrictA.body.decisions[0].affectedGrantIds.sort()).toEqual(grants);
+    // the second review records its own restriction of grants that are already suspended
+    const restrictB = await b.decide({ kind: 'restrict', actorPersonId: people.adult.personId });
+    expect(restrictB.status).toBe(201);
+    expect(restrictB.body.decisions[0].affectedGrantIds.sort()).toEqual(grants);
+
+    const liftA = await a.decide({ kind: 'lift', note: 'first dispute settled' });
+    expect(liftA.status).toBe(201);
+    expect(liftA.body.decisions.at(-1).affectedGrantIds.sort()).toEqual(grants);
+    // review B is still open and still restricts the guardian
+    expect(await can('collect')).toBe(false);
+    expect(await can('view')).toBe(false);
+    expect(await suspendedBy(people.guardianGrants.collect as string)).toBe(b.id);
+    expect(await liftedEvents(a.id)).toHaveLength(0);
+    expect(
+      (
+        await t.http
+          .get(`/v1/people/${people.child.personId}`)
+          .set(await authHeaderForPerson(t, people.adult.personId))
+      ).status,
+    ).toBe(404);
+
+    const liftB = await b.decide({ kind: 'lift' });
+    expect(liftB.status).toBe(201);
+    expect(liftB.body.decisions.at(-1).affectedGrantIds.sort()).toEqual(grants);
+    expect(await can('collect')).toBe(true);
+    expect(await can('view')).toBe(true);
+    expect(await suspendedBy(people.guardianGrants.collect as string)).toBeNull();
+    const lifted = await liftedEvents(b.id);
+    expect(lifted).toHaveLength(1);
+    expect((lifted[0]?.payload as { grantIds: string[] }).grantIds.sort()).toEqual(grants);
+  });
+
+  it('SPK-IAM-005 / §4.6: a second review restricting explicit grantIds keeps them suspended after the first review lifts', async () => {
+    const { people, a, b, can } = await twoReviews();
+    const collect = people.guardianGrants.collect as string;
+    expect(
+      (await a.decide({ kind: 'restrict', actorPersonId: people.adult.personId })).status,
+    ).toBe(201);
+    const restrictB = await b.decide({ kind: 'restrict', grantIds: [collect] });
+    expect(restrictB.status).toBe(201);
+    expect(restrictB.body.decisions[0].affectedGrantIds).toEqual([collect]);
+    // restricting again under the same review records nothing new
+    const again = await b.decide({ kind: 'restrict', grantIds: [collect] });
+    expect(again.body.decisions.at(-1).affectedGrantIds).toEqual([]);
+    expect((await a.decide({ kind: 'lift' })).status).toBe(201);
+    expect(await can('view')).toBe(true);
+    expect(await can('collect')).toBe(false);
+    // lifting a grant this review never restricted affects nothing
+    const liftView = await b.decide({ kind: 'lift', grantIds: [people.guardianGrants.view] });
+    expect(liftView.body.decisions.at(-1).affectedGrantIds).toEqual([]);
+    expect(await can('collect')).toBe(false);
+    expect((await b.decide({ kind: 'lift', grantIds: [collect] })).status).toBe(201);
+    expect(await can('collect')).toBe(true);
+  });
+
+  it('SPK-IAM-005: a temporary restriction ending does not end another review’s open-ended restriction of the same grant', async () => {
+    const start = t.clock.now();
+    const { people, a, b, can } = await twoReviews(['view']);
+    try {
+      const timed = await a.decide({
+        kind: 'restrict',
+        actorPersonId: people.adult.personId,
+        effectiveTo: new Date(start.getTime() + 3600_000).toISOString(),
+      });
+      expect(timed.status).toBe(201);
+      const openEnded = await b.decide({ kind: 'restrict', actorPersonId: people.adult.personId });
+      expect(openEnded.body.decisions[0].affectedGrantIds).toEqual([people.guardianGrants.view]);
+      t.clock.advance(2 * 3600_000);
+      expect(await can('view')).toBe(false);
+      expect((await b.decide({ kind: 'lift' })).status).toBe(201);
+      expect(await can('view')).toBe(true);
+    } finally {
+      t.clock.set(start);
+    }
+  });
+
   it('a review cannot be opened by someone with no authority over the subject, and restrict needs a target', async () => {
     const people = await createOrganizationPeople(t);
     const stranger = await createOrganizationPeople(t);

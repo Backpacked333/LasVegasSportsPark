@@ -2,7 +2,7 @@ import type { ColumnType, Generated } from 'kysely';
 import type { GeneratedJson, GeneratedTimestamp, Json, NullableTimestamp, Timestamp } from './core';
 
 /**
- * Identity module tables (migrations 0100-0102, specification §3.1 SPK-IAM-001..007).
+ * Identity module tables (migrations 0100-0103, specification §3.1 SPK-IAM-001..007).
  * `date` columns are read through a `::text` cast by the module so both drivers return
  * `YYYY-MM-DD`; the type below documents that contract.
  */
@@ -123,6 +123,25 @@ export interface AccessGrantsTable {
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
+}
+
+/**
+ * Migration 0103 (SPK-IAM-005, §4.6): one row per access review and grant it suspends. A grant is
+ * suspended while any unended row is in force; `access_grants.suspended_*` is the projection.
+ * Rows are only ever ended (once), never edited or deleted.
+ */
+export interface AccessGrantSuspensionsTable {
+  id: string;
+  organization_id: string;
+  grant_id: string;
+  review_id: string;
+  restrict_decision_id: string | null;
+  reason: string | null;
+  suspended_at: Timestamp;
+  suspended_until: NullableTimestamp;
+  ended_at: NullableTimestamp;
+  end_decision_id: string | null;
+  created_at: GeneratedTimestamp;
 }
 
 export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
@@ -290,6 +309,7 @@ export interface IdentityTables {
   household_memberships: HouseholdMembershipsTable;
   relationships: RelationshipsTable;
   access_grants: AccessGrantsTable;
+  access_grant_suspensions: AccessGrantSuspensionsTable;
   invitations: InvitationsTable;
   invitation_subjects: InvitationSubjectsTable;
   claims: ClaimsTable;

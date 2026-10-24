@@ -31,6 +31,7 @@ import {
   type Trx,
 } from '../../../kernel';
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
+import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { ResourcesService } from '../../scheduling';
 import { FacilitiesActions } from '../facilities.actions';
 import {
@@ -86,7 +87,29 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
     private readonly exceptions: OperationalExceptions,
     private readonly reader: FacilitiesReader,
     private readonly resources: ResourcesService,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
   ) {}
+
+  /**
+   * SPK-FAC-002 / §4.3: a task's assigned owner is an active adult person of the task's own
+   * organization, checked through the identity person directory (the composite foreign key of
+   * migration 0901 is the database guarantee). A foreign-organization or unknown id reads exactly
+   * like an inactive one.
+   */
+  async assertAssignableOwner(
+    trx: Trx,
+    organizationId: string,
+    personId: string,
+    path = 'assignedOwnerPersonId',
+  ): Promise<void> {
+    const person = await this.persons.findPerson(organizationId, personId, trx);
+    if (!person || person.status !== 'active' || person.kind !== 'adult') {
+      throw errors.validation(
+        'The assigned owner must be an active adult person of this organization.',
+        { path },
+      );
+    }
+  }
 
   async reportIssue(principal: Principal, input: ReportIssueInput): Promise<MaintenanceTask> {
     const organizationId = organizationOf(principal);
@@ -153,6 +176,9 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
    * timer. Callers authorize first. Shared with preventive schedule generation (SPK-FAC-005).
    */
   async insertTask(trx: Trx, data: NewTaskData): Promise<TaskRow> {
+    if (data.assignedOwnerPersonId) {
+      await this.assertAssignableOwner(trx, data.organizationId, data.assignedOwnerPersonId);
+    }
     const id = newId();
     const now = this.clock.now();
     const status = data.assignedOwnerPersonId ? 'assigned' : 'open';
@@ -268,6 +294,7 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
             changes.push('unassigned');
           }
         } else {
+          await this.assertAssignableOwner(trx, organizationId, body.assignedOwnerPersonId);
           status = MaintenanceTaskMachine.next(status, 'assign');
           owner = body.assignedOwnerPersonId;
           changes.push('assigned');

@@ -3,6 +3,7 @@ import { json, seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OutboxDispatcher } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
+import { createPersonFixture } from '../../identity';
 import {
   at,
   ClosuresService,
@@ -15,6 +16,7 @@ import { FacilitiesModule } from '../facilities.module';
 import { OPERATING_STATUS_PORT, type OperatingStatusPort } from '../ports';
 import { RestrictionsService } from '../services/restrictions.service';
 import { seedAsset } from '../testing/facilities-fixtures';
+import { keepFakePrincipals } from './support';
 
 describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restrictions, SPK-AT-021)', () => {
   let t: TestApp;
@@ -30,7 +32,11 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
   let auth: { Authorization: string };
 
   beforeAll(async () => {
-    t = await createTestApp({ imports: [FacilitiesModule], clockStart: '2026-10-19T12:00:00Z' });
+    t = await createTestApp({
+      imports: [FacilitiesModule],
+      clockStart: '2026-10-19T12:00:00Z',
+      configure: keepFakePrincipals(() => t),
+    });
     events = t.app.get(EventsService);
     closures = t.app.get(ClosuresService);
     restrictions = t.app.get(RestrictionsService);
@@ -41,7 +47,10 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
       facilityId: facility,
       name: 'Pitch 1',
     });
-    operator = staffPrincipal(org, ['facilities_operator']);
+    // a real person: the operator is also assigned as task owner (SPK-FAC-002, migration 0901)
+    operator = staffPrincipal(org, ['facilities_operator'], {
+      personId: await createPersonFixture(t, { kind: 'adult' }),
+    });
     manager = staffPrincipal(org, ['general_manager']);
     frontDesk = staffPrincipal(org, ['front_desk']);
     auth = await t.authHeader(operator);

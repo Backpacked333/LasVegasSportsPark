@@ -27,12 +27,25 @@ import { IdentityEvents } from '../identity.events';
 import { AccessReviewMachine } from '../identity.machines';
 import { isSuspendedAt, toAccessReview } from '../identity.shared';
 
+interface LiveSuspension {
+  id: string;
+  grant_id: string;
+  suspended_at: Date;
+  suspended_until: Date | null;
+}
+
 /**
  * Disputed-access reviews (SPK-IAM-005). A restricted set of staff roles owns the workflow;
  * temporary restrictions suspend grants without deleting them (until the restriction's
  * `effectiveTo`, or until lifted), every decision is an append-only history row, and nothing here
  * consults household membership to resolve a dispute. Decisions on one review are serialized by
  * a row lock (§4.9).
+ *
+ * Each review records its own suspension of a grant (`access_grant_suspensions`, migration 0103):
+ * a grant stays suspended while any review's suspension is in force, and lifting one review ends
+ * only that review's suspensions (§4.6: independent facts never overwrite one another). The
+ * `access_grants.suspended_*` columns are the projection of the suspensions in force, rewritten
+ * under the grant's row lock whenever one of them changes.
  */
 @Injectable()
 export class AccessReviewsService {
@@ -173,6 +186,8 @@ export class AccessReviewsService {
       let status: AccessReviewStatus = review.status;
       let affectedGrantIds: string[] = [];
       const patch: Record<string, unknown> = {};
+      // Suspension rows name the decision that made or ended them (written below, same transaction).
+      const decisionId = newId();
 
       switch (input.kind) {
         case 'restrict': {
@@ -183,26 +198,50 @@ export class AccessReviewsService {
               effectiveTo: input.effectiveTo,
             });
           }
+          // Locked (in id order): a concurrent decision of another review on the same grants
+          // waits, so the projection below always sees every committed suspension.
           const grants = await this.targetGrants(
             trx,
             organizationId,
             review.subject_person_id,
             input,
           );
-          // A suspension whose window has passed no longer holds, so it may be applied again.
-          const toSuspend = grants.filter((g) => g.revoked_at === null && !isSuspendedAt(g, now));
-          affectedGrantIds = toSuspend.map((g) => g.id);
-          if (affectedGrantIds.length > 0) {
+          const own = await this.liveSuspensions(
+            trx,
+            organizationId,
+            id,
+            grants.map((g) => g.id),
+          );
+          const toSuspend: typeof grants = [];
+          for (const grant of grants) {
+            if (grant.revoked_at !== null) continue;
+            const current = own.get(grant.id);
+            // This review already restricts the grant; another review's restriction does not count.
+            if (current && isSuspendedAt(current, now)) continue;
+            // A suspension of this review whose window has passed is superseded by the new one.
+            if (current) {
+              await this.endSuspensions(trx, organizationId, [current.id], now, decisionId);
+            }
             await trx
-              .updateTable('access_grants')
-              .set({
+              .insertInto('access_grant_suspensions')
+              .values({
+                id: newId(),
+                organization_id: organizationId,
+                grant_id: grant.id,
+                review_id: id,
+                restrict_decision_id: decisionId,
+                reason: input.note ?? review.reason,
                 suspended_at: now,
                 suspended_until: suspendedUntil,
-                suspended_by_review_id: id,
-                suspension_reason: input.note ?? review.reason,
+                ended_at: null,
+                end_decision_id: null,
               })
-              .where('id', 'in', affectedGrantIds)
               .execute();
+            toSuspend.push(grant);
+          }
+          affectedGrantIds = toSuspend.map((g) => g.id);
+          if (affectedGrantIds.length > 0) {
+            await this.projectSuspensions(trx, organizationId, affectedGrantIds, now);
             await this.outbox.enqueue(trx, IdentityEvents.accessRestricted, {
               organizationId,
               aggregateType: 'access_review',
@@ -219,37 +258,48 @@ export class AccessReviewsService {
           break;
         }
         case 'lift': {
-          let query = trx
-            .selectFrom('access_grants')
-            .select('id')
-            .where('organization_id', '=', organizationId)
-            .where('suspended_by_review_id', '=', id);
-          if (input.grantIds && input.grantIds.length > 0) {
-            query = query.where('id', 'in', input.grantIds);
-          }
-          affectedGrantIds = (await query.execute()).map((g) => g.id);
+          // Ends only this review's suspensions; another review's restriction of the same grant
+          // stays in force (§4.6).
+          const own = [
+            ...(
+              await this.liveSuspensions(
+                trx,
+                organizationId,
+                id,
+                input.grantIds && input.grantIds.length > 0 ? input.grantIds : null,
+              )
+            ).values(),
+          ];
+          affectedGrantIds = own.map((s) => s.grant_id).sort();
           if (affectedGrantIds.length > 0) {
-            await trx
-              .updateTable('access_grants')
-              .set({
-                suspended_at: null,
-                suspended_until: null,
-                suspended_by_review_id: null,
-                suspension_reason: null,
-              })
-              .where('id', 'in', affectedGrantIds)
-              .execute();
-            await this.outbox.enqueue(trx, IdentityEvents.accessRestrictionLifted, {
+            await this.lockGrants(trx, organizationId, affectedGrantIds);
+            await this.endSuspensions(
+              trx,
               organizationId,
-              aggregateType: 'access_review',
-              aggregateId: id,
-              payload: {
-                reviewId: id,
-                subjectPersonId: review.subject_person_id,
-                grantIds: affectedGrantIds,
-              },
-              correlationId,
-            });
+              own.map((s) => s.id),
+              now,
+              decisionId,
+            );
+            const stillSuspended = await this.projectSuspensions(
+              trx,
+              organizationId,
+              affectedGrantIds,
+              now,
+            );
+            const restored = affectedGrantIds.filter((g) => !stillSuspended.has(g));
+            if (restored.length > 0) {
+              await this.outbox.enqueue(trx, IdentityEvents.accessRestrictionLifted, {
+                organizationId,
+                aggregateType: 'access_review',
+                aggregateId: id,
+                payload: {
+                  reviewId: id,
+                  subjectPersonId: review.subject_person_id,
+                  grantIds: restored,
+                },
+                correlationId,
+              });
+            }
           }
           break;
         }
@@ -299,7 +349,6 @@ export class AccessReviewsService {
               .executeTakeFirstOrThrow()
           ).n,
         ) + 1;
-      const decisionId = newId();
       try {
         await trx
           .insertInto('access_review_decisions')
@@ -373,6 +422,8 @@ export class AccessReviewsService {
         .where('organization_id', '=', organizationId)
         .where('subject_person_id', '=', subjectPersonId)
         .where('id', 'in', input.grantIds)
+        .orderBy('id')
+        .forUpdate()
         .execute();
       if (rows.length !== new Set(input.grantIds).size) {
         throw errors.validation('Every grantId must be a grant over the reviewed person.');
@@ -386,9 +437,117 @@ export class AccessReviewsService {
         .where('organization_id', '=', organizationId)
         .where('subject_person_id', '=', subjectPersonId)
         .where('actor_person_id', '=', input.actorPersonId)
+        .orderBy('id')
+        .forUpdate()
         .execute();
     }
     throw errors.validation('restrict requires grantIds or actorPersonId.');
+  }
+
+  /** Row locks on the grants, always taken in id order so two reviews never deadlock. */
+  private async lockGrants(trx: Trx, organizationId: string, grantIds: string[]): Promise<void> {
+    await trx
+      .selectFrom('access_grants')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', grantIds)
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+  }
+
+  /** The review's unended suspensions by grant (at most one per grant: migration 0103 index). */
+  private async liveSuspensions(
+    trx: Trx,
+    organizationId: string,
+    reviewId: string,
+    grantIds: string[] | null,
+  ): Promise<Map<string, LiveSuspension>> {
+    if (grantIds !== null && grantIds.length === 0) return new Map();
+    let query = trx
+      .selectFrom('access_grant_suspensions')
+      .select(['id', 'grant_id', 'suspended_at', 'suspended_until'])
+      .where('organization_id', '=', organizationId)
+      .where('review_id', '=', reviewId)
+      .where('ended_at', 'is', null);
+    if (grantIds !== null) query = query.where('grant_id', 'in', grantIds);
+    const rows = await query.orderBy('grant_id').execute();
+    return new Map(rows.map((r) => [r.grant_id, r]));
+  }
+
+  private async endSuspensions(
+    trx: Trx,
+    organizationId: string,
+    suspensionIds: string[],
+    now: Date,
+    decisionId: string,
+  ): Promise<void> {
+    await trx
+      .updateTable('access_grant_suspensions')
+      .set({ ended_at: now, end_decision_id: decisionId })
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', suspensionIds)
+      .where('ended_at', 'is', null)
+      .execute();
+  }
+
+  /**
+   * Rewrites the grants' suspension projection from the suspensions still in force (any review,
+   * closed ones included: closing never lifts). With several, the grant is suspended from the
+   * earliest start until the latest end (open-ended if any is), and `suspended_by_review_id`
+   * names the review whose restriction lasts longest. Callers hold the grants' row locks.
+   * Returns the grants that remain suspended.
+   */
+  private async projectSuspensions(
+    trx: Trx,
+    organizationId: string,
+    grantIds: string[],
+    now: Date,
+  ): Promise<Set<string>> {
+    const rows = await trx
+      .selectFrom('access_grant_suspensions')
+      .select(['grant_id', 'review_id', 'reason', 'suspended_at', 'suspended_until'])
+      .where('organization_id', '=', organizationId)
+      .where('grant_id', 'in', grantIds)
+      .where('ended_at', 'is', null)
+      .where((eb) => eb.or([eb('suspended_until', 'is', null), eb('suspended_until', '>', now)]))
+      .execute();
+    const ms = (value: Date | string | null) =>
+      value === null ? Number.POSITIVE_INFINITY : new Date(value).getTime();
+    const suspended = new Set<string>();
+    for (const grantId of grantIds) {
+      const inForce = rows
+        .filter((r) => r.grant_id === grantId)
+        .sort(
+          (x, y) =>
+            ms(y.suspended_until) - ms(x.suspended_until) ||
+            ms(x.suspended_at) - ms(y.suspended_at) ||
+            x.review_id.localeCompare(y.review_id),
+        );
+      const holder = inForce[0];
+      if (holder) suspended.add(grantId);
+      await trx
+        .updateTable('access_grants')
+        .set(
+          holder
+            ? {
+                suspended_at: new Date(Math.min(...inForce.map((r) => ms(r.suspended_at)))),
+                suspended_until: holder.suspended_until,
+                suspended_by_review_id: holder.review_id,
+                suspension_reason: holder.reason,
+              }
+            : {
+                suspended_at: null,
+                suspended_until: null,
+                suspended_by_review_id: null,
+                suspension_reason: null,
+              },
+        )
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', grantId)
+        .execute();
+    }
+    return suspended;
   }
 
   async detail(db: Db | Trx, organizationId: string, id: string): Promise<AccessReview> {
