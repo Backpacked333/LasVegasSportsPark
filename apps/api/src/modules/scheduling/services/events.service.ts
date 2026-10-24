@@ -33,7 +33,7 @@ import type {
 } from '../ports';
 import { SchedulingActions } from '../scheduling.actions';
 import { EventMachine } from '../scheduling.state-machines';
-import { minutesOf, minutesSinceMidnight, toLocal } from '../time/local-time';
+import { localMinuteSpan, minutesOf } from '../time/local-time';
 import { EventWriter, sameResourceSet } from './event-writer';
 
 const Cursor = z.object({ start: z.string(), id: z.string() });
@@ -496,15 +496,13 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
       const occupiedEnd = s + duration + cleanup * 60_000;
       if (busy.some((b) => b.start < occupiedEnd && occupiedStart < b.end)) continue;
       if (windows.length > 0) {
-        const start = new Date(s);
-        const local = toLocal(facility.timezone, start);
-        const startMinute = minutesSinceMidnight(facility.timezone, start);
-        const endMinute = startMinute + input.durationMinutes;
+        // SPK-SCHED-008: the slot's local wall-clock end, not start plus elapsed minutes
+        const span = localMinuteSpan(facility.timezone, new Date(s), new Date(s + duration));
         const fits = windows.some(
           (w) =>
-            w.weekday === local.weekday &&
-            minutesOf(w.opens_at) <= startMinute &&
-            endMinute <= minutesOf(w.closes_at),
+            w.weekday === span.weekday &&
+            minutesOf(w.opens_at) <= span.startMinute &&
+            span.endMinute <= minutesOf(w.closes_at),
         );
         if (!fits) continue;
       }

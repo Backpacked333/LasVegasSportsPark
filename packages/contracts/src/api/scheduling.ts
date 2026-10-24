@@ -416,7 +416,13 @@ export const CreateEventSeriesBody = withCommandMeta({
     .max(24 * 60),
   setupMinutes: Minutes.optional(),
   cleanupMinutes: Minutes.optional(),
+  /**
+   * SPK-SCHED-008: required when the local start time does not exist on some date of the rule
+   * (spring-forward gap); without it the series is refused with details.code
+   * dst_resolution_required naming those dates.
+   */
   nonexistentPolicy: NonexistentTimePolicy.optional(),
+  /** SPK-SCHED-008: required when the local start time occurs twice on some date (fall-back overlap). */
   ambiguousPolicy: AmbiguousTimePolicy.optional(),
   exceptions: z.array(LocalDate).max(366).optional(),
   resourceIds: z.array(z.uuid()).min(1).max(20),

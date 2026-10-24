@@ -107,12 +107,12 @@ describe('recurring series across daylight-saving changes and recurrence edits (
   });
 
   it('SPK-SCHED-008: nonexistent and ambiguous local times are resolved explicitly and recorded on the event', async () => {
-    const shifted = await series.createSeries(programManager, {
+    const gapRule = {
       facilityId: facility,
-      kind: 'maintenance',
+      kind: 'maintenance' as const,
       title: 'Overnight cleaning',
       recurrence: {
-        frequency: 'weekly',
+        frequency: 'weekly' as const,
         interval: 1,
         byWeekday: [0],
         startDate: '2026-03-01',
@@ -121,6 +121,36 @@ describe('recurring series across daylight-saving changes and recurrence edits (
       localStartTime: '02:30',
       durationMinutes: 30,
       resourceIds: [pitch.southHalfId],
+    };
+    // "require resolution": without a chosen policy the series is refused, naming the dates
+    const seriesBefore = await t.db.selectFrom('event_series').select('id').execute();
+    await expect(series.createSeries(programManager, gapRule)).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: {
+        code: 'dst_resolution_required',
+        nonexistentLocalDates: ['2026-03-08'],
+        ambiguousLocalDates: [],
+        options: { nonexistentPolicy: ['shift_forward', 'skip'], ambiguousPolicy: [] },
+      },
+    });
+    expect(await t.db.selectFrom('event_series').select('id').execute()).toHaveLength(
+      seriesBefore.length,
+    );
+    await expect(
+      series.createSeries(programManager, {
+        ...gapRule,
+        title: 'Fall-back block without a policy',
+        recurrence: { frequency: 'daily', interval: 1, startDate: '2026-11-01', count: 1 },
+        localStartTime: '01:30',
+        resourceIds: [pitch.northHalfId],
+      }),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { nonexistentLocalDates: [], ambiguousLocalDates: ['2026-11-01'] },
+    });
+    const shifted = await series.createSeries(programManager, {
+      ...gapRule,
+      nonexistentPolicy: 'shift_forward',
     });
     const shiftedRows = await t.db
       .selectFrom('events')

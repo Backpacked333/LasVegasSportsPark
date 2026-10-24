@@ -299,6 +299,7 @@ export class EventWriter {
           .values({
             id: reservationId,
             organization_id: event.organization_id,
+            facility_id: event.facility_id,
             event_id: event.id,
             resource_id: resourceId,
             occupied,
@@ -628,7 +629,7 @@ export class EventWriter {
     nextStatus: 'canceled' = 'canceled',
   ): Promise<EventRow> {
     await this.release(trx, event.organization_id, event.id);
-    return trx
+    const canceled = await trx
       .updateTable('events')
       .set({
         status: nextStatus,
@@ -640,7 +641,25 @@ export class EventWriter {
       .where('id', '=', event.id)
       .where('revision', '=', event.revision)
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    if (!canceled) throw await this.staleEvent(trx, event);
+    return canceled;
+  }
+
+  /**
+   * §4.9: the error for a revision-matched event update that changed no row. Another command moved
+   * the event after it was read; the caller retries on the current revision (STALE_REVISION), never
+   * an unmapped internal error.
+   */
+  async staleEvent(trx: Trx, event: EventRow): Promise<Error> {
+    const current = await trx
+      .selectFrom('events')
+      .select('revision')
+      .where('organization_id', '=', event.organization_id)
+      .where('id', '=', event.id)
+      .executeTakeFirst();
+    if (!current) return errors.protectedNotFound('event');
+    return errors.staleRevision(event.revision, current.revision);
   }
 
   snapshotActor(principal: Principal): Record<string, unknown> {

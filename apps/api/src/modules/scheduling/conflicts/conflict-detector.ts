@@ -4,7 +4,7 @@ import { tstzrange, type ResourceStatus } from '@sportspark/db';
 import { sql } from 'kysely';
 import type { Trx } from '../../../kernel';
 import type { SchedulingPolicy } from '../scheduling.policy';
-import { minutesOf, minutesSinceMidnight, toLocal } from '../time/local-time';
+import { localMinuteSpan, minutesOf } from '../time/local-time';
 
 /** One event as it would exist after a command: new or moved events use the proposed values. */
 export interface ProposedEvent {
@@ -231,10 +231,9 @@ export class ConflictDetector {
       }
 
       // operating hours (SPK-SCHED-001): resource windows, falling back to facility windows
-      const local = toLocal(facility.timezone, p.scheduledStart);
-      const startMinute = minutesSinceMidnight(facility.timezone, p.scheduledStart);
-      const endMinute =
-        startMinute + Math.round((p.scheduledEnd.getTime() - p.scheduledStart.getTime()) / 60_000);
+      // SPK-SCHED-008: compare local wall-clock start and end, so a daylight-saving change inside
+      // the event neither rejects a fitting event nor accepts one that runs past closing.
+      const span = localMinuteSpan(facility.timezone, p.scheduledStart, p.scheduledEnd);
       for (const resourceId of p.resourceIds) {
         if (!resources.has(resourceId)) continue;
         let windows = hours.filter((h) => h.resource_id === resourceId);
@@ -242,9 +241,9 @@ export class ConflictDetector {
         if (windows.length === 0) continue;
         const fits = windows.some(
           (w) =>
-            w.weekday === local.weekday &&
-            minutesOf(w.opens_at) <= startMinute &&
-            endMinute <= minutesOf(w.closes_at),
+            w.weekday === span.weekday &&
+            minutesOf(w.opens_at) <= span.startMinute &&
+            span.endMinute <= minutesOf(w.closes_at),
         );
         if (!fits) {
           push('error', {

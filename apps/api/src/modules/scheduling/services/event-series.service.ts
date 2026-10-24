@@ -88,6 +88,31 @@ export class EventSeriesService {
       if (occurrences.length === 0) {
         throw errors.validation('The recurrence rule produces no occurrences.');
       }
+      // SPK-SCHED-008 "ambiguous or nonexistent times require resolution": a rule whose local start
+      // time falls in a daylight-saving gap or overlap on some date is refused until the scheduler
+      // chooses how to resolve it; the policy defaults are never applied silently.
+      const unresolvedGap = occurrences
+        .filter(
+          (o) => o.dstResolution === 'shifted_forward' && body.nonexistentPolicy === undefined,
+        )
+        .map((o) => o.localDate);
+      const unresolvedOverlap = occurrences
+        .filter((o) => o.dstResolution === 'first' && body.ambiguousPolicy === undefined)
+        .map((o) => o.localDate);
+      if (unresolvedGap.length > 0 || unresolvedOverlap.length > 0) {
+        throw errors.validation(
+          'The local start time does not exist or occurs twice on some dates; choose how to resolve them.',
+          {
+            code: 'dst_resolution_required',
+            nonexistentLocalDates: unresolvedGap,
+            ambiguousLocalDates: unresolvedOverlap,
+            options: {
+              nonexistentPolicy: unresolvedGap.length > 0 ? ['shift_forward', 'skip'] : [],
+              ambiguousPolicy: unresolvedOverlap.length > 0 ? ['first', 'second'] : [],
+            },
+          },
+        );
+      }
       const commitments = (body.commitments ?? []).map((c) => PartyCommitmentSchema.parse(c));
       const { setupMinutes, cleanupMinutes } = buffers;
       const resourceIds = resources.map((r) => r.id);
@@ -425,7 +450,8 @@ export class EventSeriesService {
           .where('id', '=', event.id)
           .where('revision', '=', event.revision)
           .returningAll()
-          .executeTakeFirstOrThrow();
+          .executeTakeFirst();
+        if (!updated) throw await this.writer.staleEvent(trx, event);
         if (updated.status === 'published') {
           await this.writer.reserve(trx, updated, facility);
           await this.writer.notifyChanged(trx, {

@@ -8,7 +8,7 @@ Restriction), §4.8 `POST /v1/maintenance-restrictions`, SPK-AT-021, SPK-UX-006 
 escalation)
 
 **Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999` (present: `0900`,
-`0901_facilities_task_owner_fk`)
+`0901_facilities_task_owner_fk`, `0902_facilities_facility_scoped_keys`)
 
 **Depends on:** scheduling (closure port, resources public API) and identity
 (`PERSON_DIRECTORY_PORT`, to check assigned task owners). Restrictions create scheduling closures
@@ -36,7 +36,9 @@ until the template is edited. Facilities API tests keep the fake principals thro
 `__tests__/support.ts`, because importing IdentityModule brings its principal resolver.
 
 Invariants enforced by the database: composite `(organization_id, id)` foreign keys everywhere
-(including the closure reference and the assigned owner); one closure backs at most one restriction; a task carries at
+(including the closure reference and the assigned owner); facility-scoped keys (migration `0902`,
+§4.3): an asset, preventive schedule, task or restriction names only the space, asset, task,
+schedule and closure of its own facility; one closure backs at most one restriction; a task carries at
 most one unreleased restriction; a preventive schedule materializes each occurrence's task and
 restriction at most once; `active` needs a closure, `released` needs who/when/which closure.
 
@@ -86,7 +88,9 @@ multi-step commands recorded as operations (`facilities.approve_restriction`,
 - **SPK-FAC-004.** Closing a task never touches its restriction (`openRestrictionIds` says so).
   `release` requires `facilities.release_to_service`, and when the task `requires_inspection` the
   latest inspection must be `passed` (`ELIGIBILITY_FAILED`, `details.code = inspection_required`
-  otherwise). While a restriction on the task is open (proposed, approved or active), turning
+  otherwise). An inspection is recorded only once it has happened: an `inspectedAt` after the
+  server clock is refused (`VALIDATION_FAILED`, `details.code = inspection_in_future`), so a
+  future-dated pass can never outrank a later failed inspection. While a restriction on the task is open (proposed, approved or active), turning
   `requiresInspection` off is refused the same way, so the gate cannot be removed before release;
   any change of the requirement is audited (`details.requiresInspection { from, to }`). The
   closure is lifted through the port, then the release is recorded. A failed

@@ -93,6 +93,7 @@ describe('scheduling schema invariants (migration 0300)', () => {
       .values({
         id: reservationId,
         organization_id: org,
+        facility_id: facility,
         event_id: eventId,
         resource_id: resourceId,
         occupied: tstzrange(occupiedStart, occupiedEnd),
@@ -372,6 +373,95 @@ describe('scheduling schema invariants (migration 0300)', () => {
         })
         .execute(),
     ).rejects.toSatisfy(isForeignKeyViolation);
+  });
+
+  it('§4.3: a row of one facility cannot name a resource or an event of another facility (0301)', async () => {
+    const otherFacility = newId();
+    await db
+      .insertInto('facilities')
+      .values({
+        id: otherFacility,
+        organization_id: org,
+        slug: `other-${otherFacility.slice(0, 8)}`,
+        name: 'Other facility',
+        timezone: 'America/Los_Angeles',
+      })
+      .execute();
+    const there = await seedResource(db, {
+      organizationId: org,
+      facilityId: otherFacility,
+      name: 'Pitch over there',
+    });
+    // a subdivision of another facility's pitch
+    await expect(
+      db
+        .insertInto('resources')
+        .values({
+          id: newId(),
+          organization_id: org,
+          facility_id: facility,
+          kind: 'subdivision',
+          name: 'Borrowed half',
+          parent_resource_id: there.resourceId,
+        })
+        .execute(),
+    ).rejects.toSatisfy(isForeignKeyViolation);
+    // a closure of this facility over the other facility's pitch
+    await expect(
+      db
+        .insertInto('closures')
+        .values({
+          id: newId(),
+          organization_id: org,
+          facility_id: facility,
+          resource_id: there.resourceId,
+          during: tstzrange(at('2026-11-20', '08:00'), at('2026-11-20', '20:00')),
+          reason: 'cross-facility',
+          source: 'manual',
+          created_by: json({}),
+          impact: null,
+          resolution: null,
+          applied_at: null,
+          lifted_at: null,
+        })
+        .execute(),
+    ).rejects.toSatisfy(isForeignKeyViolation);
+    // operating hours of this facility for the other facility's pitch
+    await expect(
+      db
+        .insertInto('operating_hours')
+        .values({
+          id: newId(),
+          organization_id: org,
+          facility_id: facility,
+          resource_id: there.resourceId,
+          weekday: 1,
+          opens_at: '08:00',
+          closes_at: '20:00',
+        })
+        .execute(),
+    ).rejects.toSatisfy(isForeignKeyViolation);
+    // a reservation joining this facility's event to the other facility's pitch, whichever
+    // facility the reservation claims
+    const eventId = await insertEvent(at('2026-11-20', '10:00'), at('2026-11-20', '11:00'), [
+      there.resourceId,
+    ]);
+    for (const claimed of [facility, otherFacility]) {
+      await expect(
+        db
+          .insertInto('reservations')
+          .values({
+            id: newId(),
+            organization_id: org,
+            facility_id: claimed,
+            event_id: eventId,
+            resource_id: there.resourceId,
+            occupied: tstzrange(at('2026-11-20', '10:00'), at('2026-11-20', '11:00')),
+            released_at: null,
+          })
+          .execute(),
+      ).rejects.toSatisfy(isForeignKeyViolation);
+    }
   });
 
   it('check constraints list exactly the lifecycle states and structural rules', async () => {

@@ -169,6 +169,8 @@ export type ReservationStatus = 'active' | 'released';
 export interface ReservationsTable {
   id: string;
   organization_id: string;
+  /** The event's facility (0301): the event and the resource are referenced through it. */
+  facility_id: string;
   event_id: string;
   resource_id: string;
   occupied: TstzRange;

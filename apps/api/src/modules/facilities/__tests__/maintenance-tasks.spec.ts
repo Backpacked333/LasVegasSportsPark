@@ -299,10 +299,15 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
       expectedRevision: afterFail.body.revision,
     });
     expect(resolvedAgain.status).toBe(200);
-    const passed = await post(`/v1/maintenance-tasks/${id}/inspections`, {
+    // SPK-FAC-004: an inspection is recorded once it has happened; a future-dated pass would
+    // outrank every later failed inspection in the release decision
+    const ahead = await post(`/v1/maintenance-tasks/${id}/inspections`, {
       outcome: 'passed',
       inspectedAt: '2026-10-20T09:00:00Z',
     });
+    expect(ahead.status).toBe(400);
+    expect(ahead.body.details).toMatchObject({ code: 'inspection_in_future', path: 'inspectedAt' });
+    const passed = await post(`/v1/maintenance-tasks/${id}/inspections`, { outcome: 'passed' });
     expect(passed.status).toBe(201);
     const inspections = await t.http.get(`/v1/maintenance-tasks/${id}/inspections`).set(auth);
     expect(inspections.body.map((i: { outcome: string }) => i.outcome)).toEqual([

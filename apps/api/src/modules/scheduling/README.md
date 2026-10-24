@@ -13,7 +13,7 @@ SPK-AT-008/009/021, SPK-COMMS-005 (old and new practical details on every schedu
 **Status: implemented** (verified by `apps/api/src/modules/scheduling/__tests__` and
 `time/recurrence.spec.ts`). Pending decisions are listed at the end.
 
-## Tables (migration `0300_scheduling_core.sql`)
+## Tables (migration `0300_scheduling_core.sql`; facility-scoped keys `0301`)
 
 | Table                                    | Purpose                                                                                                                                                                                                                                       |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -125,6 +125,26 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   nothing is partially published.
 - Series store local time + zone; nonexistent local times shift forward (or skip) and ambiguous ones
   take the first occurrence (or second) per the series, recorded as `dst_resolution` on the event.
+  SPK-SCHED-008 "require resolution": when the rule's local start time falls in a gap or an overlap
+  on some date and the matching `nonexistentPolicy` / `ambiguousPolicy` was not sent, the series is
+  refused (`VALIDATION_FAILED`, `details.code = dst_resolution_required` with the local dates); the
+  defaults are never applied silently (`event-series.spec.ts`).
+- Operating hours (SPK-SCHED-001/008) compare the local wall-clock start and end
+  (`localMinuteSpan`), never the start plus elapsed minutes: a fall-back event 00:30 PDT to
+  01:30 PST fits a 00:00-02:00 window, a spring-forward event 01:30 PST to 03:30 PDT does not fit
+  one closing at 03:00. An event may end at 24:00 of its start day; one that runs past local
+  midnight never fits (windows never span midnight). Conflict detection and the slot search share
+  the rule (`events.spec.ts`).
+- A revision-matched event write that matches no row (another command changed the event after it
+  was read) answers `STALE_REVISION`, never an internal error (`EventWriter.cancel`, series edit).
+- Facility boundaries (§4.3, migration `0301`): resources, events and closures carry
+  `unique (organization_id, facility_id, id)`; a subdivision's parent, a closure's resource, an
+  operating-hours window's resource, and a reservation's event and resource (reservations carry
+  `facility_id`) belong to the row's own facility (`schema-invariants.spec.ts`).
+- Concurrent publication (SPK-AT-008): drafts racing for the same pitch and halves commit a
+  non-overlapping set (the whole pitch alone, or at most one booking of each half) with one event,
+  publication and succeeded operation per committed draft and every other draft `failed`
+  (`concurrency.spec.ts`, under PGlite and `TEST_DATABASE_URL`).
   Occurrence indexes are stable, and occurrences that already ended are never changed by an edit.
 - Closure application either cancels affected published events (notices carry the closure id) or
   leaves them for staff resolution as an operational exception in the `scheduler` queue.

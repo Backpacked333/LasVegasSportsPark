@@ -461,6 +461,16 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
       assertExpectedRevision(body.expectedRevision, task.revision);
       const now = this.clock.now();
       const inspectedAt = body.inspectedAt ? new Date(body.inspectedAt) : now;
+      // SPK-FAC-004: the latest inspection decides the release, so an inspection is recorded only
+      // once it has happened; a future-dated pass would outrank every later failed inspection.
+      if (inspectedAt.getTime() > now.getTime()) {
+        throw errors.validation('An inspection cannot be recorded before it has taken place.', {
+          code: 'inspection_in_future',
+          path: 'inspectedAt',
+          inspectedAt: inspectedAt.toISOString(),
+          now: now.toISOString(),
+        });
+      }
       const id = newId();
       const row = await trx
         .insertInto('inspections')
