@@ -4,6 +4,7 @@ import type { CommunicationsTables } from './communications';
 import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
 import type { EnrollmentTables } from './enrollment';
+import type { EntryTables } from './entry';
 import type { FacilitiesTables } from './facilities';
 import type { IdentityTables } from './identity';
 import type { SchedulingTables } from './scheduling';
@@ -15,6 +16,7 @@ export * from './communications';
 export * from './competition-matches';
 export * from './competition';
 export * from './enrollment';
+export * from './entry';
 export * from './facilities';
 export * from './identity';
 export * from './scheduling';
@@ -32,6 +34,7 @@ export interface Database
     CompetitionMatchesTables,
     CompetitionTables,
     EnrollmentTables,
+    EntryTables,
     FacilitiesTables,
     IdentityTables,
     SchedulingTables,
