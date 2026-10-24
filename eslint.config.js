@@ -22,6 +22,14 @@ module.exports = tseslint.config(
     },
   },
   {
+    files: ['**/*.mjs'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: { console: 'readonly', process: 'readonly', URL: 'readonly' },
+    },
+    rules: { 'no-console': 'off' },
+  },
+  {
     files: ['**/*.js', '**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',
