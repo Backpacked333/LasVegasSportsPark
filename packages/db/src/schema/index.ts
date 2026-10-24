@@ -1,5 +1,6 @@
 import type { CoreTables } from './core';
 import type { CatalogTables } from './catalog';
+import type { CommunicationsTables } from './communications';
 import type { CompetitionTables } from './competition';
 import type { FacilitiesTables } from './facilities';
 import type { IdentityTables } from './identity';
@@ -7,6 +8,7 @@ import type { SchedulingTables } from './scheduling';
 
 export * from './core';
 export * from './catalog';
+export * from './communications';
 export * from './competition';
 export * from './facilities';
 export * from './identity';
@@ -20,6 +22,7 @@ export interface Database
   extends
     CoreTables,
     CatalogTables,
+    CommunicationsTables,
     CompetitionTables,
     FacilitiesTables,
     IdentityTables,
