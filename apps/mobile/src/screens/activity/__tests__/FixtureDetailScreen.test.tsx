@@ -4,7 +4,7 @@
  * §4.10, §4.15).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   AWAY_ENTRY,
   eventDetails,
@@ -314,10 +314,11 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     const reload = await screen.findByRole('button', { name: 'Reload' });
     const before = reads;
     fireEvent.press(reload);
-    await act(async () => undefined);
-    expect(reads).toBe(before + 1);
+    // The mutation reset and the refetch notify through TanStack Query's batched (timer-based)
+    // notifier, so wait for the re-render instead of assuming it lands within one act() flush.
+    await waitFor(() => expect(reads).toBe(before + 1));
     // The stale answer is cleared with the reload (no lingering "Something went wrong").
-    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull());
     expect(screen.queryByText(/Error code: INVALID_TRANSITION/)).toBeNull();
   });
 
