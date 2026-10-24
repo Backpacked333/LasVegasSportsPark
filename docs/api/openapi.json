@@ -2877,7 +2877,19 @@
             ]
           },
           "reporter": {
-            "$ref": "#/components/schemas/ActorSnapshot"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ActorSnapshot"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
           },
           "reportedAt": {
             "type": "string",
@@ -7621,7 +7633,7 @@
           "lines": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DiscountEvaluationLine"
+              "$ref": "#/components/schemas/DiscountPreviewLine"
             },
             "minItems": 1,
             "maxItems": 100
@@ -7641,7 +7653,7 @@
           "lines"
         ]
       },
-      "DiscountEvaluationLine": {
+      "DiscountPreviewLine": {
         "type": "object",
         "properties": {
           "lineId": {
@@ -7653,17 +7665,6 @@
             "type": "string",
             "format": "uuid"
           },
-          "offeringKind": {
-            "$ref": "#/components/schemas/OfferingKind"
-          },
-          "programId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "default": null
-          },
           "participantPersonId": {
             "type": [
               "string",
@@ -7672,6 +7673,16 @@
             "format": "uuid",
             "default": null
           },
+          "offeringKind": {
+            "$ref": "#/components/schemas/OfferingKind"
+          },
+          "programId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "baseAmountMinor": {
             "type": "integer",
             "minimum": 0
@@ -7679,9 +7690,7 @@
         },
         "required": [
           "lineId",
-          "offeringId",
-          "offeringKind",
-          "baseAmountMinor"
+          "offeringId"
         ]
       },
       "Notification": {

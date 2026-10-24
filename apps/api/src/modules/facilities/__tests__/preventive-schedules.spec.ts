@@ -1,4 +1,4 @@
-import { newId, type Principal } from '@sportspark/contracts';
+import { MaintenanceTaskSchema, newId, type Principal } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
@@ -162,6 +162,12 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
         dueAt: restriction.interval.end,
         openRestrictionIds: [restriction.id],
       });
+      // §4.8 exact schemas: the response declares every field it returns, including the note that
+      // names a generated task's origin
+      expect(task.body.reporter.note).toMatch(/^preventive schedule /);
+      const declared = Object.keys(MaintenanceTaskSchema.shape.reporter.shape);
+      expect(Object.keys(task.body.reporter).filter((k) => !declared.includes(k))).toEqual([]);
+      expect(MaintenanceTaskSchema.strict().safeParse(task.body).success).toBe(true);
     }
     // the future closures affect availability on the half and the whole pitch, not the other half
     await expect(

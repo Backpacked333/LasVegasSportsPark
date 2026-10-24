@@ -167,7 +167,8 @@ export const MaintenanceTaskSchema = z
     resourceId: z.uuid().nullable(),
     issue: z.string(),
     severity: MaintenanceSeverity,
-    reporter: ActorSnapshotSchema,
+    /** Who reported the task; `note` names the origin of a generated task (a preventive schedule). */
+    reporter: ActorSnapshotSchema.extend({ note: z.string().optional() }),
     reportedAt: Instant,
     evidence: z.array(EvidenceReferenceSchema),
     assignedOwnerPersonId: z.uuid().nullable(),
