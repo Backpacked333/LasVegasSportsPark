@@ -2,7 +2,7 @@ import type { ColumnType, Generated } from 'kysely';
 import type { GeneratedJson, GeneratedTimestamp, Json, NullableTimestamp, Timestamp } from './core';
 
 /**
- * Identity module tables (migration 0100, specification §3.1 SPK-IAM-001..007).
+ * Identity module tables (migrations 0100-0103, specification §3.1 SPK-IAM-001..007).
  * `date` columns are read through a `::text` cast by the module so both drivers return
  * `YYYY-MM-DD`; the type below documents that contract.
  */
@@ -116,11 +116,32 @@ export interface AccessGrantsTable {
   revoked_by: Json<Record<string, unknown>> | null;
   revocation_reason: string | null;
   suspended_at: NullableTimestamp;
+  /** Migration 0102: end of a temporary restriction (SPK-IAM-005); null until lifted. */
+  suspended_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   suspended_by_review_id: string | null;
   suspension_reason: string | null;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
+}
+
+/**
+ * Migration 0103 (SPK-IAM-005, §4.6): one row per access review and grant it suspends. A grant is
+ * suspended while any unended row is in force; `access_grants.suspended_*` is the projection.
+ * Rows are only ever ended (once), never edited or deleted.
+ */
+export interface AccessGrantSuspensionsTable {
+  id: string;
+  organization_id: string;
+  grant_id: string;
+  review_id: string;
+  restrict_decision_id: string | null;
+  reason: string | null;
+  suspended_at: Timestamp;
+  suspended_until: NullableTimestamp;
+  ended_at: NullableTimestamp;
+  end_decision_id: string | null;
+  created_at: GeneratedTimestamp;
 }
 
 export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
@@ -151,6 +172,17 @@ export interface InvitationsTable {
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
+}
+
+/**
+ * Migration 0101: the people an invitation covers, fixed at issue (SPK-IAM-004, §4.5).
+ * Append-only.
+ */
+export interface InvitationSubjectsTable {
+  organization_id: string;
+  invitation_id: string;
+  person_id: string;
+  created_at: GeneratedTimestamp;
 }
 
 export type ClaimKind = 'self' | 'guardian';
@@ -277,7 +309,9 @@ export interface IdentityTables {
   household_memberships: HouseholdMembershipsTable;
   relationships: RelationshipsTable;
   access_grants: AccessGrantsTable;
+  access_grant_suspensions: AccessGrantSuspensionsTable;
   invitations: InvitationsTable;
+  invitation_subjects: InvitationSubjectsTable;
   claims: ClaimsTable;
   staff_memberships: StaffMembershipsTable;
   access_reviews: AccessReviewsTable;

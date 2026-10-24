@@ -44,16 +44,50 @@ export function requiredStaffFor(units: readonly CapacityUnit[]): number {
   return total;
 }
 
-/** Mechanism for SPK-YOUTH-002: is this capacity change a staffing increase that needs a reason? */
+/**
+ * SPK-YOUTH-002: the capacity units whose staffing ratio a change removes or relaxes. A unit that
+ * carried a ratio before is relaxed when the change drops the unit (for example by swapping it for
+ * an unstaffed one), drops its ratio, or raises its participants per staff member. Removing a
+ * ratio lowers the computed requirement, so the staff count alone would call it a decrease.
+ */
+export function relaxedStaffingRatios(
+  before: readonly CapacityUnit[],
+  after: readonly CapacityUnit[],
+): CapacityUnit['unit'][] {
+  const relaxed: CapacityUnit['unit'][] = [];
+  for (const unit of before) {
+    if (!unit.staffingRatio) continue;
+    const next = after.find((u) => u.unit === unit.unit);
+    if (
+      !next?.staffingRatio ||
+      next.staffingRatio.participantsPerStaff > unit.staffingRatio.participantsPerStaff
+    ) {
+      relaxed.push(unit.unit);
+    }
+  }
+  return relaxed;
+}
+
+/**
+ * Mechanism for SPK-YOUTH-002: does this capacity change need an explicit reason? It does when it
+ * raises the staffing requirement or removes or relaxes a staffing ratio.
+ */
 export function staffingIncreaseNeedsReason(
   before: readonly CapacityUnit[],
   after: readonly CapacityUnit[],
-): { requiredStaffBefore: number; requiredStaffAfter: number; needsReason: boolean } {
+): {
+  requiredStaffBefore: number;
+  requiredStaffAfter: number;
+  ratiosRelaxed: CapacityUnit['unit'][];
+  needsReason: boolean;
+} {
   const requiredStaffBefore = requiredStaffFor(before);
   const requiredStaffAfter = requiredStaffFor(after);
+  const ratiosRelaxed = relaxedStaffingRatios(before, after);
   return {
     requiredStaffBefore,
     requiredStaffAfter,
-    needsReason: requiredStaffAfter > requiredStaffBefore,
+    ratiosRelaxed,
+    needsReason: requiredStaffAfter > requiredStaffBefore || ratiosRelaxed.length > 0,
   };
 }

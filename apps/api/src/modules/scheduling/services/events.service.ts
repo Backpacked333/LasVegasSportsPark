@@ -33,7 +33,7 @@ import type {
 import { SchedulingActions } from '../scheduling.actions';
 import { EventMachine } from '../scheduling.state-machines';
 import { minutesOf, minutesSinceMidnight, toLocal } from '../time/local-time';
-import { EventWriter } from './event-writer';
+import { EventWriter, sameResourceSet } from './event-writer';
 
 const Cursor = z.object({ start: z.string(), id: z.string() });
 
@@ -78,7 +78,8 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         facility.id,
         input.resourceIds,
       );
-      const buffers = this.writer.defaultBuffers(resources);
+      // SPK-SCHED-003: the reserved resources' turnover requirement is the minimum buffer
+      const buffers = this.writer.effectiveBuffers(resources, input);
       const status = input.status ?? 'published';
       const data = {
         organizationId,
@@ -89,8 +90,8 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         format: input.format ?? null,
         scheduledStart,
         scheduledEnd,
-        setupMinutes: input.setupMinutes ?? buffers.setupMinutes,
-        cleanupMinutes: input.cleanupMinutes ?? buffers.cleanupMinutes,
+        setupMinutes: buffers.setupMinutes,
+        cleanupMinutes: buffers.cleanupMinutes,
         status,
         resourceIds: resources.map((r) => r.id),
         commitments: input.commitments ?? [],
@@ -167,12 +168,20 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         input.resourceIds ?? event.resource_ids,
       );
       const before = await this.writer.details(trx, event);
+      // SPK-SCHED-003: buffers follow the resources actually reserved; the event's own buffers
+      // carry over only while it stays on the same resources, never below their requirement.
+      const resourceIds = resources.map((r) => r.id);
+      const sameResources = sameResourceSet(resourceIds, event.resource_ids);
+      const buffers = this.writer.effectiveBuffers(resources, {
+        setupMinutes: input.setupMinutes ?? (sameResources ? event.setup_minutes : undefined),
+        cleanupMinutes: input.cleanupMinutes ?? (sameResources ? event.cleanup_minutes : undefined),
+      });
       const proposal = this.writer.proposalOf(event, {
         scheduledStart,
         scheduledEnd,
-        setupMinutes: input.setupMinutes ?? event.setup_minutes,
-        cleanupMinutes: input.cleanupMinutes ?? event.cleanup_minutes,
-        resourceIds: resources.map((r) => r.id),
+        setupMinutes: buffers.setupMinutes,
+        cleanupMinutes: buffers.cleanupMinutes,
+        resourceIds,
       });
       const published = event.status === 'published';
       if (published) {
@@ -412,8 +421,11 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
       .where('id', '=', resource.facility_id)
       .executeTakeFirstOrThrow();
     const policy = this.writer.policyFor(facility);
-    const setup = input.setupMinutes ?? resource.default_setup_minutes;
-    const cleanup = input.cleanupMinutes ?? resource.default_cleanup_minutes;
+    // the same buffers createEvent would hold on this resource (SPK-SCHED-003)
+    const { setupMinutes: setup, cleanupMinutes: cleanup } = this.writer.effectiveBuffers(
+      [resource],
+      input,
+    );
     const step = (input.stepMinutes ?? policy.availabilityStepMinutes) * 60_000;
     const duration = input.durationMinutes * 60_000;
     const windowStart = new Date(input.interval.start);

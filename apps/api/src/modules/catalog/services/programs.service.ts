@@ -5,6 +5,7 @@ import {
   errors,
   newId,
   z,
+  type AgeBand,
   type CreateProgramInput,
   type ListProgramsQuery,
   type Page,
@@ -29,6 +30,16 @@ import { organizationOf, toProgram } from '../catalog.shared';
 import { ProgramMachine, type ProgramEvent } from '../catalog.state-machines';
 
 const Cursor = z.object({ name: z.string(), id: z.string() });
+
+/** Offering states in which customers see the offering and register against its age band. */
+const AGE_BAND_FROZEN_STATES = ['published', 'registration_open', 'registration_paused'] as const;
+
+function sameAgeBand(a: AgeBand, b: AgeBand): boolean {
+  return (
+    (a.minAgeYears ?? null) === (b.minAgeYears ?? null) &&
+    (a.maxAgeYears ?? null) === (b.maxAgeYears ?? null)
+  );
+}
 
 /** Reusable program definitions, separate from dated offerings (SPK-CAT-001, SPK-YOUTH-001). */
 @Injectable()
@@ -129,6 +140,38 @@ export class ProgramsService {
         if (!event) throw errors.invalidTransition('Program', current.status, 'revert_to_draft');
         status = ProgramMachine.next(current.status, event);
       }
+      // SPK-REG-002: offerings read the program's age band live, and enrollment evaluates age
+      // eligibility from it when the eligibility policy sets no age limits. Changing it under a
+      // published offering would change eligibility with no policy version, offering revision or
+      // event, so it is refused; a new eligibility policy version with explicit age limits is the
+      // versioned path.
+      const beforeAgeBand = current.age_band as AgeBand;
+      const ageBandChanged =
+        body.ageBand !== undefined && !sameAgeBand(beforeAgeBand, body.ageBand);
+      if (ageBandChanged) {
+        // Lock the program's live offerings: a concurrent publication either commits first and is
+        // seen here, or waits for this change and publishes under the new age band.
+        const live = await trx
+          .selectFrom('offerings')
+          .select(['id', 'publication_state'])
+          .where('organization_id', '=', organizationId)
+          .where('program_id', '=', id)
+          .where('publication_state', 'in', ['draft', ...AGE_BAND_FROZEN_STATES])
+          .orderBy('id')
+          .forShare()
+          .execute();
+        const offeringIds = live
+          .filter((o) =>
+            (AGE_BAND_FROZEN_STATES as readonly string[]).includes(o.publication_state),
+          )
+          .map((o) => o.id);
+        if (offeringIds.length > 0) {
+          throw errors.resourceConflict(
+            'The age band of a program cannot change while it has published offerings; give the offering an eligibility policy version with explicit age limits instead (SPK-REG-002).',
+            { code: 'PROGRAM_AGE_BAND_IN_USE', offeringIds: offeringIds.slice(0, 20) },
+          );
+        }
+      }
       let updated;
       try {
         updated = await trx
@@ -163,7 +206,10 @@ export class ProgramsService {
         afterRevision: updated.revision,
         reason: body.reason ?? null,
         correlationId,
-        details: status !== current.status ? { status } : {},
+        details: {
+          ...(status !== current.status ? { status } : {}),
+          ...(ageBandChanged ? { ageBand: { before: beforeAgeBand, after: body.ageBand } } : {}),
+        },
       });
       await this.outbox.enqueue(trx, CatalogEvents.programUpdated, {
         organizationId,

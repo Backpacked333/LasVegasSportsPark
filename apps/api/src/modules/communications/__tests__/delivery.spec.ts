@@ -12,10 +12,13 @@ import {
   type OrganizationPeople,
 } from '../../identity';
 import { CommunicationsModule } from '../communications.module';
+import { COMMUNICATIONS_POLICY, type CommunicationsPolicy } from '../communications.policy';
+import type { ChannelSendRequest } from '../ports';
 import {
   FAKE_MESSAGING_SIGNATURE_HEADER,
   FakeMessagingProvider,
 } from '../providers/fake-messaging.provider';
+import { DeliveryWorker } from '../services/delivery-worker';
 import {
   attemptsOf,
   composeAndDispatch,
@@ -224,6 +227,116 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
     expect(fakes.email.sent).toHaveLength(0);
     expect(fakes.push.sent).toHaveLength(1);
     expect((await attemptsByChannel(n.id))['email']).toMatchObject({ status: 'unknown' });
+  });
+
+  /** Runs `fn` with every external fake's `send` wrapped by `around`, restoring them afterwards. */
+  async function withSendHook<T>(
+    around: (request: ChannelSendRequest) => Promise<void>,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const providers = [fakes.push, fakes.email];
+    const originals = providers.map((p) => p.send.bind(p));
+    providers.forEach((p, i) => {
+      p.send = async (request) => {
+        await around(request);
+        return (originals[i] as FakeMessagingProvider['send'])(request);
+      };
+    });
+    try {
+      return await fn();
+    } finally {
+      providers.forEach((p, i) => {
+        p.send = originals[i] as FakeMessagingProvider['send'];
+      });
+    }
+  }
+
+  const sendsPerAttempt = () => {
+    const counts = new Map<string, number>();
+    for (const r of [...fakes.push.sent, ...fakes.email.sent]) {
+      counts.set(r.attemptId, (counts.get(r.attemptId) ?? 0) + 1);
+    }
+    return counts;
+  };
+
+  it('§4.12 / SPK-COMMS-004: a second poller that takes over expired leases mid-batch never makes the provider receive one attempt twice', async () => {
+    await deliverQueued(t.app); // nothing left over from earlier cases
+    fakes.push.reset();
+    fakes.email.reset();
+    const worker = t.app.get(DeliveryWorker);
+    const lease = t.app.get<CommunicationsPolicy>(COMMUNICATIONS_POLICY).deliveryLeaseSeconds;
+    const notices = [];
+    for (let i = 0; i < 4; i += 1) {
+      notices.push(await composeAndDispatch(t.app, system, notice({ title: `Lease ${i}` })));
+    }
+    const ids = new Set<string>();
+    for (const n of notices) {
+      for (const a of await attemptsOf(t.db, org, n.id)) if (a.channel !== 'in_app') ids.add(a.id);
+    }
+    expect(ids.size).toBe(8);
+
+    // A slow but successful provider: every call takes 20 s. Once the first worker's batch lease has
+    // run out, a second poller runs and claims the tail of that batch.
+    const started = t.clock.now().getTime();
+    let secondPoller: Promise<unknown> | null = null;
+    const first = await withSendHook(
+      async () => {
+        t.clock.advance(20_000);
+        if (!secondPoller && t.clock.now().getTime() - started > lease * 1000) {
+          secondPoller = worker.runOnce();
+          await secondPoller;
+        }
+      },
+      () => worker.runOnce(),
+    );
+    expect(secondPoller).not.toBeNull();
+    const counts = sendsPerAttempt();
+    expect([...counts.keys()].sort()).toEqual([...ids].sort());
+    expect([...counts.values()].every((c) => c === 1)).toBe(true);
+    expect(first.accepted + first.skipped).toBe(8);
+    expect(first.skipped).toBeGreaterThan(0);
+    for (const n of notices) {
+      const external = (await attemptsOf(t.db, org, n.id)).filter((a) => a.channel !== 'in_app');
+      expect(external.map((a) => a.status)).toEqual(['provider_accepted', 'provider_accepted']);
+    }
+  });
+
+  it('§4.11 / §4.12: an attempt another poller re-claimed after this worker’s lease expired is left to that poller, then handed over exactly once', async () => {
+    await deliverQueued(t.app);
+    fakes.push.reset();
+    fakes.email.reset();
+    const worker = t.app.get(DeliveryWorker);
+    const lease = t.app.get<CommunicationsPolicy>(COMMUNICATIONS_POLICY).deliveryLeaseSeconds;
+    const n = await composeAndDispatch(t.app, system, notice({ title: 'Fenced lease' }));
+    let reclaimed = false;
+    const summary = await withSendHook(
+      async () => {
+        if (reclaimed) return;
+        reclaimed = true;
+        // The first call outlasts the batch lease; another poller claims the other attempt.
+        t.clock.advance((lease + 1) * 1000);
+        await t.db
+          .updateTable('delivery_attempts')
+          .set({ locked_until: new Date(t.clock.now().getTime() + lease * 1000) })
+          .where('notification_id', '=', n.id)
+          .where('channel', '<>', 'in_app')
+          .where('status', '=', 'queued')
+          .where('attempted_at', 'is', null)
+          .execute();
+      },
+      () => worker.runOnce(),
+    );
+    expect(summary).toMatchObject({ claimed: 2, accepted: 1, skipped: 1 });
+    let external = (await attemptsOf(t.db, org, n.id)).filter((a) => a.channel !== 'in_app');
+    const held = external.find((a) => a.status === 'queued');
+    expect(held).toMatchObject({ attempted_at: null }); // not handed over by the expired worker
+    expect(sendsPerAttempt().get(held?.id as string)).toBeUndefined();
+
+    t.clock.advance((lease + 1) * 1000); // the other poller died; its lease runs out too
+    expect(await deliverQueued(t.app)).toMatchObject({ claimed: 1, accepted: 1 });
+    external = (await attemptsOf(t.db, org, n.id)).filter((a) => a.channel !== 'in_app');
+    expect(external.map((a) => a.status)).toEqual(['provider_accepted', 'provider_accepted']);
+    expect([...sendsPerAttempt().values()]).toEqual([1, 1]);
   });
 
   it('a person without a contact point for the channel gets a failed attempt (NO_ADDRESS), not a silent skip', async () => {

@@ -9,6 +9,7 @@ import {
   type AgeBand,
   type CapacityUnit,
   type CopyOfferingInput,
+  type DstResolution,
   type CreateOfferingInput,
   type ListProgramOfferingsQuery,
   type ListPublicOfferingsQuery,
@@ -35,6 +36,13 @@ import {
   type Trx,
 } from '../../../kernel';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
+import {
+  addDays as addLocalDays,
+  DEFAULT_DST_POLICY,
+  localDateOf,
+  localTimeOf,
+  resolveLocal,
+} from '../../scheduling';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { staffingIncreaseNeedsReason } from '../catalog.policy';
@@ -270,7 +278,8 @@ export class OfferingsService implements OfferingLookupPort {
         });
       }
 
-      // SPK-YOUTH-002: a capacity increase that raises the staffing requirement is never silent.
+      // SPK-YOUTH-002: a capacity change that raises the staffing requirement, or removes or relaxes
+      // a staffing ratio, is never silent.
       let capacityChange: {
         before: CapacityUnit[];
         after: CapacityUnit[];
@@ -278,19 +287,24 @@ export class OfferingsService implements OfferingLookupPort {
         requiredStaffAfter: number;
         reason: string | null;
       } | null = null;
+      let ratiosRelaxed: CapacityUnit['unit'][] = [];
       if (body.capacityUnits) {
         const before = capacityUnitsOf(current);
         const staffing = staffingIncreaseNeedsReason(before, body.capacityUnits);
         if (staffing.needsReason && !body.reason) {
           throw errors.validation(
-            'Increasing this capacity raises the staffing requirement; provide a reason confirming staffing is arranged (SPK-YOUTH-002).',
+            staffing.ratiosRelaxed.length > 0
+              ? `This capacity change removes or relaxes the staffing ratio of ${staffing.ratiosRelaxed.join(', ')}; provide a reason confirming staffing is arranged (SPK-YOUTH-002).`
+              : 'Increasing this capacity raises the staffing requirement; provide a reason confirming staffing is arranged (SPK-YOUTH-002).',
             {
               path: 'reason',
               requiredStaffBefore: staffing.requiredStaffBefore,
               requiredStaffAfter: staffing.requiredStaffAfter,
+              ratiosRelaxed: staffing.ratiosRelaxed,
             },
           );
         }
+        ratiosRelaxed = staffing.ratiosRelaxed;
         capacityChange = {
           before,
           after: body.capacityUnits,
@@ -366,6 +380,7 @@ export class OfferingsService implements OfferingLookupPort {
           ? {
               requiredStaffBefore: capacityChange.requiredStaffBefore,
               requiredStaffAfter: capacityChange.requiredStaffAfter,
+              ratiosRelaxed,
             }
           : {},
       });
@@ -602,17 +617,64 @@ export class OfferingsService implements OfferingLookupPort {
       if (startsOn > endsOn) {
         throw errors.validation('startsOn must not be after endsOn.', { path: 'endsOn' });
       }
-      const shift = (value: Date | string | null): Date | null =>
-        value === null ? null : new Date(new Date(value).getTime() + deltaDays * 86_400_000);
+      // SPK-SCHED-008: shift by calendar days in facility-local time, keeping the wall-clock time,
+      // so a copy across a daylight-saving change does not move every session by an hour. Local
+      // times that do not exist or are ambiguous on the new date are resolved by the default DST
+      // policy and recorded in the audit details.
+      const zones = await trx
+        .selectFrom('facilities')
+        .select(['id', 'timezone'])
+        .where('organization_id', '=', organizationId)
+        .where('id', 'in', [source.facility_id, facilityId])
+        .execute();
+      const zoneOf = (facility: string): string => {
+        const zone = zones.find((z) => z.id === facility)?.timezone;
+        if (!zone) throw errors.internal(`facility ${facility} has no timezone`);
+        return zone;
+      };
+      const fromZone = zoneOf(source.facility_id);
+      const toZone = zoneOf(facilityId);
+      const dstResolutions: Array<{
+        field: string;
+        sessionId?: string;
+        resolution: DstResolution;
+      }> = [];
+      const shift = (
+        value: Date | string | null,
+        field: string,
+        sessionId?: string,
+      ): Date | null => {
+        if (value === null) return null;
+        const instant = new Date(value);
+        if (deltaDays === 0 && fromZone === toZone) return instant;
+        const resolved = resolveLocal(
+          addLocalDays(localDateOf(fromZone, instant), deltaDays),
+          localTimeOf(fromZone, instant),
+          toZone,
+          DEFAULT_DST_POLICY,
+        );
+        // shift_forward never skips, so resolveLocal always resolves under the default policy.
+        if (!resolved) throw errors.internal('a copied local time could not be resolved');
+        if (resolved.resolution !== 'exact') {
+          dstResolutions.push({
+            field,
+            ...(sessionId ? { sessionId } : {}),
+            resolution: resolved.resolution,
+          });
+        }
+        // localTimeOf has minute precision; keep the source's seconds within the minute.
+        const subMinute = ((instant.getTime() % 60_000) + 60_000) % 60_000;
+        return new Date(resolved.instant.getTime() + subMinute);
+      };
       const opensAt =
         body.registrationOpensAt === undefined
-          ? shift(source.registration_opens_at)
+          ? shift(source.registration_opens_at, 'registrationOpensAt')
           : body.registrationOpensAt
             ? new Date(body.registrationOpensAt)
             : null;
       const closesAt =
         body.registrationClosesAt === undefined
-          ? shift(source.registration_closes_at)
+          ? shift(source.registration_closes_at, 'registrationClosesAt')
           : body.registrationClosesAt
             ? new Date(body.registrationClosesAt)
             : null;
@@ -670,6 +732,13 @@ export class OfferingsService implements OfferingLookupPort {
           .execute();
         for (const session of sessions) {
           const sessionId = newId();
+          const start = shift(session.scheduled_start, 'scheduledStart', sessionId) as Date;
+          // the session keeps its length, so start < end always holds
+          const end = new Date(
+            start.getTime() +
+              (new Date(session.scheduled_end).getTime() -
+                new Date(session.scheduled_start).getTime()),
+          );
           await trx
             .insertInto('offering_sessions')
             .values({
@@ -678,8 +747,8 @@ export class OfferingsService implements OfferingLookupPort {
               offering_id: newId_,
               sequence: session.sequence,
               title: session.title,
-              scheduled_start: shift(session.scheduled_start) as Date,
-              scheduled_end: shift(session.scheduled_end) as Date,
+              scheduled_start: start,
+              scheduled_end: end,
               scheduling_event_id: null,
               capacity_override:
                 session.capacity_override === null ? null : json(session.capacity_override),
@@ -701,7 +770,7 @@ export class OfferingsService implements OfferingLookupPort {
         afterRevision: row.revision,
         reason: body.reason ?? null,
         correlationId,
-        details: { sourceOfferingId: id, copiedSessionIds, deltaDays },
+        details: { sourceOfferingId: id, copiedSessionIds, deltaDays, dstResolutions },
       });
       await this.outbox.enqueue(trx, CatalogEvents.offeringCopied, {
         organizationId,
@@ -1028,8 +1097,53 @@ export class OfferingsService implements OfferingLookupPort {
         'priceRules',
         'A current or future price rule is required (SPK-PAY-001).',
       );
+    } else {
+      // SPK-CAT-001 "price and obligations", SPK-PAY-001: every instant a customer can still
+      // register must have an effective price rule ("unpriced" is not "free"; a free offering is a
+      // 0-price rule). Rules never overlap (exclusion constraint), are never extended
+      // (price_rules_guard), and a successor closes an open-ended rule only where it begins, so
+      // coverage proven here holds for the rest of the window.
+      const gap = await this.firstUnpricedInstant(trx, organizationId, row, now);
+      if (gap) {
+        problem(
+          'price_rule_gap',
+          'priceRules',
+          `No price rule is effective at ${gap.toISOString()}, inside the registration window (SPK-PAY-001).`,
+        );
+      }
     }
     return problems;
+  }
+
+  /** The first instant of [max(now, opens), closes) that no price rule covers, if any. */
+  private async firstUnpricedInstant(
+    db: Trx | Db,
+    organizationId: string,
+    row: OfferingRow,
+    now: Date,
+  ): Promise<Date | null> {
+    // A missing window is reported as registration_window_missing.
+    if (!row.registration_opens_at || !row.registration_closes_at) return null;
+    const end = new Date(row.registration_closes_at).getTime();
+    let cursor = Math.max(now.getTime(), new Date(row.registration_opens_at).getTime());
+    if (cursor >= end) return null;
+    const rules = await db
+      .selectFrom('price_rules')
+      .select(['effective_from', 'effective_to'])
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', row.id)
+      .where('effective_from', '<', new Date(end))
+      .where((eb) =>
+        eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', new Date(cursor))]),
+      )
+      .orderBy('effective_from')
+      .execute();
+    for (const rule of rules) {
+      if (new Date(rule.effective_from).getTime() > cursor) break;
+      cursor = rule.effective_to === null ? Infinity : new Date(rule.effective_to).getTime();
+      if (cursor >= end) return null;
+    }
+    return new Date(cursor);
   }
 
   private async checkPolicy(

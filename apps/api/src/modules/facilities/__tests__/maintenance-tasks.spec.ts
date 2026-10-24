@@ -3,11 +3,13 @@ import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OutboxDispatcher, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
+import { createPersonFixture } from '../../identity';
 import { seedPitchWithHalves, type PitchFixture } from '../../scheduling';
 import { FacilitiesModule } from '../facilities.module';
 import { MAINTENANCE_REPORT_PORT, type MaintenanceReportPort } from '../ports';
 import { MaintenanceTasksService } from '../services/maintenance-tasks.service';
 import { reportMaintenanceTask, seedAsset } from '../testing/facilities-fixtures';
+import { keepFakePrincipals } from './support';
 
 describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX-006)', () => {
   let t: TestApp;
@@ -19,7 +21,11 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
   let auth: { Authorization: string };
 
   beforeAll(async () => {
-    t = await createTestApp({ imports: [FacilitiesModule], clockStart: '2026-10-19T12:00:00Z' });
+    t = await createTestApp({
+      imports: [FacilitiesModule],
+      clockStart: '2026-10-19T12:00:00Z',
+      configure: keepFakePrincipals(() => t),
+    });
     tasks = t.app.get(MaintenanceTasksService);
     org = t.organizationId;
     facility = t.facilityId;
@@ -28,7 +34,10 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
       facilityId: facility,
       name: 'Pitch 2',
     });
-    operator = staffPrincipal(org, ['facilities_operator']);
+    // a real person: the operator is also assigned as task owner (SPK-FAC-002, migration 0901)
+    operator = staffPrincipal(org, ['facilities_operator'], {
+      personId: await createPersonFixture(t, { kind: 'adult' }),
+    });
     auth = await t.authHeader(operator);
   });
   afterAll(async () => {
@@ -318,6 +327,46 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
         'facilities.inspection_recorded',
       ]),
     );
+  });
+
+  it('SPK-FAC-002 / §4.3: a task is assigned only to an active adult person of its own organization', async () => {
+    const reported = await reportMaintenanceTask(tasks, {
+      organizationId: org,
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      principal: operator,
+    });
+    const other = await seedOrganization(t.db);
+    const foreign = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: other.organizationId,
+    });
+    const child = await createPersonFixture(t, { kind: 'child' });
+    const inactive = await createPersonFixture(t, { kind: 'adult', status: 'inactive' });
+    for (const personId of [foreign, newId(), child, inactive]) {
+      const refused = await patch(`/v1/maintenance-tasks/${reported.id}`, {
+        assignedOwnerPersonId: personId,
+        expectedRevision: reported.revision,
+      });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+      expect(refused.body).toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: { path: 'assignedOwnerPersonId' },
+      });
+    }
+    const unchanged = await t.http.get(`/v1/maintenance-tasks/${reported.id}`).set(auth);
+    expect(unchanged.body).toMatchObject({
+      status: 'open',
+      assignedOwnerPersonId: null,
+      revision: reported.revision,
+    });
+    const owner = await createPersonFixture(t, { kind: 'adult' });
+    const assigned = await patch(`/v1/maintenance-tasks/${reported.id}`, {
+      assignedOwnerPersonId: owner,
+      expectedRevision: reported.revision,
+    });
+    expect(assigned.status, JSON.stringify(assigned.body)).toBe(200);
+    expect(assigned.body).toMatchObject({ status: 'assigned', assignedOwnerPersonId: owner });
   });
 
   it('lists tasks with filters, pagination and organization scope', async () => {

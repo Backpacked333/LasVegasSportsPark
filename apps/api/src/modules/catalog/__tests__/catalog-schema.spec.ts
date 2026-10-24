@@ -26,7 +26,7 @@ import {
  * Integrity invariants proven at the database (§4.7, CLAUDE.md "Integrity that matters is
  * enforced in the database"): rows are written through Kysely, bypassing the services.
  */
-describe('catalog schema invariants (migration 0200)', () => {
+describe('catalog schema invariants (migrations 0200, 0201)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -215,6 +215,57 @@ describe('catalog schema invariants (migration 0200)', () => {
         effectiveFrom: new Date('2030-01-01T00:00:00Z'),
       }),
     ).rejects.toSatisfy(isCheckViolation);
+  });
+
+  it('SPK-PAY-002 / §4.4: price rules and approved policy versions are never deleted; an approved window is never extended (migration 0201)', async () => {
+    const offering = await createOfferingFixture(t, { responsibleManagerPersonId: manager });
+    await expect(
+      db.deleteFrom('price_rules').where('offering_id', '=', offering.offeringId).execute(),
+    ).rejects.toThrow(/append-only/);
+    expect(
+      await db
+        .selectFrom('price_rules')
+        .select('id')
+        .where('offering_id', '=', offering.offeringId)
+        .execute(),
+    ).toHaveLength(1);
+
+    // an approved version no record references still cannot be deleted; a draft can be discarded
+    const approved = await createPolicyVersionFixture(t, {
+      kind: 'refund',
+      effectiveTo: new Date('2027-06-01T00:00:00Z'),
+    });
+    await expect(
+      db.deleteFrom('policy_versions').where('id', '=', approved).execute(),
+    ).rejects.toThrow(/cannot be deleted/);
+    const draft = await createPolicyVersionFixture(t, { kind: 'refund', approved: false });
+    await db.deleteFrom('policy_versions').where('id', '=', draft).execute();
+
+    // the approved window may be shortened, never extended or reopened
+    const setEffectiveTo = (id: string, value: Date | null) =>
+      db.updateTable('policy_versions').set({ effective_to: value }).where('id', '=', id).execute();
+    await setEffectiveTo(approved, new Date('2027-05-01T00:00:00Z'));
+    await expect(setEffectiveTo(approved, new Date('2027-07-01T00:00:00Z'))).rejects.toThrow(
+      /cannot extend its effective window/,
+    );
+    await expect(setEffectiveTo(approved, null)).rejects.toThrow(
+      /cannot extend its effective window/,
+    );
+    const openEnded = await createPolicyVersionFixture(t, { kind: 'refund' });
+    await setEffectiveTo(openEnded, new Date('2027-01-01T00:00:00Z'));
+
+    // a retired version's window is final, and a retired version is not deleted either
+    await db
+      .updateTable('policy_versions')
+      .set({ approval_status: 'retired', retired_at: t.clock.now(), retired_reason: 'superseded' })
+      .where('id', '=', approved)
+      .execute();
+    await expect(setEffectiveTo(approved, new Date('2027-04-01T00:00:00Z'))).rejects.toThrow(
+      /effective window is final/,
+    );
+    await expect(
+      db.deleteFrom('policy_versions').where('id', '=', approved).execute(),
+    ).rejects.toThrow(/cannot be deleted/);
   });
 
   it('§4.7 invariant 7: the redemption counter can never exceed the limit, even by a direct update', async () => {

@@ -1,6 +1,6 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Outbox, UnitOfWork } from '../../../kernel';
+import { EventHandlerRegistry, Outbox, UnitOfWork, type EventHandler } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
   authHeaderForPerson,
@@ -266,6 +266,135 @@ describe('schedule notices (SPK-COMMS-002 "schedule publication or change", SPK-
     expect(parties).toEqual([
       expect.objectContaining({ party_type: 'person', party_id: people.child.personId }),
     ]);
+  });
+
+  describe('§4.12 reordering: an older scheduling.event_changed processed after a newer one (SPK-COMMS-008, SPK-COMMS-005)', () => {
+    /** Makes the notice handler fail once for the next `moved` change of the event (a transient error). */
+    function failNextMove(eventId: string): () => void {
+      const entry = t.app
+        .get(EventHandlerRegistry)
+        .handlersFor('scheduling.event_changed')
+        .find((h) => h.name === 'communications.schedule_change_notice');
+      if (!entry) throw new Error('schedule change handler not registered');
+      const original: EventHandler = entry.handler;
+      let failed = false;
+      entry.handler = async (event, ctx) => {
+        const payload = event.payload as { eventId: string; change: string };
+        if (!failed && payload.eventId === eventId && payload.change === 'moved') {
+          failed = true;
+          throw new Error('transient failure');
+        }
+        return original(event, ctx);
+      };
+      return () => {
+        entry.handler = original;
+      };
+    }
+    const changesOf = (eventId: string) =>
+      t.db
+        .selectFrom('outbox_events')
+        .select(['id', 'status', 'payload'])
+        .where('event_type', '=', 'scheduling.event_changed')
+        .where('aggregate_id', '=', eventId)
+        .execute();
+    const entryOf = (eventId: string) =>
+      t.db
+        .selectFrom('calendar_entries')
+        .selectAll()
+        .where('event_id', '=', eventId)
+        .executeTakeFirstOrThrow();
+
+    it('SPK-COMMS-008 / SPK-COMMS-005: a late retry of an older move neither rolls the calendar entry back (or bumps SEQUENCE) nor composes a stale notice that supersedes the current one', async () => {
+      const event = await createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: t.facilityId,
+        resourceIds: [pitch.pitchId],
+        start: at('2026-12-05', '10:00'),
+        end: at('2026-12-05', '11:00'),
+        title: 'U12 Lions vs Bears',
+        commitments: [personCommitment(adultPlayer, 'participant')],
+      });
+      await dispatchOutbox(t.app);
+      const restore = failNextMove(event.id);
+      try {
+        const moved = await events.moveEvent(system, event.id, {
+          scheduledStart: at('2026-12-05', '14:00'),
+          scheduledEnd: at('2026-12-05', '15:00'),
+          expectedRevision: event.revision,
+        });
+        await dispatchOutbox(t.app); // the first move's notice handler fails and is retried later
+        t.clock.advance(1000);
+        await events.moveEvent(system, event.id, {
+          scheduledStart: at('2026-12-05', '18:00'),
+          scheduledEnd: at('2026-12-05', '19:00'),
+          expectedRevision: moved.revision,
+        });
+        await dispatchOutbox(t.app); // the newer move is applied first
+        t.clock.advance(5000);
+        await dispatchOutbox(t.app); // the older move's retry arrives last
+      } finally {
+        restore();
+      }
+      const changes = await changesOf(event.id);
+      expect(changes.every((c) => c.status === 'dispatched')).toBe(true);
+      const latest = changes.find(
+        (c) =>
+          (c.payload as { after?: { scheduledStart?: string } }).after?.scheduledStart ===
+          at('2026-12-05', '18:00'),
+      );
+      expect(await entryOf(event.id)).toMatchObject({
+        status: 'published',
+        sequence: 1,
+        last_source_event_id: latest?.id,
+      });
+      expect(new Date((await entryOf(event.id)).scheduled_start).toISOString()).toBe(
+        at('2026-12-05', '18:00'),
+      );
+      const changed = (await noticesFor(event.id)).filter((n) => n.kind === 'schedule_changed');
+      expect(changed).toHaveLength(1);
+      expect(changed[0]?.details_after).toMatchObject({
+        scheduledStart: at('2026-12-05', '18:00'),
+      });
+      expect(changed[0]?.superseded_by_notification_id).toBeNull();
+      const published = (await noticesFor(event.id)).find((n) => n.kind === 'schedule_published');
+      expect(published?.superseded_by_notification_id).toBe(changed[0]?.id);
+    });
+
+    it('SPK-COMMS-008 / SPK-COMMS-005: a late retry of a move made before a cancellation leaves the entry canceled and composes no change notice after the cancellation', async () => {
+      const event = await createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: t.facilityId,
+        resourceIds: [pitch.pitchId],
+        start: at('2026-12-06', '10:00'),
+        end: at('2026-12-06', '11:00'),
+        title: 'U12 Lions vs Wolves',
+        commitments: [personCommitment(adultPlayer, 'participant')],
+      });
+      await dispatchOutbox(t.app);
+      const restore = failNextMove(event.id);
+      try {
+        const moved = await events.moveEvent(system, event.id, {
+          scheduledStart: at('2026-12-06', '14:00'),
+          scheduledEnd: at('2026-12-06', '15:00'),
+          expectedRevision: event.revision,
+        });
+        await dispatchOutbox(t.app);
+        t.clock.advance(1000);
+        await events.cancelEvent(system, event.id, {
+          reason: 'Pitch flooded',
+          expectedRevision: moved.revision,
+        });
+        await dispatchOutbox(t.app);
+        t.clock.advance(5000);
+        await dispatchOutbox(t.app);
+      } finally {
+        restore();
+      }
+      expect((await changesOf(event.id)).every((c) => c.status === 'dispatched')).toBe(true);
+      expect(await entryOf(event.id)).toMatchObject({ status: 'canceled', sequence: 1 });
+      const kinds = (await noticesFor(event.id)).map((n) => n.kind);
+      expect(kinds).toEqual(['schedule_published', 'cancellation']);
+    });
   });
 
   it('a publication group produces a staff summary for schedulers of the facility', async () => {

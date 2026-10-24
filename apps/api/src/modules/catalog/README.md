@@ -20,22 +20,22 @@ capacity and staffing configuration), §4.7 invariants 2, 5 and 7
 next to the code: `pricing/discount-evaluator.spec.ts`, `entitlements/equivalence-key.spec.ts`,
 `catalog.state-machines.spec.ts`). Statements below are verified unless marked proposed or pending.
 
-## Tables (migration `0200_catalog_core.sql`)
+## Tables (migrations `0200_catalog_core.sql`, `0201_catalog_history_guards.sql`)
 
-| Table                         | Purpose                                                                                                                                                                                                                                                                                   |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `programs`                    | Reusable definitions: name (unique per organization), activity type, format, age band, status `draft/active/archived`                                                                                                                                                                     |
-| `policy_versions`             | `(kind, key, version)` unique per organization; kinds eligibility, cancellation, refund, discount, waitlist, hold, approval, form, overpayment, installment; `approval_status` `draft/approved/retired`; trigger `policy_versions_guard` makes approved content immutable                 |
-| `approvals`                   | Append-only approval facts (policy versions, offering publications) with actor, reason, details                                                                                                                                                                                           |
-| `acknowledgments`             | Subject, policy version, signer, basis `self/guardian`, recorder snapshot and kind, evidence, status; partial unique index on active `(subject, policy version)`; check `acknowledgments_staff_never_signer`                                                                              |
-| `entitlement_definitions`     | Kind (team_entry, roster_place, seat, session_seat, camp_group_place, rental_resource, package_credits, membership_benefit), scope, `equivalence_scope` + rule used by enrollment for §4.7 invariant 2                                                                                    |
-| `offerings`                   | Program, facility, name, kind (the eleven SPK-CAT-002 kinds), dates, registration window, eligibility reference date, eligibility and cancellation policy versions, entitlement, `capacity_units` jsonb, responsible manager, `publication_state`, provenance (`copied_from_offering_id`) |
-| `offering_required_forms`     | Join table so every required form is a real policy version                                                                                                                                                                                                                                |
-| `offering_sessions`           | Sequence (unique per offering), interval, optional `scheduling_event_id` (no cross-module FK), capacity override, status `scheduled/canceled/completed`                                                                                                                                   |
-| `price_rules`                 | Version per offering, `effective_from/to`, `base_price_minor` bigint + currency, `charge_lines` jsonb; `EXCLUDE USING gist` on `tstzrange(effective_from, effective_to)` per offering; trigger `price_rules_guard` forbids any change except closing/shortening the window                |
-| `discount_definitions`        | Code (case-insensitive unique) or automatic, percentage/fixed amount, eligibility rules, stacking rule and priority, cap, redemption and per-person limits, rounding, allocation method, effective dates, status                                                                          |
-| `discount_redemptions`        | Counter per definition with the mirrored limit; `check (redeemed_count <= redemption_limit)` is the database guarantee of §4.7 invariant 7                                                                                                                                                |
-| `discount_redemption_entries` | Append-only ledger: one `redeem` and at most one `release` per referencing record (replay-safe, §4.7 invariant 5)                                                                                                                                                                         |
+| Table                         | Purpose                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `programs`                    | Reusable definitions: name (unique per organization), activity type, format, age band, status `draft/active/archived`                                                                                                                                                                                                                                                        |
+| `policy_versions`             | `(kind, key, version)` unique per organization; kinds eligibility, cancellation, refund, discount, waitlist, hold, approval, form, overpayment, installment; `approval_status` `draft/approved/retired`; trigger `policy_versions_guard` makes approved content immutable and an approved window only shorter (0201); approved and retired versions are never deleted (0201) |
+| `approvals`                   | Append-only approval facts (policy versions, offering publications) with actor, reason, details                                                                                                                                                                                                                                                                              |
+| `acknowledgments`             | Subject, policy version, signer, basis `self/guardian`, recorder snapshot and kind, evidence, status; partial unique index on active `(subject, policy version)`; check `acknowledgments_staff_never_signer`                                                                                                                                                                 |
+| `entitlement_definitions`     | Kind (team_entry, roster_place, seat, session_seat, camp_group_place, rental_resource, package_credits, membership_benefit), scope, `equivalence_scope` + rule used by enrollment for §4.7 invariant 2                                                                                                                                                                       |
+| `offerings`                   | Program, facility, name, kind (the eleven SPK-CAT-002 kinds), dates, registration window, eligibility reference date, eligibility and cancellation policy versions, entitlement, `capacity_units` jsonb, responsible manager, `publication_state`, provenance (`copied_from_offering_id`)                                                                                    |
+| `offering_required_forms`     | Join table so every required form is a real policy version                                                                                                                                                                                                                                                                                                                   |
+| `offering_sessions`           | Sequence (unique per offering), interval, optional `scheduling_event_id` (no cross-module FK), capacity override, status `scheduled/canceled/completed`                                                                                                                                                                                                                      |
+| `price_rules`                 | Version per offering, `effective_from/to`, `base_price_minor` bigint + currency, `charge_lines` jsonb; `EXCLUDE USING gist` on `tstzrange(effective_from, effective_to)` per offering; trigger `price_rules_guard` forbids any change except closing/shortening the window; a rule is never deleted (0201)                                                                   |
+| `discount_definitions`        | Code (case-insensitive unique) or automatic, percentage/fixed amount, eligibility rules, stacking rule and priority, cap, redemption and per-person limits, rounding, allocation method, effective dates, status                                                                                                                                                             |
+| `discount_redemptions`        | Counter per definition with the mirrored limit; `check (redeemed_count <= redemption_limit)` is the database guarantee of §4.7 invariant 7                                                                                                                                                                                                                                   |
+| `discount_redemption_entries` | Append-only ledger: one `redeem` and at most one `release` per referencing record (replay-safe, §4.7 invariant 5)                                                                                                                                                                                                                                                            |
 
 Every table carries `organization_id`; references use composite `(organization_id, id)` keys;
 editable records carry `revision` and `touch_updated_at`; append-only tables carry
@@ -123,14 +123,30 @@ human-readable `explanation[]` so a quote can be re-explained later (SPK-PAY-002
   refund, discount, overpayment, installment) by the finance operator — DEC-003, DEC-006, DEC-007,
   DEC-009. Approving a newer version retires nothing automatically; retirement is explicit.
 - SPK-YOUTH-002: the staffing requirement is `ceil(limit / participantsPerStaff)` summed over the
-  units that carry a ratio; an update that raises it needs a `reason` and the requirement is
-  published on `catalog.offering_updated` (DEC-003 for the ratios themselves). `camp_group_places`
-  units cannot be published without a group size and a ratio.
-- A new price rule starts at or after the clock and closes the current open-ended rule where it
-  begins; bounded windows must not overlap an existing rule; historical prices are never rewritten
-  (DEC-007 for the actual prices, taxes and rounding).
+  units that carry a ratio; an update that raises it, or that removes or relaxes a unit's ratio
+  (dropping the ratio, raising participants per staff member, or swapping the staffed unit for
+  another), needs a `reason`. The requirement is published on `catalog.offering_updated` and the
+  relaxed units are in the audit details (DEC-003 for the ratios themselves). `camp_group_places`
+  units cannot be published without a group size and a ratio. A session `capacityOverride` is
+  offering configuration: it needs `catalog.manage_offerings` as well as
+  `catalog.manage_sessions`, follows the same camp-group rule, needs a `reason` when it raises the
+  requirement, relaxes a ratio or adds unstaffed units to a staffed offering, and is recorded in
+  the audit details and on `catalog.session_created`.
+- A new price rule starts at or after the clock (refused otherwise in every case) and closes the
+  current open-ended rule where it begins; bounded windows must not overlap an existing rule;
+  historical prices are never rewritten (DEC-007 for the actual prices, taxes and rounding).
+  Publication, and any edit of an offering beyond draft, require price rules that cover every
+  instant of the remaining registration window, from the later of now and the opening to the
+  closing (`price_rule_gap`, SPK-PAY-001).
+- Retiring a policy version may shorten its window from now on, never extend or backdate it.
+- A program's age band cannot change while the program has a published, open or paused offering
+  (`PROGRAM_AGE_BAND_IN_USE`, SPK-REG-002); the versioned path is an eligibility policy version with
+  explicit age limits. A permitted change records the age band before and after in the audit.
 - Copying an offering (SPK-CAT-003) copies configuration, required forms and, on request, scheduled
-  sessions shifted by the date difference; never price rules (finance prices each offering) and
+  sessions shifted by the date difference, keeping facility-local wall-clock time (SPK-SCHED-008):
+  a copy across a daylight-saving change keeps 09:00 at 09:00. A local time that does not exist or
+  is ambiguous on the new date follows the default DST policy (shift forward, first occurrence) and
+  is listed in the audit details as `dstResolutions`. Never price rules (finance prices each offering) and
   nothing transactional (enrollments, payments, attendance, results and permissions live elsewhere
   and reference the source id).
 - The eligibility reference date defaults to the offering start date (POL-001 pending).
@@ -144,7 +160,13 @@ human-readable `explanation[]` so a quote can be re-explained later (SPK-PAY-002
   is also a guardian needs a customer-only session or a desk colleague to record the guardian's
   signature; lifting this needs a kernel notion of "acting as customer" (pending DEC-004).
 - Per-person discount limits are enforced in the service from the ledger, not by a database
-  constraint; the organization-wide limit is.
+  constraint; the organization-wide limit is. Concurrent redemptions of one discount serialize on
+  the counter row lock that `redeem()` takes before counting, so the per-person check holds under
+  concurrency (`pricing.spec.ts`, run under PGlite and PostgreSQL). A release restores the
+  allowance of the participant on the redemption it reverses and copies that row's amount.
+- Proposed: closed and archived offerings still show the program's current age band, because the
+  offering reads it from the program. The complete fix is a catalog migration that copies the age
+  band onto the offering and freezes it at publication.
 - `offering_sessions.scheduling_event_id` is a plain uuid: the scheduling module owns the event and
   migration order forbids a cross-module key. Session completion (`complete`) has no command yet
   (the entry module will drive it from attendance).

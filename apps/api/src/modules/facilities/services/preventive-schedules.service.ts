@@ -23,6 +23,7 @@ import {
   Outbox,
   UnitOfWork,
   type Clock,
+  type Trx,
 } from '../../../kernel';
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
 import { materializeOccurrences, ResourcesService } from '../../scheduling';
@@ -96,6 +97,7 @@ export class PreventiveSchedulesService {
         if (!asset || asset.facility_id !== facility.id)
           throw errors.notFound('asset', body.assetId);
       }
+      await this.assertTemplateOwner(trx, organizationId, body.taskTemplate);
       const id = newId();
       const row = await trx
         .insertInto('preventive_schedules')
@@ -150,6 +152,9 @@ export class PreventiveSchedulesService {
         facilityId: current.facility_id,
       });
       assertExpectedRevision(body.expectedRevision, current.revision);
+      if (body.taskTemplate !== undefined) {
+        await this.assertTemplateOwner(trx, organizationId, body.taskTemplate);
+      }
       let status = current.status;
       if (body.status !== undefined && body.status !== current.status) {
         status = PreventiveScheduleMachine.next(current.status, scheduleEventFor(body.status));
@@ -454,6 +459,21 @@ export class PreventiveSchedulesService {
       correlationId,
     });
     return restriction.id;
+  }
+
+  /** SPK-FAC-002: a template's owner is checked when the schedule is written, not first at generation. */
+  private async assertTemplateOwner(
+    trx: Trx,
+    organizationId: string,
+    template: { assignedOwnerPersonId?: string | null },
+  ): Promise<void> {
+    if (!template.assignedOwnerPersonId) return;
+    await this.tasks.assertAssignableOwner(
+      trx,
+      organizationId,
+      template.assignedOwnerPersonId,
+      'taskTemplate.assignedOwnerPersonId',
+    );
   }
 
   private async resolveResource(

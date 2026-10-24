@@ -7,10 +7,12 @@ preventive maintenance schedules
 Restriction), §4.8 `POST /v1/maintenance-restrictions`, SPK-AT-021, SPK-UX-006 (overdue
 escalation)
 
-**Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999`
+**Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999` (present: `0900`,
+`0901_facilities_task_owner_fk`)
 
-**Depends on:** scheduling (closure port, resources public API). Restrictions create scheduling
-closures through the scheduling authority; this module never writes scheduling tables (§4.2).
+**Depends on:** scheduling (closure port, resources public API) and identity
+(`PERSON_DIRECTORY_PORT`, to check assigned task owners). Restrictions create scheduling closures
+through the scheduling authority; this module never writes scheduling or identity tables (§4.2).
 
 **Status: implemented** (verified by `apps/api/src/modules/facilities/__tests__` and
 `facilities.state-machines.spec.ts`). Pending decisions are listed at the end.
@@ -25,8 +27,16 @@ closures through the scheduling authority; this module never writes scheduling t
 | `restrictions`         | Affected area `resource_id` (whole pitch or subdivision), optional asset/task, kind `closed / limited`, `tstzrange during`, status `proposed → approved → active → released`, approval and release facts (check-constrained to the state), `scheduling_closure_id` (composite FK to closures), `affected_conflict_unit_ids` derived from scheduling at activation |
 | `preventive_schedules` | Recurrence in facility-local time + zone, task template, restriction kind, lead time, status `active / paused / ended`                                                                                                                                                                                                                                            |
 
+Assigned owner (SPK-FAC-002, §4.3): a task PATCH, a reported or generated task and a preventive
+schedule's `taskTemplate.assignedOwnerPersonId` accept only an active adult person of the
+organization (checked through `PERSON_DIRECTORY_PORT`; otherwise VALIDATION_FAILED with the path),
+and migration `0901` adds the composite foreign key `(organization_id, assigned_owner_person_id)`
+to `persons`. A template whose owner later becomes inactive fails generation with that error
+until the template is edited. Facilities API tests keep the fake principals through
+`__tests__/support.ts`, because importing IdentityModule brings its principal resolver.
+
 Invariants enforced by the database: composite `(organization_id, id)` foreign keys everywhere
-(including the closure reference); one closure backs at most one restriction; a task carries at
+(including the closure reference and the assigned owner); one closure backs at most one restriction; a task carries at
 most one unreleased restriction; a preventive schedule materializes each occurrence's task and
 restriction at most once; `active` needs a closure, `released` needs who/when/which closure.
 
@@ -64,10 +74,19 @@ multi-step commands recorded as operations (`facilities.approve_restriction`,
   between this module's transactions (a nested transaction through the root database deadlocks
   under PGlite and would not be atomic on PostgreSQL either); an interruption leaves the
   restriction `approved` and `POST …/approve` resumes it (closure id recorded as soon as created).
+  Exactly one closure backs a restriction (SPK-FAC-004, SPK-AT-021): the closure id is linked under
+  the restriction's row lock, a concurrent or retried approval that created its own closure uses the
+  linked one instead (audit `facilities.restriction_closure_superseded`; its own closure stays
+  `pending`, which blocks nothing), and an approval that finds the restriction already activated
+  with that closure succeeds (`alreadyActive` on its operation). The authorized release therefore
+  lifts the only closure that blocks the area.
 - **SPK-FAC-004.** Closing a task never touches its restriction (`openRestrictionIds` says so).
   `release` requires `facilities.release_to_service`, and when the task `requires_inspection` the
   latest inspection must be `passed` (`ELIGIBILITY_FAILED`, `details.code = inspection_required`
-  otherwise). The closure is lifted through the port, then the release is recorded. A failed
+  otherwise). While a restriction on the task is open (proposed, approved or active), turning
+  `requiresInspection` off is refused the same way, so the gate cannot be removed before release;
+  any change of the requirement is audited (`details.requiresInspection { from, to }`). The
+  closure is lifted through the port, then the release is recorded. A failed
   inspection sends a resolved task back to `in_progress`; on a closed task it raises an
   operational exception. A closure lifted directly in scheduling raises
   `facilities.closure_lifted_outside_release` (outbox handler on `scheduling.closure_lifted`),
@@ -123,4 +142,6 @@ Handlers registered in `onModuleInit`: `facilities.escalate_overdue_task` (own t
   **pending** (permission matrix C.10); today the proposer approves in the same request.
 - A `proposed` restriction cannot be withdrawn and an `approved` one cannot be released before
   activation completes (`approve` resumes it); the scheduling port offers no closure withdrawal.
+  For the same reason the closure created by a superseded concurrent approval stays `pending` in
+  scheduling (inert); removing it needs a `withdrawClosure` on the closure port (scheduling owner).
 - Evidence is stored by reference only; file storage is a provider-selection gate (§5.2).

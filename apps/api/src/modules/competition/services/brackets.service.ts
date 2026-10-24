@@ -79,14 +79,32 @@ export class BracketsService {
         }
       }
       if (input.fixtureId) {
+        // Locked like result publication locks it, so linking and a first publication serialize.
         const fixture = await trx
           .selectFrom('fixtures')
           .select(['id', 'season_id'])
           .where('organization_id', '=', organizationId)
           .where('id', '=', input.fixtureId)
+          .forUpdate()
           .executeTakeFirst();
         if (!fixture || fixture.season_id !== seasonId)
           throw errors.notFound('fixture', input.fixtureId);
+        // A node's fixture is a playoff game, which never counts in the league table. A fixture
+        // whose result is already published counts there, so linking it would silently change
+        // published standings (SPK-RESULT-001/004, §4.7 invariant 9).
+        const published = await trx
+          .selectFrom('result_revisions')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('fixture_id', '=', input.fixtureId)
+          .where('status', 'in', ['official', 'superseded'])
+          .executeTakeFirst();
+        if (published) {
+          throw errors.validation(
+            'A fixture with a published result is part of the league standings and cannot be linked to a bracket node; create the playoff fixture for the node.',
+            { code: 'fixture_result_published', fixtureId: input.fixtureId },
+          );
+        }
       }
       const id = newId();
       const row = await trx
@@ -119,7 +137,13 @@ export class BracketsService {
         afterRevision: 1,
         reason: input.reason ?? null,
         correlationId,
-        details: { operation: 'create', seasonId, round: input.round, slot: input.slot },
+        details: {
+          operation: 'create',
+          seasonId,
+          round: input.round,
+          slot: input.slot,
+          fixtureId: input.fixtureId ?? null,
+        },
       });
       await this.outbox.enqueue(trx, MatchEvents.bracketNodeCreated, {
         organizationId,
@@ -295,10 +319,41 @@ export class BracketsService {
   }
 
   /**
-   * Bracket progression (SPK-COMP-001 "bracket progression"): once a bracket game's first official
-   * result is published, the node records its winner and the nodes fed by it receive the winner
-   * or loser in a still-empty slot. A correction never moves entries here: it goes through
-   * management review (SPK-RESULT-004).
+   * SPK-RESULT-004: what a correction that changes the outcome of a bracket game would rewrite
+   * beyond `correctionImpact`. The nodes fed by the game's node already act on the old outcome
+   * once they have recorded a winner (the bracket went on) or have a fixture (its sides were set
+   * from the old outcome and are not rewritten here), so changing them needs management review.
+   */
+  async revisionBlockers(
+    db: Reader,
+    organizationId: string,
+    fixtureId: string,
+  ): Promise<CorrectionImpact> {
+    const node = await db
+      .selectFrom('bracket_nodes')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('fixture_id', '=', fixtureId)
+      .executeTakeFirst();
+    if (!node) return { bracketNodeIds: [], fixtureIds: [] };
+    const blocked = (await this.dependentsOf(db, node)).filter(
+      (n) => n.published || n.winner_entry_id !== null || n.fixture_id !== null,
+    );
+    return {
+      bracketNodeIds: blocked.map((n) => n.id).sort(),
+      fixtureIds: blocked
+        .map((n) => n.fixture_id)
+        .filter((id): id is string => id !== null)
+        .sort(),
+    };
+  }
+
+  /**
+   * Bracket progression (SPK-COMP-001 "bracket progression"): once a bracket game has an official
+   * result with a winner (its first one, or a correction of an official result that had none), the
+   * node records its winner and the nodes fed by it receive the winner or loser in a still-empty
+   * slot. A correction that changes a recorded outcome goes through `reviseOutcome` when nothing
+   * downstream acts on it, and through management review otherwise (SPK-RESULT-004).
    */
   async recordOutcome(
     trx: Trx,
@@ -326,13 +381,7 @@ export class BracketsService {
       await this.progress(trx, principal, node, { winner_entry_id: input.winnerEntryId }, input);
       changed.push(node.id);
     }
-    const dependents = (await this.seasonNodes(trx, organizationId, [node.season_id])).filter((n) =>
-      sourcesOf(n).some(
-        (source) =>
-          (source.kind === 'winner_of' || source.kind === 'loser_of') && source.nodeId === node.id,
-      ),
-    );
-    for (const dependent of dependents) {
+    for (const dependent of await this.dependentsOf(trx, node)) {
       const rule = dependent.source_rule as { home: BracketSource; away: BracketSource };
       const entryFor = (source: BracketSource): string | null =>
         source.kind === 'winner_of' && source.nodeId === node.id
@@ -358,12 +407,98 @@ export class BracketsService {
     return changed;
   }
 
+  /**
+   * SPK-RESULT-004 / SPK-COMP-001: a correction that changes the outcome of a bracket game whose
+   * node and successors nobody acts on yet (none published, no winner recorded, no fixture; see
+   * `revisionBlockers`) revises the progression instead of leaving the bracket on the old winner:
+   * the node's winner, and each slot fed by the node that still holds the previous entry (or is
+   * empty), take the new outcome. Every change is audited as `progress_revised` with the previous
+   * and next values (§4.7 invariant 9).
+   */
+  async reviseOutcome(
+    trx: Trx,
+    principal: Principal,
+    input: {
+      organizationId: string;
+      fixtureId: string;
+      previous: { winnerEntryId: string | null; loserEntryId: string | null };
+      next: { winnerEntryId: string | null; loserEntryId: string | null };
+      correlationId: string | null;
+      operationId: string | null;
+    },
+  ): Promise<string[]> {
+    const { organizationId, previous, next } = input;
+    const node = await trx
+      .selectFrom('bracket_nodes')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('fixture_id', '=', input.fixtureId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!node) return [];
+    const audit = { ...input, operation: 'progress_revised', previous, next };
+    const changed: string[] = [];
+    if (node.winner_entry_id !== next.winnerEntryId) {
+      await this.progress(trx, principal, node, { winner_entry_id: next.winnerEntryId }, audit);
+      changed.push(node.id);
+    }
+    for (const dependent of await this.dependentsOf(trx, node)) {
+      const rule = dependent.source_rule as { home: BracketSource; away: BracketSource };
+      // Both sides are computed before writing, so a winner/loser swap never collides.
+      const revised = (source: BracketSource, current: string | null): string | null => {
+        const fed =
+          source.kind === 'winner_of' && source.nodeId === node.id
+            ? { from: previous.winnerEntryId, to: next.winnerEntryId }
+            : source.kind === 'loser_of' && source.nodeId === node.id
+              ? { from: previous.loserEntryId, to: next.loserEntryId }
+              : null;
+        if (!fed || (current !== null && current !== fed.from)) return current;
+        return fed.to;
+      };
+      const home = revised(rule.home, dependent.home_entry_id);
+      const away = revised(rule.away, dependent.away_entry_id);
+      const set: { home_entry_id?: string | null; away_entry_id?: string | null } = {};
+      if (home !== dependent.home_entry_id) set.home_entry_id = home;
+      if (away !== dependent.away_entry_id) set.away_entry_id = away;
+      if (Object.keys(set).length === 0) continue;
+      const locked = await this.load(trx, organizationId, dependent.id, { forUpdate: true });
+      if (!locked) continue;
+      await this.progress(trx, principal, locked, set, audit);
+      changed.push(dependent.id);
+    }
+    return changed;
+  }
+
+  /** The nodes fed (through winner_of / loser_of) directly by the node. */
+  private async dependentsOf(
+    db: Reader,
+    node: Selectable<BracketNodesTable>,
+  ): Promise<Array<Selectable<BracketNodesTable>>> {
+    return (await this.seasonNodes(db, node.organization_id, [node.season_id])).filter((n) =>
+      sourcesOf(n).some(
+        (source) =>
+          (source.kind === 'winner_of' || source.kind === 'loser_of') && source.nodeId === node.id,
+      ),
+    );
+  }
+
   private async progress(
     trx: Trx,
     principal: Principal,
     node: Selectable<BracketNodesTable>,
-    set: { winner_entry_id?: string; home_entry_id?: string; away_entry_id?: string },
-    input: { fixtureId: string; correlationId: string | null; operationId: string | null },
+    set: {
+      winner_entry_id?: string | null;
+      home_entry_id?: string | null;
+      away_entry_id?: string | null;
+    },
+    input: {
+      fixtureId: string;
+      correlationId: string | null;
+      operationId: string | null;
+      operation?: string;
+      previous?: { winnerEntryId: string | null; loserEntryId: string | null };
+      next?: { winnerEntryId: string | null; loserEntryId: string | null };
+    },
   ): Promise<void> {
     await trx
       .updateTable('bracket_nodes')
@@ -382,7 +517,12 @@ export class BracketsService {
       afterRevision: node.revision + 1,
       correlationId: input.correlationId,
       operationId: input.operationId,
-      details: { operation: 'progress', fixtureId: input.fixtureId, ...set },
+      details: {
+        operation: input.operation ?? 'progress',
+        fixtureId: input.fixtureId,
+        ...set,
+        ...(input.previous ? { previousOutcome: input.previous, nextOutcome: input.next } : {}),
+      },
     });
   }
 

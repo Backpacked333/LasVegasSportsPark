@@ -97,7 +97,18 @@ dispatch creates the attempts or suppresses the notice.
   roster from competition's `ROSTER_PORT` treated as subject persons (`team_member`, guardians of
   child players through `receive_messages`); staff roles → identity's `STAFF_DIRECTORY_PORT` within
   the optional facility; explicit person ids. `isStillAuthorized` re-evaluates one recipient against
-  the same sources.
+  the same sources: a recipient reached several ways is stored once with its first basis and every
+  subject merged in, and the re-check requires each one (the `receive_messages` grant over every
+  subject other than the person themself, and that subject still in the audience, so a guardian
+  stops receiving a team's protected notices when the child leaves the roster); staff roles are
+  re-checked in the audience's facility scope, the one resolution used.
+- **Composition scope** (SPK-COMMS-006, §4.14): compose, preview and send authorize the audience's
+  facility as well as the notification's own, and a facility-scoped composer cannot address a staff
+  role across every facility. A protected notice refuses explicit person ids
+  (`PROTECTED_EXPLICIT_RECIPIENT`): a person named by id carries no authority that could be
+  re-checked, so an explicit basis never justifies protected content. `GET /notifications` lists,
+  for a facility-scoped reader, only organization-wide notices and those of their facilities (the
+  rows `GET /notifications/{id}` would allow).
 - **Dispatch** (`communications.delivery_requested` handler → `NotificationsService.dispatch`): a
   protected notice re-checks every pending recipient; a recipient without authority becomes
   `revoked` and gets no attempt; the rest become `authorized`, an in-app attempt is created
@@ -105,24 +116,34 @@ dispatch creates the attempts or suppresses the notice.
   the person's preferences enable. A notice nobody may receive is `suppressed`
   (`authority_revoked` or `no_recipients`).
 - **Delivery worker** (`services/delivery-worker.ts`, §4.11): claims queued external attempts with a
-  lock lease (`FOR UPDATE SKIP LOCKED`), re-checks a protected recipient immediately before the
-  hand-off (invariant 10), resolves the address through identity's `PeopleService` (contact points
-  are never copied), marks `attempted_at`, calls the provider OUTSIDE any transaction and records
-  exactly its answer: `provider_accepted`, `failed` (`PROVIDER_REJECTED`, `NO_ADDRESS`,
-  `PROVIDER_ERROR`, `RECIPIENT_REVOKED`) or `unknown`. An interrupted hand-off is recorded `unknown`
-  and never retried blindly (§4.12). A failed essential notice raises a `front_desk` operational
-  exception (SPK-UX-006); a revocation is not a failure.
+  lock lease (`FOR UPDATE SKIP LOCKED`), resolves the address through identity's `PeopleService`
+  (contact points are never copied), then in one transaction locks the recipient and the attempt,
+  re-checks a protected recipient (invariant 10) and marks `attempted_at` only if the attempt is
+  still queued, unmarked and held under this worker's lease (renewing it for the call); after that
+  commits it calls the provider OUTSIDE any transaction and records exactly its answer:
+  `provider_accepted`, `failed` (`PROVIDER_REJECTED`, `NO_ADDRESS`, `PROVIDER_ERROR`,
+  `RECIPIENT_REVOKED`) or `unknown`. A revocation that commits first fails the attempt and nothing is
+  sent; one processed later finds the hand-off committed and leaves it alone, so the record matches
+  what the provider received. An attempt another poller re-claimed after the lease expired is
+  skipped, so it reaches the provider once; an interrupted hand-off is recorded `unknown` and never
+  retried blindly (§4.12). A failed essential notice raises a `front_desk` operational exception
+  (SPK-UX-006); a revocation is not a failure.
 - **Receipts** (`DeliveryWorker.applyReceipt`, inbox provider `fake-messaging`): resolve
   `queued/provider_accepted/unknown` into `provider_accepted/delivered/failed`; duplicates and
   out-of-order receipts are ignored rather than rewriting a later fact.
 - **Revocation** (SPK-IAM-006, SPK-AT-017): `identity.access_grant_revoked` (for `receive_messages`)
   and `identity.access_restricted` re-evaluate every pending or authorized recipient of a protected
   notice that is still queued or whose external attempts have not been handed over; those lose
-  their attempts (`RECIPIENT_REVOKED`). What was already delivered in-app is not recalled.
+  their attempts (`RECIPIENT_REVOKED`). The delivered in-app fact is not rewritten, but the inbox
+  stops serving a protected notice to a recipient who no longer holds the authority that justified
+  it, re-checked on every read; reading or acknowledging it then answers NOT_FOUND.
 - **Schedule notices** (`services/schedule-notices.ts`, SPK-COMMS-002/005): `scheduling.event_changed`
   for a published event composes `schedule_published`, `schedule_changed` (old and new practical
   details rendered in facility-local time) or `cancellation` addressed to the committed parties,
-  keyed on the source event id so a replay never composes twice; `scheduling.schedule_published`
+  keyed on the source event id so a replay never composes twice; a change older than the one the
+  calendar projection last applied (a late retry or another worker's order; outbox ids are UUID v7)
+  is ignored and composes nothing, so it can neither roll the feed back with a higher `SEQUENCE` nor
+  supersede the current notice; `scheduling.schedule_published`
   composes a staff summary for schedulers and league managers of the facility. Draft events
   produce nothing (SPK-SCHED-005).
 - **Obsolete reminders** (SPK-COMMS-005): queuing a `schedule_changed` or `cancellation` about a
@@ -200,8 +221,19 @@ Handlers registered: `communications.dispatch_notification` (`communications.del
 
 - Team audiences resolve to the effective roster (players with their roles); a captain or
   co-captain who holds a team role without a roster row is not reached through a team audience
-  (competition exposes no "role holders of an entry" port yet). Name them explicitly or wait for
-  that port.
+  (competition exposes no "role holders of an entry" port yet). Name them explicitly in an
+  unprotected notice or wait for that port; a protected notice cannot name explicit recipients.
+- Pending: a per-person authority basis for protected notices to explicitly chosen people (an
+  identity port for "active staff at facility", a competition port for team-role holders); until
+  then protected content goes only through subject persons, team entries and staff roles.
+- Customer audiences (subject persons, team entries, person ids) are not scoped by facility: persons
+  are organization-wide, and what makes a customer audience "authorized" for a composer is
+  POL-024 / DEC-012 (pending decision). Only the facility dimension is enforced today.
+- A grant revocation that commits while the worker's hand-off claim transaction is open is ordered
+  after that hand-off (identity's relationship authority reads grants without `FOR SHARE`); the
+  record stays truthful, the window is one short transaction.
+- A child leaving a team's roster is caught by the re-checks at dispatch, at the hand-off and in the
+  inbox; there is no `competition.roster_changed` consumer failing queued attempts promptly.
 - Reminders are a composed notice with `scheduledFor`; there is no recurring reminder scheduler.
 - No retry/re-route command for failed deliveries (`communications.retry_delivery` in the
   permission matrix is proposed); a retry is a new attempt row once the command exists.

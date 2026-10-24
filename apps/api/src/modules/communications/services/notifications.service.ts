@@ -7,6 +7,7 @@ import {
   newId,
   systemPrincipal,
   z,
+  type Audience,
   type ListNotificationsQuery,
   type Notification,
   type NotificationDeliveries,
@@ -27,6 +28,7 @@ import {
   UnitOfWork,
   assertExpectedRevision,
   snapshotActor,
+  type ActionDefinition,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -119,11 +121,21 @@ export class NotificationsService {
   async composeIn(trx: Trx, principal: Principal, input: ComposeInput): Promise<NotificationRow> {
     const organizationId = organizationOf(principal);
     const parsed = ComposeNotificationBody.parse(input);
-    await this.authorization.require(principal, CommunicationsActions.compose, {
-      type: 'notification',
-      organizationId,
-      facilityId: parsed.facilityId ?? null,
-    });
+    if (parsed.protected && parsed.audience.personIds.length > 0) {
+      // Invariant 10 / SPK-AT-017: protected content reaches people only through a basis that is
+      // re-checked before dispatch (subject persons, team entries, staff roles within a facility);
+      // a person named by id carries no authority that could be re-checked.
+      throw errors.validation(
+        'A protected notice must address people through subject persons, team entries or staff roles, whose authority is re-checked before dispatch; explicit person ids carry no authority.',
+        { code: 'PROTECTED_EXPLICIT_RECIPIENT', path: 'audience.personIds' },
+      );
+    }
+    await this.requireAudience(
+      principal,
+      CommunicationsActions.compose,
+      { organizationId, facilityId: parsed.facilityId ?? null },
+      parsed.audience,
+    );
     if (parsed.facilityId) await this.assertFacility(trx, organizationId, parsed.facilityId);
     const id = newId();
     const createdByPersonId = await this.knownPersonId(trx, organizationId, principal.personId);
@@ -233,12 +245,12 @@ export class NotificationsService {
     const organizationId = organizationOf(principal);
     const row = await this.loadForUpdate(trx, organizationId, notificationId);
     if (!row) throw errors.notFound('notification', notificationId);
-    await this.authorization.require(principal, CommunicationsActions.send, {
-      type: 'notification',
-      id: row.id,
-      organizationId,
-      facilityId: row.facility_id,
-    });
+    await this.requireAudience(
+      principal,
+      CommunicationsActions.send,
+      { id: row.id, organizationId, facilityId: row.facility_id },
+      audienceOf(row),
+    );
     assertExpectedRevision(options.expectedRevision, row.revision);
     const to = NotificationMachine.next(row.status, 'queue');
     const now = this.clock.now();
@@ -354,8 +366,10 @@ export class NotificationsService {
     let authorized = 0;
     let revoked = 0;
     let attempts = 0;
+    const audience = audienceOf(row);
     for (const recipient of recipients) {
-      // Invariant 10: a protected notice is re-checked against current authority at dispatch time.
+      // Invariant 10: a protected notice is re-checked against current authority at dispatch time,
+      // in the audience's own facility scope (the one resolution used, SPK-COMMS-003).
       const ok = row.protected
         ? await this.resolver.isStillAuthorized(
             organizationId,
@@ -364,8 +378,9 @@ export class NotificationsService {
               basis: recipient.resolved_basis,
               basisDetail: recipient.basis_detail,
               subjectPersonIds: recipient.subject_person_ids,
+              audience,
             },
-            row.facility_id,
+            audience.facilityId,
             trx,
           )
         : true;
@@ -556,6 +571,7 @@ export class NotificationsService {
     for (const recipient of rows) {
       const notification = await this.loadForUpdate(trx, organizationId, recipient.notification_id);
       if (!notification) continue;
+      const audience = audienceOf(notification);
       const still = await this.resolver.isStillAuthorized(
         organizationId,
         {
@@ -563,8 +579,9 @@ export class NotificationsService {
           basis: recipient.resolved_basis,
           basisDetail: recipient.basis_detail,
           subjectPersonIds: recipient.subject_person_ids,
+          audience,
         },
-        notification.facility_id,
+        audience.facilityId,
         trx,
       );
       if (still) continue;
@@ -710,6 +727,14 @@ export class NotificationsService {
     if (query.status) q = q.where('status', '=', query.status);
     if (query.kind) q = q.where('kind', '=', query.kind);
     if (query.facilityId) q = q.where('facility_id', '=', query.facilityId);
+    // §4.14 object-level authorization: a facility-scoped staff reader lists only organization-wide
+    // notices and notices of their own facilities, the same rows get()/deliveries() would allow.
+    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
+      const facilityIds = [...principal.facilityIds];
+      q = q.where((eb) =>
+        eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)]),
+      );
+    }
     if (cursor) {
       q = q.where(
         sql<boolean>`(created_at, id) < (${new Date(cursor.createdAt)}::timestamptz, ${cursor.id}::uuid)`,
@@ -762,12 +787,12 @@ export class NotificationsService {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.uow.reader(), organizationId, id);
     if (!row) throw errors.notFound('notification', id);
-    await this.authorization.require(principal, CommunicationsActions.previewRecipients, {
-      type: 'notification',
-      id,
-      organizationId,
-      facilityId: row.facility_id,
-    });
+    await this.requireAudience(
+      principal,
+      CommunicationsActions.previewRecipients,
+      { id, organizationId, facilityId: row.facility_id },
+      audienceOf(row),
+    );
     const resolved = await this.resolver.resolve(organizationId, audienceOf(row));
     const recipients = [];
     for (const r of resolved) {
@@ -791,6 +816,37 @@ export class NotificationsService {
   // -------------------------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------------------------
+  /**
+   * SPK-COMMS-006 "compose messages against an authorized audience", §4.14: the audience's facility
+   * is part of the target, not only the notification's facility tag, so a facility-scoped composer
+   * cannot reach another facility's staff; nor can they address a staff role across every facility.
+   */
+  private async requireAudience(
+    principal: Principal,
+    action: ActionDefinition,
+    target: { id?: string; organizationId: string; facilityId: string | null },
+    audience: Audience,
+  ): Promise<void> {
+    for (const facilityId of new Set([target.facilityId, audience.facilityId])) {
+      await this.authorization.require(principal, action, {
+        type: 'notification',
+        ...target,
+        facilityId,
+      });
+    }
+    if (
+      principal.kind === 'staff' &&
+      principal.facilityIds.length > 0 &&
+      audience.staffRoles.length > 0 &&
+      audience.facilityId === null
+    ) {
+      throw errors.accessDenied(
+        'A facility-scoped composer addresses staff roles within one of their facilities.',
+        { action: action.id },
+      );
+    }
+  }
+
   private async supersedeObsolete(
     trx: Trx,
     principal: Principal,

@@ -88,6 +88,12 @@ export interface IdempotencyKeysTable {
   created_at: GeneratedTimestamp;
   completed_at: NullableTimestamp;
   expires_at: Timestamp;
+  /** The claim currently holding an in-progress key (migration 0002, §4.9). */
+  claim_token: ColumnType<string | null, string | null | undefined, string | null>;
+  /** Until when that claim is reserved; a retry may take over a lapsed claim that committed nothing. */
+  locked_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** Set inside the business transaction when the request's command committed changes. */
+  committed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
 }
 
 export type OutboxStatus = 'pending' | 'dispatched' | 'dead';
@@ -127,6 +133,12 @@ export interface InboxEventsTable {
   attempts: Generated<number>;
   last_error: string | null;
   processed_at: NullableTimestamp;
+  /** Next attempt time; failures back off like outbox events (migration 0003, §4.12). */
+  available_at: GeneratedTimestamp;
+  max_attempts: Generated<number>;
+  failure_owner: string | null;
+  locked_by: string | null;
+  locked_until: NullableTimestamp;
 }
 
 export interface EventConsumptionsTable {

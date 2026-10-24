@@ -10,6 +10,7 @@ import {
 } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing';
+import { createPersonFixture } from '../../identity';
 import {
   at,
   ClosuresService,
@@ -24,7 +25,7 @@ import { seedAsset } from '../testing/facilities-fixtures';
  * Integrity invariants proven at the database (CLAUDE.md "Integrity that matters is enforced in
  * the database"): rows are inserted through Kysely, bypassing the services.
  */
-describe('facilities schema invariants (migration 0900)', () => {
+describe('facilities schema invariants (migrations 0900-0901)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -191,6 +192,30 @@ describe('facilities schema invariants (migration 0900)', () => {
           notes: null,
           inspected_at: new Date(),
         })
+        .execute(),
+    ).rejects.toSatisfy(isForeignKeyViolation);
+  });
+
+  it('SPK-FAC-002 / §4.3: a task can only be assigned to a person of its own organization (migration 0901)', async () => {
+    const other = await seedOrganization(db);
+    const foreign = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: other.organizationId,
+    });
+    const own = await createPersonFixture(t, { kind: 'adult' });
+    const assigned = (personId: string) => ({
+      status: 'assigned',
+      assigned_owner_person_id: personId,
+    });
+    await expect(insertTask(assigned(foreign))).rejects.toSatisfy(isForeignKeyViolation);
+    await expect(insertTask(assigned(newId()))).rejects.toSatisfy(isForeignKeyViolation);
+    const ok = taskValues(assigned(own));
+    await insertTask(ok);
+    await expect(
+      db
+        .updateTable('maintenance_tasks')
+        .set({ assigned_owner_person_id: foreign })
+        .where('id', '=', ok.id)
         .execute(),
     ).rejects.toSatisfy(isForeignKeyViolation);
   });

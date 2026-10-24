@@ -31,6 +31,7 @@ import {
   type Trx,
 } from '../../../kernel';
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
+import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { ResourcesService } from '../../scheduling';
 import { FacilitiesActions } from '../facilities.actions';
 import {
@@ -86,7 +87,29 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
     private readonly exceptions: OperationalExceptions,
     private readonly reader: FacilitiesReader,
     private readonly resources: ResourcesService,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
   ) {}
+
+  /**
+   * SPK-FAC-002 / §4.3: a task's assigned owner is an active adult person of the task's own
+   * organization, checked through the identity person directory (the composite foreign key of
+   * migration 0901 is the database guarantee). A foreign-organization or unknown id reads exactly
+   * like an inactive one.
+   */
+  async assertAssignableOwner(
+    trx: Trx,
+    organizationId: string,
+    personId: string,
+    path = 'assignedOwnerPersonId',
+  ): Promise<void> {
+    const person = await this.persons.findPerson(organizationId, personId, trx);
+    if (!person || person.status !== 'active' || person.kind !== 'adult') {
+      throw errors.validation(
+        'The assigned owner must be an active adult person of this organization.',
+        { path },
+      );
+    }
+  }
 
   async reportIssue(principal: Principal, input: ReportIssueInput): Promise<MaintenanceTask> {
     const organizationId = organizationOf(principal);
@@ -153,6 +176,9 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
    * timer. Callers authorize first. Shared with preventive schedule generation (SPK-FAC-005).
    */
   async insertTask(trx: Trx, data: NewTaskData): Promise<TaskRow> {
+    if (data.assignedOwnerPersonId) {
+      await this.assertAssignableOwner(trx, data.organizationId, data.assignedOwnerPersonId);
+    }
     const id = newId();
     const now = this.clock.now();
     const status = data.assignedOwnerPersonId ? 'assigned' : 'open';
@@ -241,6 +267,17 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
       if (current.status === 'closed') {
         throw errors.invalidTransition('MaintenanceTask', 'closed', body.status ?? 'update');
       }
+      if (current.requires_inspection && body.requiresInspection === false) {
+        // SPK-FAC-004: an inspection that remains required cannot be dropped while it gates the
+        // release of an open restriction (the task row is locked, so no restriction slips past).
+        const open = await this.reader.openRestrictionIds(trx, organizationId, taskId);
+        if (open.length > 0) {
+          throw errors.eligibility(
+            'The inspection requirement cannot be removed while a restriction on this task is open; record the inspection, then release.',
+            { code: 'inspection_required', taskId, openRestrictionIds: open },
+          );
+        }
+      }
       const now = this.clock.now();
       const changes: MaintenanceTaskChange[] = [];
       let status: MaintenanceTaskStatus = current.status;
@@ -257,6 +294,7 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
             changes.push('unassigned');
           }
         } else {
+          await this.assertAssignableOwner(trx, organizationId, body.assignedOwnerPersonId);
           status = MaintenanceTaskMachine.next(status, 'assign');
           owner = body.assignedOwnerPersonId;
           changes.push('assigned');
@@ -360,7 +398,19 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
         afterRevision: updated.revision,
         reason: body.reason ?? null,
         correlationId: correlationId ?? null,
-        details: { changes, status, openRestrictionIds },
+        details: {
+          changes,
+          status,
+          openRestrictionIds,
+          ...(updated.requires_inspection !== current.requires_inspection
+            ? {
+                requiresInspection: {
+                  from: current.requires_inspection,
+                  to: updated.requires_inspection,
+                },
+              }
+            : {}),
+        },
       });
       await this.outbox.enqueue(trx, MaintenanceTaskUpdated, {
         organizationId,

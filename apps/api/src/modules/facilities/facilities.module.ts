@@ -1,6 +1,7 @@
 import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import type { EventPayload } from '@sportspark/contracts';
 import { EventHandlerRegistry } from '../../kernel';
+import { IdentityModule } from '../identity';
 import { ClosureLifted, SchedulingModule } from '../scheduling';
 import { AssetsController } from './controllers/assets.controller';
 import { MaintenanceTasksController } from './controllers/maintenance-tasks.controller';
@@ -30,10 +31,11 @@ const providers: Provider[] = [
  * FacilitiesModule (specification §3.17 SPK-FAC-001..005, §4.4 Facilities, SPK-AT-021). Owns
  * assets, maintenance tasks, inspections, operating restrictions and preventive schedules.
  * Restrictions reach scheduling only through the scheduling module's closure port and public
- * services (§4.2): this module never writes scheduling tables.
+ * services (§4.2): this module never writes scheduling tables. Assigned task owners are checked
+ * through the identity person directory port (§4.3).
  */
 @Module({
-  imports: [SchedulingModule],
+  imports: [IdentityModule, SchedulingModule],
   providers,
   controllers: [
     AssetsController,

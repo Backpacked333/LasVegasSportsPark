@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  AudienceSchema,
   decodeCursor,
   encodeCursor,
   errors,
@@ -11,6 +12,7 @@ import {
   type MarkReadInput,
   type Page,
   type Principal,
+  type RecipientBasisValue,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import { sql } from 'kysely';
@@ -36,13 +38,27 @@ import {
   type AttemptRow,
   type InboxRow,
 } from '../communications.shared';
+import { AudienceResolver } from './audience-resolver';
 
 const InboxCursor = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
+
+/** An inbox row plus what the protected-notice re-check needs (never part of the response). */
+interface EntitlementRow extends InboxRow {
+  protected: boolean;
+  audience: unknown;
+  recipient_person_id: string;
+  resolved_basis: RecipientBasisValue;
+  basis_detail: string | null;
+  subject_person_ids: string[];
+}
 
 /**
  * The in-app inbox (SPK-UX-003): every in-app delivery attempt addressed to the principal's own
  * person, newest first, with the real delivery state (delivered, read, acknowledged; SPK-COMMS-004).
  * Reading and acknowledging are self-only commands; nobody reads another person's inbox here.
+ * A protected notice is served only while the recipient still holds the authority that justified
+ * it, re-checked on every read like a calendar feed (SPK-IAM-006 "revocation must affect new
+ * protected requests", SPK-AT-017, invariant 10); the delivered fact itself is never rewritten.
  */
 @Injectable()
 export class InboxService {
@@ -52,6 +68,7 @@ export class InboxService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly resolver: AudienceResolver,
   ) {}
 
   async list(principal: Principal, query: InboxQuery): Promise<Page<InboxItem>> {
@@ -70,7 +87,11 @@ export class InboxService {
       );
     }
     const rows = await q.execute();
-    const items = rows.slice(0, query.limit).map(toInboxItem);
+    const items: InboxItem[] = [];
+    for (const row of rows.slice(0, query.limit)) {
+      if (await this.stillEntitled(organizationId, row)) items.push(toInboxItem(row));
+    }
+    // The cursor follows the rows read, so paging moves past items withheld above.
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
     return {
       items,
@@ -91,6 +112,7 @@ export class InboxService {
     return this.uow.run(async ({ trx }) => {
       const attempt = await this.loadMine(trx, organizationId, personId, attemptId);
       await this.authorize(principal, organizationId, personId, CommunicationsActions.acknowledge);
+      await this.assertEntitled(trx, organizationId, personId, attemptId);
       assertExpectedRevision(input.expectedRevision, attempt.revision);
       if (attempt.status === 'read' || attempt.status === 'acknowledged') {
         return this.itemFor(trx, organizationId, personId, attemptId); // reading twice is not an error
@@ -145,6 +167,7 @@ export class InboxService {
     return this.uow.run(async ({ trx }) => {
       const attempt = await this.loadMine(trx, organizationId, personId, attemptId);
       await this.authorize(principal, organizationId, personId, CommunicationsActions.acknowledge);
+      await this.assertEntitled(trx, organizationId, personId, attemptId);
       assertExpectedRevision(input.expectedRevision, attempt.revision);
       if (attempt.status === 'acknowledged') {
         return this.itemFor(trx, organizationId, personId, attemptId); // recorded once per recipient
@@ -250,52 +273,103 @@ export class InboxService {
   }
 
   private inboxQuery(db: Db | Trx, organizationId: string, personId: string) {
-    return db
-      .selectFrom('delivery_attempts as a')
-      .innerJoin('notifications as n', (join) =>
-        join
-          .onRef('n.organization_id', '=', 'a.organization_id')
-          .onRef('n.id', '=', 'a.notification_id'),
-      )
-      .innerJoin('notification_recipients as r', (join) =>
-        join
-          .onRef('r.organization_id', '=', 'a.organization_id')
-          .onRef('r.id', '=', 'a.recipient_id'),
-      )
-      .select([
-        'a.id as attempt_id',
-        'a.status as attempt_status',
-        'a.created_at as attempt_created_at',
-        'a.delivered_at',
-        'a.read_at',
-        'a.acknowledged_at',
-        'n.id as notification_id',
-        'n.kind',
-        'n.category',
-        'n.title',
-        'n.body',
-        'n.facility_id',
-        'n.subject_type',
-        'n.subject_id',
-        'n.details_before',
-        'n.details_after',
-        'n.superseded_by_notification_id',
-      ])
-      .where('a.organization_id', '=', organizationId)
-      .where('a.channel', '=', 'in_app')
-      .where('r.person_id', '=', personId);
+    return (
+      db
+        .selectFrom('delivery_attempts as a')
+        .innerJoin('notifications as n', (join) =>
+          join
+            .onRef('n.organization_id', '=', 'a.organization_id')
+            .onRef('n.id', '=', 'a.notification_id'),
+        )
+        .innerJoin('notification_recipients as r', (join) =>
+          join
+            .onRef('r.organization_id', '=', 'a.organization_id')
+            .onRef('r.id', '=', 'a.recipient_id'),
+        )
+        .select([
+          'a.id as attempt_id',
+          'a.status as attempt_status',
+          'a.created_at as attempt_created_at',
+          'a.delivered_at',
+          'a.read_at',
+          'a.acknowledged_at',
+          'n.id as notification_id',
+          'n.kind',
+          'n.category',
+          'n.title',
+          'n.body',
+          'n.facility_id',
+          'n.subject_type',
+          'n.subject_id',
+          'n.details_before',
+          'n.details_after',
+          'n.superseded_by_notification_id',
+          'n.protected',
+          'n.audience',
+          'r.person_id as recipient_person_id',
+          'r.resolved_basis',
+          'r.basis_detail',
+          'r.subject_person_ids',
+        ])
+        .where('a.organization_id', '=', organizationId)
+        .where('a.channel', '=', 'in_app')
+        .where('r.person_id', '=', personId)
+        // A recipient revoked from a protected notice is never served it (SPK-IAM-006).
+        .where((eb) => eb.or([eb('n.protected', '=', false), eb('r.status', '!=', 'revoked')]))
+    );
   }
 
+  /**
+   * Unprotected notices are served as delivered. A protected one only while the recipient still
+   * holds, right now, the authority that justified their inclusion (invariant 10, SPK-AT-017).
+   */
+  private async stillEntitled(
+    organizationId: string,
+    row: EntitlementRow,
+    trx?: Trx,
+  ): Promise<boolean> {
+    if (!row.protected) return true;
+    const audience = AudienceSchema.parse(row.audience);
+    return this.resolver.isStillAuthorized(
+      organizationId,
+      {
+        personId: row.recipient_person_id,
+        basis: row.resolved_basis,
+        basisDetail: row.basis_detail,
+        subjectPersonIds: row.subject_person_ids,
+        audience,
+      },
+      audience.facilityId,
+      trx,
+    );
+  }
+
+  /** Read and acknowledge act only on a notice the person may still be served (§4.10 not found). */
+  private async assertEntitled(
+    trx: Trx,
+    organizationId: string,
+    personId: string,
+    attemptId: string,
+  ): Promise<void> {
+    const row = await this.inboxQuery(trx, organizationId, personId)
+      .where('a.id', '=', attemptId)
+      .executeTakeFirst();
+    if (!row || !(await this.stillEntitled(organizationId, row, trx))) {
+      throw errors.protectedNotFound('notice');
+    }
+  }
+
+  /** The item after a command; entitlement was asserted earlier in the same transaction. */
   private async itemFor(
-    db: Db | Trx,
+    trx: Trx,
     organizationId: string,
     personId: string,
     attemptId: string,
   ): Promise<InboxItem> {
-    const row = await this.inboxQuery(db, organizationId, personId)
+    const row = await this.inboxQuery(trx, organizationId, personId)
       .where('a.id', '=', attemptId)
       .executeTakeFirst();
     if (!row) throw errors.protectedNotFound('notice');
-    return toInboxItem(row as InboxRow);
+    return toInboxItem(row);
   }
 }

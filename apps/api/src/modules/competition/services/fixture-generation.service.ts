@@ -207,6 +207,24 @@ export class FixtureGenerationService {
     correlationId: string | null,
   ): Promise<SolverRun> {
     const organizationId = organizationOf(principal);
+    // The resources' setup and cleanup turnover comes from the scheduling module, read before the
+    // transaction (§4.11): the generator never places two games on one resource at overlapping
+    // occupied times, the same rule publication applies (SPK-FIX-004, SPK-FIX-005).
+    const requested = await this.loadSpecification(this.db, organizationId, specificationId);
+    if (!requested) throw errors.notFound('fixture_specification', specificationId);
+    await this.authorization.require(principal, MatchActions.generateFixtures, {
+      type: 'fixture_specification',
+      id: specificationId,
+      organizationId,
+      facilityId: requested.facility_id,
+    });
+    const resourceBuffers: Record<string, { setupMinutes: number; cleanupMinutes: number }> = {};
+    for (const resource of await this.resources.listResources(principal, requested.facility_id)) {
+      resourceBuffers[resource.id] = {
+        setupMinutes: resource.defaultSetupMinutes,
+        cleanupMinutes: resource.defaultCleanupMinutes,
+      };
+    }
     const plan = await this.uow.run(async ({ trx }): Promise<GenerationPlan> => {
       const spec = await this.loadSpecification(trx, organizationId, specificationId, {
         forUpdate: true,
@@ -222,12 +240,16 @@ export class FixtureGenerationService {
       if (!season) throw errors.notFound('season', spec.season_id);
       const ruleSet = await loadRuleSetRow(trx, organizationId, season.rule_set_id);
       if (!ruleSet) throw errors.notFound('rule_set', season.rule_set_id);
-      const division = await trx
+      let divisionQuery = trx
         .selectFrom('divisions')
         .selectAll()
         .where('organization_id', '=', organizationId)
-        .where('id', '=', spec.division_id)
-        .executeTakeFirstOrThrow();
+        .where('id', '=', spec.division_id);
+      // SPK-FIX-002 / §4.7: the "division already has fixtures" check below and the fixture inserts
+      // must not interleave with a run of another specification of the same division, so a real
+      // run holds the division row. FOR NO KEY UPDATE still lets other writers reference it.
+      if (!input.dryRun) divisionQuery = divisionQuery.forNoKeyUpdate();
+      const division = await divisionQuery.executeTakeFirstOrThrow();
       const facility = await trx
         .selectFrom('facilities')
         .select(['id', 'timezone'])
@@ -293,6 +315,7 @@ export class FixtureGenerationService {
           allowedStartTimes: snapshot.allowedStartTimes,
           matchDurationMinutes: spec.match_duration_minutes,
           resourceIds: spec.required_resource_ids,
+          resourceBuffers,
           fairnessPreferences: snapshot.fairnessPreferences,
           playoffStructure: snapshot.playoffStructure,
           resolveInstant: (date, time) =>
@@ -317,8 +340,15 @@ export class FixtureGenerationService {
       const runId = newId();
       const games: ProposedGame[] = result.proposal?.games ?? [];
       const fixtureIds: string[] = [];
+      // A proposal that breaks a hard constraint is an explanation only: it never becomes fixtures
+      // or a scheduling draft (SPK-FIX-003 hard constraints are visibly distinct, SPK-FIX-004 "no
+      // feasible proposal found"). A partial proposal that respects every hard constraint is
+      // materialized, its unscheduled games kept as remaining obligations (SPK-FIX-002).
       const materialize =
-        !input.dryRun && result.outcome !== 'proven_infeasible' && games.length > 0;
+        !input.dryRun &&
+        result.outcome !== 'proven_infeasible' &&
+        result.explanation.hardViolations.length === 0 &&
+        games.length > 0;
       if (materialize) {
         for (const game of games) {
           const fixtureId = newId();

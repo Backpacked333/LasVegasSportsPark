@@ -17,9 +17,13 @@ export interface AuthorizationTargetInput extends Omit<AuthorizationTarget, 'id'
 
 /**
  * Single authorization path for every command and query (§4.14 object-level authorization).
- * Order of evaluation: system principal → organization scope → facility scope → staff role →
- * self → relationship permission → team role → deny. A denial on a protected record is reported
- * as not-found so record existence is not revealed across households (§4.10).
+ * Order of evaluation: organization scope → system principal → staff role within its facility
+ * scope → self → relationship permission → team role → deny. A staff role held outside its
+ * facility scope grants nothing, but it does not take away the person's own self, relationship or
+ * team authority (SPK-IAM-001/003: a coach who is also a parent receives each permission only in
+ * its proper scope); when none of those allows, the denial says 'facility scope mismatch'.
+ * A denial on a protected record is reported as not-found so record existence is not revealed
+ * across households (§4.10).
  */
 @Injectable()
 export class AuthorizationService {
@@ -47,6 +51,7 @@ export class AuthorizationService {
     if (principal.kind === 'system') {
       return { allowed: true, basis: 'system' };
     }
+    let denial = 'no applicable authority';
     if (principal.kind === 'staff') {
       const facilityOk =
         !target.facilityId ||
@@ -56,9 +61,8 @@ export class AuthorizationService {
       if (roleOk && facilityOk) {
         return { allowed: true, basis: `staff role` };
       }
-      if (roleOk && !facilityOk) {
-        return { allowed: false, reason: 'facility scope mismatch', protectedRecord };
-      }
+      // Fall through: the person's own authority below is still evaluated (SPK-IAM-001/003).
+      if (roleOk) denial = 'facility scope mismatch';
     }
     const subjects = target.subjectPersonIds ?? [];
     if (principal.personId) {
@@ -102,7 +106,7 @@ export class AuthorizationService {
         if (ok) return { allowed: true, basis: `team_role:${definition.teamRole}` };
       }
     }
-    return { allowed: false, reason: 'no applicable authority', protectedRecord };
+    return { allowed: false, reason: denial, protectedRecord };
   }
 
   /** Throws ACCESS_DENIED (or NOT_FOUND for protected records) unless allowed. */

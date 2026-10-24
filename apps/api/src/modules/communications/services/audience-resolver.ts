@@ -13,9 +13,15 @@ import { TEAM_MEMBERSHIP_PORT, type TeamMembershipPort } from '../ports';
 
 export interface ResolvedRecipient {
   personId: string;
+  /** The first justification found; a merged recipient keeps it (see `subjectPersonIds`). */
   basis: RecipientBasisValue;
   basisDetail: string | null;
-  /** Participants whose `receive_messages` grants (or own adulthood) justified inclusion. */
+  /**
+   * Participants whose `receive_messages` grants (or own adulthood) justified inclusion. When the
+   * same person is reached several ways the subjects are merged, so every subject other than the
+   * person themself is a `receive_messages` justification, whatever `basis` says; the re-check
+   * requires all of them (invariant 10, SPK-IAM-006).
+   */
   subjectPersonIds: string[];
 }
 
@@ -24,6 +30,11 @@ export interface RecipientAuthorityCheck {
   basis: RecipientBasisValue;
   basisDetail: string | null;
   subjectPersonIds: readonly string[];
+  /**
+   * The notification's stored audience: a subject reached through a team entry justifies the
+   * recipient only while it is still on one of the audience's teams (SPK-COMMS-003).
+   */
+  audience: Audience;
 }
 
 /**
@@ -32,9 +43,11 @@ export interface RecipientAuthorityCheck {
  *    currently holds `receive_messages` over them (identity's relationship authority);
  *  - team entries: current roster members treated as subject persons (competition's port);
  *  - staff roles: persons holding the role right now, optionally within one facility;
- *  - explicit person ids: named by the composer (must exist and be active).
- * `isStillAuthorized` re-evaluates one recipient against the same sources at dispatch time and
- * immediately before an external hand-off (invariant 10, SPK-IAM-006, SPK-AT-017).
+ *  - explicit person ids: named by the composer (must exist and be active); they carry no
+ *    authority, so they never justify protected content.
+ * `isStillAuthorized` re-evaluates one recipient against the same sources at dispatch time,
+ * immediately before an external hand-off and whenever the inbox serves a protected notice
+ * (invariant 10, SPK-IAM-006, SPK-AT-017).
  */
 @Injectable()
 export class AudienceResolver {
@@ -51,6 +64,8 @@ export class AudienceResolver {
     trx?: Trx,
   ): Promise<ResolvedRecipient[]> {
     const out = new Map<string, ResolvedRecipient>();
+    // A person reached several ways is one recipient: the first basis is kept and every subject is
+    // merged in, so the re-check sees (and requires) each justification (invariant 10).
     const add = (recipient: ResolvedRecipient): void => {
       const existing = out.get(recipient.personId);
       if (!existing) {
@@ -119,40 +134,49 @@ export class AudienceResolver {
       .sort((a, b) => (a.personId < b.personId ? -1 : a.personId > b.personId ? 1 : 0));
   }
 
-  /** Does the recipient still hold, right now, the authority that justified their inclusion? */
+  /**
+   * Does the recipient still hold, right now, the authority that justified their inclusion in a
+   * protected notice? `audienceFacilityId` is the audience's facility scope (`Audience.facilityId`),
+   * the same scope `resolve()` used, not the notification's facility tag (SPK-COMMS-003).
+   */
   async isStillAuthorized(
     organizationId: string,
     recipient: RecipientAuthorityCheck,
-    facilityId: string | null,
+    audienceFacilityId: string | null,
     trx?: Trx,
   ): Promise<boolean> {
     const person = await this.persons.findPerson(organizationId, recipient.personId, trx);
     if (!person || person.status !== 'active') return false;
+    // Every subject other than the person themself was added through a receive_messages grant,
+    // whatever basis was stored first when duplicate persons were merged (invariant 10,
+    // SPK-IAM-006): each grant must still hold, and the subject must still be in the audience (a
+    // child who left a team's roster no longer justifies the guardian, SPK-COMMS-003).
+    const delegated = recipient.subjectPersonIds.filter((s) => s !== recipient.personId);
+    for (const subject of delegated) {
+      if (!(await this.inAudience(organizationId, recipient.audience, subject, trx))) return false;
+      const ok = await this.authority.hasPermission(
+        organizationId,
+        recipient.personId,
+        subject,
+        'receive_messages',
+        trx,
+      );
+      if (!ok) return false;
+    }
     switch (recipient.basis) {
       case 'self':
+        return true;
       case 'explicit':
-        return true;
-      case 'receive_messages': {
-        const subjects = recipient.subjectPersonIds.filter((s) => s !== recipient.personId);
-        if (subjects.length === 0) return false;
-        for (const subject of subjects) {
-          const ok = await this.authority.hasPermission(
-            organizationId,
-            recipient.personId,
-            subject,
-            'receive_messages',
-            trx,
-          );
-          if (!ok) return false;
-        }
-        return true;
-      }
+        // A person named by the composer holds no authority over protected content (SPK-AT-017).
+        return false;
+      case 'receive_messages':
+        return delegated.length > 0;
       case 'staff_role': {
         if (!recipient.basisDetail) return false;
         const members = await this.staff.staffWithRole(
           organizationId,
           recipient.basisDetail as StaffRole,
-          facilityId,
+          audienceFacilityId,
           trx,
         );
         return members.includes(recipient.personId);
@@ -162,5 +186,19 @@ export class AudienceResolver {
         return this.teams.isMember(organizationId, recipient.basisDetail, recipient.personId, trx);
       }
     }
+  }
+
+  /** Is the subject still part of the audience: named directly, or on one of its team entries now? */
+  private async inAudience(
+    organizationId: string,
+    audience: Audience,
+    subjectPersonId: string,
+    trx?: Trx,
+  ): Promise<boolean> {
+    if (audience.subjectPersonIds.includes(subjectPersonId)) return true;
+    for (const teamEntryId of audience.teamEntryIds) {
+      if (await this.teams.isMember(organizationId, teamEntryId, subjectPersonId, trx)) return true;
+    }
+    return false;
   }
 }

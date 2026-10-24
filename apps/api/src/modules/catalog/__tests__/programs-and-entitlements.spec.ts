@@ -7,12 +7,14 @@ import {
   createStaffMemberFixture,
 } from '../../identity';
 import { CatalogModule } from '../catalog.module';
+import { createOfferingFixture, createProgramFixture } from '../testing/catalog-fixtures';
 
 const key = () => `k-${newId()}`;
 
 describe('programs and entitlement definitions (SPK-CAT-001, SPK-YOUTH-001, §4.4)', () => {
   let t: TestApp;
   let pm: { Authorization: string };
+  let managerPersonId: string;
   let frontDesk: { Authorization: string };
   let customer: { Authorization: string };
 
@@ -24,6 +26,7 @@ describe('programs and entitlement definitions (SPK-CAT-001, SPK-YOUTH-001, §4.
     });
     const manager = await createStaffMemberFixture(t, { roles: ['program_manager'] });
     pm = await authHeaderForPerson(t, manager.personId);
+    managerPersonId = manager.personId;
     const desk = await createStaffMemberFixture(t, { roles: ['front_desk'] });
     frontDesk = await authHeaderForPerson(t, desk.personId);
     const people = await createOrganizationPeople(t);
@@ -105,6 +108,88 @@ describe('programs and entitlement definitions (SPK-CAT-001, SPK-YOUTH-001, §4.
       'catalog.program_created',
       'catalog.program_updated',
     ]);
+  });
+
+  it('SPK-REG-002: a program age band cannot change under a published or open offering', async () => {
+    const programId = await createProgramFixture(t, {
+      ageBand: { minAgeYears: 6, maxAgeYears: 9 },
+    });
+    const open = await createOfferingFixture(t, {
+      programId,
+      responsibleManagerPersonId: managerPersonId,
+      publicationState: 'registration_open',
+    });
+    const revision = async () =>
+      (
+        await t.db
+          .selectFrom('programs')
+          .select('revision')
+          .where('id', '=', programId)
+          .executeTakeFirstOrThrow()
+      ).revision;
+    const before = await revision();
+    const changed = await t.http
+      .patch(`/v1/programs/${programId}`)
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: before, ageBand: { minAgeYears: 14, maxAgeYears: 18 } });
+    expect(changed.status).toBe(409);
+    expect(changed.body.code).toBe('RESOURCE_CONFLICT');
+    expect(changed.body.details).toMatchObject({
+      code: 'PROGRAM_AGE_BAND_IN_USE',
+      offeringIds: [open.offeringId],
+    });
+    expect(await revision()).toBe(before);
+    expect((await t.http.get(`/v1/offerings/${open.offeringId}`)).body.ageBand).toEqual({
+      minAgeYears: 6,
+      maxAgeYears: 9,
+    });
+    // other edits, and restating the same age band, are still allowed
+    const renamed = await t.http
+      .patch(`/v1/programs/${programId}`)
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({
+        expectedRevision: before,
+        description: 'Renamed',
+        ageBand: { maxAgeYears: 9, minAgeYears: 6 },
+      });
+    expect(renamed.status).toBe(200);
+  });
+
+  it('SPK-REG-002: a program whose offerings are all drafts can change its age band, and the audit keeps both values', async () => {
+    const programId = await createProgramFixture(t, {
+      ageBand: { minAgeYears: 6, maxAgeYears: 9 },
+    });
+    await createOfferingFixture(t, {
+      programId,
+      responsibleManagerPersonId: managerPersonId,
+      publicationState: 'draft',
+    });
+    const { revision } = await t.db
+      .selectFrom('programs')
+      .select('revision')
+      .where('id', '=', programId)
+      .executeTakeFirstOrThrow();
+    const changed = await t.http
+      .patch(`/v1/programs/${programId}`)
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: revision, ageBand: { minAgeYears: 7, maxAgeYears: 10 } });
+    expect(changed.status).toBe(200);
+    expect(changed.body.ageBand).toEqual({ minAgeYears: 7, maxAgeYears: 10 });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('action', '=', 'catalog.program_updated')
+      .where('target_id', '=', programId)
+      .executeTakeFirstOrThrow();
+    expect(audit.details).toEqual({
+      ageBand: {
+        before: { minAgeYears: 6, maxAgeYears: 9 },
+        after: { minAgeYears: 7, maxAgeYears: 10 },
+      },
+    });
   });
 
   it('§4.9: creating a program is idempotent; the same key replays without a second row', async () => {

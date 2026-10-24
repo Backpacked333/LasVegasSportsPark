@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
+  hasStaffRole,
   newId,
   type AcceptTeamInvitationInput,
   type ChangeRosterInput,
@@ -30,6 +31,7 @@ import {
   type RosterSource,
   type TeamInvitationStatus,
 } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -96,6 +98,13 @@ export class RosterService implements RosterPort {
   // -------------------------------------------------------------------------------------------
   // Roster changes with effective dates (SPK-COMP-005)
   // -------------------------------------------------------------------------------------------
+  /**
+   * Adds and removals take effect now or at a later instant. A change dated before now rewrites
+   * the roster of matches already played (SPK-COMP-005: a player removed today stays on last
+   * week's roster), so only league staff may make one, with a reason, and it is audited as a
+   * retroactive correction (§4.7 invariant 9). A completed or archived season takes no change at
+   * all: its rosters are history (SPK-AT-003).
+   */
   async changeRoster(
     principal: Principal,
     teamEntryId: string,
@@ -104,7 +113,15 @@ export class RosterService implements RosterPort {
   ): Promise<RosterResponse> {
     const organizationId = organizationOf(principal);
     const staff = isStaffLike(principal);
+    const leagueStaff =
+      principal.kind === 'system' ||
+      hasStaffRole(principal, ...CompetitionActions.manageRoster.staffRoles);
     const now = this.clock.now();
+    const dated = input.changes.map((change) => {
+      const explicit = change.action === 'add' ? change.effectiveFrom : change.effectiveTo;
+      const at = explicit ? new Date(explicit) : now;
+      return { change, at, retroactive: at.getTime() < now.getTime() };
+    });
     return this.uow.run(async ({ trx }) => {
       const context = await loadEntryContext(trx, organizationId, teamEntryId, { forUpdate: true });
       if (!context) throw errors.protectedNotFound('team_entry');
@@ -116,28 +133,55 @@ export class RosterService implements RosterPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, context.entry.revision);
-      for (const change of input.changes) {
+      if (context.season.status === 'completed' || context.season.status === 'archived') {
+        throw errors.invalidTransition('Season', context.season.status, 'change_roster');
+      }
+      for (const { change, retroactive } of dated) {
+        if (!retroactive) continue;
+        const field = change.action === 'add' ? 'effectiveFrom' : 'effectiveTo';
+        if (!leagueStaff) {
+          throw errors.validation(
+            'Roster changes take effect now or later; ask league management to correct a past roster.',
+            { code: 'retroactive_roster_change', personId: change.personId, field, now: iso(now) },
+          );
+        }
+        if (!input.reason) {
+          throw errors.validation('A retroactive roster correction requires a reason.', {
+            code: 'correction_reason_required',
+            personId: change.personId,
+            field,
+          });
+        }
+      }
+      await this.lockSeasonMemberships(
+        trx,
+        organizationId,
+        context.entry.season_id,
+        dated.filter((d) => d.change.action === 'add').map((d) => d.change.personId),
+      );
+      for (const { change, at, retroactive } of dated) {
+        const correction = retroactive ? { reason: input.reason ?? null, recordedAt: now } : null;
         if (change.action === 'add') {
-          const effectiveFrom = change.effectiveFrom ? new Date(change.effectiveFrom) : now;
           await this.addMember(trx, principal, context, {
             personId: change.personId,
             status: change.status,
-            effectiveFrom,
+            effectiveFrom: at,
             jerseyNumber: change.jerseyNumber ?? null,
             source: staff ? 'staff' : 'captain',
             actorIsStaff: staff,
             correlationId,
+            correction,
           });
         } else {
-          const effectiveTo = change.effectiveTo ? new Date(change.effectiveTo) : now;
           await this.removeMember(
             trx,
             principal,
             context,
             change.personId,
-            effectiveTo,
+            at,
             change.reason,
             correlationId,
+            correction,
           );
         }
       }
@@ -798,9 +842,14 @@ export class RosterService implements RosterPort {
       source: RosterSource;
       actorIsStaff: boolean;
       correlationId: string | null;
+      /** A league-staff correction dated before now (see changeRoster). */
+      correction?: RetroactiveCorrection | null;
     },
   ): Promise<RosterMember> {
     const organizationId = context.entry.organization_id;
+    await this.lockSeasonMemberships(trx, organizationId, context.entry.season_id, [
+      input.personId,
+    ]);
     const open = await openRosterRow(trx, organizationId, context.entry.id, input.personId);
     if (open && statusAt(open) === null) {
       // A pending invitation or request placeholder gives way to the real membership.
@@ -866,6 +915,7 @@ export class RosterService implements RosterPort {
       targetType: 'roster_membership',
       targetId: id,
       afterRevision: 1,
+      reason: input.correction?.reason ?? null,
       correlationId: input.correlationId,
       details: {
         teamEntryId: context.entry.id,
@@ -874,6 +924,7 @@ export class RosterService implements RosterPort {
         effectiveFrom: input.effectiveFrom.toISOString(),
         source: input.source,
         reasonCodes: evaluation.reasons.map((r) => r.code),
+        ...correctionDetails(input.correction),
       },
     });
     await this.outbox.enqueue(trx, CompetitionEvents.rosterChanged, {
@@ -913,6 +964,7 @@ export class RosterService implements RosterPort {
     effectiveTo: Date,
     reason: string,
     correlationId: string | null,
+    correction: RetroactiveCorrection | null = null,
   ): Promise<void> {
     const organizationId = context.entry.organization_id;
     const open = await openRosterRow(trx, organizationId, context.entry.id, personId);
@@ -950,6 +1002,7 @@ export class RosterService implements RosterPort {
         personId,
         effectiveTo: effectiveTo.toISOString(),
         status,
+        ...correctionDetails(correction),
       },
     });
     await this.outbox.enqueue(trx, CompetitionEvents.rosterChanged, {
@@ -969,6 +1022,26 @@ export class RosterService implements RosterPort {
       },
       correlationId,
     });
+  }
+
+  /**
+   * Serializes additions of one person within a season (SPK-COMP-005, SPK-COMP-002 "Multi-team
+   * restrictions", §6.8 item 4). The multi-team rules read the person's memberships on other
+   * entries, which the target entry's row lock does not cover, so two captains adding the same
+   * person to two entries at once would each see none. A transaction-scoped advisory lock per
+   * (organization, season, person) makes the second addition wait and then see the first. Locks
+   * are taken in a stable order, and are re-entrant within the transaction.
+   */
+  private async lockSeasonMemberships(
+    trx: Trx,
+    organizationId: string,
+    seasonId: string,
+    personIds: string[],
+  ): Promise<void> {
+    for (const personId of [...new Set(personIds)].sort()) {
+      const key = `competition.season_membership:${organizationId}:${seasonId}:${personId}`;
+      await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(trx);
+    }
   }
 
   private async openPendingRow(
@@ -1101,6 +1174,22 @@ export class RosterService implements RosterPort {
     const members = await this.entries.rosterMembers(db, context, rows, at);
     return { teamEntryId: context.entry.id, at: at.toISOString(), members };
   }
+}
+
+interface RetroactiveCorrection {
+  reason: string | null;
+  recordedAt: Date;
+}
+
+/** Audit details that mark a retroactive roster correction as such (§4.7 invariant 9). */
+function correctionDetails(correction: RetroactiveCorrection | null | undefined) {
+  return correction
+    ? {
+        retroactive: true,
+        recordedAt: correction.recordedAt.toISOString(),
+        correctionReason: correction.reason,
+      }
+    : {};
 }
 
 export type { RosterRow };
