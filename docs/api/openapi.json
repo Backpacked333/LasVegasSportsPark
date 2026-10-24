@@ -21076,6 +21076,3313 @@
           "status"
         ]
       },
+      "Quote": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "basketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/QuoteStatus"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLine"
+            }
+          },
+          "subtotalMinor": {
+            "type": "integer"
+          },
+          "discountMinor": {
+            "type": "integer"
+          },
+          "taxMinor": {
+            "type": "integer"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "includedTaxMinor": {
+            "type": "integer"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "creditsAppliedMinor": {
+            "type": "integer"
+          },
+          "appliedCredits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AppliedCredit"
+            }
+          },
+          "dueNowMinor": {
+            "type": "integer"
+          },
+          "paymentPlan": {
+            "type": "string",
+            "enum": [
+              "full",
+              "installments"
+            ]
+          },
+          "futureObligations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FutureObligation"
+            }
+          },
+          "discounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteDiscountLine"
+            }
+          },
+          "policies": {
+            "$ref": "#/components/schemas/QuotePolicyReferences"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "consumedByCheckoutId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "basketId",
+          "payerPersonId",
+          "status",
+          "currency",
+          "lines",
+          "subtotalMinor",
+          "discountMinor",
+          "taxMinor",
+          "feeMinor",
+          "includedTaxMinor",
+          "totalMinor",
+          "creditsAppliedMinor",
+          "appliedCredits",
+          "dueNowMinor",
+          "paymentPlan",
+          "futureObligations",
+          "discounts",
+          "policies",
+          "expiresAt",
+          "consumedByCheckoutId",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "QuoteStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "expired",
+          "consumed"
+        ]
+      },
+      "QuoteLine": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "basketLineId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participantPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "priceRuleId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "unitPriceMinor": {
+            "type": "integer"
+          },
+          "baseAmountMinor": {
+            "type": "integer"
+          },
+          "discountMinor": {
+            "type": "integer"
+          },
+          "taxMinor": {
+            "type": "integer"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "includedTaxMinor": {
+            "type": "integer"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "discounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteDiscountLine"
+            }
+          },
+          "charges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AppliedCharge"
+            }
+          },
+          "policies": {
+            "$ref": "#/components/schemas/LinePolicyReferences"
+          },
+          "enrollmentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "basketLineId",
+          "participantPersonId",
+          "offeringId",
+          "description",
+          "quantity",
+          "priceRuleId",
+          "unitPriceMinor",
+          "baseAmountMinor",
+          "discountMinor",
+          "taxMinor",
+          "feeMinor",
+          "includedTaxMinor",
+          "totalMinor",
+          "currency",
+          "discounts",
+          "charges",
+          "policies",
+          "enrollmentId"
+        ]
+      },
+      "QuoteDiscountLine": {
+        "type": "object",
+        "properties": {
+          "discountDefinitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "explanation": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "discountDefinitionId",
+          "code",
+          "name",
+          "amountMinor",
+          "explanation"
+        ]
+      },
+      "AppliedCharge": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tax",
+              "fee"
+            ]
+          },
+          "inclusive": {
+            "type": "boolean"
+          },
+          "basisPoints": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "amountMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "kind",
+          "inclusive",
+          "basisPoints",
+          "amountMinor"
+        ]
+      },
+      "LinePolicyReferences": {
+        "type": "object",
+        "properties": {
+          "eligibilityPolicyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "cancellationPolicyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "requiredFormPolicyVersionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "approvalPolicyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "eligibilityPolicyVersionId",
+          "cancellationPolicyVersionId",
+          "requiredFormPolicyVersionIds",
+          "approvalPolicyVersionId"
+        ]
+      },
+      "AppliedCredit": {
+        "type": "object",
+        "properties": {
+          "creditId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "creditId",
+          "amountMinor"
+        ]
+      },
+      "FutureObligation": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "integer"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "amountMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "dueAt",
+          "amountMinor"
+        ]
+      },
+      "QuotePolicyReferences": {
+        "type": "object",
+        "properties": {
+          "overpaymentPolicyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "installmentPolicyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "refundPolicyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "defaults": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "overpaymentPolicyVersionId",
+          "installmentPolicyVersionId",
+          "refundPolicyVersionId",
+          "defaults"
+        ]
+      },
+      "CreateQuoteRequest": {
+        "type": "object",
+        "properties": {
+          "basketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "discountCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,49}$"
+            },
+            "maxItems": 10,
+            "default": []
+          },
+          "creditIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 10,
+            "default": []
+          },
+          "paymentPlan": {
+            "$ref": "#/components/schemas/PaymentPlanRequest"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "basketId"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentPlanRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "full"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "installments"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 2,
+                "maximum": 24
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "default": {
+          "kind": "full"
+        }
+      },
+      "Checkout": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quoteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "basketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckoutStatus"
+          },
+          "paymentKind": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "cash",
+              "none"
+            ]
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentAttempt"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/Receipt"
+          },
+          "holdIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "enrollmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "failure": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "details": {}
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/CheckoutRecovery"
+          },
+          "nextAction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "quoteId",
+          "orderId",
+          "basketId",
+          "payerPersonId",
+          "status",
+          "paymentKind",
+          "payment",
+          "receipt",
+          "holdIds",
+          "enrollmentIds",
+          "operationId",
+          "failure",
+          "recovery",
+          "nextAction",
+          "revision",
+          "createdAt",
+          "updatedAt",
+          "completedAt"
+        ]
+      },
+      "CheckoutStatus": {
+        "type": "string",
+        "enum": [
+          "prepared",
+          "awaiting_payment",
+          "finalizing",
+          "completed",
+          "recovery_required",
+          "compensated",
+          "aborted"
+        ]
+      },
+      "PaymentAttempt": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "checkout",
+              "obligation",
+              "contribution",
+              "installment"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PaymentAttemptStatus"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actionRequired": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {}
+          },
+          "failureReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidenceSource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "sync_response",
+              "webhook",
+              "reconciliation",
+              null
+            ]
+          },
+          "payerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "checkoutId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "obligationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "contributionRequestId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "installmentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "unknownSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "purpose",
+          "status",
+          "amountMinor",
+          "currency",
+          "provider",
+          "providerReference",
+          "actionRequired",
+          "failureReason",
+          "evidenceSource",
+          "payerPersonId",
+          "checkoutId",
+          "orderId",
+          "obligationId",
+          "contributionRequestId",
+          "installmentId",
+          "unknownSince",
+          "resolvedAt",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaymentAttemptStatus": {
+        "type": "string",
+        "enum": [
+          "created",
+          "action_required",
+          "processing",
+          "succeeded",
+          "failed",
+          "canceled",
+          "unknown"
+        ]
+      },
+      "Receipt": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceKind": {
+            "type": "string",
+            "enum": [
+              "payment_attempt",
+              "cash_tender"
+            ]
+          },
+          "paymentAttemptId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "cashTenderId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "allocatedMinor": {
+            "type": "integer"
+          },
+          "excessMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "sourceKind",
+          "paymentAttemptId",
+          "cashTenderId",
+          "amountMinor",
+          "allocatedMinor",
+          "excessMinor",
+          "currency",
+          "receivedAt"
+        ]
+      },
+      "CheckoutRecovery": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "reasonCode": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "refund",
+              "credit",
+              "manual"
+            ]
+          },
+          "refundAttemptId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "creditId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "exceptionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "reasonCode",
+          "message",
+          "plan",
+          "refundAttemptId",
+          "creditId",
+          "exceptionId"
+        ]
+      },
+      "CreateCheckoutRequest": {
+        "type": "object",
+        "properties": {
+          "quoteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/CheckoutPayment"
+          },
+          "authorizeFutureInstallments": {
+            "type": "boolean",
+            "default": false
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "quoteId"
+        ],
+        "additionalProperties": false
+      },
+      "CheckoutPayment": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "provider"
+                ]
+              },
+              "paymentMethodToken": {
+                "$ref": "#/components/schemas/PaymentMethodToken"
+              }
+            },
+            "required": [
+              "method",
+              "paymentMethodToken"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "cash"
+                ]
+              },
+              "tenderKind": {
+                "$ref": "#/components/schemas/CashTenderKind"
+              },
+              "facilityId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "evidence": {
+                "type": "object",
+                "properties": {
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "reference"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "method",
+              "tenderKind",
+              "facilityId",
+              "evidence"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "PaymentMethodToken": {
+        "type": "string",
+        "pattern": "^pm_[A-Za-z0-9_]{3,100}$"
+      },
+      "CashTenderKind": {
+        "type": "string",
+        "enum": [
+          "cash",
+          "check",
+          "external_terminal"
+        ]
+      },
+      "RetryCheckoutPaymentRequest": {
+        "type": "object",
+        "properties": {
+          "paymentMethodToken": {
+            "$ref": "#/components/schemas/PaymentMethodToken"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "paymentMethodToken"
+        ],
+        "additionalProperties": false
+      },
+      "AbortCheckoutRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "RecoverCheckoutRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "CompensateCheckoutRequest": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "refund",
+              "credit"
+            ]
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "method",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quoteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "basketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "creditsAppliedMinor": {
+            "type": "integer"
+          },
+          "dueNowMinor": {
+            "type": "integer"
+          },
+          "paymentStatus": {
+            "type": "string",
+            "enum": [
+              "awaiting_payment",
+              "paid",
+              "canceled"
+            ]
+          },
+          "fulfillmentStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "fulfilled",
+              "recovery_required",
+              "compensated",
+              "canceled"
+            ]
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderLine"
+            }
+          },
+          "obligationIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "installmentPlanId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "paidAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "fulfilledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "canceledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "quoteId",
+          "basketId",
+          "payerPersonId",
+          "currency",
+          "totalMinor",
+          "creditsAppliedMinor",
+          "dueNowMinor",
+          "paymentStatus",
+          "fulfillmentStatus",
+          "lines",
+          "obligationIds",
+          "installmentPlanId",
+          "paidAt",
+          "fulfilledAt",
+          "canceledAt",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "OrderLine": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "basketLineId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enrollmentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "participantPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "priceRuleId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "unitPriceMinor": {
+            "type": "integer"
+          },
+          "baseAmountMinor": {
+            "type": "integer"
+          },
+          "discountMinor": {
+            "type": "integer"
+          },
+          "taxMinor": {
+            "type": "integer"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "policies": {
+            "$ref": "#/components/schemas/LinePolicyReferences"
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "basketLineId",
+          "enrollmentId",
+          "participantPersonId",
+          "offeringId",
+          "description",
+          "quantity",
+          "priceRuleId",
+          "unitPriceMinor",
+          "baseAmountMinor",
+          "discountMinor",
+          "taxMinor",
+          "feeMinor",
+          "totalMinor",
+          "currency",
+          "policies"
+        ]
+      },
+      "Refund": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentAttemptId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "customer_refund",
+              "compensation"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/RefundStatus"
+          },
+          "reservationStatus": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "settled",
+              "released"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "providerReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failureReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checkoutId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "operationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "refundable": {
+            "$ref": "#/components/schemas/Refundable"
+          },
+          "unknownSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "paymentAttemptId",
+          "amountMinor",
+          "currency",
+          "purpose",
+          "status",
+          "reservationStatus",
+          "reason",
+          "providerReference",
+          "failureReason",
+          "checkoutId",
+          "operationId",
+          "refundable",
+          "unknownSince",
+          "resolvedAt",
+          "createdAt"
+        ]
+      },
+      "RefundStatus": {
+        "type": "string",
+        "enum": [
+          "requested",
+          "processing",
+          "succeeded",
+          "failed",
+          "canceled",
+          "unknown"
+        ]
+      },
+      "Refundable": {
+        "type": "object",
+        "properties": {
+          "capturedMinor": {
+            "type": "integer"
+          },
+          "refundedMinor": {
+            "type": "integer"
+          },
+          "reservedMinor": {
+            "type": "integer"
+          },
+          "availableMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          }
+        },
+        "required": [
+          "capturedMinor",
+          "refundedMinor",
+          "reservedMinor",
+          "availableMinor",
+          "currency"
+        ]
+      },
+      "CreateRefundRequest": {
+        "type": "object",
+        "properties": {
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "amountMinor",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "Obligation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "debtor": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "team_entry"
+                ]
+              },
+              "personId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "teamEntryId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "personId",
+              "teamEntryId"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ObligationMode"
+          },
+          "responsiblePayerPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "order",
+                  "installment",
+                  "team_fee",
+                  "manual"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "orderId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObligationStatus"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ObligationTotals"
+          },
+          "contributions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ContributionSummary"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "debtor",
+          "mode",
+          "responsiblePayerPersonId",
+          "source",
+          "orderId",
+          "description",
+          "dueAt",
+          "status",
+          "totals",
+          "contributions",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "ObligationMode": {
+        "type": "string",
+        "enum": [
+          "individual",
+          "single_team_payer",
+          "team_with_contributions"
+        ]
+      },
+      "ObligationStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "settled",
+          "written_off",
+          "canceled"
+        ]
+      },
+      "ObligationTotals": {
+        "type": "object",
+        "properties": {
+          "amountMinor": {
+            "type": "integer"
+          },
+          "receivedMinor": {
+            "type": "integer"
+          },
+          "allocatedMinor": {
+            "type": "integer"
+          },
+          "remainingMinor": {
+            "type": "integer"
+          },
+          "excessMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          }
+        },
+        "required": [
+          "amountMinor",
+          "receivedMinor",
+          "allocatedMinor",
+          "remainingMinor",
+          "excessMinor",
+          "currency"
+        ]
+      },
+      "ContributionSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestedPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "paid",
+              "canceled"
+            ]
+          },
+          "paidAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "requestedPersonId",
+          "amountMinor",
+          "currency",
+          "status",
+          "paidAt"
+        ]
+      },
+      "CreateObligationRequest": {
+        "type": "object",
+        "properties": {
+          "debtor": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "person"
+                    ]
+                  },
+                  "personId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "personId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "team_entry"
+                    ]
+                  },
+                  "teamEntryId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "teamEntryId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ObligationMode"
+          },
+          "responsiblePayerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "team_fee",
+                  "manual"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "default": {
+              "kind": "manual"
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "debtor",
+          "mode",
+          "amountMinor",
+          "currency",
+          "dueAt",
+          "description"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentOutcome": {
+        "type": "object",
+        "properties": {
+          "payment": {
+            "$ref": "#/components/schemas/PaymentAttempt"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/Receipt"
+          },
+          "obligation": {
+            "$ref": "#/components/schemas/Obligation"
+          },
+          "overpaymentCreditId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "payment",
+          "receipt",
+          "obligation",
+          "overpaymentCreditId"
+        ]
+      },
+      "PayObligationRequest": {
+        "type": "object",
+        "properties": {
+          "paymentMethodToken": {
+            "$ref": "#/components/schemas/PaymentMethodToken"
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "paymentMethodToken"
+        ],
+        "additionalProperties": false
+      },
+      "ContributionRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "obligationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestedPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "paid",
+              "canceled"
+            ]
+          },
+          "paidAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "obligation": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "totals": {
+                "$ref": "#/components/schemas/ObligationTotals"
+              },
+              "status": {
+                "$ref": "#/components/schemas/ObligationStatus"
+              }
+            },
+            "required": [
+              "description",
+              "totals",
+              "status"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "obligationId",
+          "requestedPersonId",
+          "amountMinor",
+          "currency",
+          "message",
+          "status",
+          "paidAt",
+          "obligation",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "CreateContributionRequestRequest": {
+        "type": "object",
+        "properties": {
+          "requestedPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "requestedPersonId",
+          "amountMinor"
+        ],
+        "additionalProperties": false
+      },
+      "PayContributionRequest": {
+        "type": "object",
+        "properties": {
+          "paymentMethodToken": {
+            "$ref": "#/components/schemas/PaymentMethodToken"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "paymentMethodToken"
+        ],
+        "additionalProperties": false
+      },
+      "Credit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ownerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "originalMinor": {
+            "type": "integer"
+          },
+          "remainingMinor": {
+            "type": "integer"
+          },
+          "permittedUses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditUse"
+            }
+          },
+          "sourceKind": {
+            "type": "string",
+            "enum": [
+              "overpayment",
+              "compensation",
+              "goodwill",
+              "adjustment"
+            ]
+          },
+          "sourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CreditStatus"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "approvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "redemptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditRedemption"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "ownerPersonId",
+          "currency",
+          "originalMinor",
+          "remainingMinor",
+          "permittedUses",
+          "sourceKind",
+          "sourceId",
+          "status",
+          "expiresAt",
+          "reason",
+          "approvedAt",
+          "redemptions",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "CreditUse": {
+        "type": "string",
+        "enum": [
+          "registration",
+          "obligation"
+        ]
+      },
+      "CreditStatus": {
+        "type": "string",
+        "enum": [
+          "pending_approval",
+          "active",
+          "exhausted",
+          "expired",
+          "revoked"
+        ]
+      },
+      "CreditRedemption": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "redeem",
+              "reversal"
+            ]
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "referenceType": {
+            "type": "string"
+          },
+          "referenceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "redeemedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "amountMinor",
+          "referenceType",
+          "referenceId",
+          "redeemedAt"
+        ]
+      },
+      "IssueCreditRequest": {
+        "type": "object",
+        "properties": {
+          "ownerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "permittedUses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditUse"
+            },
+            "minItems": 1,
+            "maxItems": 2
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sourceKind": {
+            "type": "string",
+            "enum": [
+              "goodwill",
+              "adjustment"
+            ]
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "ownerPersonId",
+          "amountMinor",
+          "currency",
+          "permittedUses",
+          "sourceKind",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "RedeemCreditRequest": {
+        "type": "object",
+        "properties": {
+          "obligationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "obligationId",
+          "amountMinor"
+        ],
+        "additionalProperties": false
+      },
+      "ApproveCreditRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "InstallmentPlan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "completed",
+              "defaulted",
+              "canceled"
+            ]
+          },
+          "authorization": {
+            "type": "object",
+            "properties": {
+              "authorizedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "authorizedByPersonId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "authorizedAt",
+              "authorizedByPersonId"
+            ]
+          },
+          "retryPolicy": {
+            "type": "object",
+            "properties": {
+              "maxAttempts": {
+                "type": "integer"
+              },
+              "retryIntervalHours": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "maxAttempts",
+              "retryIntervalHours"
+            ]
+          },
+          "noticePolicy": {
+            "type": "object",
+            "properties": {
+              "daysBefore": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "daysBefore"
+            ]
+          },
+          "outstandingMinor": {
+            "type": "integer"
+          },
+          "installments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Installment"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "payerPersonId",
+          "currency",
+          "totalMinor",
+          "status",
+          "authorization",
+          "retryPolicy",
+          "noticePolicy",
+          "outstandingMinor",
+          "installments",
+          "revision"
+        ]
+      },
+      "Installment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "obligationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "originalDueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "paid",
+              "failed",
+              "canceled"
+            ]
+          },
+          "attemptCount": {
+            "type": "integer"
+          },
+          "lastFailureReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nextRetryAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "paidAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "extensionCount": {
+            "type": "integer"
+          },
+          "noticeSentAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "obligationId",
+          "amountMinor",
+          "currency",
+          "dueAt",
+          "originalDueAt",
+          "status",
+          "attemptCount",
+          "lastFailureReason",
+          "nextRetryAt",
+          "paidAt",
+          "extensionCount",
+          "noticeSentAt",
+          "revision"
+        ]
+      },
+      "CollectInstallmentRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExtendInstallmentRequest": {
+        "type": "object",
+        "properties": {
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "dueAt",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "CashTender": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenderKind": {
+            "$ref": "#/components/schemas/CashTenderKind"
+          },
+          "payerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "obligationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "checkoutId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "recordedByPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "reconciled"
+            ]
+          },
+          "reconciliationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/Receipt"
+          },
+          "overpaymentCreditId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "tenderKind",
+          "payerPersonId",
+          "amountMinor",
+          "currency",
+          "obligationId",
+          "checkoutId",
+          "evidence",
+          "recordedByPersonId",
+          "recordedAt",
+          "status",
+          "reconciliationId",
+          "receipt",
+          "overpaymentCreditId"
+        ]
+      },
+      "RecordCashTenderRequest": {
+        "type": "object",
+        "properties": {
+          "obligationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenderKind": {
+            "$ref": "#/components/schemas/CashTenderKind"
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "payerPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "notes": {
+                "type": "string",
+                "maxLength": 2000
+              }
+            },
+            "required": [
+              "reference"
+            ],
+            "additionalProperties": false
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "obligationId",
+          "facilityId",
+          "tenderKind",
+          "amountMinor",
+          "currency",
+          "evidence"
+        ],
+        "additionalProperties": false
+      },
+      "SettlementReconciliation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "processor_settlement",
+              "cash_drawer"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "facilityId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "expectedMinor": {
+            "type": "integer"
+          },
+          "reportedMinor": {
+            "type": "integer"
+          },
+          "differenceMinor": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "balanced",
+              "discrepancy"
+            ]
+          },
+          "breakdown": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "externalReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "performedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "provider",
+          "facilityId",
+          "periodStart",
+          "periodEnd",
+          "currency",
+          "expectedMinor",
+          "reportedMinor",
+          "differenceMinor",
+          "status",
+          "breakdown",
+          "externalReference",
+          "performedAt"
+        ]
+      },
+      "CreateSettlementReconciliationRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "processor_settlement",
+              "cash_drawer"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "reportedMinor": {
+            "type": "integer"
+          },
+          "externalReference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "kind",
+          "periodStart",
+          "periodEnd",
+          "currency",
+          "reportedMinor"
+        ],
+        "additionalProperties": false
+      },
+      "ReconciliationReport": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "orders": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "totalMinor": {
+                "type": "integer"
+              },
+              "paidCount": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "count",
+              "totalMinor",
+              "paidCount"
+            ]
+          },
+          "obligations": {
+            "type": "object",
+            "properties": {
+              "openCount": {
+                "type": "integer"
+              },
+              "openRemainingMinor": {
+                "type": "integer"
+              },
+              "settledCount": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "openCount",
+              "openRemainingMinor",
+              "settledCount"
+            ]
+          },
+          "receipts": {
+            "type": "object",
+            "properties": {
+              "processorMinor": {
+                "type": "integer"
+              },
+              "cashMinor": {
+                "type": "integer"
+              },
+              "count": {
+                "type": "integer"
+              },
+              "excessMinor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "processorMinor",
+              "cashMinor",
+              "count",
+              "excessMinor"
+            ]
+          },
+          "refunds": {
+            "type": "object",
+            "properties": {
+              "succeededMinor": {
+                "type": "integer"
+              },
+              "reservedMinor": {
+                "type": "integer"
+              },
+              "unknownCount": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "succeededMinor",
+              "reservedMinor",
+              "unknownCount"
+            ]
+          },
+          "credits": {
+            "type": "object",
+            "properties": {
+              "issuedMinor": {
+                "type": "integer"
+              },
+              "redeemedMinor": {
+                "type": "integer"
+              },
+              "pendingApprovalMinor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "issuedMinor",
+              "redeemedMinor",
+              "pendingApprovalMinor"
+            ]
+          },
+          "processorFeesMinor": {
+            "type": "integer"
+          },
+          "disputes": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "count",
+              "note"
+            ]
+          },
+          "settlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettlementReconciliation"
+            }
+          },
+          "cash": {
+            "type": "object",
+            "properties": {
+              "recordedMinor": {
+                "type": "integer"
+              },
+              "unreconciledMinor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "recordedMinor",
+              "unreconciledMinor"
+            ]
+          },
+          "exceptions": {
+            "type": "object",
+            "properties": {
+              "unknownPayments": {
+                "type": "integer"
+              },
+              "recoveryRequiredCheckouts": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "unknownPayments",
+              "recoveryRequiredCheckouts"
+            ]
+          },
+          "ledger": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerBalance"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "currency",
+          "orders",
+          "obligations",
+          "receipts",
+          "refunds",
+          "credits",
+          "processorFeesMinor",
+          "disputes",
+          "settlements",
+          "cash",
+          "exceptions",
+          "ledger"
+        ]
+      },
+      "LedgerBalance": {
+        "type": "object",
+        "properties": {
+          "accountCode": {
+            "$ref": "#/components/schemas/LedgerAccount"
+          },
+          "debitMinor": {
+            "type": "integer"
+          },
+          "creditMinor": {
+            "type": "integer"
+          },
+          "balanceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accountCode",
+          "debitMinor",
+          "creditMinor",
+          "balanceMinor"
+        ]
+      },
+      "LedgerAccount": {
+        "type": "string",
+        "enum": [
+          "customer_receivable",
+          "cash_processor",
+          "deferred_revenue",
+          "credits_payable",
+          "processor_fees",
+          "refunds",
+          "cash_on_hand",
+          "overpayment_liability"
+        ]
+      },
+      "PaymentWebhook": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "payment.succeeded",
+              "payment.failed",
+              "payment.canceled",
+              "payment.processing",
+              "payment.requires_action",
+              "refund.succeeded",
+              "refund.failed"
+            ]
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "organizationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "providerReference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "paymentAttemptId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "refundAttemptId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "amountMinor": {
+                "type": "integer"
+              },
+              "currency": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 3,
+                "pattern": "^[A-Z]{3}$"
+              },
+              "feeMinor": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failureReason": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "organizationId",
+              "providerReference"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "sequence",
+          "data"
+        ]
+      },
       "Operation": {
         "type": "object",
         "properties": {
@@ -44497,6 +47804,2784 @@
           },
           "404": {
             "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-quotes": {
+      "post": {
+        "summary": "Evaluate an authorized basket and price it from server-side price rules (SPK-PAY-001/002/003)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-quotes/{id}": {
+      "get": {
+        "summary": "Read a quote",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quote"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-checkouts": {
+      "post": {
+        "summary": "Acquire capacity and initiate checkout for a stored quote (§4.11)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCheckoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checkout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-checkouts/{id}": {
+      "get": {
+        "summary": "Read a checkout and its payment state",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checkout"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-checkouts/{id}/payments": {
+      "post": {
+        "summary": "Retry payment of an awaiting checkout (never while an outcome is unknown, SPK-PAY-007)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryCheckoutPaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checkout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-checkouts/{id}/abort": {
+      "post": {
+        "summary": "Abort a checkout that holds no live payment",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AbortCheckoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checkout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-checkouts/{id}/recover": {
+      "post": {
+        "summary": "Retry finalization of a checkout whose money was received but fulfillment is incomplete",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverCheckoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checkout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registration-checkouts/{id}/compensate": {
+      "post": {
+        "summary": "Compensate a checkout that cannot be fulfilled (refund or credit)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompensateCheckoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checkout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders/{id}": {
+      "get": {
+        "summary": "Read an order with its price and policy basis",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{id}": {
+      "get": {
+        "summary": "Read a payment attempt",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentAttempt"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{id}/refunds": {
+      "post": {
+        "summary": "Reserve and request a refund (SPK-PAY-008)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRefundRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refund"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{id}/reconcile": {
+      "post": {
+        "summary": "Resolve an unknown payment outcome from authoritative provider evidence (SPK-PAY-007)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentAttempt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/refunds/{id}": {
+      "get": {
+        "summary": "Read a refund",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refund"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/refunds/{id}/reconcile": {
+      "post": {
+        "summary": "Resolve an unknown refund outcome from authoritative provider evidence",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refund"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/obligations": {
+      "post": {
+        "summary": "Create an obligation (individual or team)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateObligationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Obligation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List obligations",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "debtorPersonId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "teamEntryId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ObligationStatus"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Obligation"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/obligations/{id}": {
+      "get": {
+        "summary": "Read an obligation with consistent totals",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Obligation"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/obligations/{id}/payments": {
+      "post": {
+        "summary": "Pay toward an obligation (excess follows the overpayment policy, SPK-PAY-005)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayObligationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/obligations/{id}/contribution-requests": {
+      "post": {
+        "summary": "Request a player contribution toward one team obligation (SPK-PAY-004)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateContributionRequestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributionRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contribution-requests/{id}": {
+      "get": {
+        "summary": "Read a contribution request",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributionRequest"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contribution-requests/{id}/pay": {
+      "post": {
+        "summary": "Pay a requested contribution",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayContributionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/credits": {
+      "post": {
+        "summary": "Issue a credit (SPK-PAY-009)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueCreditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credit"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List a person's credits",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "ownerPersonId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Credit"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/credits/{id}": {
+      "get": {
+        "summary": "Read a credit and its redemption history",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credit"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/credits/{id}/redeem": {
+      "post": {
+        "summary": "Redeem a credit against an obligation",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemCreditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credit"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/credits/{id}/approve": {
+      "post": {
+        "summary": "Approve a credit held pending approval (overpayment, POL-015)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveCreditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credit"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/installment-plans/{id}": {
+      "get": {
+        "summary": "Read an installment plan",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallmentPlan"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/installments/{id}/collect": {
+      "post": {
+        "summary": "Collect a due installment with the authorized payment method",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectInstallmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallmentPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/installments/{id}/extend": {
+      "post": {
+        "summary": "Extend an installment due date",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendInstallmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallmentPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cash-tenders": {
+      "post": {
+        "summary": "Record a cash or external tender with evidence (SPK-PAY-012)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordCashTenderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CashTender"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settlement-reconciliations": {
+      "post": {
+        "summary": "Reconcile a processor settlement or cash drawer (SPK-PAY-011)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSettlementReconciliationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementReconciliation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (client-submitted prices and card data are rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (QUOTE_EXPIRED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Integration unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/finance/reconciliation-report": {
+      "get": {
+        "summary": "Reconciliation report distinguishing orders, obligations, receipts, refunds, credits, fees, disputes, settlements and cash",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 3,
+              "pattern": "^[A-Z]{3}$",
+              "default": "USD"
+            },
+            "required": false,
+            "name": "currency",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/finance/ledger-balances": {
+      "get": {
+        "summary": "Computed subledger balances (SPK-PAY-010)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 3,
+              "pattern": "^[A-Z]{3}$",
+              "default": "USD"
+            },
+            "required": false,
+            "name": "currency",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerBalance"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/payments/{provider}": {
+      "post": {
+        "summary": "Authenticated payment provider event, recorded durably in the inbox (§4.11)",
+        "tags": [
+          "Finance"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-payments-signature",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentWebhook"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Recorded (duplicates are acknowledged without a second effect)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "inboxEventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "inboxEventId",
+                    "duplicate"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Signature invalid",
             "content": {
               "application/json": {
                 "schema": {
