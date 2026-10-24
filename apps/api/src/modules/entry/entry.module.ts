@@ -4,6 +4,7 @@ import { Inbox, lazyPort } from '../../kernel';
 import { CatalogModule } from '../catalog';
 import { CompetitionModule } from '../competition';
 import { EnrollmentModule } from '../enrollment';
+import { ParticipationStandingService } from '../finance';
 import { IdentityModule } from '../identity';
 import { SchedulingModule } from '../scheduling';
 import { WorkforceModule } from '../workforce';
@@ -48,8 +49,11 @@ const providers: Provider[] = [
   // Policy values the specification leaves to operators (DEC-005, DEC-033, DEC-034, DEC-056,
   // DEC-075): the specification's proposed defaults, overridable per facility.
   { provide: ENTRY_POLICY, useValue: DEFAULT_ENTRY_POLICY },
-  // Finance registers FINANCIAL_STANDING_IMPL; until then every standing is `unknown` and never
-  // blocks (SPK-ENTRY-004). Resolved lazily so there is no import cycle.
+  // SPK-ENTRY-004: the participant's standing comes from finance's ParticipationStandingService
+  // when the finance module is part of the application (finance precedes entry in §4.2 order, so
+  // entry looks it up; nothing here imports finance's module). An explicit FINANCIAL_STANDING_IMPL
+  // takes precedence (tests script it); without either, every standing is `unknown` and never
+  // blocks. Resolved lazily so module order does not matter at construction.
   {
     provide: FINANCIAL_STANDING_PORT,
     inject: [ModuleRef],
@@ -57,8 +61,13 @@ const providers: Provider[] = [
       lazyPort<FinancialStandingPort>(
         moduleRef,
         FINANCIAL_STANDING_IMPL,
-        unknownFinancialStanding,
-        'no FINANCIAL_STANDING_IMPL registered: arrival checks report the balance as unknown',
+        lazyPort<FinancialStandingPort>(
+          moduleRef,
+          ParticipationStandingService,
+          unknownFinancialStanding,
+          'no finance module is part of the application: arrival checks report the balance as unknown',
+        ),
+        null,
       ),
   },
   // Provider-selection gate (§5.2, DEC-023): the deterministic fake is the only hardware adapter.

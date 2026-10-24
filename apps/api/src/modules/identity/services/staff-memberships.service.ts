@@ -311,7 +311,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
     trx?: Trx,
   ): Promise<string[]> {
     const now = this.clock.now();
-    let query = (trx ?? this.db)
+    let query = (trx ?? executorFor(this.db))
       .selectFrom('staff_memberships')
       .select('person_id')
       .distinct()

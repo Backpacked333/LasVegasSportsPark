@@ -21,6 +21,7 @@ import {
   snapshotActor,
   type Clock,
 } from '../../../kernel';
+import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { FinanceActions } from '../finance.actions';
 import {
   isStaffLike,
@@ -49,6 +50,7 @@ export class CreditsService {
     private readonly outbox: Outbox,
     private readonly ledger: LedgerService,
     private readonly facts: MoneyFacts,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly people: PersonDirectoryPort,
   ) {}
 
   async view(db: Reader, row: CreditRow): Promise<Credit> {
@@ -115,13 +117,21 @@ export class CreditsService {
       throw errors.validation('A credit cannot expire in the past.');
     }
     return this.uow.run(async ({ trx }) => {
-      const owner = await trx
-        .selectFrom('persons')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', input.ownerPersonId)
-        .executeTakeFirst();
+      // §4.2: identity's person directory, never its tables. SPK-IAM-007: a merged record no
+      // longer owns money (the survivor's credit list and checkout would never see the credit), so
+      // the credit is refused with the surviving record named, never moved silently.
+      const owner = await this.people.findPerson(organizationId, input.ownerPersonId, trx);
       if (!owner) throw errors.notFound('person', input.ownerPersonId);
+      if (owner.status === 'merged' || owner.canonicalPersonId !== owner.id) {
+        throw errors.validation(
+          'This person record was merged; issue the credit to the surviving record.',
+          {
+            code: 'person_merged',
+            ownerPersonId: owner.id,
+            canonicalPersonId: owner.canonicalPersonId,
+          },
+        );
+      }
       const id = await this.facts.insertCredit(trx, {
         organizationId,
         ownerPersonId: input.ownerPersonId,

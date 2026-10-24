@@ -187,13 +187,17 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
   facilities register none); `ReadinessService` runs them on every read. A
   check named `workforce.*` replaces the "officials unknown" verdict; a check that throws is
   reported as `unknown` evidence, never as a pass.
-- Part 2 consumer ports (`competition-matches.ports.ts`), resolved lazily with deterministic
-  defaults until the owning modules register under the `*_IMPL` token:
-  `ASSIGNMENT_CHECK_PORT` (workforce: is the person an accepted official for the fixture — default
-  no, so only league administration submits results), `FORMS_CHECK_PORT` (catalog
-  acknowledgments — default `unknown`), `FINANCIAL_CONDITIONS_PORT` (finance — default `unknown`),
-  `CHANGE_NOTICE_CHECK_PORT` (communications delivery of a material change notice — default
-  `unknown`).
+- Part 2 consumer ports (`competition-matches.ports.ts`), resolved lazily; each owning module
+  registers under the `*_IMPL` token, and a deterministic default answers only when that module is
+  not part of the application (competition-only tests): `ASSIGNMENT_CHECK_PORT` (workforce: is the
+  person an accepted official for the fixture — default no, so only league administration submits
+  results), `FORMS_CHECK_PORT` (enrollment over catalog: the season's registration offering's
+  required forms against the rostered participants' acknowledgments — default `unknown`),
+  `FINANCIAL_CONDITIONS_PORT` (finance: open obligations of the competing team entries, reported
+  `unknown` while POL-017/DEC-056 are pending — default `unknown`), `CHANGE_NOTICE_CHECK_PORT`
+  (communications: delivery of the notice that describes the fixture's current time — default
+  `unknown`). **Verified** in the assembled application
+  (`apps/api/src/__tests__/cross-module-ports.spec.ts`).
 - Exported services for other modules: `ResultsService`, `StandingsService`, `BracketsService`,
   `DisciplineService`, `DisputesService`, `FixtureGenerationService`, `ReadinessService`,
   `FixtureObligationsService`, plus the pure `computeStandings`, `generateFixtures`, `roundRobin`
@@ -366,12 +370,11 @@ identifiers only.
   fixture machine's outcomes are terminal); the result revision is authoritative. A `canceled` or
   `postponed` classification records the fact; cancelling or postponing the game itself remains a
   fixture command. Results are not refused before kickoff.
-- Required forms, financial conditions and change-notice delivery come from ports whose owners
-  (catalog/enrollment, finance, communications) have not registered an implementation
-  (`FORMS_CHECK_IMPL`, `FINANCIAL_CONDITIONS_IMPL`, `CHANGE_NOTICE_CHECK_IMPL`), so readiness
-  reports those checks as `unknown`. Officials are covered: workforce registers
-  `ASSIGNMENT_CHECK_IMPL` and the `workforce.required_officials` readiness check, so an accepted
-  official can submit results.
+- An open team obligation keeps the finance check `unknown` (never a pass or a block) until the
+  participation policy for team balances is approved (POL-017, DEC-056). A fixture whose event was
+  canceled (postponed, unlinked) reports the change notice as `unknown`. Officials are covered:
+  workforce registers `ASSIGNMENT_CHECK_IMPL` and the `workforce.required_officials` readiness
+  check, so an accepted official can submit results.
 - A rule-set suspension proposal is not withdrawn automatically when a correction removes the card;
   the league manager overturns it. Disputes are withdrawn by the reviewer only (no submitter
   withdrawal command); a decided consequence is not executed automatically.

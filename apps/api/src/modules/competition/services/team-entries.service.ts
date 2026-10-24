@@ -36,6 +36,7 @@ import {
   UnitOfWork,
   assertExpectedRevision,
   snapshotActor,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -1068,7 +1069,11 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     teamEntryId: string,
     trx?: Trx,
   ): Promise<TeamEntrySummary | null> {
-    const context = await loadEntryContext(trx ?? this.db, organizationId, teamEntryId);
+    const context = await loadEntryContext(
+      trx ?? executorFor(this.db),
+      organizationId,
+      teamEntryId,
+    );
     if (!context) return null;
     return toTeamEntrySummary(context.entry, context.team, context.season.competition_id);
   }
@@ -1078,7 +1083,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     seasonId: string,
     trx?: Trx,
   ): Promise<TeamEntrySummary[]> {
-    const db = trx ?? this.db;
+    const db = trx ?? executorFor(this.db);
     const rows = await db
       .selectFrom('team_entries')
       .innerJoin('teams', (join) =>
@@ -1106,7 +1111,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     at: Date,
     trx?: Trx,
   ): Promise<PersonEntryMembership[]> {
-    const db = trx ?? this.db;
+    const db = trx ?? executorFor(this.db);
     const memberships = await db
       .selectFrom('roster_memberships as rm')
       .innerJoin('team_entries as te', (join) =>

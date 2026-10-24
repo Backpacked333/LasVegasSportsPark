@@ -32,6 +32,7 @@ import {
   Outbox,
   snapshotActor,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -364,7 +365,7 @@ export class DiscountsService {
     input: EvaluateDiscountsRequest,
     trx?: Trx,
   ): Promise<DiscountEvaluation> {
-    const db = trx ?? this.db;
+    const db = trx ?? executorFor(this.db);
     const rows = await db
       .selectFrom('discount_definitions')
       .selectAll()

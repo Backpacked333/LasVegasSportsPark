@@ -168,6 +168,12 @@ dispatch creates the attempts or suppresses the notice.
   `TEAM_ENTRY_QUERY_PORT` at the clock.
 - `COMMUNICATIONS_POLICY` (`communications.policy.ts`): default channels per category, delivery
   lease and batch size, supersedable/superseding kinds, feed window, iCalendar product id.
+- `CHANGE_NOTICE_CHECK_IMPL` (competition's `ChangeNoticeCheckPort`, `ChangeNoticeCheck`): fixture
+  readiness "material change notifications" (SPK-READY-001) from this module's own evidence — the
+  schedule-change notice of the fixture's scheduling event that describes its current time, and its
+  delivery attempts: satisfied when every authorized recipient has a provider-accepted (or better)
+  attempt, unsatisfied when nobody could be told or all attempts of a recipient failed, otherwise
+  `unknown`. **Verified** (`apps/api/src/__tests__/cross-module-ports.spec.ts`).
 - For other modules: `NotificationsService.compose / composeAndQueue / composeAndQueueIn(trx, …)`
   (the `ComposeInput` carries `sourceEventId` so a replayed handler never composes twice),
   `PreferencesService.enabledChannels`, `InboxService`, `CalendarFeedsService`.

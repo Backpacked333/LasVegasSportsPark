@@ -1,7 +1,7 @@
 import { Module, type OnModuleDestroy, type OnModuleInit, type Provider } from '@nestjs/common';
 import { DeliveryReceiptSchema, type EventPayload } from '@sportspark/contracts';
 import { BackgroundWorkers, EventHandlerRegistry, Inbox } from '../../kernel';
-import { CompetitionModule } from '../competition';
+import { CHANGE_NOTICE_CHECK_IMPL, CompetitionModule } from '../competition';
 import { IdentityEvents, IdentityModule } from '../identity';
 import { EventChanged, SchedulePublished, SchedulingModule } from '../scheduling';
 import { DeliveryRequested } from './communications.events';
@@ -21,6 +21,7 @@ import { AudienceResolver } from './services/audience-resolver';
 import { CalendarEntriesService } from './services/calendar-entries.service';
 import { CalendarFeedsService } from './services/calendar-feeds.service';
 import { CompetitionTeamMembership } from './services/competition-team-membership';
+import { ChangeNoticeCheck } from './services/change-notice-check';
 import { DeliveryWorker } from './services/delivery-worker';
 import { InboxService } from './services/inbox.service';
 import { NotificationsService } from './services/notifications.service';
@@ -51,6 +52,10 @@ const providers: Provider[] = [
   CalendarEntriesService,
   CalendarFeedsService,
   ScheduleNotices,
+  // Fixture readiness "Material change notifications" (SPK-READY-001): this module's delivery
+  // evidence for the schedule-change notice.
+  ChangeNoticeCheck,
+  { provide: CHANGE_NOTICE_CHECK_IMPL, useExisting: ChangeNoticeCheck },
 ];
 
 /**

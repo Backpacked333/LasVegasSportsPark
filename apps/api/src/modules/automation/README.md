@@ -214,7 +214,8 @@ those modules); the provider behind the assistant is DEC-013 (**Pending decision
 
 - The kernel configuration schema does not carry module settings, so `AUTOMATION_SETTINGS` reads
   the environment in this module (tests override the token).
-- `operations` and `audit_records` have no `unique (organization_id, id)`: plain foreign keys plus
-  triggers refuse another organization's rows.
+- References to `operations` and `audit_records` are organization-scoped composite foreign keys
+  (`0005_core_org_scoped_keys.sql`, `1480_automation_org_scoped_kernel_fks.sql`); the earlier
+  triggers are kept as earlier feedback with their messages.
 - Outbox handlers receive the transaction but not the kernel's transaction context; the module
   binds it with `runWithTransaction`.

@@ -28,6 +28,7 @@ import {
 } from '../../../kernel';
 import { CommunicationsActions, NotificationsService } from '../../communications';
 import { FinanceActions, RefundsService } from '../../finance';
+import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { SupportActions } from '../support.actions';
 import { CaseActionRecorded } from '../support.events';
 import { CaseActionMachine } from '../support.machines';
@@ -72,6 +73,7 @@ export class CaseActionsService {
     private readonly exceptions: OperationalExceptions,
     private readonly notifications: NotificationsService,
     private readonly refunds: RefundsService,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -830,13 +832,9 @@ export class CaseActionsService {
     personId: string | null,
   ): Promise<string | null> {
     if (!personId) return null;
-    const row = await trx
-      .selectFrom('persons')
-      .select('id')
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', personId)
-      .executeTakeFirst();
-    return row?.id ?? null;
+    // §4.2: identity's person directory, never its tables.
+    const person = await this.persons.findPerson(organizationId, personId, trx);
+    return person?.id ?? null;
   }
 
   private uowReader() {

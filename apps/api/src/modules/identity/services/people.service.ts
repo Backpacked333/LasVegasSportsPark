@@ -19,6 +19,7 @@ import {
   UnitOfWork,
   assertExpectedRevision,
   snapshotActor,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -295,7 +296,8 @@ export class PeopleService implements PersonDirectoryPort {
     personId: string,
     trx?: Trx,
   ): Promise<PersonSummary | null> {
-    const row = await this.loadPerson(trx ?? this.db, organizationId, personId);
+    // Called from other modules' commands and handlers: read through their transaction.
+    const row = await this.loadPerson(trx ?? executorFor(this.db), organizationId, personId);
     if (!row) return null;
     return {
       id: row.id,
@@ -312,7 +314,7 @@ export class PeopleService implements PersonDirectoryPort {
     personId: string,
     trx?: Trx,
   ): Promise<string> {
-    const db = trx ?? this.db;
+    const db = trx ?? executorFor(this.db);
     let current = personId;
     // Merges form a chain (A→B, later B→C); follow it with a bounded walk.
     for (let hop = 0; hop < 16; hop += 1) {

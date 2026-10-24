@@ -347,6 +347,7 @@ export class ReadinessService {
       teamEntryIds: sides.map((s) => s.teamEntryId),
       personIds: [...allPersons],
       at,
+      registrationOfferingRef: season?.registration_offering_ref ?? null,
     };
     check('forms');
     for (const finding of await this.forms.requiredForms(organizationId, conditionContext)) {
@@ -417,6 +418,8 @@ export class ReadinessService {
         ...conditionContext,
         changedAt: new Date(change.occurred_at),
         schedulingEventId: detail.schedulingEventId,
+        scheduledStart: detail.scheduledStart,
+        scheduledEnd: detail.scheduledEnd,
       });
       for (const finding of findings) this.addCondition(add, 'notifications', finding);
     }

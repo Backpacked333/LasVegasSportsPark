@@ -1,11 +1,14 @@
 import type { Trx } from '../../kernel';
 
 /**
- * Ports part 2 consumes from modules that are not built yet (workforce, catalog forms, finance).
- * Each has a deterministic default: assignments are unknown, so only league administration may
- * submit results; forms and financial conditions report `unknown`, never `satisfied`
- * (SPK-READY-002 "unknown or stale evidence" is never a pass). Implementations register under the
- * `*_IMPL` tokens and are resolved lazily through the kernel's `lazyPort`.
+ * Ports competition consumes from modules later in the dependency order. Implementations register
+ * under the `*_IMPL` tokens and are resolved lazily through the kernel's `lazyPort`: workforce
+ * (ASSIGNMENT_CHECK_IMPL), enrollment over catalog's offerings and acknowledgments
+ * (FORMS_CHECK_IMPL), finance (FINANCIAL_CONDITIONS_IMPL) and communications
+ * (CHANGE_NOTICE_CHECK_IMPL). When an implementing module is not part of the application (for
+ * example a competition-only test), a deterministic default answers: assignments are unknown, so
+ * only league administration may submit results; forms, financial conditions and change notices
+ * report `unknown`, never `satisfied` (SPK-READY-002 "unknown or stale evidence" is never a pass).
  */
 
 /** Workforce: is the person an accepted official for the fixture (SPK-STAFF-002: proposed does not count)? */
@@ -43,6 +46,8 @@ export interface FixtureConditionContext {
   teamEntryIds: string[];
   personIds: string[];
   at: Date;
+  /** The season's catalog registration offering (`seasons.registration_offering_ref`), if any. */
+  registrationOfferingRef?: string | null;
 }
 
 /** Catalog/enrollment: required forms (acknowledgments) for the people on the rosters. */
@@ -60,7 +65,8 @@ export const formsUnknown: FormsCheckPort = {
     {
       status: 'unknown',
       code: 'required_forms_unknown',
-      message: 'No forms authority is registered; required acknowledgments cannot be confirmed.',
+      message:
+        'No forms check is part of this application; required acknowledgments cannot be confirmed.',
       source: { type: 'fixture', id: context.fixtureId },
       responsibleRole: 'program_manager',
       requiredAction: 'Confirm required forms once the catalog forms check is registered.',
@@ -84,7 +90,8 @@ export const financialConditionsUnknown: FinancialConditionsPort = {
     {
       status: 'unknown',
       code: 'financial_conditions_unknown',
-      message: 'No finance authority is registered; financial conditions cannot be confirmed.',
+      message:
+        'No finance check is part of this application; financial conditions cannot be confirmed.',
       source: { type: 'fixture', id: context.fixtureId },
       responsibleRole: 'finance_operator',
       requiredAction: 'Confirm team obligations once the finance conditions check is registered.',
@@ -101,7 +108,13 @@ export const financialConditionsUnknown: FinancialConditionsPort = {
 export interface ChangeNoticeCheckPort {
   changeNotices(
     organizationId: string,
-    context: FixtureConditionContext & { changedAt: Date; schedulingEventId: string | null },
+    context: FixtureConditionContext & {
+      changedAt: Date;
+      schedulingEventId: string | null;
+      /** The fixture's current published time, which the change notice must describe. */
+      scheduledStart?: string | null;
+      scheduledEnd?: string | null;
+    },
     trx?: Trx,
   ): Promise<ConditionFinding[]>;
 }

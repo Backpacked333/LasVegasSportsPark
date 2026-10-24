@@ -9,7 +9,7 @@ import {
   type AppConfig,
 } from '../../kernel';
 import { CatalogModule } from '../catalog';
-import { CompetitionModule } from '../competition';
+import { CompetitionModule, FINANCIAL_CONDITIONS_IMPL } from '../competition';
 import { EnrollmentModule, FINANCE_POLICY_IMPL } from '../enrollment';
 import { IdentityModule } from '../identity';
 import {
@@ -39,6 +39,7 @@ import { CheckoutFinalizer } from './services/checkout-finalizer.service';
 import { CheckoutService } from './services/checkout.service';
 import { CreditsService } from './services/credits.service';
 import { FinancePolicyAdapter } from './services/finance-policy.adapter';
+import { ParticipationStandingService } from './services/participation-standing.service';
 import { FinancePolicyResolver } from './services/finance-policy.resolver';
 import { FinanceWorker } from './services/finance-worker';
 import { InstallmentsService } from './services/installments.service';
@@ -87,6 +88,10 @@ const providers: Provider[] = [
   // Enrollment's FinancePolicyPort (transfer/cancellation consequences), resolved lazily there.
   FinancePolicyAdapter,
   { provide: FINANCE_POLICY_IMPL, useExisting: FinancePolicyAdapter },
+  // Fixture readiness "Applicable financial conditions" (SPK-READY-001) and the arrival standing
+  // entry reads (SPK-ENTRY-004).
+  ParticipationStandingService,
+  { provide: FINANCIAL_CONDITIONS_IMPL, useExisting: ParticipationStandingService },
 ];
 
 /**
@@ -131,6 +136,7 @@ const providers: Provider[] = [
     CashTendersService,
     ReconciliationService,
     FinanceWorker,
+    ParticipationStandingService,
   ],
 })
 export class FinanceModule implements OnModuleInit, OnModuleDestroy {

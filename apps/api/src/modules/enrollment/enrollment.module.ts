@@ -3,7 +3,7 @@ import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
 import { EventHandlerRegistry, lazyPort, runWithTransaction } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
-import { CompetitionModule } from '../competition';
+import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
 import { IdentityModule } from '../identity';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
@@ -30,6 +30,7 @@ import { ApplicationsService } from './services/applications.service';
 import { BasketsService } from './services/baskets.service';
 import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
+import { CompetitionFormsCheck } from './services/competition-forms-check';
 import { EnrollmentsService } from './services/enrollments.service';
 import { FamilyCalendarService } from './services/family-calendar.service';
 import { MakeupsService } from './services/makeups.service';
@@ -71,6 +72,10 @@ const providers: Provider[] = [
   { provide: CAPACITY_PORT, useExisting: CapacityService },
   { provide: BASKET_PORT, useExisting: BasketsService },
   { provide: WAITLIST_PORT, useExisting: WaitlistService },
+  // Fixture readiness "Required forms" (SPK-READY-001): the season's registration offering's
+  // required forms, checked against catalog acknowledgments.
+  CompetitionFormsCheck,
+  { provide: FORMS_CHECK_IMPL, useExisting: CompetitionFormsCheck },
 ];
 
 /**

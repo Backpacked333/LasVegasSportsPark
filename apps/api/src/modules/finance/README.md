@@ -211,8 +211,9 @@ minutes; percentage taxes and fees rounded half up per line (DEC-007).
   recovery (partial-fulfillment baskets, DEC-026, are not split at payment time).
 - A plan whose installment failed its final attempt is not marked `defaulted` automatically; the
   owned exception asks the finance operator to decide.
-- `FINANCIAL_CONDITIONS_IMPL` (competition match readiness) is not registered: whether an overdue
-  team balance blocks play is undecided (POL-017, DEC-056), so readiness keeps reporting unknown.
+- `FINANCIAL_CONDITIONS_IMPL` (competition match readiness, `ParticipationStandingService`) reports
+  an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
+  DEC-056), so it is never a pass or a block until the policy is approved.
 - The money side of transfers and cancellations is answered (consequence) but not executed
   automatically (no automatic refund, credit or charge from enrollment's commands).
 - List endpoints return one page (`nextCursor: null`).

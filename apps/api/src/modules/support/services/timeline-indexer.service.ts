@@ -18,6 +18,7 @@ import type {
   RefundRequested,
   RefundSettled,
 } from '../../finance';
+import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { PaymentsService, RefundsService } from '../../finance';
 import type { EventChanged } from '../../scheduling';
 
@@ -46,6 +47,7 @@ export class TimelineIndexer {
     private readonly refunds: RefundsService,
     private readonly notifications: NotificationsService,
     @Inject(ROSTER_PORT) private readonly rosters: RosterPort,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
   ) {}
 
   async onPayment(
@@ -261,16 +263,12 @@ export class TimelineIndexer {
     if (rows.length === 0) return;
     // Only people of the organization are indexed (the composite foreign key refuses others).
     const ids = [...new Set(rows.map((r) => r.personId))];
-    const known = new Set(
-      (
-        await trx
-          .selectFrom('persons')
-          .select('id')
-          .where('organization_id', '=', event.organizationId)
-          .where('id', 'in', ids)
-          .execute()
-      ).map((p) => p.id),
-    );
+    // §4.2: through identity's person directory, never its tables.
+    const known = new Set<string>();
+    for (const id of ids) {
+      const person = await this.persons.findPerson(event.organizationId, id, trx);
+      if (person) known.add(person.id);
+    }
     const seen = new Set<string>();
     const values = rows
       .filter((r) => {

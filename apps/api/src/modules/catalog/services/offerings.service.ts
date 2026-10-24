@@ -32,6 +32,7 @@ import {
   Outbox,
   snapshotActor,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -926,7 +927,7 @@ export class OfferingsService implements OfferingLookupPort {
     at: Date,
     trx?: Trx,
   ): Promise<OfferingSnapshot | null> {
-    const db = trx ?? this.db;
+    const db = trx ?? executorFor(this.db);
     const row = await this.loadOffering(db, organizationId, offeringId);
     if (!row) return null;
     const contexts = await this.contexts(db, organizationId, [row], at);
