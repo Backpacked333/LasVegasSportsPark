@@ -122,6 +122,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/reports',
     screenIds: 'SCR-S-43 to SCR-S-45',
     purpose: 'Operating reports, utilization and economics, exports.',
+    ownRoutes: true,
   },
   {
     id: 'admin',
@@ -130,7 +131,20 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-46 to SCR-S-49, SCR-S-56',
     purpose:
       'Accounts and roles, integrations and configuration, migration imports, support cases.',
-    links: [{ path: '/admin/cases', title: 'Support cases', screenIds: 'SCR-S-49' }],
+    links: [
+      { path: '/admin/accounts', title: 'Accounts, roles and permissions', screenIds: 'SCR-S-46' },
+      {
+        path: '/admin/integrations',
+        title: 'Integrations and configuration',
+        screenIds: 'SCR-S-47',
+      },
+      {
+        path: '/admin/migration',
+        title: 'Migration imports and reconciliation',
+        screenIds: 'SCR-S-48',
+      },
+      { path: '/admin/cases', title: 'Support cases', screenIds: 'SCR-S-49' },
+    ],
   },
 ];
 

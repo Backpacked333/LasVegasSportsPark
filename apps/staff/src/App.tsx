@@ -4,7 +4,9 @@
  */
 import { Navigate, Route, Routes } from 'react-router';
 import { competitionRoutes } from './features/competition/routes';
+import { insightAdminRoutes } from './features/insight-admin/routes';
 import { operationsRoutes } from './features/operations/routes';
+import { registrationFinanceRoutes } from './features/registration-finance/routes';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS } from './navigation/areas';
 import { AreaScreen } from './screens/area/AreaScreen';
@@ -25,7 +27,6 @@ import { SupportCasesScreen } from './screens/support/SupportCasesScreen';
 import { ExceptionDetailScreen } from './screens/today/ExceptionDetailScreen';
 import { TodayScreen } from './screens/today/TodayScreen';
 import { RequireSession } from './session/RequireSession';
-import { registrationFinanceRoutes } from './features/registration-finance/routes';
 
 export function AppRoutes() {
   return (
@@ -44,6 +45,7 @@ export function AppRoutes() {
         {/* Before the area placeholders: equally ranked routes match in order. */}
         {competitionRoutes()}
         {operationsRoutes()}
+        {insightAdminRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />
