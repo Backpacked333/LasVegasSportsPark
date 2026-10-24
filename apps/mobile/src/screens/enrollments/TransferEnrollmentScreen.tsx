@@ -1,0 +1,440 @@
+/**
+ * SCR-C-33 Cancellation and transfer preview: transfer (SPK-REG-010, SPK-PAY-008, SPK-PAY-009,
+ * §4.8 `POST /v1/enrollments/{id}/transfer`, §4.9, SPK-UX-008; POL-007 to POL-009 and DEC-009
+ * govern transfer money and are the API's policy, never the app's).
+ *
+ * 1. Choose the target among the published offerings of the same program (`GET /v1/offerings`).
+ * 2. Preview: `commit: false` returns the existing and proposed participation, both date ranges
+ *    and whether they overlap, the capacity required and whether anyone is waiting ahead, the
+ *    eligibility result with its reasons, the refund, credit or additional charge with the API's
+ *    explanation, and whether staff approval is required. Nothing changes.
+ * 3. Confirm: the customer acknowledges the money consequence; the preview is asked again (a new
+ *    intent) and, if the consequence changed, nothing is committed and the new one must be
+ *    acknowledged. Then `commit: true, acceptConsequence: true` with `expectedRevision`; a retry
+ *    after no answer reuses the same idempotency key and cannot transfer twice.
+ * 4. Success: "Transferred to <offering>" with the linked old and new enrollments.
+ *
+ * A transfer that needs approval is not committed by a customer (the API answers
+ * RESOURCE_CONFLICT `APPROVAL_REQUIRED`): the screen says staff approval is needed and how to ask.
+ *
+ * States: loading; empty (no other offering to move to); ready (preview); validation failure
+ * (target ineligible: the API's reasons); permission restriction ("Staff approval needed", not
+ * available); stale version (capacity or price changed: re-preview; STALE_REVISION reloads);
+ * offline (disabled); processing (busy); success (linked enrollments); partial completion: not
+ * permitted; recovery required: not applicable, the transfer is one transaction in the API.
+ */
+import type { ApiError, Schema } from '@sportspark/api-client';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
+import { View } from 'react-native';
+import { useApiCommand } from '../../api/useApiCommand';
+import { useApiQuery } from '../../api/useApiQuery';
+import { CommandFailure } from '../../features/money/CommandFailure';
+import { formatDateRange } from '../../features/money/format';
+import { useNameOf } from '../../features/money/people';
+import { moneyRoutes, param } from '../../features/money/routes';
+import {
+  consequenceSummary,
+  enrollmentStatus,
+  sameConsequence,
+  type Enrollment,
+  type FinancialConsequence,
+  type TransferPreview,
+} from '../../features/money/status';
+import { Body, ButtonRow, Caption, ChoiceRow, Field, Section } from '../../features/money/ui';
+import { useConnectivity } from '../../providers/AppProviders';
+import { RequireSession } from '../../session/RequireSession';
+import { Button } from '../../ui/Button';
+import { ListRow } from '../../ui/ListRow';
+import { QueryBoundary } from '../../ui/QueryBoundary';
+import { Screen } from '../../ui/Screen';
+import { StateView } from '../../ui/StateView';
+import { StatusBadge } from '../../ui/StatusBadge';
+
+type PublicOffering = Schema<'PublicOffering'>;
+type TransferBody = Schema<'TransferEnrollmentRequest'>;
+
+/** Conflict sub-codes the transfer command sends in `details.code`. */
+export function conflictCode(error: ApiError | null): string | null {
+  if (error?.code !== 'RESOURCE_CONFLICT') return null;
+  const details = error.details as { code?: unknown } | undefined;
+  return typeof details?.code === 'string' ? details.code : null;
+}
+
+/** What stops a customer from committing this preview, in the customer's words. */
+export function transferBlockers(preview: TransferPreview): string[] {
+  const out: string[] = [];
+  if (!preview.eligibility.eligible) {
+    out.push('Not eligible for this activity.');
+  }
+  if (preview.requiredApproval) {
+    out.push('Staff approval is needed. Ask the front desk to make this transfer.');
+  }
+  if (preview.capacity.waitlistAhead > 0) {
+    out.push(
+      `${preview.capacity.waitlistAhead} ${preview.capacity.waitlistAhead === 1 ? 'person is' : 'people are'} waiting for this activity; places go to them first.`,
+    );
+  } else if (!preview.capacity.sufficient) {
+    out.push('No place is available in this activity.');
+  }
+  return out;
+}
+
+function PreviewView({ preview }: { preview: TransferPreview }) {
+  const summary = consequenceSummary(preview.financialConsequence);
+  return (
+    <View testID="transfer-preview">
+      <Section title="From">
+        <Field label="Activity" value={preview.existing.offeringName} />
+        <Field
+          label="Dates"
+          value={formatDateRange(
+            preview.affectedDates.existingRange.startsOn,
+            preview.affectedDates.existingRange.endsOn,
+          )}
+        />
+      </Section>
+      <Section title="To">
+        <Field label="Activity" value={preview.proposed.offeringName} />
+        <Field
+          label="Dates"
+          value={formatDateRange(
+            preview.affectedDates.proposedRange.startsOn,
+            preview.affectedDates.proposedRange.endsOn,
+          )}
+        />
+        {preview.affectedDates.overlapping ? (
+          <Caption>The two activities overlap in time.</Caption>
+        ) : null}
+        <Field
+          label="Place"
+          value={
+            preview.capacity.sufficient
+              ? 'A place is available'
+              : preview.capacity.waitlistAhead > 0
+                ? 'Others are waiting for a place'
+                : 'No place is available'
+          }
+        />
+        <Field
+          label="Eligibility"
+          value={preview.eligibility.eligible ? 'Eligible' : 'Not eligible'}
+        />
+        {preview.eligibility.reasons.map((reason) => (
+          <Caption key={`${reason.code}-${reason.message}`}>▲ {reason.message}</Caption>
+        ))}
+        <Field
+          label="Approval"
+          value={preview.requiredApproval ? 'Staff approval is required' : 'No approval needed'}
+        />
+      </Section>
+      <Section title="Money" testID="money-consequence">
+        <StatusBadge tone={summary.tone} label={summary.headline} testID="consequence" />
+        <Body>{summary.explanation}</Body>
+      </Section>
+    </View>
+  );
+}
+
+function Transferred({ preview }: { preview: TransferPreview }) {
+  const router = useRouter();
+  const next = preview.newEnrollment;
+  const previous = preview.previousEnrollment;
+  const recorded = consequenceSummary(preview.financialConsequence);
+  return (
+    <Section title="Transfer complete">
+      <StatusBadge
+        tone="success"
+        label={`Transferred to ${preview.proposed.offeringName}`}
+        testID="transfer-success"
+      />
+      <Field label="Money consequence" value={recorded.headline} />
+      <Caption>The old and new enrollments stay linked, and attendance history is kept.</Caption>
+      {previous ? (
+        <ListRow
+          title={preview.existing.offeringName}
+          status={enrollmentStatus(previous, {
+            transferTargetName: preview.proposed.offeringName,
+          })}
+        />
+      ) : null}
+      {next ? (
+        <ListRow
+          title={preview.proposed.offeringName}
+          status={enrollmentStatus(next, { offeringName: preview.proposed.offeringName })}
+          onPress={() => router.replace(moneyRoutes.enrollment(next.id))}
+          accessibilityHint="Opens the new enrollment"
+        />
+      ) : null}
+    </Section>
+  );
+}
+
+function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: () => void }) {
+  const { reachable } = useConnectivity();
+  const offline = reachable === false;
+  const nameOf = useNameOf();
+  const current = useApiQuery({
+    path: '/offerings/{id}',
+    request: { path: { id: enrollment.offeringId } },
+  });
+  const programId = current.data?.programId;
+  const settled = current.data !== undefined || current.error !== null;
+  const offerings = useApiQuery({
+    path: '/offerings',
+    request: { query: programId ? { programId, limit: 50 } : { limit: 50 } },
+    enabled: settled && enrollment.status === 'confirmed',
+  });
+  const previewCmd = useApiCommand('post', '/enrollments/{id}/transfer');
+  const commitCmd = useApiCommand('post', '/enrollments/{id}/transfer', {
+    invalidate: [
+      ['api', '/enrollments'],
+      ['api', '/enrollments/{id}'],
+    ],
+  });
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<TransferPreview | null>(null);
+  const [acknowledged, setAcknowledged] = useState<FinancialConsequence | null>(null);
+  const [changed, setChanged] = useState(false);
+  const [failure, setFailure] = useState<{ error: ApiError; step: 'preview' | 'commit' } | null>(
+    null,
+  );
+  const [done, setDone] = useState<TransferPreview | null>(null);
+
+  if (done) return <Transferred preview={done} />;
+  // Checked after success: once transferred, the refreshed record is no longer confirmed.
+  if (enrollment.status !== 'confirmed') {
+    return (
+      <StateView
+        variant="unavailable"
+        title="Cannot be transferred"
+        description={`Only a confirmed registration can be transferred. This one is ${enrollmentStatus(enrollment).label.toLowerCase()}.`}
+      />
+    );
+  }
+
+  const bodyFor = (target: string, commit: boolean): TransferBody => ({
+    targetOfferingId: target,
+    commit,
+    acceptConsequence: commit,
+    expectedRevision: enrollment.revision,
+  });
+
+  const runPreview = async (target: string) => {
+    setFailure(null);
+    try {
+      const result = (await previewCmd.submit({
+        path: { id: enrollment.id },
+        body: bodyFor(target, false),
+      })) as TransferPreview;
+      setPreview(result);
+      return result;
+    } catch (error) {
+      setFailure({ error: error as ApiError, step: 'preview' });
+      return null;
+    }
+  };
+
+  const commit = async (target: string) => {
+    setFailure(null);
+    try {
+      setDone(
+        (await commitCmd.submit({
+          path: { id: enrollment.id },
+          body: bodyFor(target, true),
+        })) as TransferPreview,
+      );
+    } catch (error) {
+      const apiError = error as ApiError;
+      setFailure({ error: apiError, step: 'commit' });
+      if (conflictCode(apiError) === 'CONSEQUENCE_NOT_ACCEPTED') {
+        setAcknowledged(null);
+        setChanged(true);
+      }
+    }
+  };
+
+  const confirm = async () => {
+    if (!targetId || !preview) return;
+    const needsAck = preview.financialConsequence.kind !== 'none';
+    if (needsAck && !acknowledged) return;
+    // Stale version: ask for the preview again; a changed consequence is never committed unseen.
+    const fresh = await runPreview(targetId);
+    if (!fresh) return;
+    if (needsAck && acknowledged && !sameConsequence(fresh.financialConsequence, acknowledged)) {
+      setAcknowledged(null);
+      setChanged(true);
+      return;
+    }
+    if (transferBlockers(fresh).length > 0) return;
+    await commit(targetId);
+  };
+
+  const choose = (id: string) => {
+    setTargetId(id);
+    setPreview(null);
+    setAcknowledged(null);
+    setChanged(false);
+    setFailure(null);
+    previewCmd.reset();
+    commitCmd.reset();
+  };
+
+  const choices = (offerings.data?.items ?? []).filter(
+    (o: PublicOffering) => o.id !== enrollment.offeringId,
+  );
+  const blockers = preview ? transferBlockers(preview) : [];
+  const needsAck = preview ? preview.financialConsequence.kind !== 'none' : false;
+  const summary = preview ? consequenceSummary(preview.financialConsequence) : null;
+  const approvalRefused = conflictCode(failure?.error ?? null) === 'APPROVAL_REQUIRED';
+
+  return (
+    <View>
+      <Section title="Transfer">
+        <Field label="Participant" value={nameOf(enrollment.participantPersonId)} />
+        <Field label="Now in" value={current.data?.name ?? 'Activity no longer listed'} />
+        <StatusBadge {...enrollmentStatus(enrollment, { offeringName: current.data?.name })} />
+      </Section>
+
+      <Section title="Move to">
+        <QueryBoundary
+          query={offerings}
+          label="activities to move to"
+          isEmpty={(page) => page.items.every((o) => o.id === enrollment.offeringId)}
+          empty={{
+            title: 'Nothing to move to',
+            description:
+              'There is no other published activity in this program right now. The front desk can help with other options.',
+          }}
+          unavailableOffline={['previewing a transfer', 'transferring']}
+        >
+          {() => (
+            <View accessibilityRole="radiogroup" accessibilityLabel="Activity to move to">
+              {choices.map((o) => (
+                <ChoiceRow
+                  key={o.id}
+                  mode="radio"
+                  label={o.name}
+                  detail={formatDateRange(o.startsOn, o.endsOn)}
+                  checked={targetId === o.id}
+                  onPress={() => choose(o.id)}
+                />
+              ))}
+            </View>
+          )}
+        </QueryBoundary>
+        <ButtonRow>
+          <Button
+            label="Preview transfer"
+            variant="secondary"
+            disabled={!targetId || offline}
+            busy={previewCmd.isProcessing && !commitCmd.isProcessing}
+            onPress={() => targetId && void runPreview(targetId)}
+          />
+        </ButtonRow>
+      </Section>
+
+      {preview ? <PreviewView preview={preview} /> : null}
+
+      {preview ? (
+        <Section title="Confirm the transfer">
+          {changed ? (
+            <StatusBadge
+              tone="warning"
+              label="The money consequence changed since you reviewed it. Review it again."
+              testID="consequence-changed"
+            />
+          ) : null}
+          {blockers.length > 0 ? (
+            <StateView
+              variant="unavailable"
+              title="This transfer cannot be made in the app"
+              description={blockers.join(' ')}
+            />
+          ) : (
+            <>
+              {needsAck && summary ? (
+                <ChoiceRow
+                  mode="checkbox"
+                  label={`I accept: ${summary.headline}`}
+                  checked={acknowledged !== null}
+                  onPress={() => {
+                    setChanged(false);
+                    setAcknowledged(acknowledged ? null : preview.financialConsequence);
+                  }}
+                />
+              ) : null}
+              {offline ? <Caption>Needs a connection.</Caption> : null}
+              <ButtonRow>
+                <Button
+                  label="Transfer"
+                  onPress={() => void confirm()}
+                  disabled={offline || (needsAck && acknowledged === null)}
+                  busy={commitCmd.isProcessing}
+                  accessibilityHint="Moves the registration with the money consequence shown above"
+                />
+              </ButtonRow>
+            </>
+          )}
+        </Section>
+      ) : null}
+
+      {failure && approvalRefused ? (
+        <StateView
+          variant="unavailable"
+          title="Staff approval needed"
+          description="This transfer needs staff approval, so it cannot be made in the app. Ask the front desk to make it; nothing has changed."
+        />
+      ) : failure ? (
+        <CommandFailure
+          error={failure.error}
+          what={failure.step === 'commit' ? 'the transfer' : 'the transfer preview'}
+          onRetry={() => {
+            if (!targetId) return;
+            void (failure.step === 'commit' ? commit(targetId) : runPreview(targetId));
+          }}
+          onReload={() => {
+            setFailure(null);
+            setPreview(null);
+            setAcknowledged(null);
+            previewCmd.reset();
+            commitCmd.reset();
+            reload();
+          }}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+export function TransferEnrollmentScreen({ enrollmentId }: { enrollmentId: string }) {
+  const enrollment = useApiQuery({
+    path: '/enrollments/{id}',
+    request: { path: { id: enrollmentId } },
+  });
+  return (
+    <Screen>
+      <RequireSession what="this transfer">
+        <QueryBoundary
+          query={enrollment}
+          label="the enrollment"
+          empty={{ title: 'Not available', description: '' }}
+          unavailableOffline={['previewing a transfer', 'transferring']}
+        >
+          {(data) => <TransferForm enrollment={data} reload={() => void enrollment.refetch()} />}
+        </QueryBoundary>
+      </RequireSession>
+    </Screen>
+  );
+}
+
+/** Route component for app/enrollments/[id]/transfer.tsx. */
+export function TransferEnrollmentRoute() {
+  const id = param(useLocalSearchParams<{ id: string }>().id);
+  return (
+    <>
+      <Stack.Screen options={{ title: 'Transfer preview' }} />
+      <TransferEnrollmentScreen enrollmentId={id} />
+    </>
+  );
+}

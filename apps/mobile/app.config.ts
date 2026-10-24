@@ -25,5 +25,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     staleDataThresholdMinutes: process.env.SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES
       ? Number(process.env.SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES)
       : null,
+    // How customers reach the facility for help (SCR-C-38): facility facts, unset until the
+    // operator provides them (support coverage is DEC-015).
+    supportContact: {
+      phone: process.env.SPORTSPARK_SUPPORT_PHONE ?? null,
+      email: process.env.SPORTSPARK_SUPPORT_EMAIL ?? null,
+      hours: process.env.SPORTSPARK_SUPPORT_HOURS ?? null,
+    },
   },
 });
