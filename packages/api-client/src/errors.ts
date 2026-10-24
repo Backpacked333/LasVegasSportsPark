@@ -24,6 +24,7 @@ export const API_ERROR_CODES = [
   'QUOTE_EXPIRED',
   'IDEMPOTENCY_CONFLICT',
   'IDEMPOTENCY_IN_PROGRESS',
+  'IDEMPOTENCY_OUTCOME_UNAVAILABLE',
   'PAYMENT_OUTCOME_UNKNOWN',
   'REFUND_PENDING',
   'INTEGRATION_UNAVAILABLE',
@@ -133,8 +134,32 @@ export class ApiError extends Error {
     return this.code === 'ACCESS_DENIED' || this.code === 'PARTICIPANT_AUTHORITY_REQUIRED';
   }
 
+  /**
+   * What is on screen no longer matches the record: reload before deciding again. Includes
+   * IDEMPOTENCY_OUTCOME_UNAVAILABLE, the API's answer when an earlier attempt with this key changed
+   * data but its response was never recorded (next action `reload_current_state`, §4.9).
+   */
   get isStale(): boolean {
-    return this.code === 'STALE_REVISION' || this.code === 'INVALID_TRANSITION';
+    return (
+      this.code === 'STALE_REVISION' ||
+      this.code === 'INVALID_TRANSITION' ||
+      this.code === 'IDEMPOTENCY_OUTCOME_UNAVAILABLE'
+    );
+  }
+
+  /**
+   * Whether the next attempt of the same user intent must keep this intent's idempotency key.
+   *
+   * The API stores every domain (4xx) answer under the key and replays it for the same key and
+   * payload (apps/api/src/kernel/http/idempotency.interceptor.ts). After such a definitive answer a
+   * retry with the same key can only get the same refusal again, so the intent ends and the next
+   * attempt gets a new key. The key is kept only while the outcome is not known: no response
+   * (network, timeout), a retryable code (IDEMPOTENCY_IN_PROGRESS, INTEGRATION_UNAVAILABLE,
+   * RATE_LIMITED, INTERNAL_ERROR, a 5xx without the contract), or PAYMENT_OUTCOME_UNKNOWN, where a
+   * new key could start a second payment (SPK-PAY-007).
+   */
+  get keepsIntent(): boolean {
+    return this.isOffline || this.retryable || this.code === 'PAYMENT_OUTCOME_UNKNOWN';
   }
 
   get isAuthenticationRequired(): boolean {

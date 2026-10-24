@@ -90,6 +90,25 @@ export class CommandIntentTracker {
   reset(): void {
     this.complete();
   }
+
+  /**
+   * Call after an attempt failed. The intent, and so the key, is kept while the outcome is unknown
+   * or the API asked for a retry with the same key; after a definitive answer (one the API stores
+   * and would replay for this key, such as MISSING_ACKNOWLEDGMENT or STALE_REVISION) the intent
+   * ends, so the next attempt, once the user has fixed the cause, is a new intent (§4.9).
+   */
+  failed(error: unknown): void {
+    if (!keepsIntentAfter(error)) this.complete();
+  }
+}
+
+/**
+ * Whether a failed attempt's intent must survive for the retry. Anything that is not the typed
+ * client error (a programming error) keeps it: the request may still have been sent.
+ */
+export function keepsIntentAfter(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('keepsIntent' in error)) return true;
+  return (error as { keepsIntent: unknown }).keepsIntent !== false;
 }
 
 /** JSON with object keys sorted, so `{a,b}` and `{b,a}` are the same input. */

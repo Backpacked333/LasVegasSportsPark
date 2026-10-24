@@ -62,6 +62,7 @@ export function useKeyedCommands<M extends CommandMethod, P extends PathsWithMet
                 nextAction: 'retry_or_contact_support',
                 correlationId: null,
               });
+        tracker.failed(apiError);
         setStates((s) => ({ ...s, [key]: { status: 'failed', error: apiError } }));
         return false;
       }

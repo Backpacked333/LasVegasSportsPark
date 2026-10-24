@@ -1,12 +1,13 @@
 import { ErrorCodes } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
-import { ApiError } from '../errors';
+import { ApiError, networkError, timeoutError } from '../errors';
 import { formatClientInfo, parseClientInfo } from '../client-info';
 import { apiQueryKey, formatAge, isStale, isTerminalOperationStatus } from '../freshness';
 import {
   CommandIntentTracker,
   createCommandIntent,
   defaultKeyGenerator,
+  keepsIntentAfter,
   stableStringify,
 } from '../idempotency';
 import { RECOVERY_ACTION_LABELS, presentationForError, recoveryActionFor } from '../screen-state';
@@ -34,6 +35,67 @@ describe('idempotency keys (§4.9)', () => {
     );
     const tracker = new CommandIntentTracker(() => 'fixed-key-123');
     expect(tracker.current().key).toBe('fixed-key-123');
+  });
+});
+
+function apiError(code: string, status = 409): ApiError {
+  return new ApiError({
+    kind: 'api',
+    status,
+    code,
+    message: code,
+    nextAction: (ErrorCodes as Record<string, { nextAction: string }>)[code]?.nextAction ?? 'x',
+    correlationId: 'corr-1',
+  });
+}
+
+describe('intent after a failed attempt (§4.9, the API replays stored 4xx answers)', () => {
+  it('a definitive refusal ends the intent: the next attempt of the same input gets a new key', () => {
+    let n = 0;
+    const tracker = new CommandIntentTracker(() => `key-${String(++n).padStart(4, '0')}`);
+    const input = { expectedRevision: 3 };
+    const first = tracker.current(input).key;
+    tracker.failed(apiError('MISSING_ACKNOWLEDGMENT', 422));
+    expect(tracker.current(input).key).not.toBe(first);
+  });
+
+  it.each([
+    'MISSING_ACKNOWLEDGMENT',
+    'STALE_REVISION',
+    'INVALID_TRANSITION',
+    'CAPACITY_UNAVAILABLE',
+    'ELIGIBILITY_FAILED',
+    'ACCESS_DENIED',
+    'IDEMPOTENCY_CONFLICT',
+    'IDEMPOTENCY_OUTCOME_UNAVAILABLE',
+  ])('%s is definitive and does not keep the key', (code) => {
+    expect(apiError(code).keepsIntent).toBe(false);
+    expect(keepsIntentAfter(apiError(code))).toBe(false);
+  });
+
+  it('an unknown outcome or a retryable answer keeps the key for the retry', () => {
+    let n = 0;
+    const tracker = new CommandIntentTracker(() => `key-${String(++n).padStart(4, '0')}`);
+    const first = tracker.current({ a: 1 }).key;
+    for (const error of [
+      timeoutError(20_000),
+      networkError(new Error('reset')),
+      apiError('IDEMPOTENCY_IN_PROGRESS'),
+      apiError('PAYMENT_OUTCOME_UNKNOWN'),
+      apiError('INTEGRATION_UNAVAILABLE', 503),
+      apiError('RATE_LIMITED', 429),
+      apiError('INTERNAL_ERROR', 500),
+      new Error('not a client error'),
+    ]) {
+      tracker.failed(error);
+      expect(tracker.current({ a: 1 }).key).toBe(first);
+    }
+  });
+
+  it('IDEMPOTENCY_OUTCOME_UNAVAILABLE asks for a reload, not a retry', () => {
+    const error = apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE');
+    expect(error.isStale).toBe(true);
+    expect(recoveryActionFor(error)).toMatchObject({ label: 'Reload', retry: false });
   });
 });
 

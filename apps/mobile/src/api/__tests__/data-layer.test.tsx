@@ -58,6 +58,69 @@ describe('useApiCommand (§4.9)', () => {
   });
 });
 
+describe('useApiCommand after a definitive refusal (§4.9, the API replays stored 4xx answers)', () => {
+  it('MISSING_ACKNOWLEDGMENT, then the same press again, sends a new key (no stored replay)', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'POST /baskets/{id}/hold': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(
+                422,
+                apiErrorBody('MISSING_ACKNOWLEDGMENT', { nextAction: 'complete_acknowledgment' }),
+              )
+            : fakeResponse(200, { ok: true });
+        },
+      },
+    });
+    const { result } = renderHook(() => useApiCommand('post', '/baskets/{id}/hold'), {
+      wrapper: app.wrapper,
+    });
+    await act(async () => undefined);
+    const request = { path: { id: ASSIGNMENT }, body: { expectedRevision: 4 } };
+    await act(async () => {
+      await result.current.submit(request).catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error?.code).toBe('MISSING_ACKNOWLEDGMENT'));
+    await act(async () => {
+      await result.current.submit(request);
+    });
+    const keys = app.fake.requests.map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(app.fake.requests[1]?.body).toEqual({ expectedRevision: 4 });
+  });
+
+  it('a timeout keeps the key for the retry of the same intent', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'POST /baskets/{id}/hold': () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new TypeError('Network request failed'))
+            : fakeResponse(200, { ok: true });
+        },
+      },
+    });
+    const { result } = renderHook(() => useApiCommand('post', '/baskets/{id}/hold'), {
+      wrapper: app.wrapper,
+    });
+    await act(async () => undefined);
+    const request = { path: { id: ASSIGNMENT }, body: { expectedRevision: 4 } };
+    await act(async () => {
+      await result.current.submit(request).catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error?.isOffline).toBe(true));
+    await act(async () => {
+      await result.current.submit(request);
+    });
+    const keys = app.fake.requests.map((r) => r.headers['idempotency-key']);
+    expect(keys).toEqual([keys[0], keys[0]]);
+  });
+});
+
 describe('session expiry and update required', () => {
   it('drops the stored session when the API answers AUTHENTICATION_REQUIRED and asks to sign in again', async () => {
     const app = createTestApp({

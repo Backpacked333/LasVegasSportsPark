@@ -1,7 +1,8 @@
 /**
  * Consequential commands from screens (§4.9). One hook instance is one user intent: retrying the
  * same input reuses the idempotency key (a double tap or a retry after a timeout never duplicates
- * an effect); changed input or a confirmed success starts a new intent with a new key.
+ * an effect); changed input, a confirmed success or a definitive refusal (an answer the API stores
+ * and would replay for the same key) starts a new intent with a new key.
  * Pass `expectedRevision` in the body wherever the API takes it; a STALE_REVISION answer is shown
  * with "Reload" and the user's input is kept (SPK-UX-008).
  */
@@ -40,6 +41,11 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
       const intent = tracker.current.current(request);
       const send = api[method] as (path: P, options: object) => Promise<ResponseBody<P, M>>;
       return send(path, { ...request, intent });
+    },
+    // A definitive refusal ends the intent: the API replays a stored 4xx for the same key, so the
+    // next attempt (after the user fixed the cause) needs a new key. Unknown outcomes keep it.
+    onError: (error) => {
+      tracker.current.failed(error);
     },
     onSuccess: async () => {
       tracker.current.complete();

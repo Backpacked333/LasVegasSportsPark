@@ -73,6 +73,8 @@ export function useKeyedCommands(options: { invalidate?: readonly (readonly unkn
                 correlationId: null,
                 cause,
               });
+        // A definitive refusal ends this key's intent (the API replays stored 4xx answers).
+        tracker.failed(error);
         setOutcomes((prev) => ({ ...prev, [key]: { status: 'error', error } }));
         return undefined;
       }
