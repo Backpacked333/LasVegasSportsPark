@@ -12,3 +12,4 @@ coverage/
 
 # Claude Code workflow worktrees and local session state
 .claude/worktrees/
+.claude/merge.lock/

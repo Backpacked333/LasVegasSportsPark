@@ -2,6 +2,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import { newId } from '@sportspark/contracts';
 import { sql } from 'kysely';
 import { createPgDatabase, createPgliteDatabase, type Db } from './client';
+import { pgErrorCode } from './helpers';
 import { migrateToLatest } from './migrate';
 
 export interface TestDatabase {
@@ -30,6 +31,25 @@ export async function createTestDatabase(): Promise<TestDatabase> {
 
 /** Advisory lock key serializing extension installation across parallel test files. */
 const EXTENSION_LOCK_KEY = 727_262;
+/** Advisory lock key serializing per-file schema drops (each drop locks every object it removes). */
+const SCHEMA_DROP_LOCK_KEY = 727_263;
+
+/**
+ * PostgreSQL's shared lock table holds max_locks_per_transaction x max_connections entries. Creating
+ * or dropping a whole module schema in one transaction takes a lock per object, so parallel test
+ * files can exhaust it ("out of shared memory", SQLSTATE 53200). The failing transaction rolls back
+ * completely, so retrying it is safe.
+ */
+async function retryOnLockExhaustion<T>(fn: () => Promise<T>, attempts = 6): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (pgErrorCode(error) !== '53200' || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+    }
+  }
+}
 
 async function createIsolatedPgSchema(url: string): Promise<TestDatabase> {
   const schema = `test_${newId().replaceAll('-', '')}`;
@@ -45,7 +65,8 @@ async function createIsolatedPgSchema(url: string): Promise<TestDatabase> {
   const search = new URL(url);
   search.searchParams.set('options', `-c search_path=${schema},public`);
   const { db, close } = createPgDatabase({ connectionString: search.toString(), max: 10 });
-  await migrateToLatest(db);
+  // Each migration file runs in its own transaction, so a retry resumes at the file that failed.
+  await retryOnLockExhaustion(() => migrateToLatest(db));
   return {
     db,
     pglite: null,
@@ -53,8 +74,17 @@ async function createIsolatedPgSchema(url: string): Promise<TestDatabase> {
     close: async () => {
       await close();
       const cleanup = createPgDatabase({ connectionString: url, max: 1 });
-      await sql.raw(`drop schema "${schema}" cascade`).execute(cleanup.db);
-      await cleanup.close();
+      try {
+        // One drop at a time: concurrent drops of large schemas are what exhaust the lock table.
+        await retryOnLockExhaustion(() =>
+          cleanup.db.transaction().execute(async (trx) => {
+            await sql`select pg_advisory_xact_lock(${SCHEMA_DROP_LOCK_KEY})`.execute(trx);
+            await sql.raw(`drop schema if exists "${schema}" cascade`).execute(trx);
+          }),
+        );
+      } finally {
+        await cleanup.close();
+      }
     },
   };
 }
