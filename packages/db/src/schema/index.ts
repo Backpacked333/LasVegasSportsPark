@@ -5,6 +5,7 @@ import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
 import type { EnrollmentTables } from './enrollment';
 import type { FacilitiesTables } from './facilities';
+import type { FinanceTables } from './finance';
 import type { IdentityTables } from './identity';
 import type { SchedulingTables } from './scheduling';
 import type { WorkforceTables } from './workforce';
@@ -16,6 +17,7 @@ export * from './competition-matches';
 export * from './competition';
 export * from './enrollment';
 export * from './facilities';
+export * from './finance';
 export * from './identity';
 export * from './scheduling';
 export * from './workforce';
@@ -33,6 +35,7 @@ export interface Database
     CompetitionTables,
     EnrollmentTables,
     FacilitiesTables,
+    FinanceTables,
     IdentityTables,
     SchedulingTables,
     WorkforceTables {}
