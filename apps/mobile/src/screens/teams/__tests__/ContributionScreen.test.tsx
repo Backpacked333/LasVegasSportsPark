@@ -9,6 +9,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import {
   IDS,
   contributionRequest,
+  me,
   obligation,
   paymentAttempt,
 } from '../../../features/teams/testing/fixtures';
@@ -40,7 +41,7 @@ describe('SCR-C-25 ContributionScreen', () => {
     expect(await screen.findByLabelText('Your amount: $75.00')).toBeOnTheScreen();
     expect(screen.getByLabelText('Requested')).toBeOnTheScreen();
     expect(
-      screen.getByLabelText('From your captain: Your share of the Fall team fee.'),
+      screen.getByLabelText('Message with the request: Your share of the Fall team fee.'),
     ).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
@@ -79,6 +80,7 @@ describe('SCR-C-25 ContributionScreen', () => {
     });
     expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
+    await app.settle(); // the first re-read has finished, so "Check again" is not busy
     app.fake.set('GET /payments/{id}', {
       status: 200,
       body: paymentAttempt({ status: 'succeeded' }),
@@ -116,6 +118,62 @@ describe('SCR-C-25 ContributionScreen', () => {
       screen.getByLabelText('No answer yet: this may already have been recorded'),
     ).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
+  });
+
+  it('SPK-PAY-004: a guardian paying a child’s contribution sees the child named, not "your"', async () => {
+    const CHILD = '0192f1a0-0000-7000-8000-00000000ce01';
+    renderContribution({
+      'GET /me': { status: 200, body: me() },
+      'GET /contribution-requests/{id}': {
+        status: 200,
+        body: contributionRequest({ requestedPersonId: CHILD }),
+      },
+      'GET /people/{id}': {
+        status: 200,
+        body: { id: CHILD, givenName: 'Sam', familyName: 'Morgan', kind: 'child' },
+      },
+    });
+    expect(await screen.findByRole('header', { name: 'Contribution for Sam' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Amount for Sam: $75.00')).toBeOnTheScreen();
+    expect(screen.queryByText('Your contribution')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: "Pay Sam's contribution: $75.00" }),
+    ).toBeOnTheScreen();
+  });
+
+  it('SPK-PAY-007: processing then failed brings the payment method back, under a new key', async () => {
+    let posts = 0;
+    const app = renderContribution({
+      'POST /contribution-requests/{id}/pay': () => {
+        posts += 1;
+        return fakeResponse(201, outcome(posts === 1 ? 'processing' : 'succeeded'));
+      },
+      'GET /payments/{id}': { status: 200, body: paymentAttempt({ status: 'processing' }) },
+    });
+    fireEvent.press(
+      await screen.findByRole('radio', { name: 'Development payment: processing, outcome later' }),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();
+    await app.settle(); // the first re-read has finished, so "Check again" is not busy
+    app.fake.set('GET /payments/{id}', {
+      status: 200,
+      body: paymentAttempt({ status: 'failed', failureReason: 'Declined.' }),
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByText('Declined.')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('radio', { name: 'Development payment: succeeds' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    const keys = app.keysOf('POST', '/contribution-requests/{id}/pay');
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+    await app.settle();
   });
 
   it('§4.10: another person’s contribution request is not available', async () => {

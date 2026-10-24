@@ -191,8 +191,23 @@ describe('SCR-C-26 RosterChangeScreen', () => {
   });
 
   it('removes a player only with a reason, sent with the expected revision', async () => {
+    // The API answers with the roster in which Pat's membership has ended.
+    const afterRemoval = {
+      ...history,
+      members: history.members.map((m) =>
+        m.personId === IDS.player2
+          ? {
+              ...m,
+              status: 'removed',
+              effectiveTo: '2026-10-24T12:00:00.000Z',
+              removedAt: '2026-10-24T12:00:00.000Z',
+              removalReason: 'Moved away',
+            }
+          : m,
+      ),
+    };
     const app = renderChange({
-      'POST /team-entries/{id}/roster': { status: 200, body: history },
+      'POST /team-entries/{id}/roster': { status: 200, body: afterRemoval },
     });
     fireEvent.press(await screen.findByRole('radio', { name: 'Remove a player' }));
     fireEvent.press(screen.getByRole('radio', { name: /^Pat Player/ }));
@@ -213,8 +228,28 @@ describe('SCR-C-26 RosterChangeScreen', () => {
         expectedRevision: 4,
       },
     ]);
-    expect(await screen.findByTestId('change-success')).toBeOnTheScreen();
+    expect(await screen.findByTestId('change-success')).toHaveProp(
+      'accessibilityLabel',
+      'Removed from Oct 24, 2026',
+    );
     await app.settle();
+  });
+
+  it('a removal answered with an unchanged roster, or another player chosen after it, shows no success', async () => {
+    renderChange({
+      'POST /team-entries/{id}/roster': { status: 200, body: history },
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Remove a player' }));
+    fireEvent.press(screen.getByRole('radio', { name: /^Pat Player/ }));
+    fireEvent.changeText(screen.getByLabelText(/^Reason for the removal/), 'Moved away');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Remove from the roster' }));
+    });
+    expect(screen.queryByTestId('change-success')).toBeNull();
+    expect(screen.getByText(/does not show this removal yet/)).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('radio', { name: /^Casey Captain/ }));
+    expect(screen.queryByTestId('change-success')).toBeNull();
+    expect(screen.getByLabelText(/^Reason for the removal/)).toHaveProp('value', '');
   });
 
   it('a roster change the API refuses (ACCESS_DENIED) is not available', async () => {

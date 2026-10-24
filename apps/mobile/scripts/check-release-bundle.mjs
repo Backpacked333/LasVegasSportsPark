@@ -7,7 +7,13 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const dir = path.resolve(process.argv[2] ?? 'dist');
-const MARKERS = ['Development sign-in', '/dev/tokens', 'Development payment method', 'pm_fake_'];
+const MARKERS = [
+  'Development sign-in',
+  '/dev/tokens',
+  'Development payment method',
+  'Development payment:',
+  'pm_fake_',
+];
 
 function files(root) {
   return readdirSync(root).flatMap((name) => {

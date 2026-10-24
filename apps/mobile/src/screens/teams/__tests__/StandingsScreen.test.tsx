@@ -65,6 +65,21 @@ describe('SCR-C-28 StandingsScreen', () => {
     });
   });
 
+  it('SPK-UX-009: at large text sizes each row is stacked text instead of fixed-width cells', async () => {
+    const dimensions = jest
+      .spyOn(require('react-native'), 'useWindowDimensions')
+      .mockReturnValue({ width: 390, height: 844, scale: 3, fontScale: 1.6 });
+    const app = createTeamsTestApp({ routes: routes() });
+    render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    expect(await screen.findByTestId('standings-stacked')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        '2nd: Desert Foxes (your team), 9 points, played 4, won 3, drawn 0, lost 1, goals 8 for and 5 against, difference 3',
+      ),
+    ).toBeOnTheScreen();
+    dimensions.mockRestore();
+  });
+
   it('SPK-RESULT-003: explains how a tie on points was decided', async () => {
     const app = createTeamsTestApp({ routes: routes() });
     render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });

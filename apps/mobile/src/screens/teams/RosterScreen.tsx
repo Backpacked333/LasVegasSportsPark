@@ -439,7 +439,7 @@ function RosterContent({ workspace, refetch }: { workspace: Workspace; refetch: 
       <Section title="Roster" testID="roster">
         <StatusBadge
           tone={r.rosterComplete ? 'success' : 'warning'}
-          label={`${r.rosterCount} on the roster (minimum ${r.rosterMin}, maximum ${r.rosterMax})`}
+          label={`${r.rosterComplete ? 'Roster complete' : 'Roster not complete'}: ${r.rosterCount} on the roster (minimum ${r.rosterMin}, maximum ${r.rosterMax})`}
         />
         <QueryBoundary
           query={roster}

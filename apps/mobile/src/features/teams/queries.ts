@@ -8,7 +8,7 @@
  * someone the API refuses is answered ACCESS_DENIED or NOT_FOUND and rendered "not available".
  * (Reported: the workspace should state the viewer's permitted actions.)
  */
-import type { Schema } from '@sportspark/api-client';
+import type { ApiError, Schema } from '@sportspark/api-client';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp } from '../../providers/AppProviders';
 
@@ -29,15 +29,27 @@ export function useMe() {
 }
 
 /**
- * The signed-in person's id for layout decisions, and whether it is still loading (so a screen
- * does not flash the player view before the captain view). A failed read leaves it null: the
- * reduced view is shown and the API still answers every command.
+ * The signed-in person's id for layout decisions, whether it is still loading (so a screen does
+ * not flash the player view before the captain view), and why it could not be read. A failed or
+ * paused read is reported, never turned into "not your team" (SPK-UX-008): screens wait for it.
  */
-export function useViewerPerson(): { personId: string | null; loading: boolean } {
+export function useViewerPerson(): {
+  personId: string | null;
+  loading: boolean;
+  /** The read failed and nothing is cached. */
+  error: ApiError | null;
+  /** The read is waiting for a connection and nothing is cached. */
+  paused: boolean;
+  refetch: () => void;
+} {
   const me = useMe();
+  const missing = me.data === undefined;
   return {
     personId: me.data?.person?.id ?? null,
-    loading: me.data === undefined && me.error === null && me.fetchStatus === 'fetching',
+    loading: missing && me.error === null && me.fetchStatus === 'fetching',
+    error: missing ? me.error : null,
+    paused: missing && me.error === null && me.fetchStatus === 'paused',
+    refetch: () => void me.refetch(),
   };
 }
 

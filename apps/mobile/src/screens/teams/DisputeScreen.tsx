@@ -37,6 +37,7 @@ import {
 } from '../../features/teams/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
@@ -137,10 +138,20 @@ function DisputeForm({
     ],
   });
   const reasonError = attempted && !reason.trim() ? 'Give the reason for the dispute.' : null;
-  const filled = evidence.filter((e) => e.kind.trim() && e.reference.trim());
+  const started = (e: EvidenceDraft) =>
+    Boolean(e.kind.trim() || e.reference.trim() || e.description.trim());
+  const complete = (e: EvidenceDraft) => Boolean(e.kind.trim() && e.reference.trim());
+  // A started row without both a kind and a reference is never dropped silently: it blocks
+  // sending and says what is missing, and the draft is kept.
+  const incomplete = evidence.filter((e) => started(e) && !complete(e));
+  const filled = evidence.filter(complete);
+  const evidenceError = (e: EvidenceDraft) =>
+    attempted && started(e) && !complete(e)
+      ? 'Give the kind and the reference, or remove this evidence.'
+      : null;
   const submit = () => {
     setAttempted(true);
-    if (!reason.trim()) return;
+    if (!reason.trim() || incomplete.length > 0) return;
     void submitDispute
       .submit({
         path: { id: fixtureId },
@@ -194,6 +205,7 @@ function DisputeForm({
             value={e.kind}
             onChangeText={(kind) => update(e.key, { kind })}
             hint="For example video, photo or witness statement."
+            error={!e.kind.trim() ? evidenceError(e) : null}
           />
           <TextField
             label={`Evidence ${index + 1}: reference`}
@@ -201,6 +213,7 @@ function DisputeForm({
             onChangeText={(reference) => update(e.key, { reference })}
             autoCapitalize="none"
             hint="A link or where the league can find it."
+            error={!e.reference.trim() ? evidenceError(e) : null}
           />
           <TextField
             label={`Evidence ${index + 1}: description (optional)`}
@@ -305,7 +318,15 @@ function DisputeContent({
         {official ? null : <Body>There is no official result for this game yet.</Body>}
       </Section>
       <Section title="Disputes for this game">
-        <ExistingDisputes disputes={disputes.data ?? []} />
+        {/* Loading, error and offline come from the read; "none yet" only for an empty list. */}
+        <QueryBoundary
+          query={disputes}
+          label="the disputes for this game"
+          isEmpty={(list) => list.length === 0}
+          empty={{ title: 'No disputes yet', description: 'No disputes for this game yet.' }}
+        >
+          {(list) => <ExistingDisputes disputes={list} />}
+        </QueryBoundary>
       </Section>
       <Section title="File a dispute">
         <Body muted>{`Filed for ${workspace.team.name} as its captain.`}</Body>

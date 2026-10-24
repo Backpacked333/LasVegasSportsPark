@@ -83,6 +83,37 @@ describe('SCR-C-29 DisputeScreen', () => {
     await app.settle();
   });
 
+  it('an evidence row with only a reference blocks sending, says what is missing and is kept', async () => {
+    const app = renderDispute({
+      'POST /fixtures/{id}/disputes': { status: 201, body: dispute() },
+    });
+    fireEvent.changeText(await screen.findByLabelText('Reason'), 'Late goal.');
+    fireEvent.press(screen.getByRole('button', { name: 'Add an evidence reference' }));
+    fireEvent.changeText(
+      screen.getByLabelText('Evidence 1: reference'),
+      'https://video.example.test/clip-7',
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Submit the dispute' }));
+    expect(
+      screen.getByLabelText(
+        'Evidence 1: kind. Give the kind and the reference, or remove this evidence.',
+      ),
+    ).toBeOnTheScreen();
+    expect(app.requestsTo('POST', '/fixtures/{id}/disputes')).toHaveLength(0);
+    expect(
+      screen.getByLabelText(/^Evidence 1: reference/),
+    ).toHaveProp('value', 'https://video.example.test/clip-7');
+  });
+
+  it('SPK-UX-008: a failed read of the existing disputes shows its code, never "no disputes"', async () => {
+    renderDispute({
+      'GET /fixtures/{id}/disputes': () =>
+        fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' })),
+    });
+    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(screen.queryByText('No disputes for this game yet.')).toBeNull();
+  });
+
   it('requires a reason before sending', async () => {
     const app = renderDispute();
     fireEvent.press(await screen.findByRole('button', { name: 'Submit the dispute' }));

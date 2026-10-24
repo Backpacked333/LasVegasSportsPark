@@ -77,6 +77,13 @@ describe('SCR-C-23 RosterScreen', () => {
     });
   });
 
+  it('SPK-UX-009: roster completeness is stated in words, not by colour or glyph alone', async () => {
+    renderRoster();
+    expect(
+      await screen.findByLabelText(/^Roster (not )?complete: \d+ on the roster \(minimum \d+, maximum \d+\)$/),
+    ).toBeOnTheScreen();
+  });
+
   it('SPK-IAM-004: invites several recipients, each with its own key and outcome (partial completion)', async () => {
     let calls = 0;
     const app = renderRoster({
@@ -134,13 +141,16 @@ describe('SCR-C-23 RosterScreen', () => {
     const [first, second] = app.keysOf('POST', '/team-entries/{id}/invitations');
     expect(first).not.toEqual(second);
 
-    // Sending again only retries the failed recipient, under that recipient's same key.
+    // Sending again only retries the failed recipient. VALIDATION_FAILED is a definitive answer the
+    // API stores under the key and would replay, so the retry is that recipient's new intent (§4.9).
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
     });
     const keys = app.keysOf('POST', '/team-entries/{id}/invitations');
     expect(keys).toHaveLength(3);
-    expect(keys[2]).toBe(second);
+    expect(keys[2]).not.toBe(second);
+    expect(keys[2]).not.toBe(first);
+    expect(app.bodiesOf('POST', '/team-entries/{id}/invitations')[2]).toEqual(bodies[1]);
     await app.settle();
   });
 
@@ -267,6 +277,18 @@ describe('SCR-C-23 RosterScreen', () => {
     ).toBeOnTheScreen();
     expect(screen.queryByTestId('invite-form')).toBeNull();
     expect(app.requestsTo('GET', '/team-entries/{id}/roster')).toHaveLength(0);
+  });
+
+  it('SPK-UX-008: when GET /me fails, a captain sees its code and Try again, never "not available to you"', async () => {
+    renderRoster({
+      routes: routes({
+        'GET /me': () =>
+          fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' })),
+      }),
+    });
+    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(screen.queryByText(/Your captain manages it/)).toBeNull();
   });
 
   it('a refused invitation (ACCESS_DENIED) is shown as not available', async () => {

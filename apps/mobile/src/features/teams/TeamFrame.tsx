@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { useEffect } from 'react';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { useOpenedTeamEntries } from './opened-teams';
@@ -50,6 +50,22 @@ export function TeamFrame({
             {(ws) =>
               person.loading ? (
                 <StateView variant="loading" label="your role on this team" />
+              ) : person.error ? (
+                // Who the viewer is could not be read: say so with the code, never "not yours".
+                <QueryErrorView
+                  error={person.error}
+                  onRetry={person.refetch}
+                  unavailableOffline={unavailableOffline}
+                />
+              ) : person.paused ? (
+                <StateView
+                  variant="offline-stale"
+                  offline
+                  updatedAt={null}
+                  now={now}
+                  unavailableActions={unavailableOffline}
+                  onRetry={person.refetch}
+                />
               ) : (
                 children(ws, viewerOf(ws, person.personId, now), () => void workspace.refetch())
               )

@@ -29,7 +29,7 @@ import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, Detail, Section, Title } from '../../features/teams/ui';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type ResultRevision = Schema<'ResultRevision'>;
@@ -193,6 +193,11 @@ function ResultsContent({
                   <DisputeRow key={d.id} dispute={d} />
                 ))}
               </View>
+            </Section>
+          ) : disputes.data === undefined && disputes.error ? (
+            // A failed read is shown with its code, not as "no disputes" (SPK-UX-008).
+            <Section title="Disputes">
+              <QueryErrorView error={disputes.error} onRetry={() => void disputes.refetch()} />
             </Section>
           ) : null}
         </View>

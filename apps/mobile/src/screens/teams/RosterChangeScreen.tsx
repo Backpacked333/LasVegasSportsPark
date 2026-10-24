@@ -226,12 +226,15 @@ function RemovePlayer({
   const [personId, setPersonId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [attempted, setAttempted] = useState(false);
+  /** The person the last removal was sent for: success is shown for that person only. */
+  const [submitted, setSubmitted] = useState<string | null>(null);
   const change = useApiCommand('post', '/team-entries/{id}/roster', {
     invalidate: [WORKSPACE_KEY, ROSTER_KEY],
   });
   const submit = () => {
     setAttempted(true);
     if (!personId || !reason.trim()) return;
+    setSubmitted(personId);
     void change
       .submit({
         path: { id: workspace.entry.id },
@@ -240,9 +243,18 @@ function RemovePlayer({
           expectedRevision: workspace.entry.revision,
         },
       })
+      .then(() => {
+        setReason('');
+        setAttempted(false);
+      })
       .catch(() => undefined);
   };
-  const removed = change.data?.members.find((m) => m.personId === personId);
+  // Success only when the returned roster shows the submitted person ended (SPK-COMP-005).
+  const removed = change.data?.members.find(
+    (m) =>
+      m.personId === submitted &&
+      (m.status === 'removed' || (m.effectiveTo !== null && new Date(m.effectiveTo) <= now)),
+  );
   return (
     <View style={styles.group}>
       <RadioGroup label="Current player">
@@ -275,16 +287,21 @@ function RemovePlayer({
         disabled={!personId || offline}
         busy={change.isProcessing}
       />
-      {change.data ? (
+      {change.data && removed ? (
         <StatusBadge
           tone="success"
           label={
-            removed?.effectiveTo
+            removed.effectiveTo
               ? `Removed from ${formatDay(removed.effectiveTo)}`
               : 'Removed from the roster'
           }
           testID="change-success"
         />
+      ) : change.data && submitted ? (
+        <Body muted>
+          The roster the facility returned does not show this removal yet. Reload to see the
+          current roster.
+        </Body>
       ) : null}
       {change.error ? (
         <CommandFailure

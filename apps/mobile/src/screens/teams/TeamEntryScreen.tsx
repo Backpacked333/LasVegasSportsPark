@@ -329,11 +329,11 @@ function EntryContent({ prior }: { prior: Workspace | null }) {
 
 function RenewContent({ priorEntryId }: { priorEntryId: string }) {
   const prior = useWorkspace(priorEntryId);
-  if (
-    prior.data === undefined &&
-    prior.error &&
-    (prior.error.isNotFound || prior.error.isPermissionRestriction)
-  ) {
+  if (prior.data === undefined && prior.error && prior.error.isNotFound) {
+    // §4.10: a protected NOT_FOUND never implies the team exists or who captains it.
+    return <StateView variant="unavailable" />;
+  }
+  if (prior.data === undefined && prior.error && prior.error.isPermissionRestriction) {
     return (
       <StateView
         variant="unavailable"

@@ -15,7 +15,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay, formatInstant, ordinal, plural } from '../../features/teams/format';
 import type { Workspace } from '../../features/teams/queries';
@@ -24,7 +24,7 @@ import { fixtureStatus } from '../../features/teams/status';
 import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, Section, Title } from '../../features/teams/ui';
 import { ListRow } from '../../ui/ListRow';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { colors, spacing, type } from '../../ui/theme';
 
 /** The published component is nullable (reported); a null answer reads as "no official results". */
@@ -67,7 +67,28 @@ export function standingsRowLabel(row: StandingsRow, ours: boolean): string {
   return `${ordinal(row.position)}: ${row.teamName}${ours ? ' (your team)' : ''}, ${plural(row.points, 'point')}, played ${row.played}, won ${row.won}, drawn ${row.drawn}, lost ${row.lost}, goals ${row.goalsFor} for and ${row.goalsAgainst} against, difference ${row.goalDifference}`;
 }
 
+/** Above this text scale the table's fixed columns no longer fit: rows are stacked instead. */
+export const LARGE_TEXT_SCALE = 1.3;
+
 function StandingsTable({ standings, entryId }: { standings: Standings; entryId: string }) {
+  const { fontScale } = useWindowDimensions();
+  if (fontScale > LARGE_TEXT_SCALE) {
+    // SPK-UX-009 large text: one readable row per team instead of clipped numeric cells.
+    return (
+      <View accessibilityRole="list" testID="standings-stacked">
+        {standings.rows.map((row) => {
+          const ours = row.teamEntryId === entryId;
+          return (
+            <ListRow
+              key={row.teamEntryId}
+              title={standingsRowLabel(row, ours)}
+              testID={`standings-row-${row.teamEntryId}`}
+            />
+          );
+        })}
+      </View>
+    );
+  }
   return (
     <View style={styles.table}>
       <View
@@ -208,7 +229,15 @@ function Bracket({ workspace, names }: { workspace: Workspace; names: Map<string
       query: workspace.division ? { divisionId: workspace.division.id } : {},
     },
   });
-  const list = nodes.data ?? [];
+  if (nodes.data === undefined) {
+    // A failed bracket read says so with its code (SPK-UX-008); loading shows nothing yet.
+    return nodes.error ? (
+      <Section title="Bracket" testID="bracket">
+        <QueryErrorView error={nodes.error} onRetry={() => void nodes.refetch()} />
+      </Section>
+    ) : null;
+  }
+  const list = nodes.data;
   if (list.length === 0) return null;
   return (
     <Section title="Bracket" testID="bracket">
@@ -307,9 +336,9 @@ const styles = StyleSheet.create({
   },
   ours: { backgroundColor: colors.surface },
   head: { fontWeight: '700', color: colors.textMuted },
-  cellPos: { ...type.body, width: 28, color: colors.text },
+  cellPos: { ...type.body, minWidth: 28, flexShrink: 0, color: colors.text },
   cellTeam: { ...type.body, flex: 1, color: colors.text },
-  cell: { ...type.body, width: 34, textAlign: 'right', color: colors.text },
+  cell: { ...type.body, minWidth: 34, flexShrink: 0, textAlign: 'right', color: colors.text },
   bold: { fontWeight: '700' },
   tie: { gap: spacing.xs, paddingVertical: spacing.xs },
   step: { gap: 2, paddingLeft: spacing.sm },

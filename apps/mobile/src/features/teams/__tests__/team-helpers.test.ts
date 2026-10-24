@@ -260,7 +260,9 @@ describe('opened teams (session list, SCR-C-21)', () => {
 });
 
 describe('development payment methods (DEC-019)', () => {
-  it('exist in development builds only', () => {
+  // The release half is verified by scripts/check-release-bundle.mjs on the exported bundle
+  // ("pm_fake_" and "Development payment:" must be absent).
+  it('are offered in development builds', () => {
     expect(__DEV__).toBe(true);
     expect(DEV_CONTRIBUTION_PAYMENT_METHODS?.map((m) => m.token)).toContain('pm_fake_visa');
   });

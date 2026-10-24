@@ -109,10 +109,15 @@ function TeamRow({ entryId, onForget }: { entryId: string; onForget: () => void 
 
   const viewer = viewerOf(ws, me.data?.person?.id ?? null, now);
   const row = standings.data?.rows.find((r) => r.teamEntryId === entryId);
+  // Loading, a failed read and an empty table are three different things (SPK-UX-008).
   const standing =
-    row && standings.data && standings.data.sourceResultIds.length > 0
-      ? `${ordinal(row.position)} of ${standings.data.rows.length}`
-      : 'no official standing yet';
+    standings.data === undefined
+      ? standings.error
+        ? 'standing not available'
+        : 'standing loading'
+      : row && standings.data && standings.data.sourceResultIds.length > 0
+        ? `${ordinal(row.position)} of ${standings.data.rows.length}`
+        : 'no official standing yet';
   const age = workspace.updatedAt ? `. Updated ${formatAge(workspace.updatedAt, now)}` : '';
   return (
     <ListRow

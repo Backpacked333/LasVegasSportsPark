@@ -182,16 +182,13 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     await app.settle();
   });
 
-  it('renewal by someone who is not a prior captain is not available', async () => {
+  it('§4.10: a prior entry answered NOT_FOUND is generically not available, implying no team or captain', async () => {
     renderEntry(IDS.priorEntry, {
       'GET /team-entries/{id}': () =>
         fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' })),
     });
-    expect(
-      await screen.findByText(
-        'Renewing this team is not available to you. Only a captain of the prior entry can renew it.',
-      ),
-    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
+    expect(screen.queryByText(/captain/i)).toBeNull();
   });
 
   it('a renewal the API refuses (ACCESS_DENIED) is not available, without the error code', async () => {
