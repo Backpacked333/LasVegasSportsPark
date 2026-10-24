@@ -192,6 +192,99 @@ describe('disputed access reviews (SPK-IAM-005)', () => {
     ).toBe(404);
   });
 
+  async function restrictedGuardian() {
+    const people = await createOrganizationPeople(t, { guardianPermissions: ['view'] });
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const header = await authHeaderForPerson(t, support.personId);
+    const opened = await t.http
+      .post('/v1/access-reviews')
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({
+        subjectPersonId: people.child.personId,
+        reason: 'dispute',
+        effectiveTo: new Date(t.clock.now().getTime() + 24 * 3600_000).toISOString(),
+      });
+    expect(opened.status).toBe(201);
+    const decide = (body: Record<string, unknown>) =>
+      t.http
+        .post(`/v1/access-reviews/${opened.body.id}/decisions`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send(body);
+    const canView = () =>
+      authority.hasPermission(
+        t.organizationId,
+        people.adult.personId,
+        people.child.personId,
+        'view',
+      );
+    return { people, decide, canView };
+  }
+
+  it('SPK-IAM-005: restrictions left in place by a closed review can still be lifted', async () => {
+    const { people, decide, canView } = await restrictedGuardian();
+    expect((await decide({ kind: 'restrict', actorPersonId: people.adult.personId })).status).toBe(
+      201,
+    );
+    const closed = await decide({ kind: 'close', note: 'hearing done' });
+    expect(closed.status).toBe(201);
+    expect(closed.body.status).toBe('closed');
+    // closing never lifts silently
+    expect(await canView()).toBe(false);
+    const note = await decide({ kind: 'note', note: 'too late' });
+    expect(note.status).toBe(409);
+    expect(note.body.code).toBe('INVALID_TRANSITION');
+    const lifted = await decide({ kind: 'lift', note: 'order expired' });
+    expect(lifted.status).toBe(201);
+    expect(lifted.body.status).toBe('closed');
+    expect(lifted.body.decisions.map((d: { kind: string }) => d.kind)).toEqual([
+      'restrict',
+      'close',
+      'lift',
+    ]);
+    expect(lifted.body.decisions[2].affectedGrantIds).toEqual([people.guardianGrants.view]);
+    expect(await canView()).toBe(true);
+  });
+
+  it('SPK-IAM-005: a restriction with an end time stops suspending at that time, without a lift', async () => {
+    const start = t.clock.now();
+    const { people, decide, canView } = await restrictedGuardian();
+    const restricted = await decide({
+      kind: 'restrict',
+      actorPersonId: people.adult.personId,
+      effectiveTo: new Date(start.getTime() + 3600_000).toISOString(),
+    });
+    expect(restricted.status).toBe(201);
+    const grant = await t.db
+      .selectFrom('access_grants')
+      .select(['suspended_at', 'suspended_until'])
+      .where('id', '=', people.guardianGrants.view as string)
+      .executeTakeFirstOrThrow();
+    expect(grant.suspended_until).not.toBeNull();
+    try {
+      expect(await canView()).toBe(false);
+      t.clock.advance(2 * 3600_000);
+      expect(await canView()).toBe(true);
+      expect(await authority.authoritiesOf(t.organizationId, people.adult.personId)).toEqual([
+        { subjectPersonId: people.child.personId, permissions: ['view'] },
+      ]);
+      // an expired restriction can be applied again, and an end time in the past is refused
+      const past = await decide({
+        kind: 'restrict',
+        actorPersonId: people.adult.personId,
+        effectiveTo: new Date(t.clock.now().getTime() - 1).toISOString(),
+      });
+      expect(past.status).toBe(400);
+      const again = await decide({ kind: 'restrict', actorPersonId: people.adult.personId });
+      expect(again.status).toBe(201);
+      expect(again.body.decisions.at(-1).affectedGrantIds).toEqual([people.guardianGrants.view]);
+      expect(await canView()).toBe(false);
+    } finally {
+      t.clock.set(start);
+    }
+  });
+
   it('a review cannot be opened by someone with no authority over the subject, and restrict needs a target', async () => {
     const people = await createOrganizationPeople(t);
     const stranger = await createOrganizationPeople(t);

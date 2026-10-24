@@ -19,6 +19,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  ensureUpdated,
   snapshotActor,
   type Clock,
   type Trx,
@@ -33,11 +34,13 @@ import {
   newToken,
   normalizeContactValue,
   personColumns,
+  staffAuthorityApplies,
   toAccessGrant,
   toInvitation,
   toRelationship,
   type PersonRow,
 } from '../identity.shared';
+import { buildPrincipal } from './principal-resolver.service';
 import { RelationshipAuthority } from './relationship-authority.service';
 import { RelationshipsService } from './relationships.service';
 
@@ -48,11 +51,19 @@ export interface InvitationAccepted {
   droppedPermissions: GrantPermissionValue[];
 }
 
+type InvitationScope =
+  { type: 'person'; personId: string } | { type: 'household'; householdId: string };
+
+/** How the inviter was authorized when the invitation was issued (stored on `invited_by`). */
+type InvitationBasis = 'staff_role' | 'delegated';
+
 /**
  * Invitations (SPK-IAM-004). The record keeps the inviting actor, recipient, scope, requested
- * permissions, expiry, acceptance and revocation. Acceptance grants only the requested
- * permissions the inviter still holds at that moment (staff may grant any); the rest are dropped
- * and reported, never silently implied.
+ * permissions, expiry, acceptance and revocation; the people the scope covers are fixed at issue
+ * (`invitation_subjects`, §4.5). Acceptance grants only to those people, and only the requested
+ * permissions the inviter is still authorized for at that moment: a staff inviter must still hold
+ * a staff role that covers invitations, a customer inviter must still hold each permission as a
+ * guardian. The rest are dropped and reported, never silently implied.
  */
 @Injectable()
 export class InvitationsService {
@@ -74,26 +85,35 @@ export class InvitationsService {
   ): Promise<Invitation & { token: string }> {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
-    const isStaff = principal.kind === 'staff' || principal.kind === 'system';
+    // The branch follows the authority actually used, not principal.kind (SPK-IAM acceptance
+    // example 3): a coach who is also a parent invites as a parent.
+    const viaStaffRole = await staffAuthorityApplies(
+      this.authorization,
+      principal,
+      IdentityActions.createInvitation,
+      organizationId,
+    );
     return runInTransaction(this.uow, async ({ trx }) => {
-      const subjects = await this.scopeSubjects(trx, organizationId, input.scope);
-      if (isStaff) {
-        await this.authorization.require(principal, IdentityActions.createInvitation, {
-          type: 'invitation',
-          organizationId,
-        });
+      let subjects: string[];
+      if (viaStaffRole) {
+        subjects = await this.scopeSubjects(trx, organizationId, input.scope);
       } else {
-        if (!principal.personId) throw errors.protectedNotFound('person');
+        if (!principal.personId) throw errors.protectedNotFound(input.scope.type);
+        subjects = await this.scopeSubjects(trx, organizationId, input.scope, principal.personId);
+        // §4.10: the target names the scope record, so a denial reads exactly like a missing one.
         await this.authorization.require(principal, IdentityActions.createInvitation, {
-          type: 'invitation',
+          type: input.scope.type,
           organizationId,
           subjectPersonIds: subjects,
           protected: true,
         });
-        // Delegation: a customer may only invite others into permissions they hold themselves.
+        // Delegation (SPK-IAM-001/003/004; DEC-089 proposed default, pending): only a guardian
+        // may invite others, and only into permissions they hold as guardian. A delegate or
+        // caregiver cannot pass their access on, and nobody can mint a guardian relationship from
+        // a delegate's grant.
         for (const subject of subjects) {
           for (const permission of input.requestedPermissions) {
-            const held = await this.authority.hasPermission(
+            const held = await this.authority.hasPermissionAsGuardian(
               organizationId,
               principal.personId,
               subject,
@@ -102,7 +122,7 @@ export class InvitationsService {
             );
             if (!held) {
               throw errors.participantAuthorityRequired(
-                `You do not hold '${permission}' over this person and cannot delegate it.`,
+                `Only a guardian may invite others, and only into permissions held as guardian ('${permission}').`,
               );
             }
           }
@@ -111,17 +131,24 @@ export class InvitationsService {
       let recipientPersonId: string | null = null;
       if (input.recipientPersonId) {
         const recipient = await this.loadPerson(trx, organizationId, input.recipientPersonId);
-        if (!recipient || recipient.status !== 'active') {
-          throw errors.notFound('person', input.recipientPersonId);
-        }
-        if (recipient.kind !== 'adult') {
-          throw errors.validation('Only an adult can be invited to hold authority.');
+        if (viaStaffRole) {
+          if (!recipient || recipient.status !== 'active') {
+            throw errors.notFound('person', input.recipientPersonId);
+          }
+          if (recipient.kind !== 'adult') {
+            throw errors.validation('Only an adult can be invited to hold authority.');
+          }
+        } else if (!recipient || recipient.status !== 'active' || recipient.kind !== 'adult') {
+          // §4.10: a customer learns nothing about a person they cannot invite (missing,
+          // inactive or a child all read the same).
+          throw errors.protectedNotFound('person');
         }
         if (subjects.includes(recipient.id)) {
           throw errors.validation('A person cannot be invited over themselves.');
         }
         recipientPersonId = recipient.id;
       }
+      const basis: InvitationBasis = viaStaffRole ? 'staff_role' : 'delegated';
       const id = newId();
       const token = newToken();
       const now = this.clock.now();
@@ -130,7 +157,7 @@ export class InvitationsService {
         .values({
           id,
           organization_id: organizationId,
-          invited_by: json(snapshotActor(principal)),
+          invited_by: json({ ...snapshotActor(principal), basis }),
           invited_by_person_id: principal.personId,
           recipient_person_id: recipientPersonId,
           recipient_contact_kind: input.recipientContact?.kind ?? null,
@@ -151,6 +178,17 @@ export class InvitationsService {
           revocation_reason: null,
         })
         .execute();
+      // SPK-IAM-004, §4.5: the inviter authorized exactly these people; acceptance never widens it.
+      await trx
+        .insertInto('invitation_subjects')
+        .values(
+          subjects.map((personId) => ({
+            organization_id: organizationId,
+            invitation_id: id,
+            person_id: personId,
+          })),
+        )
+        .execute();
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -162,6 +200,8 @@ export class InvitationsService {
         correlationId,
         details: {
           scope: input.scope,
+          subjects,
+          basis,
           relationshipKind: input.relationshipKind,
           requestedPermissions: input.requestedPermissions,
           recipientPersonId,
@@ -195,7 +235,9 @@ export class InvitationsService {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     const outcome = await runInTransaction(this.uow, async ({ trx }) => {
-      const invitation = await this.load(trx, organizationId, id);
+      // §4.9, SPK-IAM-004: locked, so a concurrent accept or revoke waits and then sees this
+      // one's outcome (an invitation is accepted once, by one person).
+      const invitation = await this.load(trx, organizationId, id, { lock: true });
       // Token mismatch and cross-organization ids look identical: not found (§4.10).
       if (!invitation || invitation.token_hash !== hashToken(token)) {
         throw errors.protectedNotFound('invitation');
@@ -235,18 +277,22 @@ export class InvitationsService {
           'Only an active adult can accept an invitation to hold authority.',
         );
       }
-      const subjects = await this.scopeSubjects(
+      // SPK-IAM-004, §4.5: only the people fixed at issue, minus any that left the scope since.
+      const { subjects, droppedSubjects } = await this.acceptanceSubjects(
         trx,
         organizationId,
-        invitation.scope_type === 'person'
-          ? { type: 'person', personId: invitation.scope_person_id as string }
-          : { type: 'household', householdId: invitation.scope_household_id as string },
+        invitation,
       );
+      if (subjects.length === 0) {
+        throw errors.validation('Nobody this invitation was issued for is still in its scope.', {
+          droppedSubjects,
+        });
+      }
       if (subjects.includes(acceptor.id)) {
         throw errors.validation('A person cannot accept authority over themselves.');
       }
 
-      const inviterIsStaff = (invitation.invited_by as { kind?: string }).kind !== 'customer';
+      const inviter = await this.inviterAuthority(trx, organizationId, invitation);
       const inviterId = invitation.invited_by_person_id;
       const relationships: Relationship[] = [];
       const grants: AccessGrant[] = [];
@@ -257,9 +303,10 @@ export class InvitationsService {
         const authorized: GrantPermissionValue[] = [];
         for (const permission of invitation.requested_permissions) {
           const ok =
-            inviterIsStaff ||
-            (inviterId !== null &&
-              (await this.authority.hasPermission(
+            inviter === 'authorized' ||
+            (inviter === 'delegated' &&
+              inviterId !== null &&
+              (await this.authority.hasPermissionAsGuardian(
                 organizationId,
                 inviterId,
                 subject,
@@ -269,6 +316,8 @@ export class InvitationsService {
           if (ok) authorized.push(permission);
           else dropped.add(permission);
         }
+        // Nothing authorized for this person: no relationship either (nothing is implied).
+        if (authorized.length === 0) continue;
         const result = await this.relationships.ensureAuthority(trx, principal, organizationId, {
           actorPersonId: acceptor.id,
           subjectPersonId: subject,
@@ -284,7 +333,7 @@ export class InvitationsService {
         }
         grantIds.push(...result.createdGrantIds);
       }
-      await trx
+      const accepted = await trx
         .updateTable('invitations')
         .set({
           status: next,
@@ -295,7 +344,10 @@ export class InvitationsService {
         })
         .where('id', '=', id)
         .where('revision', '=', invitation.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(accepted.numUpdatedRows, () =>
+        errors.staleRevision(invitation.revision, invitation.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -305,7 +357,13 @@ export class InvitationsService {
         beforeRevision: invitation.revision,
         afterRevision: invitation.revision + 1,
         correlationId,
-        details: { granted: [...grantedUnion], dropped: [...dropped], subjects },
+        details: {
+          granted: [...grantedUnion],
+          dropped: [...dropped],
+          subjects,
+          droppedSubjects,
+          inviterAuthority: inviter,
+        },
       });
       await this.outbox.enqueue(trx, IdentityEvents.invitationAccepted, {
         organizationId,
@@ -343,7 +401,8 @@ export class InvitationsService {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
-      const invitation = await this.load(trx, organizationId, id);
+      // §4.9: locked against a concurrent accept (a revoked invitation never grants anything).
+      const invitation = await this.load(trx, organizationId, id, { lock: true });
       if (!invitation) throw errors.protectedNotFound('invitation');
       await this.authorization.require(principal, IdentityActions.revokeInvitation, {
         type: 'invitation',
@@ -355,7 +414,7 @@ export class InvitationsService {
       assertExpectedRevision(input.expectedRevision, invitation.revision);
       const next = InvitationMachine.next(invitation.status, 'revoke');
       const now = this.clock.now();
-      await trx
+      const revoked = await trx
         .updateTable('invitations')
         .set({
           status: next,
@@ -366,7 +425,10 @@ export class InvitationsService {
         })
         .where('id', '=', id)
         .where('revision', '=', invitation.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(revoked.numUpdatedRows, () =>
+        errors.staleRevision(invitation.revision, invitation.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -398,12 +460,15 @@ export class InvitationsService {
     correlationId: string | null,
   ): Promise<void> {
     const next = InvitationMachine.next(invitation.status, 'expire');
-    await trx
+    const expired = await trx
       .updateTable('invitations')
       .set({ status: next, revision: invitation.revision + 1 })
       .where('id', '=', invitation.id)
       .where('revision', '=', invitation.revision)
-      .execute();
+      .executeTakeFirst();
+    ensureUpdated(expired.numUpdatedRows, () =>
+      errors.staleRevision(invitation.revision, invitation.revision + 1),
+    );
     await this.audit.record(trx, {
       organizationId: invitation.organization_id,
       actor: principal,
@@ -417,11 +482,16 @@ export class InvitationsService {
     });
   }
 
-  /** The people an invitation scope covers: one person, or the child members of a household. */
+  /**
+   * The people an invitation scope covers now: one person, or the child members of a household.
+   * `memberPersonId` is set for a customer: an empty household then reads as not-found unless the
+   * customer belongs to it (§4.10).
+   */
   private async scopeSubjects(
     trx: Trx,
     organizationId: string,
-    scope: { type: 'person'; personId: string } | { type: 'household'; householdId: string },
+    scope: InvitationScope,
+    memberPersonId?: string,
   ): Promise<string[]> {
     if (scope.type === 'person') {
       const person = await this.loadPerson(trx, organizationId, scope.personId);
@@ -435,6 +505,28 @@ export class InvitationsService {
       .where('id', '=', scope.householdId)
       .executeTakeFirst();
     if (!household) throw errors.protectedNotFound('household');
+    const members = await this.householdChildMembers(trx, organizationId, scope.householdId);
+    if (members.length === 0) {
+      if (memberPersonId !== undefined) {
+        const member = await trx
+          .selectFrom('household_memberships')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('household_id', '=', scope.householdId)
+          .where('person_id', '=', memberPersonId)
+          .executeTakeFirst();
+        if (!member) throw errors.protectedNotFound('household');
+      }
+      throw errors.validation('The household has no child members to hold authority over.');
+    }
+    return members;
+  }
+
+  private async householdChildMembers(
+    trx: Trx,
+    organizationId: string,
+    householdId: string,
+  ): Promise<string[]> {
     const members = await trx
       .selectFrom('household_memberships')
       .innerJoin('persons', (join) =>
@@ -444,15 +536,114 @@ export class InvitationsService {
       )
       .select('persons.id')
       .where('household_memberships.organization_id', '=', organizationId)
-      .where('household_memberships.household_id', '=', scope.householdId)
+      .where('household_memberships.household_id', '=', householdId)
       .where('persons.kind', '=', 'child')
       .where('persons.status', '=', 'active')
       .orderBy('persons.id')
       .execute();
-    if (members.length === 0) {
-      throw errors.validation('The household has no child members to hold authority over.');
-    }
     return members.map((m) => m.id);
+  }
+
+  /**
+   * SPK-IAM-004, §4.5: the subjects fixed at issue that are still in scope at acceptance (still
+   * active; for a household scope, still a child member). A child added to the household after
+   * issue is never included; the ones that left are reported as dropped.
+   */
+  private async acceptanceSubjects(
+    trx: Trx,
+    organizationId: string,
+    invitation: Selectable<InvitationsTable>,
+  ): Promise<{ subjects: string[]; droppedSubjects: string[] }> {
+    const snapshot = (
+      await trx
+        .selectFrom('invitation_subjects')
+        .select('person_id')
+        .where('organization_id', '=', organizationId)
+        .where('invitation_id', '=', invitation.id)
+        .orderBy('person_id')
+        .execute()
+    ).map((r) => r.person_id);
+    let inScope: Set<string>;
+    if (invitation.scope_type === 'household') {
+      inScope = new Set(
+        await this.householdChildMembers(
+          trx,
+          organizationId,
+          invitation.scope_household_id as string,
+        ),
+      );
+    } else {
+      const active =
+        snapshot.length === 0
+          ? []
+          : await trx
+              .selectFrom('persons')
+              .select('id')
+              .where('organization_id', '=', organizationId)
+              .where('id', 'in', snapshot)
+              .where('status', '=', 'active')
+              .execute();
+      inScope = new Set(active.map((p) => p.id));
+    }
+    return {
+      subjects: snapshot.filter((p) => inScope.has(p)),
+      droppedSubjects: snapshot.filter((p) => !inScope.has(p)),
+    };
+  }
+
+  /**
+   * Whether the inviter is still authorized at acceptance (SPK-IAM-004). A staff-role invitation
+   * needs the inviter to still hold a staff role covering invitations at the clock, exactly as a
+   * customer inviter must still hold each permission ('delegated': checked per permission by the
+   * caller). The system is always authorized.
+   */
+  private async inviterAuthority(
+    trx: Trx,
+    organizationId: string,
+    invitation: Selectable<InvitationsTable>,
+  ): Promise<'authorized' | 'delegated' | 'lapsed'> {
+    const by = invitation.invited_by as {
+      kind?: string;
+      basis?: InvitationBasis;
+      accountId?: string | null;
+    };
+    // Rows written before `basis` existed: a non-customer inviter could only pass the staff-role
+    // check, so it means 'staff_role'.
+    const basis: InvitationBasis =
+      by.basis ?? (by.kind === 'customer' ? 'delegated' : 'staff_role');
+    if (basis === 'delegated') return 'delegated';
+    if (by.kind === 'system') return 'authorized';
+    const inviterId = invitation.invited_by_person_id;
+    if (!inviterId) return 'lapsed';
+    const now = this.clock.now();
+    const person = await trx
+      .selectFrom('persons')
+      .select('status')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', inviterId)
+      .executeTakeFirst();
+    if (!person || person.status !== 'active') return 'lapsed';
+    const memberships = await trx
+      .selectFrom('staff_memberships')
+      .select(['roles', 'facility_ids'])
+      .where('organization_id', '=', organizationId)
+      .where('person_id', '=', inviterId)
+      .where('status', '=', 'active')
+      .where('effective_from', '<=', now)
+      .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', now)]))
+      .execute();
+    const inviterPrincipal = buildPrincipal(
+      { id: by.accountId ?? inviterId, organizationId, personId: inviterId },
+      memberships.map((m) => ({ roles: m.roles, facilityIds: m.facility_ids })),
+      null,
+    );
+    const still = await staffAuthorityApplies(
+      this.authorization,
+      inviterPrincipal,
+      IdentityActions.createInvitation,
+      organizationId,
+    );
+    return still ? 'authorized' : 'lapsed';
   }
 
   private async assertVerifiedContact(
@@ -478,13 +669,19 @@ export class InvitationsService {
     }
   }
 
-  private async load(trx: Trx, organizationId: string, id: string) {
-    return trx
+  private async load(
+    trx: Trx,
+    organizationId: string,
+    id: string,
+    options: { lock?: boolean } = {},
+  ) {
+    let query = trx
       .selectFrom('invitations')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('id', '=', id)
-      .executeTakeFirst();
+      .where('id', '=', id);
+    if (options.lock) query = query.forUpdate();
+    return query.executeTakeFirst();
   }
 
   private async loadPerson(

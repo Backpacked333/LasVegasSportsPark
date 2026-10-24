@@ -15,10 +15,12 @@ import { currentTransaction } from '../identity.transaction-context';
 export const CHILD_SELF_EXCLUDED: readonly GrantPermissionValue[] = ['pay', 'collect'];
 
 /**
- * RELATIONSHIP_AUTHORITY_IMPL (SPK-IAM-003/006). Authority is exactly one thing: an access_grants
- * row that is unrevoked, unsuspended, inside its effective dates, on a relationship that is active,
- * evaluated at the injected clock. Revocation and suspension are therefore visible on the very next
- * check without caching. Household membership, surname or shared contact points never count.
+ * RELATIONSHIP_AUTHORITY_IMPL (SPK-IAM-003/005/006). Authority is exactly one thing: an
+ * access_grants row that is unrevoked, not under a suspension in force, inside its own effective
+ * dates, on a relationship that is active and inside its relationship's effective dates, evaluated
+ * at the injected clock. Revocation, suspension and the end of a time-bounded relationship are
+ * therefore visible on the very next check without caching. Household membership, surname or
+ * shared contact points never count.
  */
 @Injectable()
 export class RelationshipAuthority implements RelationshipAuthorityPort, AuthorityLookupPort {
@@ -71,32 +73,40 @@ export class RelationshipAuthority implements RelationshipAuthorityPort, Authori
     return rows.map((r) => r.actor_person_id);
   }
 
+  /**
+   * Module-internal (not on AuthorityLookupPort): true only when the permission is held through a
+   * relationship of kind `guardian`. Customer invitations are limited to guardians (DEC-089,
+   * proposed default): a delegate or caregiver cannot hand their access on (SPK-IAM-001/003/004).
+   */
+  async hasPermissionAsGuardian(
+    organizationId: string,
+    actorPersonId: string,
+    subjectPersonId: string,
+    permission: GrantPermissionValue,
+    trx?: Trx,
+  ): Promise<boolean> {
+    if (actorPersonId === subjectPersonId) return false;
+    const row = await this.effectiveGrants(
+      trx ?? currentTransaction() ?? this.db,
+      organizationId,
+      subjectPersonId,
+      permission,
+    )
+      .where('access_grants.actor_person_id', '=', actorPersonId)
+      .where('relationships.kind', '=', 'guardian')
+      .select('access_grants.id')
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
   /** Every effective permission the actor currently holds, grouped by subject (for GET /me). */
   async authoritiesOf(
     organizationId: string,
     actorPersonId: string,
   ): Promise<Array<{ subjectPersonId: string; permissions: GrantPermissionValue[] }>> {
-    const now = this.clock.now();
-    const rows = await this.db
-      .selectFrom('access_grants')
-      .innerJoin('relationships', (join) =>
-        join
-          .onRef('relationships.organization_id', '=', 'access_grants.organization_id')
-          .onRef('relationships.id', '=', 'access_grants.relationship_id'),
-      )
+    const rows = await this.effectiveGrantRows(this.db, organizationId)
       .select(['access_grants.subject_person_id', 'access_grants.permission'])
-      .where('access_grants.organization_id', '=', organizationId)
       .where('access_grants.actor_person_id', '=', actorPersonId)
-      .where('access_grants.revoked_at', 'is', null)
-      .where('access_grants.suspended_at', 'is', null)
-      .where('access_grants.effective_from', '<=', now)
-      .where((eb) =>
-        eb.or([
-          eb('access_grants.effective_to', 'is', null),
-          eb('access_grants.effective_to', '>', now),
-        ]),
-      )
-      .where('relationships.status', '=', 'active')
       .orderBy('access_grants.subject_person_id')
       .orderBy('access_grants.permission')
       .execute();
@@ -118,26 +128,51 @@ export class RelationshipAuthority implements RelationshipAuthorityPort, Authori
     subjectPersonId: string,
     permission: GrantPermissionValue,
   ) {
-    const now = this.clock.now();
-    return db
-      .selectFrom('access_grants')
-      .innerJoin('relationships', (join) =>
-        join
-          .onRef('relationships.organization_id', '=', 'access_grants.organization_id')
-          .onRef('relationships.id', '=', 'access_grants.relationship_id'),
-      )
-      .where('access_grants.organization_id', '=', organizationId)
+    return this.effectiveGrantRows(db, organizationId)
       .where('access_grants.subject_person_id', '=', subjectPersonId)
-      .where('access_grants.permission', '=', permission)
-      .where('access_grants.revoked_at', 'is', null)
-      .where('access_grants.suspended_at', 'is', null)
-      .where('access_grants.effective_from', '<=', now)
-      .where((eb) =>
-        eb.or([
-          eb('access_grants.effective_to', 'is', null),
-          eb('access_grants.effective_to', '>', now),
-        ]),
-      )
-      .where('relationships.status', '=', 'active');
+      .where('access_grants.permission', '=', permission);
+  }
+
+  /** The one effectivity rule, in SQL (mirrors `isGrantEffective` plus the relationship window). */
+  private effectiveGrantRows(db: Db | Trx, organizationId: string) {
+    const now = this.clock.now();
+    return (
+      db
+        .selectFrom('access_grants')
+        .innerJoin('relationships', (join) =>
+          join
+            .onRef('relationships.organization_id', '=', 'access_grants.organization_id')
+            .onRef('relationships.id', '=', 'access_grants.relationship_id'),
+        )
+        .where('access_grants.organization_id', '=', organizationId)
+        .where('access_grants.revoked_at', 'is', null)
+        // SPK-IAM-005: a suspension holds until its end time (migration 0102) or a lift.
+        .where((eb) =>
+          eb.or([
+            eb('access_grants.suspended_at', 'is', null),
+            eb.and([
+              eb('access_grants.suspended_until', 'is not', null),
+              eb('access_grants.suspended_until', '<=', now),
+            ]),
+          ]),
+        )
+        .where('access_grants.effective_from', '<=', now)
+        .where((eb) =>
+          eb.or([
+            eb('access_grants.effective_to', 'is', null),
+            eb('access_grants.effective_to', '>', now),
+          ]),
+        )
+        .where('relationships.status', '=', 'active')
+        // SPK-IAM-003/006: the relationship's own dates bound every grant on it, whatever the
+        // grant rows say (a grant added later never outlives a time-bounded relationship).
+        .where('relationships.effective_from', '<=', now)
+        .where((eb) =>
+          eb.or([
+            eb('relationships.effective_to', 'is', null),
+            eb('relationships.effective_to', '>', now),
+          ]),
+        )
+    );
   }
 }

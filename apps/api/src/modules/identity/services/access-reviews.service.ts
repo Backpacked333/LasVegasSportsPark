@@ -7,7 +7,7 @@ import {
   type OpenAccessReviewInput,
   type Principal,
 } from '@sportspark/contracts';
-import { json, type AccessReviewStatus, type Db } from '@sportspark/db';
+import { isUniqueViolation, json, type AccessReviewStatus, type Db } from '@sportspark/db';
 import {
   AuditWriter,
   AuthorizationService,
@@ -16,6 +16,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  ensureUpdated,
   snapshotActor,
   type Clock,
   type Trx,
@@ -24,12 +25,14 @@ import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { AccessReviewMachine } from '../identity.machines';
-import { toAccessReview } from '../identity.shared';
+import { isSuspendedAt, toAccessReview } from '../identity.shared';
 
 /**
  * Disputed-access reviews (SPK-IAM-005). A restricted set of staff roles owns the workflow;
- * temporary restrictions suspend grants without deleting them, every decision is an append-only
- * history row, and nothing here consults household membership to resolve a dispute.
+ * temporary restrictions suspend grants without deleting them (until the restriction's
+ * `effectiveTo`, or until lifted), every decision is an append-only history row, and nothing here
+ * consults household membership to resolve a dispute. Decisions on one review are serialized by
+ * a row lock (§4.9).
  */
 @Injectable()
 export class AccessReviewsService {
@@ -57,8 +60,9 @@ export class AccessReviewsService {
         .where('id', '=', input.subjectPersonId)
         .executeTakeFirst();
       if (!subject) throw errors.protectedNotFound('person');
+      // §4.10: the target is the person, so a denial reads exactly like a missing person.
       await this.authorization.require(principal, IdentityActions.openAccessReview, {
-        type: 'access_review',
+        type: 'person',
         organizationId,
         subjectPersonIds: [input.subjectPersonId],
         protected: true,
@@ -143,11 +147,14 @@ export class AccessReviewsService {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9: decisions on one review are serialized, so the decision sequence is exact and a
+      // concurrent decision made against the same revision fails with STALE_REVISION.
       const review = await trx
         .selectFrom('access_reviews')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
+        .forUpdate()
         .executeTakeFirst();
       if (!review) throw errors.protectedNotFound('access_review');
       await this.authorization.require(principal, IdentityActions.decideAccessReview, {
@@ -157,7 +164,9 @@ export class AccessReviewsService {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, review.revision);
-      if (review.status === 'closed') {
+      // SPK-IAM-005: a closed review takes no further decisions except lifting the restrictions it
+      // left in place (closing never lifts them silently; the lift is its own recorded decision).
+      if (review.status === 'closed' && input.kind !== 'lift') {
         throw errors.invalidTransition('AccessReview', 'closed', input.kind);
       }
       const now = this.clock.now();
@@ -167,19 +176,28 @@ export class AccessReviewsService {
 
       switch (input.kind) {
         case 'restrict': {
+          // SPK-IAM-005 effective dates: a restriction with an end time stops on its own.
+          const suspendedUntil = input.effectiveTo ? new Date(input.effectiveTo) : null;
+          if (suspendedUntil !== null && suspendedUntil.getTime() <= now.getTime()) {
+            throw errors.validation('A restriction must end after it starts.', {
+              effectiveTo: input.effectiveTo,
+            });
+          }
           const grants = await this.targetGrants(
             trx,
             organizationId,
             review.subject_person_id,
             input,
           );
-          const toSuspend = grants.filter((g) => g.suspended_at === null && g.revoked_at === null);
+          // A suspension whose window has passed no longer holds, so it may be applied again.
+          const toSuspend = grants.filter((g) => g.revoked_at === null && !isSuspendedAt(g, now));
           affectedGrantIds = toSuspend.map((g) => g.id);
           if (affectedGrantIds.length > 0) {
             await trx
               .updateTable('access_grants')
               .set({
                 suspended_at: now,
+                suspended_until: suspendedUntil,
                 suspended_by_review_id: id,
                 suspension_reason: input.note ?? review.reason,
               })
@@ -213,7 +231,12 @@ export class AccessReviewsService {
           if (affectedGrantIds.length > 0) {
             await trx
               .updateTable('access_grants')
-              .set({ suspended_at: null, suspended_by_review_id: null, suspension_reason: null })
+              .set({
+                suspended_at: null,
+                suspended_until: null,
+                suspended_by_review_id: null,
+                suspension_reason: null,
+              })
               .where('id', 'in', affectedGrantIds)
               .execute();
             await this.outbox.enqueue(trx, IdentityEvents.accessRestrictionLifted, {
@@ -277,28 +300,38 @@ export class AccessReviewsService {
           ).n,
         ) + 1;
       const decisionId = newId();
-      await trx
-        .insertInto('access_review_decisions')
-        .values({
-          id: decisionId,
-          organization_id: organizationId,
-          review_id: id,
-          sequence,
-          kind: input.kind,
-          decided_by: json(snapshotActor(principal)),
-          note: input.note ?? null,
-          affected_grant_ids: affectedGrantIds,
-          effective_from: now,
-          effective_to: input.effectiveTo ? new Date(input.effectiveTo) : null,
-          details: json({ actorPersonId: input.actorPersonId ?? null }),
-        })
-        .execute();
-      await trx
+      try {
+        await trx
+          .insertInto('access_review_decisions')
+          .values({
+            id: decisionId,
+            organization_id: organizationId,
+            review_id: id,
+            sequence,
+            kind: input.kind,
+            decided_by: json(snapshotActor(principal)),
+            note: input.note ?? null,
+            affected_grant_ids: affectedGrantIds,
+            effective_from: now,
+            effective_to: input.effectiveTo ? new Date(input.effectiveTo) : null,
+            details: json({ actorPersonId: input.actorPersonId ?? null }),
+          })
+          .execute();
+      } catch (error) {
+        // Backstop for the row lock: another decision took this sequence number first.
+        if (isUniqueViolation(error))
+          throw errors.staleRevision(review.revision, review.revision + 1);
+        throw error;
+      }
+      const updated = await trx
         .updateTable('access_reviews')
         .set({ ...patch, status, revision: review.revision + 1 })
         .where('id', '=', id)
         .where('revision', '=', review.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(updated.numUpdatedRows, () =>
+        errors.staleRevision(review.revision, review.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,

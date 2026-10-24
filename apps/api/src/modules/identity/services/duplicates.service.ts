@@ -19,6 +19,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  ensureUpdated,
   snapshotActor,
   type Clock,
   type Trx,
@@ -40,6 +41,10 @@ export interface MergeSummary {
   grantsRevokedAsDuplicate: number;
   unverifiedRelationshipsSkipped: number;
   unverifiedGrantsSkipped: number;
+  /** Self-service relationships over the survivor, ended because nobody verified them. */
+  survivorUnverifiedRelationshipsEnded: number;
+  /** The survivor's self-service creator privilege was cleared (it would reach merged history). */
+  survivorCreatorPrivilegeCleared: boolean;
   householdMembershipsMoved: number;
   staffMembershipsMoved: number;
   pendingInvitationsRevoked: number;
@@ -49,12 +54,24 @@ export interface MergeSummary {
 }
 
 /**
+ * Authority nobody verified: a customer's own assertion (self-service guardianship of a child they
+ * created; guardian verification policy pending §6.6) or legacy data carried in by a migration.
+ * A merge never carries it across the pair (SPK-IAM-002, SPK-IAM-007).
+ */
+const UNVERIFIED_AUTHORITY_SOURCES: ReadonlySet<string> = new Set(['self_service', 'import']);
+
+/**
  * Duplicate review and merge (SPK-IAM-007). Detection (PeopleService) and staff flagging only
  * produce candidates. A merge is a system-administrator command that keeps the merged person's
  * row (status 'merged', pointer to the survivor) so participation, financial ownership and source
  * identifiers held by other modules stay resolvable, re-points verified authority to the survivor,
- * and never imports unverified permissions: imported relationships and pending invitations or
- * claims addressed to the merged person are ended, not transferred.
+ * and never imports unverified permissions: self-service and imported relationships and grants on
+ * the merged person are ended, not transferred; self-service relationships over the survivor end
+ * and the survivor's self-service creator privilege is cleared (a legitimate self-service parent
+ * re-establishes access through a claim or a staff grant, and the merge summary shows staff who
+ * needs one); pending invitations or claims addressed to the merged person are revoked. A child
+ * record never survives an adult (kind cannot change later, and a child cannot hold an account's
+ * authority or a staff role).
  */
 @Injectable()
 export class DuplicatesService {
@@ -153,11 +170,12 @@ export class DuplicatesService {
       organizationId,
     });
     return runInTransaction(this.uow, async ({ trx }) => {
-      const candidate = await this.load(trx, organizationId, id);
+      // §4.9: locked against a concurrent merge or dismiss of the same candidate.
+      const candidate = await this.load(trx, organizationId, id, { lock: true });
       assertExpectedRevision(input.expectedRevision, candidate.revision);
       const next = DuplicateCandidateMachine.next(candidate.status, 'dismiss');
       const now = this.clock.now();
-      await trx
+      const dismissed = await trx
         .updateTable('duplicate_candidates')
         .set({
           status: next,
@@ -168,7 +186,10 @@ export class DuplicatesService {
         })
         .where('id', '=', id)
         .where('revision', '=', candidate.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(dismissed.numUpdatedRows, () =>
+        errors.staleRevision(candidate.revision, candidate.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -198,7 +219,8 @@ export class DuplicatesService {
       organizationId,
     });
     return runInTransaction(this.uow, async ({ trx }) => {
-      const candidate = await this.load(trx, organizationId, candidateId);
+      // §4.9: the candidate, then both persons, are locked for the whole merge.
+      const candidate = await this.load(trx, organizationId, candidateId, { lock: true });
       assertExpectedRevision(input.expectedRevision, candidate.revision);
       const next = DuplicateCandidateMachine.next(candidate.status, 'merge');
       if (![candidate.person_a_id, candidate.person_b_id].includes(input.survivorPersonId)) {
@@ -209,15 +231,27 @@ export class DuplicatesService {
         survivorId === candidate.person_a_id ? candidate.person_b_id : candidate.person_a_id;
       const persons = await trx
         .selectFrom('persons')
-        .select(['id', 'status', 'revision'])
+        .select(['id', 'status', 'revision', 'kind'])
         .where('organization_id', '=', organizationId)
         .where('id', 'in', [survivorId, mergedId])
+        .orderBy('id')
+        .forUpdate()
         .execute();
       const survivor = persons.find((p) => p.id === survivorId);
       const merged = persons.find((p) => p.id === mergedId);
       if (!survivor || !merged) throw errors.notFound('person');
       if (survivor.status !== 'active' || merged.status !== 'active') {
         throw errors.invalidTransition('Person', 'inactive', 'merge');
+      }
+      // SPK-IAM-007 / SPK-IAM-001: a merge must not move what a child cannot hold (an adult's
+      // account, authority over other people, staff memberships) onto a child. The direct paths
+      // refuse the same thing (relationships.service, staff-memberships.service), and kind cannot
+      // be changed later, so the adult record must be the survivor.
+      if (survivor.kind === 'child' && merged.kind === 'adult') {
+        throw errors.validation(
+          "The survivor must be the adult record: a child cannot take over an adult's account, authority or staff memberships.",
+          { survivorPersonId: survivorId, survivorKind: survivor.kind, mergedKind: merged.kind },
+        );
       }
       const now = this.clock.now();
       const operationId = await this.operations.create(trx, {
@@ -239,6 +273,8 @@ export class DuplicatesService {
         grantsRevokedAsDuplicate: 0,
         unverifiedRelationshipsSkipped: 0,
         unverifiedGrantsSkipped: 0,
+        survivorUnverifiedRelationshipsEnded: 0,
+        survivorCreatorPrivilegeCleared: false,
         householdMembershipsMoved: 0,
         staffMembershipsMoved: 0,
         pendingInvitationsRevoked: 0,
@@ -345,14 +381,14 @@ export class DuplicatesService {
           .where('relationship_id', '=', relationship.id)
           .where('revoked_at', 'is', null)
           .execute();
-        if (relationship.source === 'import') {
+        if (UNVERIFIED_AUTHORITY_SOURCES.has(relationship.source)) {
           await this.endRelationship(
             trx,
             relationship,
             grants,
             actor,
             now,
-            'merge: unverified imported authority is not transferred',
+            `merge: unverified ${relationship.source} authority is not transferred`,
           );
           summary.unverifiedRelationshipsSkipped += 1;
           summary.unverifiedGrantsSkipped += grants.length;
@@ -385,6 +421,17 @@ export class DuplicatesService {
           .where('id', '<>', relationship.id)
           .executeTakeFirst();
         for (const grant of grants) {
+          if (UNVERIFIED_AUTHORITY_SOURCES.has(grant.source)) {
+            await this.revokeGrant(
+              trx,
+              grant,
+              actor,
+              now,
+              `merge: unverified ${grant.source} grant is not transferred`,
+            );
+            summary.unverifiedGrantsSkipped += 1;
+            continue;
+          }
           const overlap = await trx
             .selectFrom('access_grants')
             .select('id')
@@ -453,6 +500,44 @@ export class DuplicatesService {
         }
       }
 
+      // 3b. The survivor now carries the merged person's history and verified relationships, so
+      // customer-asserted authority over the survivor would reach records nobody verified it for,
+      // and so would the self-service creator privilege (relationships.service).
+      const survivorSelfService = await trx
+        .selectFrom('relationships')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('subject_person_id', '=', survivorId)
+        .where('source', '=', 'self_service')
+        .where('status', 'in', ['active', 'suspended'])
+        .execute();
+      for (const relationship of survivorSelfService) {
+        const grants = await trx
+          .selectFrom('access_grants')
+          .selectAll()
+          .where('relationship_id', '=', relationship.id)
+          .where('revoked_at', 'is', null)
+          .execute();
+        await this.endRelationship(
+          trx,
+          relationship,
+          grants,
+          actor,
+          now,
+          'merge: unverified self_service authority over the survivor ends',
+        );
+        summary.survivorUnverifiedRelationshipsEnded += 1;
+        summary.unverifiedGrantsSkipped += grants.length;
+      }
+      const survivorCleared = await trx
+        .updateTable('persons')
+        .set({ created_by_person_id: null, revision: survivor.revision + 1 })
+        .where('id', '=', survivorId)
+        .where('revision', '=', survivor.revision)
+        .where('created_by_person_id', 'is not', null)
+        .executeTakeFirst();
+      summary.survivorCreatorPrivilegeCleared = Number(survivorCleared.numUpdatedRows) > 0;
+
       // 4. Household memberships.
       const memberships = await trx
         .selectFrom('household_memberships')
@@ -502,7 +587,19 @@ export class DuplicatesService {
         .where('organization_id', '=', organizationId)
         .where('status', '=', 'pending')
         .where((eb) =>
-          eb.or([eb('recipient_person_id', '=', mergedId), eb('scope_person_id', '=', mergedId)]),
+          eb.or([
+            eb('recipient_person_id', '=', mergedId),
+            eb('scope_person_id', '=', mergedId),
+            eb(
+              'id',
+              'in',
+              eb
+                .selectFrom('invitation_subjects')
+                .select('invitation_subjects.invitation_id')
+                .where('invitation_subjects.organization_id', '=', organizationId)
+                .where('invitation_subjects.person_id', '=', mergedId),
+            ),
+          ]),
         )
         .executeTakeFirst();
       summary.pendingInvitationsRevoked = Number(invitations.numUpdatedRows);
@@ -545,7 +642,7 @@ export class DuplicatesService {
         .where((eb) => eb.or([eb('person_a_id', '=', mergedId), eb('person_b_id', '=', mergedId)]))
         .executeTakeFirst();
       summary.otherCandidatesDismissed = Number(others.numUpdatedRows);
-      await trx
+      const decided = await trx
         .updateTable('duplicate_candidates')
         .set({
           status: next,
@@ -561,15 +658,21 @@ export class DuplicatesService {
         })
         .where('id', '=', candidateId)
         .where('revision', '=', candidate.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(decided.numUpdatedRows, () =>
+        errors.staleRevision(candidate.revision, candidate.revision + 1),
+      );
 
       // 9. The merged person stays, marked and pointing at the survivor (history reachable).
-      await trx
+      const mergedRow = await trx
         .updateTable('persons')
         .set({ status: 'merged', merged_into_person_id: survivorId, revision: merged.revision + 1 })
         .where('id', '=', mergedId)
         .where('revision', '=', merged.revision)
-        .execute();
+        .executeTakeFirst();
+      ensureUpdated(mergedRow.numUpdatedRows, () =>
+        errors.staleRevision(merged.revision, merged.revision + 1),
+      );
       await trx
         .insertInto('person_merges')
         .values({
@@ -688,13 +791,19 @@ export class DuplicatesService {
       .executeTakeFirstOrThrow();
   }
 
-  private async load(trx: Trx | Db, organizationId: string, id: string) {
-    const row = await trx
+  private async load(
+    trx: Trx | Db,
+    organizationId: string,
+    id: string,
+    options: { lock?: boolean } = {},
+  ) {
+    let query = trx
       .selectFrom('duplicate_candidates')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('id', '=', id)
-      .executeTakeFirst();
+      .where('id', '=', id);
+    if (options.lock) query = query.forUpdate();
+    const row = await query.executeTakeFirst();
     if (!row) throw errors.notFound('duplicate_candidate', id);
     return row;
   }
