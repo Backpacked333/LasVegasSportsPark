@@ -8,6 +8,7 @@ import type { EntryTables } from './entry';
 import type { FacilitiesTables } from './facilities';
 import type { FinanceTables } from './finance';
 import type { IdentityTables } from './identity';
+import type { MigrationTables } from './migration';
 import type { SchedulingTables } from './scheduling';
 import type { SupportTables } from './support';
 import type { WorkforceTables } from './workforce';
@@ -22,6 +23,7 @@ export * from './entry';
 export * from './facilities';
 export * from './finance';
 export * from './identity';
+export * from './migration';
 export * from './scheduling';
 export * from './support';
 export * from './workforce';
@@ -42,6 +44,7 @@ export interface Database
     FacilitiesTables,
     FinanceTables,
     IdentityTables,
+    MigrationTables,
     SchedulingTables,
     SupportTables,
     WorkforceTables {}

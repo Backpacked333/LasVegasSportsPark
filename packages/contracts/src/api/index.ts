@@ -9,6 +9,7 @@ export * from './entry';
 export * from './facilities';
 export * from './finance';
 export * from './identity';
+export * from './migration';
 export * from './operations';
 export * from './scheduling';
 export * from './support';
