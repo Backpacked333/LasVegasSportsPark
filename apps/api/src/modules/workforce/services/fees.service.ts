@@ -27,6 +27,7 @@ import {
   DATABASE,
   OperationsService,
   Outbox,
+  listFacilityScope,
   snapshotActor,
   UnitOfWork,
   type Clock,
@@ -57,7 +58,9 @@ const Cursor = z.object({ submittedAt: z.string(), id: z.string() });
  *  - finance approves as submitted, adjusts (each change appends a `fee_adjustments` row that the
  *    database keeps immutable) or rejects; nobody approves their own fee;
  *  - an export batch records exactly what was handed over, immutably, and marks the submissions
- *    exported; a submission is exported at most once and only in its own currency.
+ *    exported; a submission is exported at most once and only in its own currency;
+ *  - a fee belongs to its assignment's facility (§4.3, §4.14): staff scoped to some facilities
+ *    read, decide and export only those facilities' fees, as they see only those assignments.
  */
 @Injectable()
 export class FeesService {
@@ -206,6 +209,7 @@ export class FeesService {
       type: 'fee_submission',
       id,
       organizationId,
+      facilityId: await this.facilityOf(this.db, organizationId, row.assignment_id),
       subjectPersonIds: [row.person_id],
       protected: true,
     });
@@ -231,6 +235,11 @@ export class FeesService {
     if (query.status) q = q.where('status', '=', query.status);
     if (query.currency) q = q.where('currency', '=', query.currency);
     if (query.personId) q = q.where('person_id', '=', query.personId);
+    // §4.3, §4.14: staff limited to some facilities list those facilities' fees only (the scope of
+    // the roles holding the read action); the caller's own fees stay visible through self authority.
+    const selfOnly = query.personId !== undefined && query.personId === principal.personId;
+    const scope = selfOnly ? null : listFacilityScope(principal, WorkforceActions.readFees);
+    if (scope) q = q.where('assignment_id', 'in', this.assignmentsAt(organizationId, scope));
     if (cursor) {
       q = q.where(
         sql<boolean>`(submitted_at, id) > (${new Date(cursor.submittedAt)}::timestamptz, ${cursor.id}::uuid)`,
@@ -304,6 +313,10 @@ export class FeesService {
         .orderBy('id')
         .forUpdate();
       if (body.submissionIds) q = q.where('id', 'in', body.submissionIds);
+      // §4.3, §4.14: a facility-scoped operator exports only their facilities' fees; an explicit
+      // id outside the scope is reported as ineligible, revealing nothing about it.
+      const scope = listFacilityScope(principal, WorkforceActions.exportFees);
+      if (scope) q = q.where('assignment_id', 'in', this.assignmentsAt(organizationId, scope));
       const rows = await q.execute();
       if (body.submissionIds) {
         const found = new Set(rows.map((r) => r.id));
@@ -440,7 +453,29 @@ export class FeesService {
       .where('id', '=', id)
       .executeTakeFirst();
     if (!row) throw errors.notFound('fee_export_batch', id);
-    return toFeeExportBatch(row);
+    const batch = toFeeExportBatch(row);
+    // §4.3, §4.14: reading a batch needs export authority at every facility its lines belong to.
+    const assignmentIds = [...new Set(batch.lines.map((line) => line.assignmentId))];
+    const facilities =
+      assignmentIds.length === 0
+        ? []
+        : await this.db
+            .selectFrom('assignments')
+            .select('facility_id')
+            .distinct()
+            .where('organization_id', '=', organizationId)
+            .where('id', 'in', assignmentIds)
+            .orderBy('facility_id')
+            .execute();
+    for (const { facility_id: facilityId } of facilities) {
+      await this.authorization.require(principal, WorkforceActions.exportFees, {
+        type: 'fee_export_batch',
+        id,
+        organizationId,
+        facilityId,
+      });
+    }
+    return batch;
   }
 
   private async decide(
@@ -455,10 +490,13 @@ export class FeesService {
     return this.uow.run(async ({ trx }) => {
       const current = await this.load(trx, organizationId, id, true);
       if (!current) throw errors.protectedNotFound('fee_submission');
+      // §4.3, §4.14: the fee's facility is its assignment's; out of scope reads as not found.
+      const facilityId = await this.facilityOf(trx, organizationId, current.assignment_id);
       await this.authorization.require(principal, WorkforceActions.readFees, {
         type: 'fee_submission',
         id,
         organizationId,
+        facilityId,
         subjectPersonIds: [current.person_id],
         protected: true,
       });
@@ -466,6 +504,7 @@ export class FeesService {
         type: 'fee_submission',
         id,
         organizationId,
+        facilityId,
       });
       if (current.person_id === principal.personId) {
         throw errors.accessDenied('Nobody approves, adjusts or rejects their own fee.');
@@ -554,6 +593,28 @@ export class FeesService {
       });
       return this.view(trx, organizationId, id);
     });
+  }
+
+  /** The facility of the fee's assignment (fees carry no facility of their own). */
+  private async facilityOf(db: Db | Trx, organizationId: string, assignmentId: string) {
+    const row = await db
+      .selectFrom('assignments')
+      .select('facility_id')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', assignmentId)
+      .executeTakeFirstOrThrow();
+    return row.facility_id;
+  }
+
+  /** Subquery: the organization's assignments at the given facilities (none for an empty scope). */
+  private assignmentsAt(organizationId: string, facilityIds: readonly string[]) {
+    const q = this.db
+      .selectFrom('assignments')
+      .select('id')
+      .where('organization_id', '=', organizationId);
+    return facilityIds.length > 0
+      ? q.where('facility_id', 'in', [...facilityIds])
+      : q.where(sql<boolean>`false`);
   }
 
   private async view(db: Db | Trx, organizationId: string, id: string): Promise<FeeSubmission> {

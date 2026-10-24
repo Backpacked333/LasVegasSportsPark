@@ -16,6 +16,13 @@ export {
   type ProposedEvent,
   type DetectedConflict,
 } from './conflicts/conflict-detector';
+export {
+  PartyCommitmentSources,
+  lockParty,
+  partyLockKey,
+  type HeldCommitment,
+  type PartyCommitmentSource,
+} from './conflicts/party-commitment-sources';
 export * from './time/local-time';
 export * from './time/recurrence';
 export * from './testing/scheduling-fixtures';

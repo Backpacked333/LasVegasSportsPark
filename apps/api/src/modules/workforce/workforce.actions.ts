@@ -115,6 +115,15 @@ export const WorkforceActions = defineActions({
     staffRoles: ['front_desk', ...ASSIGNERS],
     requirements: ['SPK-STAFF-003', 'SPK-AT-012'],
   },
+  overrideTurnaround: {
+    id: 'workforce.override_turnaround',
+    description:
+      'Set a turnaround below the facility policy for one assignment (reason required, audited)',
+    // Pending POL-033 / DEC-011 (who may shorten the required turnaround): conservatively the work
+    // supervisors only; schedulers propose with the policy turnaround.
+    staffRoles: WORK_SUPERVISORS,
+    requirements: ['SPK-STAFF-003', '§4.9'],
+  },
   grantTemporaryAccess: {
     id: 'workforce.grant_temporary_access',
     description: 'Create temporary or substitute assignments that grant time-bounded staff access',

@@ -78,10 +78,13 @@ export class ReplacementsService {
       organizationId,
       facilityId: row.facility_id,
     });
-    const facility = await this.targets.facility(this.db, organizationId, row.facility_id);
+    // SPK-STAFF-003, SPK-AT-012: candidates are evaluated for the activity's CURRENT time and
+    // facility, read from its owning module; the original row may predate a reschedule (a declined
+    // or withdrawn row is never retimed). A canceled or unscheduled activity has no candidates.
+    const target = await this.resolveTarget(principal, row);
     const evaluatedAt = this.clock.now();
-    const start = new Date(row.scheduled_start);
-    const end = new Date(row.scheduled_end);
+    const start = target.scheduledStart;
+    const end = target.scheduledEnd;
     // One read transaction: every check sees the same snapshot.
     return this.uow.run(async ({ trx }) => {
       const requirement = await this.coverage.requirementFor(
@@ -97,7 +100,7 @@ export class ReplacementsService {
         for (const personId of await this.staff.staffWithRole(
           organizationId,
           role,
-          row.facility_id,
+          target.facilityId,
           trx,
         )) {
           pool.add(personId);
@@ -232,13 +235,14 @@ export class ReplacementsService {
         }
         const conflicts = await this.checker.conflicts(trx, {
           organizationId,
-          facility: { id: facility.id, timezone: facility.timezone },
+          facility: { id: target.facilityId, timezone: target.timezone },
           personId,
           scheduledStart: start,
           scheduledEnd: end,
           turnaroundMinutes: row.turnaround_minutes,
-          schedulingEventId: row.scheduling_event_id,
+          schedulingEventId: target.schedulingEventId,
           ignoreAssignmentIds: [],
+          lock: false,
         });
         for (const conflict of conflicts) {
           reasons.push({
@@ -282,8 +286,8 @@ export class ReplacementsService {
         targetId: row.target_id,
         role: row.role,
         slot: row.slot,
-        scheduledStart: iso(row.scheduled_start),
-        scheduledEnd: iso(row.scheduled_end),
+        scheduledStart: iso(start),
+        scheduledEnd: iso(end),
         requiredQualifications: required,
         evaluatedAt: evaluatedAt.toISOString(),
         candidates: candidates.map(({ positives: _positives, ...candidate }) => candidate),
@@ -313,12 +317,16 @@ export class ReplacementsService {
         facilityId: existing.facility_id,
       });
     }
-    const facility = await this.targets.facility(this.db, organizationId, existing.facility_id);
-    const policy = workforcePolicyForFacility(this.policy, facility.settings);
+    // SPK-STAFF-003/004, SPK-AT-012, §4.6: the replacement is for the activity as its owning
+    // module holds it now. A canceled, postponed or unscheduled activity is refused
+    // (`target_not_scheduled`, the guard `create` applies), and the replacement takes the current
+    // time, event and facility rather than the original row's copy.
+    const target = await this.resolveTarget(principal, existing, body.engagement !== 'regular');
+    const policy = workforcePolicyForFacility(this.policy, target.facilitySettings);
     const result = await this.uow.run(async ({ trx }) => {
       const original = await this.assignments.lock(trx, organizationId, assignmentId);
       assertExpectedRevision(body.expectedRevision, original.revision);
-      if (this.clock.now().getTime() >= new Date(original.scheduled_end).getTime()) {
+      if (this.clock.now().getTime() >= target.scheduledEnd.getTime()) {
         throw errors.validation('The activity has already ended.', { code: 'target_ended' });
       }
       const operationId = await this.operations.create(trx, {
@@ -345,7 +353,7 @@ export class ReplacementsService {
           reason: body.reason,
           cause: 'withdrawn',
           correlationId,
-          facilitySettings: facility.settings,
+          facilitySettings: target.facilitySettings,
           operationId,
         });
         originalRow = withdrawn.row;
@@ -354,20 +362,6 @@ export class ReplacementsService {
       } else if (original.status !== 'declined' && original.status !== 'withdrawn') {
         throw errors.invalidTransition('Assignment', original.status, 'replace');
       }
-      const target: ResolvedTarget = {
-        targetType: original.target_type,
-        targetId: original.target_id,
-        facilityId: original.facility_id,
-        timezone: facility.timezone,
-        facilitySettings: facility.settings,
-        title: original.target_title,
-        scheduledStart: new Date(original.scheduled_start),
-        scheduledEnd: new Date(original.scheduled_end),
-        schedulingEventId: original.scheduling_event_id,
-        fixtureId: original.fixture_id,
-        offeringSessionId: original.offering_session_id,
-        offeringId: original.offering_id,
-      };
       const replacement = await this.assignments.insertAssignment(trx, {
         organizationId,
         principal,
@@ -409,5 +403,39 @@ export class ReplacementsService {
       operationId: result.operationId,
       uncovered: result.uncovered,
     };
+  }
+
+  /**
+   * The original's activity as its owning module holds it now (outside any transaction, like every
+   * target resolution). When it moved to another facility, the replacement authority must hold
+   * there too.
+   */
+  private async resolveTarget(
+    principal: Principal,
+    row: AssignmentRow,
+    temporary = false,
+  ): Promise<ResolvedTarget> {
+    const target = await this.targets.resolve(row.organization_id, {
+      targetType: row.target_type,
+      targetId: row.target_id,
+      offeringId: row.offering_id,
+    });
+    if (target.facilityId !== row.facility_id) {
+      await this.authorization.require(principal, WorkforceActions.triggerReplacement, {
+        type: 'assignment',
+        id: row.id,
+        organizationId: row.organization_id,
+        facilityId: target.facilityId,
+      });
+      if (temporary) {
+        await this.authorization.require(principal, WorkforceActions.grantTemporaryAccess, {
+          type: 'assignment',
+          id: row.id,
+          organizationId: row.organization_id,
+          facilityId: target.facilityId,
+        });
+      }
+    }
+    return target;
   }
 }

@@ -296,7 +296,7 @@ export const CreateAssignmentBody = withCommandMeta({
   role: WorkforceSlug,
   slot: z.number().int().min(1).max(50).optional(),
   engagement: AssignmentEngagementSchema.default('regular'),
-  /** Overrides the policy turnaround for this assignment (SPK-STAFF-003). */
+  /** Overrides the policy turnaround for this assignment (SPK-STAFF-003); below the policy it needs a reason and `workforce.override_turnaround` (§4.9). */
   turnaroundMinutes: z.number().int().min(0).max(720).optional(),
   /** Create directly in `offered` (propose then offer in one command). */
   offer: z.boolean().default(false),

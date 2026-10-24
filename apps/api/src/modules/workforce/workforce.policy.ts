@@ -86,6 +86,12 @@ export function workforcePolicyForFacility(
 
 /** Exception category raised for an uncovered required slot (Today workspace, SPK-UX-006). */
 export const UNCOVERED_ASSIGNMENT = 'workforce.uncovered_assignment';
+/**
+ * Exception category raised when an accepted assignee stops holding a required qualification
+ * (revocation, or a requirement edited to add one): an operator decides, nothing is withdrawn
+ * automatically (SPK-STAFF-001, SPK-READY-004; the policy on revocation timing is POL-033).
+ */
+export const UNQUALIFIED_ASSIGNMENT = 'workforce.unqualified_assignment';
 /** Exception category raised when time-bounded access could not be granted or ended. */
 export const TEMPORARY_ACCESS_FAILED = 'workforce.temporary_access_failed';
 /** Name of the readiness check registered with competition (SPK-STAFF-002, SPK-READY-001). */

@@ -70,6 +70,14 @@ Every POST/PATCH/DELETE is `@Idempotent()` and validated with zod; every write r
   `FIXTURE_OBLIGATION_IMPL`; without one, no obligations exist. Blocking obligations fail the group,
   the rest are recorded as `remainingObligations` on the publication (SPK-FIX-002).
 - `SCHEDULING_POLICY` (`scheduling.policy.ts`): required rest per party kind and series limits.
+- `PartyCommitmentSources` (`conflicts/party-commitment-sources.ts`): a module that holds party
+  commitments in its own tables registers a source (workforce registers `workforce.assignments`
+  for persons, its accepted and completed assignments). Detection and the post-lock re-check in
+  `EventWriter.reserve` report overlaps and too-short rest against them as `party_overlap` /
+  `insufficient_rest` with `externalCommitments: [{ source, id }]`, so scheduling never commits a
+  person another module already holds (SPK-SCHED-004 official and assigned-coach overlap,
+  SPK-STAFF-003). The owning module takes the same per-party advisory lock (`lockParty`) before it
+  writes; scheduling never reads its tables (§4.2).
 
 Test fixtures for downstream modules: `testing/scheduling-fixtures.ts` (`seedPitchWithHalves`,
 `seedResource`, `seedOperatingHours`, `createScheduledEvent`, `createAppliedClosure`, `at`).
@@ -103,7 +111,9 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
     requested subdivision (`FOR NO KEY UPDATE`) before reading sibling reservations, so bookings of
     sibling subdivisions are serialized;
   - required rest (SPK-SCHED-004): `EventWriter.reserve` takes a transaction-scoped advisory lock
-    per committed party that needs rest and re-checks the gap after it (`insufficient_rest`).
+    per committed party that needs rest (or that a registered `PartyCommitmentSources` source
+    covers) and re-checks the gap, and the source's commitments, after it (`insufficient_rest`,
+    `party_overlap`).
     Commands that reserve several events (publication, series edit) take these locks up front in
     one order (`EventWriter.lockHolds`); a deadlock that still occurs (40P01) is retried by
     `UnitOfWork`. Verified by `__tests__/concurrency.spec.ts` under PGlite and `TEST_DATABASE_URL`.

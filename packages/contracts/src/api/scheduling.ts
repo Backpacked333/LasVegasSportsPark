@@ -351,6 +351,11 @@ export const ConflictDetailSchema = z
     closureId: z.uuid().optional(),
     party: PartyCommitmentSchema.pick({ partyType: true, partyId: true }).optional(),
     changeSequences: z.array(z.number().int()).optional(),
+    /**
+     * Commitments of the party held by another module (for example `workforce.assignments`, an
+     * accepted assignment, SPK-STAFF-003), named by source and record id.
+     */
+    externalCommitments: z.array(z.object({ source: z.string(), id: z.uuid() })).optional(),
   })
   .openapi('ConflictDetail');
 export type ConflictDetail = z.infer<typeof ConflictDetailSchema>;

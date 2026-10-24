@@ -2,8 +2,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import { tstzrange } from '@sportspark/db';
 import { sql } from 'kysely';
 import type { Trx } from '../../../kernel';
-import { ConflictDetector, SCHEDULING_POLICY, type SchedulingPolicy } from '../../scheduling';
-import { addMinutes, overlaps } from '../workforce.shared';
+import {
+  ConflictDetector,
+  lockParty,
+  SCHEDULING_POLICY,
+  type SchedulingPolicy,
+} from '../../scheduling';
+import { addMinutes, COVERING_STATUSES, overlaps } from '../workforce.shared';
 
 export interface CommitmentConflict {
   code: 'assignment_overlap' | 'insufficient_turnaround' | 'party_overlap' | 'insufficient_rest';
@@ -23,18 +28,32 @@ export interface CommitmentQuery {
   schedulingEventId: string | null;
   /** Assignments that do not count (the assignment being checked, one being replaced). */
   ignoreAssignmentIds: string[];
+  /**
+   * Take the person's scheduling party lock first (default true): a command that is about to hold
+   * the person serializes with scheduling commands committing them. Read-only explanations pass
+   * false.
+   */
+  lock?: boolean;
 }
 
 /**
  * Overlapping commitments and required turnaround (SPK-STAFF-003), as early, explainable feedback:
  *
- *  1. Accepted assignments of the person whose held interval (scheduled interval plus their
- *     turnaround) meets this one's held interval. The database exclusion constraint
- *     `assignments_no_overlap` is the guarantee; this names the colliding assignments.
+ *  1. Accepted or completed assignments of the person whose held interval (scheduled interval
+ *     plus their turnaround) meets this one's held interval: completion is allowed once the
+ *     activity starts, so a completed assignment still holds its interval (migration 0701). The
+ *     database exclusion constraint `assignments_no_overlap` is the guarantee; this names the
+ *     colliding assignments.
  *  2. Person commitments held in the scheduling module (an official or coach committed directly
  *     to an event), through scheduling's exported ConflictDetector with the person rest set to the
  *     turnaround. Scheduling owns those rows and their exclusion constraint; workforce only reads
  *     through scheduling's code.
+ *
+ * The other direction: workforce registers `held` as scheduling's `workforce.assignments` party
+ * commitment source, so scheduling refuses to commit a person an accepted (or completed)
+ * assignment holds. Both sides take scheduling's per-person advisory lock before they read
+ * (`lockParty`), so concurrent commands for one person are serialized and the second one sees the
+ * first (SPK-STAFF-003, SPK-SCHED-004; no single constraint spans the two modules' tables).
  */
 @Injectable()
 export class CommitmentChecker {
@@ -44,6 +63,7 @@ export class CommitmentChecker {
   ) {}
 
   async conflicts(trx: Trx, query: CommitmentQuery): Promise<CommitmentConflict[]> {
+    if (query.lock !== false) await lockParty(trx, query.organizationId, 'person', query.personId);
     const out: CommitmentConflict[] = [];
     const heldEnd = addMinutes(query.scheduledEnd, query.turnaroundMinutes);
     let others = trx
@@ -51,7 +71,7 @@ export class CommitmentChecker {
       .select(['id', 'scheduled_start', 'scheduled_end'])
       .where('organization_id', '=', query.organizationId)
       .where('person_id', '=', query.personId)
-      .where('status', '=', 'accepted')
+      .where('status', 'in', [...COVERING_STATUSES])
       .where(sql<boolean>`committed && ${tstzrange(query.scheduledStart, heldEnd)}`);
     if (query.ignoreAssignmentIds.length > 0) {
       others = others.where('id', 'not in', query.ignoreAssignmentIds);
@@ -69,7 +89,8 @@ export class CommitmentChecker {
     if (overlapping.length > 0) {
       out.push({
         code: 'assignment_overlap',
-        message: 'The person already holds an accepted assignment at an overlapping time.',
+        message:
+          'The person already holds an accepted or completed assignment at an overlapping time.',
         assignmentIds: overlapping.map((r) => r.id),
         conflictingEventIds: [],
       });
@@ -109,7 +130,12 @@ export class CommitmentChecker {
           commitments: [{ partyType: 'person', partyId: query.personId, role: 'staff' }],
         },
       ],
-      { policy, ignoreEventIds: query.schedulingEventId ? [query.schedulingEventId] : [] },
+      {
+        policy,
+        ignoreEventIds: query.schedulingEventId ? [query.schedulingEventId] : [],
+        // this module's own assignments are checked above
+        externalSources: false,
+      },
     );
     for (const conflict of detected) {
       if (conflict.severity !== 'error') continue;
@@ -126,5 +152,40 @@ export class CommitmentChecker {
       });
     }
     return out;
+  }
+
+  /**
+   * Scheduling's `workforce.assignments` party commitment source: accepted or completed
+   * assignments of the person whose held interval (scheduled interval plus turnaround) overlaps
+   * `range`, except those of the events scheduling is moving or replacing.
+   */
+  async held(
+    trx: Trx,
+    organizationId: string,
+    personId: string,
+    range: { start: Date; end: Date },
+    ignoreEventIds: readonly string[],
+  ): Promise<Array<{ id: string; start: Date; end: Date }>> {
+    let q = trx
+      .selectFrom('assignments')
+      .select(['id', 'scheduled_start', 'committed_end', 'scheduling_event_id'])
+      .where('organization_id', '=', organizationId)
+      .where('person_id', '=', personId)
+      .where('status', 'in', [...COVERING_STATUSES])
+      .where(sql<boolean>`committed && ${tstzrange(range.start, range.end)}`);
+    if (ignoreEventIds.length > 0) {
+      q = q.where((eb) =>
+        eb.or([
+          eb('scheduling_event_id', 'is', null),
+          eb('scheduling_event_id', 'not in', [...ignoreEventIds]),
+        ]),
+      );
+    }
+    const rows = await q.orderBy('scheduled_start').orderBy('id').execute();
+    return rows.map((r) => ({
+      id: r.id,
+      start: new Date(r.scheduled_start),
+      end: new Date(r.committed_end),
+    }));
   }
 }

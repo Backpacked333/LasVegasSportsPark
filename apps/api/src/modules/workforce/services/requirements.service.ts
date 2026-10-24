@@ -24,6 +24,7 @@ import { WorkforceActions } from '../workforce.actions';
 import { WorkforceEvents } from '../workforce.events';
 import { iso, organizationOf, type RequirementRow } from '../workforce.shared';
 import { CoverageService } from './coverage.service';
+import { QualificationsService } from './qualifications.service';
 import { TargetResolver } from './target-resolver';
 
 /**
@@ -41,6 +42,7 @@ export class RequirementsService {
     private readonly outbox: Outbox,
     private readonly targets: TargetResolver,
     private readonly coverage: CoverageService,
+    private readonly qualifications: QualificationsService,
   ) {}
 
   async create(
@@ -160,6 +162,15 @@ export class RequirementsService {
       });
       const row = (await this.load(trx, organizationId, id)) as RequirementRow;
       await this.notify(trx, row, correlationId);
+      if (body.requiredQualifications) {
+        // SPK-STAFF-001: accepted assignees who do not hold the new qualifications are flagged
+        // for an operator decision (never withdrawn automatically, POL-033 pending).
+        await this.qualifications.flagUnqualifiedAssignments(trx, organizationId, {
+          targetType: row.target_type,
+          targetId: row.target_id,
+          role: row.role,
+        });
+      }
       return this.view(trx, row);
     });
   }
