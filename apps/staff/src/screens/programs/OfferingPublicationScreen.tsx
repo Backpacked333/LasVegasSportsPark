@@ -220,6 +220,8 @@ export function OfferingPublicationScreen() {
   });
   return (
     <section aria-labelledby="offering-title">
+      {/* SPK-UX-009: the region keeps its name in every state. */}
+      <h2 id="offering-title">Offering publication and registration</h2>
       <QueryBoundary
         query={offering}
         label="the offering"

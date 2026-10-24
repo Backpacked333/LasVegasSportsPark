@@ -31,6 +31,11 @@ export const PENDING = {
     subject: 'Team liability, installment plan shapes and balance consequences',
     owner: 'Finance and league manager (DEC-008); Product owner (DEC-073)',
   },
+  installments: {
+    ids: ['DEC-073'],
+    subject: 'Installment plan shapes and where installments apply',
+    owner: 'Product owner',
+  },
   refundsCreditsCash: {
     ids: ['DEC-009', 'DEC-058'],
     subject: 'Refund eligibility and amounts, credit expiry and permitted uses, cash procedures',

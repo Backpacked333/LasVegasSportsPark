@@ -210,6 +210,9 @@ export function ObligationScreen() {
   });
   return (
     <section aria-labelledby="obligation-title">
+      {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
+      <h2 id="obligation-title">Obligation</h2>
+      <SectionNav label="Finance" links={FINANCE_LINKS} />
       <QueryBoundary
         query={obligation}
         label="the obligation"
@@ -217,8 +220,7 @@ export function ObligationScreen() {
       >
         {(data) => (
           <>
-            <h2 id="obligation-title">{data.description}</h2>
-            <SectionNav label="Finance" links={FINANCE_LINKS} />
+            <h3>{data.description}</h3>
             <p>
               <StatusBadge {...OBLIGATION_STATUS[data.status]} />{' '}
               <span className="caption">

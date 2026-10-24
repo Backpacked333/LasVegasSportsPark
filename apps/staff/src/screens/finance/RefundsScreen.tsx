@@ -21,6 +21,11 @@ import { PAYMENT_STATUS } from '../../features/registration-finance/labels';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
 import { PENDING } from '../../features/registration-finance/pending';
 import { RefundView } from '../../features/registration-finance/RefundView';
+import {
+  LockedNote,
+  outcomePending,
+  useSameRequest,
+} from '../../features/registration-finance/sameRequest';
 import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -38,6 +43,8 @@ function RequestRefund({ paymentId, currency }: { paymentId: string; currency: s
     invalidate: [['api', '/payments/{id}']],
   });
   const server = fieldErrorsOf(refund.error);
+  const same = useSameRequest(refund.submit);
+  const locked = outcomePending(refund.error);
   const submit = () => {
     const errors: Record<string, string> = {};
     const minor = parseMoneyInput(amount, currency);
@@ -46,8 +53,8 @@ function RequestRefund({ paymentId, currency }: { paymentId: string; currency: s
     if (!reason.trim()) errors.reason = 'A reason is required and is audited.';
     setLocal(errors);
     if (minor === null || Object.keys(errors).length > 0) return;
-    refund
-      .submit({ path: { id: paymentId }, body: { amountMinor: minor, reason: reason.trim() } })
+    same
+      .send({ path: { id: paymentId }, body: { amountMinor: minor, reason: reason.trim() } })
       // A new refund needs a new amount: clear it so a second click never repeats one silently.
       .then(() => setAmount(''))
       .catch(() => undefined);
@@ -68,34 +75,43 @@ function RequestRefund({ paymentId, currency }: { paymentId: string; currency: s
           submit();
         }}
       >
-        <div className="rf-grid">
-          <TextField
-            label={`Refund amount (${currency})`}
-            inputMode="decimal"
+        <fieldset className="rf-plain" disabled={locked}>
+          <div className="rf-grid">
+            <TextField
+              label={`Refund amount (${currency})`}
+              inputMode="decimal"
+              required
+              value={amount}
+              onChange={setAmount}
+              error={local.amountMinor ?? server.amountMinor}
+            />
+          </div>
+          <TextArea
+            label="Reason for the refund"
             required
-            value={amount}
-            onChange={setAmount}
-            error={local.amountMinor ?? server.amountMinor}
+            value={reason}
+            onChange={setReason}
+            error={local.reason ?? server.reason}
           />
-        </div>
-        <TextArea
-          label="Reason for the refund"
-          required
-          value={reason}
-          onChange={setReason}
-          error={local.reason ?? server.reason}
-        />
-        <div className="rf-actions">
-          <Button type="submit" busy={refund.isProcessing} disabled={!online}>
-            Reserve and request the refund
-          </Button>
-        </div>
+          <div className="rf-actions">
+            <Button type="submit" busy={refund.isProcessing} disabled={!online || locked}>
+              Reserve and request the refund
+            </Button>
+          </div>
+        </fieldset>
         <OfflineCaption action="requesting a refund" />
         {refund.isProcessing ? (
           <p role="status">Reserving the amount and requesting the refund…</p>
         ) : null}
       </form>
-      <CommandError error={refund.error} currency={currency} onRetry={submit} />
+      <LockedNote
+        error={refund.error}
+        onNewRequest={() => {
+          refund.reset();
+          same.forget();
+        }}
+      />
+      <CommandError error={refund.error} currency={currency} onRetry={same.retry} />
       {refund.data ? (
         <div aria-live="polite">
           <p role="status">

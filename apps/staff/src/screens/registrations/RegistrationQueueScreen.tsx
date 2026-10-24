@@ -7,8 +7,12 @@
  *
  * - The approval record stays separate from enrollment, placement and money (SPK-REG-003).
  * - Approval reserves nothing unless an approved policy says so: pending DEC-028/DEC-029.
- * - Who may override eligibility is pending DEC-066: "Override" is offered where the evaluation
- *   failed, and the API decides (ACCESS_DENIED names the missing permission).
+ * - The default queue is every application waiting for a decision: `awaiting_review` (eligible)
+ *   and `submitted` (the API keeps an application that failed eligibility in `submitted`).
+ * - Who may override eligibility is pending DEC-066: "Override" is offered on a submitted
+ *   application whose evaluation failed (the only state the API accepts it from), and the API
+ *   decides (ACCESS_DENIED names the missing permission). Approve is not offered on an ineligible
+ *   application without an override.
  * - The API states no review deadline or resolver per application, so they are shown as not
  *   available rather than invented.
  */
@@ -66,7 +70,8 @@ function ApplicationCard({ application }: { application: Application }) {
           : null;
   const decidable = applicationDecidable(application.status);
   const failed = application.eligibility !== null && !application.eligibility.eligible;
-  const canOverride = decidable && failed && application.override === null;
+  const canOverride = application.status === 'submitted' && failed && application.override === null;
+  const canApprove = decidable && (!failed || application.override !== null);
   const busy = accept.isProcessing || decline.isProcessing || override.isProcessing;
   const subject = application.id;
 
@@ -129,11 +134,25 @@ function ApplicationCard({ application }: { application: Application }) {
         ) : null}
       </div>
       {decidable ? (
+        // Each button is described by its row title, so a screen reader names the application it
+        // acts on (SPK-UX-009).
         <div className="rf-actions">
-          <Button busy={accept.isProcessing} disabled={!online || busy} onClick={doAccept}>
-            Approve
-          </Button>
-          <Button variant="secondary" disabled={!online || busy} onClick={() => setMode('decline')}>
+          {canApprove ? (
+            <Button
+              busy={accept.isProcessing}
+              disabled={!online || busy}
+              onClick={doAccept}
+              aria-describedby={`application-${subject}`}
+            >
+              Approve
+            </Button>
+          ) : null}
+          <Button
+            variant="secondary"
+            disabled={!online || busy}
+            onClick={() => setMode('decline')}
+            aria-describedby={`application-${subject}`}
+          >
             Decline…
           </Button>
           {canOverride ? (
@@ -141,6 +160,7 @@ function ApplicationCard({ application }: { application: Application }) {
               variant="secondary"
               disabled={!online || busy}
               onClick={() => setMode('override')}
+              aria-describedby={`application-${subject}`}
             >
               Override eligibility…
             </Button>
@@ -197,12 +217,94 @@ const STATUS_FILTERS: readonly ApplicationStatus[] = [
   'withdrawn',
 ];
 
-export function RegistrationQueueScreen() {
-  const [status, setStatus] = useState<ApplicationStatus | ''>('awaiting_review');
+/** The default filter: every application waiting for a decision. */
+const NEEDS_DECISION = 'needs_decision';
+type Filter = ApplicationStatus | typeof NEEDS_DECISION | '';
+
+function ApplicationList({ items, more }: { items: readonly Application[]; more: boolean }) {
+  return (
+    <>
+      <ul className="list" aria-label="Applications">
+        {items.map((application) => (
+          <ApplicationCard key={application.id} application={application} />
+        ))}
+      </ul>
+      {more ? (
+        <StateView
+          variant="empty"
+          title="More applications exist"
+          description="Only the first 200 of each status are shown."
+        />
+      ) : null}
+    </>
+  );
+}
+
+function DecisionQueue() {
+  const awaiting = useApiQuery({
+    path: '/applications',
+    request: { query: { limit: 200, status: 'awaiting_review' } },
+  });
+  const submitted = useApiQuery({
+    path: '/applications',
+    request: { query: { limit: 200, status: 'submitted' } },
+  });
+  return (
+    <QueryBoundary
+      query={awaiting}
+      label="applications awaiting review"
+      empty={{ title: '', description: '' }}
+      unavailableOffline={['approving, declining or overriding']}
+    >
+      {(a) => (
+        <QueryBoundary
+          query={submitted}
+          label="submitted applications"
+          empty={{ title: '', description: '' }}
+          unavailableOffline={['approving, declining or overriding']}
+        >
+          {(b) => {
+            const seen = new Set<string>();
+            const items = [...a.items, ...b.items]
+              .filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)))
+              .sort((x, y) => (x.submittedAt ?? '').localeCompare(y.submittedAt ?? ''));
+            if (items.length === 0) {
+              return (
+                <StateView
+                  variant="empty"
+                  title="Queue clear"
+                  description="No application is waiting for a decision."
+                />
+              );
+            }
+            return <ApplicationList items={items} more={!!(a.nextCursor ?? b.nextCursor)} />;
+          }}
+        </QueryBoundary>
+      )}
+    </QueryBoundary>
+  );
+}
+
+function StatusQueue({ status }: { status: ApplicationStatus | '' }) {
   const applications = useApiQuery({
     path: '/applications',
     request: { query: { limit: 200, ...(status ? { status } : {}) } },
   });
+  return (
+    <QueryBoundary
+      query={applications}
+      label="applications"
+      isEmpty={(page) => page.items.length === 0}
+      empty={{ title: 'No applications', description: 'No application has this status.' }}
+      unavailableOffline={['approving, declining or overriding']}
+    >
+      {(page) => <ApplicationList items={page.items} more={page.nextCursor !== null} />}
+    </QueryBoundary>
+  );
+}
+
+export function RegistrationQueueScreen() {
+  const [status, setStatus] = useState<Filter>(NEEDS_DECISION);
   return (
     <section aria-labelledby="queue-title">
       <h2 id="queue-title">Registration queue and approvals</h2>
@@ -216,39 +318,13 @@ export function RegistrationQueueScreen() {
         label="Applications"
         value={status}
         placeholder="All statuses"
-        onChange={(v) => setStatus(v as ApplicationStatus | '')}
-        options={STATUS_FILTERS.map((s) => ({ value: s, label: APPLICATION_STATUS[s].label }))}
+        onChange={(v) => setStatus(v as Filter)}
+        options={[
+          { value: NEEDS_DECISION, label: 'Waiting for a decision (submitted or awaiting review)' },
+          ...STATUS_FILTERS.map((s) => ({ value: s, label: APPLICATION_STATUS[s].label })),
+        ]}
       />
-      <QueryBoundary
-        query={applications}
-        label="applications"
-        isEmpty={(page) => page.items.length === 0}
-        empty={{
-          title: status === 'awaiting_review' ? 'Queue clear' : 'No applications',
-          description:
-            status === 'awaiting_review'
-              ? 'No application is waiting for review.'
-              : 'No application has this status.',
-        }}
-        unavailableOffline={['approving, declining or overriding']}
-      >
-        {(page) => (
-          <>
-            <ul className="list" aria-label="Applications">
-              {page.items.map((application) => (
-                <ApplicationCard key={application.id} application={application} />
-              ))}
-            </ul>
-            {page.nextCursor ? (
-              <StateView
-                variant="empty"
-                title="More applications exist"
-                description="Only the first 200 are shown."
-              />
-            ) : null}
-          </>
-        )}
-      </QueryBoundary>
+      {status === NEEDS_DECISION ? <DecisionQueue /> : <StatusQueue status={status} />}
     </section>
   );
 }

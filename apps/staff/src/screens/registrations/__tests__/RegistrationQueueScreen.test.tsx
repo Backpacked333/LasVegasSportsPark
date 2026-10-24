@@ -12,14 +12,29 @@ import {
   APPLICATION_ID,
   apiError,
   application,
+  eligibility,
   nameRoutes,
   ok,
 } from '../../../features/registration-finance/__tests__/fixtures';
 
-const QUEUE = ok({ items: [application()], nextCursor: null });
+/** The API's two waiting states: eligible ones await review, ineligible ones stay submitted. */
+const ELIGIBLE = application({ status: 'awaiting_review', eligibility: eligibility(true) });
+const byStatus =
+  (awaiting: unknown[], submitted: unknown[]): FakeHandler =>
+  (request) =>
+    fakeResponse(200, {
+      items:
+        request.query.status === 'awaiting_review'
+          ? awaiting
+          : request.query.status === 'submitted'
+            ? submitted
+            : [],
+      nextCursor: null,
+    });
+const QUEUE = byStatus([], [application()]);
 
-async function openQueue(routes: Record<string, FakeHandler> = {}) {
-  const app = createTestApp({ routes: { ...nameRoutes(), 'GET /applications': QUEUE, ...routes } });
+async function openQueue(routes: Record<string, FakeHandler> = {}, queue: FakeHandler = QUEUE) {
+  const app = createTestApp({ routes: { ...nameRoutes(), 'GET /applications': queue, ...routes } });
   render(app.at('/registrations/queue'));
   const list = await screen.findByRole('list', { name: 'Applications' });
   const card = within(list).getAllByRole('listitem')[0]!;
@@ -32,8 +47,10 @@ describe('SCR-S-24 RegistrationQueueScreen', () => {
     expect(await within(card).findByText('Alex Rivera')).toBeInTheDocument();
     expect(await within(card).findByText('Spring academy U10')).toBeInTheDocument();
     expect(within(card).getByText(/submitted 3 hours ago by Sam Rivera/)).toBeInTheDocument();
-    expect(within(card).getByText('awaiting_review')).toBeInTheDocument();
+    expect(within(card).getByText('submitted')).toBeInTheDocument();
     expect(within(card).getByText('Not eligible')).toBeInTheDocument();
+    // An ineligible application is not approved without an override (SPK-REG-002).
+    expect(within(card).queryByRole('button', { name: 'Approve' })).toBeNull();
     const reasons = within(card).getByRole('list', { name: 'Eligibility: reasons' });
     expect(within(reasons).getByText('Blocking')).toBeInTheDocument();
     expect(within(reasons).getByText(/older than the age band/)).toBeInTheDocument();
@@ -41,17 +58,23 @@ describe('SCR-S-24 RegistrationQueueScreen', () => {
     expect(
       within(card).getByText(/Review deadline and resolver: not available/),
     ).toBeInTheDocument();
-    expect(app.fake.requests.find((r) => r.route === '/applications')?.query).toMatchObject({
-      status: 'awaiting_review',
-    });
+    // The default queue asks for both waiting states.
+    const statuses = app.fake.requests
+      .filter((r) => r.route === '/applications')
+      .map((r) => r.query['status']);
+    expect(statuses).toEqual(expect.arrayContaining(['awaiting_review', 'submitted']));
   });
 
   it('SPK-REG-007: approves with the expected revision and an idempotency key', async () => {
     const user = userEvent.setup();
-    const { app, card } = await openQueue({
-      'POST /applications/{id}/accept': ok(application({ status: 'accepted' })),
-    });
-    await user.click(within(card).getByRole('button', { name: 'Approve' }));
+    const { app, card } = await openQueue(
+      { 'POST /applications/{id}/accept': ok(application({ status: 'accepted' })) },
+      byStatus([ELIGIBLE], []),
+    );
+    const approve = within(card).getByRole('button', { name: 'Approve' });
+    // SPK-UX-009: the button is described by the application it acts on.
+    expect(approve).toHaveAttribute('aria-describedby', `application-${APPLICATION_ID}`);
+    await user.click(approve);
     expect(await screen.findByText('Application now accepted.')).toBeInTheDocument();
     const accept = app.fake.requests.find((r) => r.route === '/applications/{id}/accept');
     expect(accept?.params).toEqual({ id: APPLICATION_ID });
@@ -104,17 +127,23 @@ describe('SCR-S-24 RegistrationQueueScreen', () => {
 
   it('reports a withdrawn application as a stale version and reloads the queue', async () => {
     const user = userEvent.setup();
-    const { app, card } = await openQueue({
-      'POST /applications/{id}/accept': apiError(409, 'STALE_REVISION', {
-        message: 'The record changed since it was loaded.',
-        nextAction: 'reload_and_retry',
-      }),
-    });
+    const { app, card } = await openQueue(
+      {
+        'POST /applications/{id}/accept': apiError(409, 'STALE_REVISION', {
+          message: 'The record changed since it was loaded.',
+          nextAction: 'reload_and_retry',
+        }),
+      },
+      byStatus([ELIGIBLE], []),
+    );
     await user.click(within(card).getByRole('button', { name: 'Approve' }));
     expect(await within(card).findByText(/Error code: STALE_REVISION/)).toBeInTheDocument();
+    const reads = app.fake.requests.filter((r) => r.route === '/applications').length;
     await user.click(within(card).getByRole('button', { name: 'Reload' }));
     await waitFor(() =>
-      expect(app.fake.requests.filter((r) => r.route === '/applications')).toHaveLength(2),
+      expect(app.fake.requests.filter((r) => r.route === '/applications').length).toBeGreaterThan(
+        reads,
+      ),
     );
   });
 
@@ -125,7 +154,7 @@ describe('SCR-S-24 RegistrationQueueScreen', () => {
         'GET /applications': (request) =>
           fakeResponse(200, {
             items:
-              request.query.status === 'awaiting_review'
+              request.query.status === 'awaiting_review' || request.query.status === 'submitted'
                 ? []
                 : [
                     application({

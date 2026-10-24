@@ -604,7 +604,7 @@ export function OfferingHeader({ offering }: { offering: Offering }) {
       <p>
         <Link to={`/programs/${offering.programId}`}>Back to the program</Link>
       </p>
-      <h2 id="offering-title">{offering.name}</h2>
+      <h3>{offering.name}</h3>
       <p>
         <StatusBadge {...PUBLICATION_STATE[offering.publicationState]} />{' '}
         <span className="caption">
@@ -622,6 +622,8 @@ export function OfferingSetupScreen() {
   const offering = useApiQuery({ path: '/offerings/{id}', request: { path: { id: offeringId } } });
   return (
     <section aria-labelledby="offering-title">
+      {/* SPK-UX-009: the region keeps its name in every state. */}
+      <h2 id="offering-title">Offering setup</h2>
       <QueryBoundary
         query={offering}
         label="the offering"

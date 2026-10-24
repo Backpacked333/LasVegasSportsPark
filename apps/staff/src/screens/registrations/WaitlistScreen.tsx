@@ -148,7 +148,12 @@ function EntryCard({ entry }: { entry: Entry }) {
             </div>
           </form>
         ) : (
-          <Button variant="secondary" disabled={!online} onClick={() => setOpen(true)}>
+          <Button
+            variant="secondary"
+            disabled={!online}
+            onClick={() => setOpen(true)}
+            aria-describedby={`entry-${entry.id}`}
+          >
             Remove…
           </Button>
         )

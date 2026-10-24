@@ -119,3 +119,13 @@
 .rf-steps {
   padding-left: var(--space-5);
 }
+/* A locked money form (outcome unknown): the fieldset carries no visual frame of its own. */
+.rf-plain {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.rf-locked {
+  margin: var(--space-2) 0;
+}

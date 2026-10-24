@@ -213,6 +213,27 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
     expect(
       screen.getByRole('link', { name: 'Open the payment attempt to reconcile it' }),
     ).toHaveAttribute('href', `/finance/payments/${PAYMENT_ID}`);
+    // SPK-PAY-007: no second payment is invited until the attempt is reconciled.
+    expect(screen.queryByRole('button', { name: 'Record payment and check out' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Price/ })).toBeNull();
+  });
+
+  it('SPK-PAY-007: a basket already checking out (after a reload) says not to take payment again', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /baskets/{id}': ok({
+          ...HELD,
+          status: 'checking_out',
+          orderRef: '0192f1a0-0000-7000-8000-00000000f0f0',
+        }),
+      }),
+    });
+    render(app.at(`/registrations/assisted/${BASKET_ID}`));
+    const state = await screen.findByTestId('checkout-in-progress');
+    expect(state).toHaveTextContent('Checkout in progress: do not take payment again');
+    expect(state).toHaveTextContent('Order reference 0192f1a0');
+    expect(screen.queryByRole('form', { name: 'Take payment' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Price/ })).toBeNull();
   });
 
   it('shows a basket the viewer may not see as not available', async () => {

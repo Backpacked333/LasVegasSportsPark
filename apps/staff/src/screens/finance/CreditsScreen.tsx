@@ -35,6 +35,11 @@ import { CREDIT_STATUS } from '../../features/registration-finance/labels';
 import { PersonName } from '../../features/registration-finance/names';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
 import { PENDING } from '../../features/registration-finance/pending';
+import {
+  LockedNote,
+  outcomePending,
+  useSameRequest,
+} from '../../features/registration-finance/sameRequest';
 import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -61,9 +66,15 @@ function CreditActions({ credit }: { credit: Credit }) {
   const [obligationId, setObligationId] = useState('');
   const [amount, setAmount] = useState('');
   const [local, setLocal] = useState<Record<string, string>>({});
+  const sameApprove = useSameRequest(approve.submit);
+  const sameRedeem = useSameRequest(redeem.submit);
+  const failed = approve.error ? 'approve' : redeem.error ? 'redeem' : null;
+  const redeemLocked = outcomePending(redeem.error);
   const reload = () => {
     approve.reset();
     redeem.reset();
+    sameApprove.forget();
+    sameRedeem.forget();
     void queryClient.invalidateQueries({ queryKey: ['api', '/credits'] });
     void queryClient.invalidateQueries({ queryKey: ['api', '/credits/{id}'] });
   };
@@ -76,8 +87,8 @@ function CreditActions({ credit }: { credit: Credit }) {
             disabled={!online}
             aria-label={`Approve the credit of ${formatMoney(credit.originalMinor, credit.currency)}`}
             onClick={() =>
-              approve
-                .submit({ path: { id: credit.id }, body: { expectedRevision: credit.revision } })
+              sameApprove
+                .send({ path: { id: credit.id }, body: { expectedRevision: credit.revision } })
                 .catch(() => undefined)
             }
           >
@@ -99,8 +110,8 @@ function CreditActions({ credit }: { credit: Credit }) {
               errors.amountMinor = `Enter a positive amount in ${credit.currency}.`;
             setLocal(errors);
             if (minor === null || Object.keys(errors).length > 0) return;
-            redeem
-              .submit({
+            sameRedeem
+              .send({
                 path: { id: credit.id },
                 body: {
                   obligationId: obligationId.trim(),
@@ -111,29 +122,44 @@ function CreditActions({ credit }: { credit: Credit }) {
               .catch(() => undefined);
           }}
         >
-          <div className="rf-grid">
-            <TextField
-              label="Obligation reference"
-              value={obligationId}
-              onChange={setObligationId}
-              error={local.obligationId}
-            />
-            <TextField
-              label={`Amount to redeem (${credit.currency})`}
-              inputMode="decimal"
-              value={amount}
-              onChange={setAmount}
-              error={local.amountMinor}
-            />
-          </div>
-          <Button type="submit" variant="secondary" busy={redeem.isProcessing} disabled={!online}>
-            Redeem
-          </Button>
+          <fieldset className="rf-plain" disabled={redeemLocked}>
+            <div className="rf-grid">
+              <TextField
+                label="Obligation reference"
+                value={obligationId}
+                onChange={setObligationId}
+                error={local.obligationId}
+              />
+              <TextField
+                label={`Amount to redeem (${credit.currency})`}
+                inputMode="decimal"
+                value={amount}
+                onChange={setAmount}
+                error={local.amountMinor}
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="secondary"
+              busy={redeem.isProcessing}
+              disabled={!online || redeemLocked}
+            >
+              Redeem
+            </Button>
+          </fieldset>
         </form>
       ) : null}
+      <LockedNote error={redeem.error} onNewRequest={reload} />
       <CommandError
         error={approve.error ?? redeem.error}
         onReload={reload}
+        onRetry={
+          failed === 'approve'
+            ? sameApprove.retry
+            : failed === 'redeem'
+              ? sameRedeem.retry
+              : undefined
+        }
         currency={credit.currency}
       />
     </>
@@ -157,7 +183,13 @@ function CreditCard({ credit }: { credit: Credit }) {
             ['Owner', <PersonName key="owner" id={credit.ownerPersonId} fallback="Owner" />],
             ['Currency', credit.currency],
             ['Permitted uses', credit.permittedUses.map(humanize).join(', ')],
-            ['Expiry', credit.expiresAt ? formatInstant(credit.expiresAt) : 'No expiry'],
+            // Credit expiry rules are pending (SPK-PAY-009): no expiry date makes no policy claim.
+            [
+              'Expiry',
+              credit.expiresAt
+                ? formatInstant(credit.expiresAt)
+                : 'No date set (expiry rules pending)',
+            ],
             [
               'Source',
               `${humanize(credit.sourceKind)}${credit.sourceId ? ` (${credit.sourceId.slice(0, 8)})` : ''}`,
@@ -197,6 +229,8 @@ function IssueCredit({ ownerId }: { ownerId: string }) {
   const [local, setLocal] = useState<Record<string, string>>({});
   const issue = useApiCommand('post', '/credits', { invalidate: CREDIT_INVALIDATE });
   const server = fieldErrorsOf(issue.error);
+  const same = useSameRequest(issue.submit);
+  const locked = outcomePending(issue.error);
   return (
     <details className="rf-panel">
       <summary>Issue a credit</summary>
@@ -223,8 +257,8 @@ function IssueCredit({ ownerId }: { ownerId: string }) {
           if (!reason.trim()) errors.reason = 'A reason is required and is audited.';
           setLocal(errors);
           if (minor === null || !sourceKind || Object.keys(errors).length > 0) return;
-          issue
-            .submit({
+          same
+            .send({
               body: {
                 ownerPersonId: owner.trim(),
                 amountMinor: minor,
@@ -239,64 +273,66 @@ function IssueCredit({ ownerId }: { ownerId: string }) {
             .catch(() => undefined);
         }}
       >
-        <div className="rf-grid">
-          <TextField
-            label="Owner reference"
+        <fieldset className="rf-plain" disabled={locked}>
+          <div className="rf-grid">
+            <TextField
+              label="Owner reference"
+              required
+              value={owner}
+              onChange={setOwner}
+              error={local.ownerPersonId ?? server.ownerPersonId}
+            />
+            <TextField
+              label="Credit amount"
+              inputMode="decimal"
+              required
+              value={amount}
+              onChange={setAmount}
+              error={local.amountMinor ?? server.amountMinor}
+            />
+            <TextField
+              label="Credit currency"
+              required
+              value={currency}
+              onChange={setCurrency}
+              error={local.currency ?? server.currency}
+            />
+            <TextField
+              label="Expires at the end of (UTC date)"
+              type="date"
+              hint="Leave empty for no expiry."
+              value={expires}
+              onChange={setExpires}
+              error={local.expiresAt ?? server.expiresAt}
+            />
+            <SelectField
+              label="Source"
+              required
+              value={sourceKind}
+              placeholder="Choose a source"
+              onChange={(v) => setSourceKind(v as 'goodwill' | 'adjustment' | '')}
+              options={[
+                { value: 'goodwill', label: 'Goodwill' },
+                { value: 'adjustment', label: 'Adjustment' },
+              ]}
+              error={local.sourceKind}
+            />
+          </div>
+          <CheckboxGroup legend="Permitted uses" options={USES} values={uses} onChange={setUses} />
+          {local.permittedUses ? <p className="rf-error">{local.permittedUses}</p> : null}
+          <TextArea
+            label="Reason for the credit"
             required
-            value={owner}
-            onChange={setOwner}
-            error={local.ownerPersonId ?? server.ownerPersonId}
+            value={reason}
+            onChange={setReason}
+            error={local.reason ?? server.reason}
           />
-          <TextField
-            label="Credit amount"
-            inputMode="decimal"
-            required
-            value={amount}
-            onChange={setAmount}
-            error={local.amountMinor ?? server.amountMinor}
-          />
-          <TextField
-            label="Credit currency"
-            required
-            value={currency}
-            onChange={setCurrency}
-            error={local.currency ?? server.currency}
-          />
-          <TextField
-            label="Expires at the end of (UTC date)"
-            type="date"
-            hint="Leave empty for no expiry."
-            value={expires}
-            onChange={setExpires}
-            error={local.expiresAt ?? server.expiresAt}
-          />
-          <SelectField
-            label="Source"
-            required
-            value={sourceKind}
-            placeholder="Choose a source"
-            onChange={(v) => setSourceKind(v as 'goodwill' | 'adjustment' | '')}
-            options={[
-              { value: 'goodwill', label: 'Goodwill' },
-              { value: 'adjustment', label: 'Adjustment' },
-            ]}
-            error={local.sourceKind}
-          />
-        </div>
-        <CheckboxGroup legend="Permitted uses" options={USES} values={uses} onChange={setUses} />
-        {local.permittedUses ? <p className="rf-error">{local.permittedUses}</p> : null}
-        <TextArea
-          label="Reason for the credit"
-          required
-          value={reason}
-          onChange={setReason}
-          error={local.reason ?? server.reason}
-        />
-        <div className="rf-actions">
-          <Button type="submit" busy={issue.isProcessing} disabled={!online}>
-            Issue the credit
-          </Button>
-        </div>
+          <div className="rf-actions">
+            <Button type="submit" busy={issue.isProcessing} disabled={!online || locked}>
+              Issue the credit
+            </Button>
+          </div>
+        </fieldset>
         <OfflineCaption action="issuing a credit" />
         {issue.data ? (
           <p role="status">
@@ -304,7 +340,14 @@ function IssueCredit({ ownerId }: { ownerId: string }) {
             {CREDIT_STATUS[issue.data.status].label}.
           </p>
         ) : null}
-        <CommandError error={issue.error} />
+        <LockedNote
+          error={issue.error}
+          onNewRequest={() => {
+            issue.reset();
+            same.forget();
+          }}
+        />
+        <CommandError error={issue.error} onRetry={same.retry} />
       </form>
     </details>
   );

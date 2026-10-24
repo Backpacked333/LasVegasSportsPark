@@ -157,6 +157,22 @@ export function instantToLocal(iso: string | null | undefined, timeZone: string 
   return new Date(date.getTime() + offset * 60_000).toISOString().slice(0, 16);
 }
 
+/** The calendar day after `date` ("2026-10-31" -> "2026-11-01"). */
+export function nextDay(date: string): string {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The start of a facility-local calendar day as an instant (SPK-SCHED-008); with `endOfDay`, the
+ * start of the next local day (an exclusive period end). Null when the date is not a date.
+ */
+export function localDayToInstant(date: string, timeZone: string, endOfDay = false): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  return localToInstant(`${endOfDay ? nextDay(date) : date}T00:00`, timeZone);
+}
+
 /** Start of a calendar day in UTC as an instant, for report periods ("2026-10-01" -> instant). */
 export function dateToInstant(date: string, endOfDay = false): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;

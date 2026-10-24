@@ -108,12 +108,42 @@ describe('SCR-S-38 ReconciliationScreen', () => {
     expect(await f.findByText(/never netted against other differences/)).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/settlement-reconciliations')?.body).toEqual({
       kind: 'cash_drawer',
-      periodStart: '2026-10-23T00:00:00.000Z',
-      periodEnd: '2026-10-24T00:00:00.000Z',
+      // SPK-SCHED-008: the facility's local day (America/Los_Angeles, PDT), not a UTC day.
+      periodStart: '2026-10-23T07:00:00.000Z',
+      periodEnd: '2026-10-24T07:00:00.000Z',
       currency: 'USD',
       reportedMinor: 12000,
       facilityId: FACILITY_A,
     });
+    expect(f.getByLabelText(/^First day \(facility time, America\/Los_Angeles\)/)).toBeVisible();
+  });
+
+  it('SPK-SCHED-008: a cash drawer day across the daylight-saving change is the facility day (25 hours)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /settlement-reconciliations': ok(reconciliationReport().settlements[0], 201),
+      }),
+    });
+    render(app.at('/finance/reconciliation'));
+    await user.click(await screen.findByText('Record a settlement or cash drawer count'));
+    const form = screen.getByRole('form', { name: 'Record a settlement or cash drawer count' });
+    const f = within(form);
+    await user.selectOptions(f.getByLabelText(/^What is reconciled/), 'cash_drawer');
+    await user.selectOptions(await f.findByLabelText(/^Facility/), FACILITY_A);
+    await user.type(f.getByLabelText(/^First day/), '2026-11-01');
+    await user.type(f.getByLabelText(/^Last day/), '2026-11-01');
+    await user.type(f.getByLabelText(/^Settlement currency/), 'USD');
+    await user.type(f.getByLabelText(/^Reported total/), '120.00');
+    await user.click(f.getByRole('button', { name: 'Reconcile' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/settlement-reconciliations')?.body,
+      ).toMatchObject({
+        periodStart: '2026-11-01T07:00:00.000Z',
+        periodEnd: '2026-11-02T08:00:00.000Z',
+      }),
+    );
   });
 
   it('SPK-PAY-012: records a cash tender with evidence against the obligation it came from', async () => {

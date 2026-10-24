@@ -4,7 +4,7 @@
  * concurrent reservation answers, an unknown refund keeping its reservation until reconciled, and
  * credits with owner, uses, expiry, balance, source and history.
  */
-import type { FakeHandler } from '@sportspark/api-client/testing';
+import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -57,6 +57,34 @@ describe('SCR-S-37 RefundsScreen', () => {
     const figures = screen.getByLabelText('Refundable amount of the payment');
     expect(within(figures).getByText('$125.00')).toBeInTheDocument();
     expect(screen.getByText('Reservation settled')).toBeInTheDocument();
+  });
+
+  it('§4.9: after no answer the form is locked and Try again resends the same request with the same key', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /payments/{id}/refunds': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('connection dropped');
+          return fakeResponse(201, refund());
+        },
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    await requestRefund(user, '25');
+    expect(await screen.findByTestId('request-locked')).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: 'Request a refund' });
+    // The amount cannot be edited while the outcome is unknown.
+    expect(within(form).getByLabelText(/^Refund amount \(USD\)/)).toBeDisabled();
+    expect(
+      within(form).getByRole('button', { name: 'Reserve and request the refund' }),
+    ).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/\$100\.00 still refundable/)).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter((r) => r.route === '/payments/{id}/refunds');
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 
   it('refuses an amount that is not a positive amount before sending, and shows an over-refund with the available amount', async () => {
@@ -213,7 +241,7 @@ describe('SCR-S-37 CreditsScreen', () => {
       .getAllByRole('listitem')
       .filter((li) => li.parentElement === list);
     expect(within(pending!).getByText('pending_approval')).toBeInTheDocument();
-    expect(within(pending!).getByText('No expiry')).toBeInTheDocument();
+    expect(within(pending!).getByText('No date set (expiry rules pending)')).toBeInTheDocument();
     expect(within(pending!).getByText(/overpayment/)).toBeInTheDocument();
     expect(
       within(active!).getByRole('link', { name: /Credit \$4\.00 remaining of \$10\.00/ }),

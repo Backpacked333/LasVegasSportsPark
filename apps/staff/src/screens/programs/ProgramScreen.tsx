@@ -38,7 +38,14 @@ const PROGRAM_NEXT: Record<ProgramStatus, readonly ProgramStatus[]> = {
 function EditProgram({ program }: { program: Schema<'Program'> }) {
   const online = useOnline();
   const queryClient = useQueryClient();
-  const update = useApiCommand('patch', '/programs/{id}', { invalidate: [['api', '/programs']] });
+  // Both the list and the detail (key ['api', '/programs/{id}', ...]) are refetched, so the next
+  // save carries the new revision.
+  const update = useApiCommand('patch', '/programs/{id}', {
+    invalidate: [
+      ['api', '/programs'],
+      ['api', '/programs/{id}'],
+    ],
+  });
   const reload = () => {
     update.reset();
     void queryClient.invalidateQueries({ queryKey: ['api', '/programs/{id}'] });

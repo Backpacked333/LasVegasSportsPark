@@ -347,11 +347,10 @@ function EnrollmentView({ enrollment }: { enrollment: Enrollment }) {
   const cancelable = enrollment.status === 'pending' || enrollment.status === 'confirmed';
   return (
     <>
-      <h2 id="enrollment-title">
+      <h3>
         <PersonName id={enrollment.participantPersonId} fallback="Participant" />:{' '}
         <OfferingName id={enrollment.offeringId} />
-      </h2>
-      <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
+      </h3>
       <p>
         <StatusBadge {...ENROLLMENT_STATUS[enrollment.status]} />
       </p>
@@ -423,6 +422,9 @@ export function EnrollmentChangeScreen() {
   });
   return (
     <section aria-labelledby="enrollment-title">
+      {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
+      <h2 id="enrollment-title">Enrollment</h2>
+      <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <QueryBoundary
         query={enrollment}
         label="the enrollment"

@@ -82,10 +82,33 @@ describe('SCR-S-36 PaymentExceptionsScreen', () => {
     });
     expect(within(unmatched).getByText(/the inbox is not published/)).toBeInTheDocument();
     expect(screen.getByText(/depends on DEC-039/)).toBeInTheDocument();
-    expect(app.fake.requests.find((r) => r.route === '/exceptions')?.query).toMatchObject({
-      queue: 'finance_operator',
-      status: 'open',
+    // SCR-S-36: the default is the API's active set (open and acknowledged), so no status.
+    const query = app.fake.requests.find((r) => r.route === '/exceptions')?.query;
+    expect(query).toMatchObject({ queue: 'finance_operator' });
+    expect(query?.['status']).toBeUndefined();
+  });
+
+  it('shows an acknowledged unknown outcome and a finance exception of an unlisted kind', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /exceptions': ok({
+          items: [
+            exception({ status: 'acknowledged' }),
+            exception({
+              id: '0192f1a0-0000-7000-8000-00000000e9e9',
+              category: 'finance.refund_review',
+              title: 'A refund needs review',
+            }),
+          ],
+          nextCursor: null,
+        }),
+      }),
     });
+    render(app.at('/finance/payments'));
+    const unknown = await screen.findByRole('region', { name: 'Unknown payment outcomes' });
+    expect(within(unknown).getByText('acknowledged')).toBeInTheDocument();
+    const other = screen.getByRole('region', { name: 'Finance exceptions of another kind' });
+    expect(within(other).getByText(/A refund needs review/)).toBeInTheDocument();
   });
 
   it('says plainly when there are no unknown outcomes', async () => {

@@ -53,6 +53,7 @@ import { OfflineCaption, useOnline } from '../../features/registration-finance/o
 import { PENDING } from '../../features/registration-finance/pending';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { useNow } from '../../providers/AppProviders';
+import { outcomePending, useSameRequest } from '../../features/registration-finance/sameRequest';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
@@ -487,9 +488,16 @@ function PriceAndPay({ basket }: { basket: Basket }) {
   const quote = useApiCommand('post', '/registration-quotes');
   const checkout = useApiCommand('post', '/registration-checkouts', { invalidate: [BASKET_KEY] });
   const current = quote.data ?? null;
+  const same = useSameRequest(checkout.submit);
+  // SPK-PAY-007: after no answer or PAYMENT_OUTCOME_UNKNOWN the payment may have been taken. No
+  // new price or payment is offered until the attempt is reconciled; only the same request may be
+  // retried, and the intent is never reset from here.
+  const unresolved = outcomePending(checkout.error);
 
   const requestQuote = () => {
+    if (unresolved) return;
     checkout.reset();
+    same.forget();
     const discountCodes = codes
       .split(',')
       .map((c) => c.trim())
@@ -501,8 +509,10 @@ function PriceAndPay({ basket }: { basket: Basket }) {
       .catch(() => undefined);
   };
   const requote = () => {
+    if (unresolved) return;
     quote.reset();
     checkout.reset();
+    same.forget();
     requestQuote();
   };
   const pay = () => {
@@ -516,8 +526,8 @@ function PriceAndPay({ basket }: { basket: Basket }) {
     }
     setLocal(errors);
     if (Object.keys(errors).length > 0) return;
-    checkout
-      .submit({
+    same
+      .send({
         body: {
           quoteId: current.id,
           authorizeFutureInstallments: false,
@@ -548,7 +558,7 @@ function PriceAndPay({ basket }: { basket: Basket }) {
           <Link to="/registrations/queue">approval queue</Link>.
         </p>
       ) : null}
-      {basket.status === 'held' && !checkout.data ? (
+      {basket.status === 'held' && !checkout.data && !unresolved ? (
         <>
           <TextField label="Discount codes (comma separated)" value={codes} onChange={setCodes} />
           <div className="rf-actions">
@@ -558,19 +568,34 @@ function PriceAndPay({ basket }: { basket: Basket }) {
           </div>
           <p className="caption">
             Prices come from the server&apos;s price rules, never from this screen (SPK-PAY-001).
-            Installment plans are pending {PENDING.teamLiability.ids.join(', ')}.
+            Installment plans are pending {PENDING.installments.ids.join(', ')} (owner:{' '}
+            {PENDING.installments.owner}).
           </p>
         </>
       ) : null}
-      {basket.status !== 'held' && !checkout.data ? (
+      {basket.status === 'checking_out' && !checkout.data && !checkout.error ? (
+        // SPK-PAY-007 recovery: a checkout in flight (for example after a reload) is never a
+        // reason to take payment again.
+        <section className="state" data-testid="checkout-in-progress" aria-live="polite">
+          <StatusBadge tone="warning" label="Checkout in progress: do not take payment again" />
+          <p>
+            A checkout for this basket is in progress or its payment outcome is being confirmed.
+            Check the payment before doing anything else.
+          </p>
+          {basket.orderRef ? (
+            <p className="caption">Order reference {shortRef(basket.orderRef)}.</p>
+          ) : null}
+          <Link to="/finance/payments">Open unknown payment outcomes</Link>
+        </section>
+      ) : basket.status !== 'held' && !checkout.data ? (
         <p>
           This basket is {BASKET_STATUS[basket.status].label}. Each line links to its enrollment
           once one exists.
         </p>
       ) : null}
       <CommandError error={quote.error} onRequote={requote} />
-      {current ? <QuoteView quote={current} /> : null}
-      {current && !checkout.data && basket.status === 'held' ? (
+      {current && !unresolved ? <QuoteView quote={current} /> : null}
+      {current && !checkout.data && basket.status === 'held' && !unresolved ? (
         <form
           noValidate
           aria-label="Take payment"
@@ -673,9 +698,9 @@ function PriceAndPay({ basket }: { basket: Basket }) {
       ) : null}
       <CommandError
         error={checkout.error}
-        onRequote={requote}
+        onRequote={unresolved ? undefined : requote}
         currency={current?.currency}
-        onRetry={pay}
+        onRetry={same.retry}
       />
       {checkout.data ? <CheckoutResult checkout={checkout.data} /> : null}
     </section>
@@ -697,8 +722,6 @@ function BasketView({ basket }: { basket: Basket }) {
   const live = basket.status === 'open' || basket.status === 'held';
   return (
     <>
-      <h2 id="assisted-title">Assisted registration</h2>
-      <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <p>
         <StatusBadge {...BASKET_STATUS[basket.status]} />
       </p>
@@ -832,6 +855,9 @@ export function AssistedRegistrationScreen() {
   }
   return (
     <section aria-labelledby="assisted-title">
+      {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
+      <h2 id="assisted-title">Assisted registration</h2>
+      <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <QueryBoundary
         query={basket}
         label="the basket"

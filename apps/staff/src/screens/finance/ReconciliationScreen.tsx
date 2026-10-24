@@ -29,6 +29,7 @@ import {
   dateToInstant,
   formatInstant,
   formatMoney,
+  localDayToInstant,
   parseMoneyInput,
 } from '../../features/registration-finance/format';
 import {
@@ -40,6 +41,11 @@ import { OfflineCaption, useOnline } from '../../features/registration-finance/o
 import { PENDING } from '../../features/registration-finance/pending';
 import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { useNow } from '../../providers/AppProviders';
+import {
+  LockedNote,
+  outcomePending,
+  useSameRequest,
+} from '../../features/registration-finance/sameRequest';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
@@ -231,7 +237,7 @@ function ReportView({ report }: { report: Report }) {
 
 function RecordSettlement() {
   const online = useOnline();
-  const { facilities } = useFacilities();
+  const { facilities, timeZoneOf } = useFacilities();
   const [kind, setKind] = useState<'processor_settlement' | 'cash_drawer' | ''>('');
   const [provider, setProvider] = useState('');
   const [facilityId, setFacilityId] = useState('');
@@ -249,6 +255,17 @@ function RecordSettlement() {
     ],
   });
   const server = fieldErrorsOf(record.error);
+  const same = useSameRequest(record.submit);
+  const locked = outcomePending(record.error);
+  // A cash drawer counts the facility's local days (SPK-SCHED-008): the API attaches every cash
+  // tender recorded in [periodStart, periodEnd) to this count. A processor settlement is in UTC.
+  const drawerZone = kind === 'cash_drawer' ? timeZoneOf(facilityId) : null;
+  const dayClock =
+    kind === 'cash_drawer'
+      ? drawerZone
+        ? `facility time, ${drawerZone}`
+        : 'facility time'
+      : 'UTC';
   return (
     <details className="rf-panel">
       <summary>Record a settlement or cash drawer count</summary>
@@ -264,8 +281,21 @@ function RecordSettlement() {
             errors.provider = 'Name the processor.';
           if (kind === 'cash_drawer' && !facilityId.trim())
             errors.facilityId = 'Choose the facility.';
-          const periodStart = dateToInstant(from);
-          const periodEnd = dateToInstant(to, true);
+          if (kind === 'cash_drawer' && facilityId.trim() && !drawerZone)
+            errors.facilityId =
+              'The time zone of this facility is not known to you, so its days cannot be counted. Ask an administrator.';
+          const periodStart =
+            kind === 'cash_drawer'
+              ? drawerZone
+                ? localDayToInstant(from, drawerZone)
+                : null
+              : dateToInstant(from);
+          const periodEnd =
+            kind === 'cash_drawer'
+              ? drawerZone
+                ? localDayToInstant(to, drawerZone, true)
+                : null
+              : dateToInstant(to, true);
           if (!periodStart) errors.periodStart = 'Enter the first day.';
           if (!periodEnd) errors.periodEnd = 'Enter the last day.';
           if (periodStart && periodEnd && periodStart >= periodEnd)
@@ -284,8 +314,8 @@ function RecordSettlement() {
             Object.keys(errors).length > 0
           )
             return;
-          record
-            .submit({
+          same
+            .send({
               body: {
                 kind,
                 periodStart,
@@ -303,88 +333,90 @@ function RecordSettlement() {
             .catch(() => undefined);
         }}
       >
-        <div className="rf-grid">
-          <SelectField
-            label="What is reconciled"
-            required
-            value={kind}
-            placeholder="Choose"
-            onChange={(v) => setKind(v as 'processor_settlement' | 'cash_drawer' | '')}
-            options={[
-              { value: 'processor_settlement', label: 'Processor settlement' },
-              { value: 'cash_drawer', label: 'Cash drawer' },
-            ]}
-            error={local.kind ?? server.kind}
-          />
-          {kind === 'processor_settlement' ? (
-            <TextField
-              label="Processor"
+        <fieldset className="rf-plain" disabled={locked}>
+          <div className="rf-grid">
+            <SelectField
+              label="What is reconciled"
               required
-              value={provider}
-              onChange={setProvider}
-              error={local.provider ?? server.provider}
+              value={kind}
+              placeholder="Choose"
+              onChange={(v) => setKind(v as 'processor_settlement' | 'cash_drawer' | '')}
+              options={[
+                { value: 'processor_settlement', label: 'Processor settlement' },
+                { value: 'cash_drawer', label: 'Cash drawer' },
+              ]}
+              error={local.kind ?? server.kind}
             />
-          ) : null}
-          {kind === 'cash_drawer' ? (
-            facilities.length > 0 ? (
-              <SelectField
-                label="Facility"
-                required
-                value={facilityId}
-                placeholder="Choose a facility"
-                onChange={setFacilityId}
-                options={facilities.map((f) => ({ value: f.id, label: f.name }))}
-                error={local.facilityId ?? server.facilityId}
-              />
-            ) : (
+            {kind === 'processor_settlement' ? (
               <TextField
-                label="Facility reference"
+                label="Processor"
                 required
-                value={facilityId}
-                onChange={setFacilityId}
-                error={local.facilityId ?? server.facilityId}
+                value={provider}
+                onChange={setProvider}
+                error={local.provider ?? server.provider}
               />
-            )
-          ) : null}
-          <TextField
-            label="First day (UTC)"
-            type="date"
-            required
-            value={from}
-            onChange={setFrom}
-            error={local.periodStart ?? server.periodStart}
-          />
-          <TextField
-            label="Last day (UTC)"
-            type="date"
-            required
-            value={to}
-            onChange={setTo}
-            error={local.periodEnd ?? server.periodEnd}
-          />
-          <TextField
-            label="Settlement currency"
-            required
-            value={currency}
-            onChange={setCurrency}
-            error={local.currency ?? server.currency}
-          />
-          <TextField
-            label="Reported total"
-            inputMode="decimal"
-            required
-            value={reported}
-            onChange={setReported}
-            error={local.reportedMinor ?? server.reportedMinor}
-          />
-          <TextField label="External reference" value={reference} onChange={setReference} />
-        </div>
-        <TextArea label="Settlement notes" value={notes} onChange={setNotes} />
-        <div className="rf-actions">
-          <Button type="submit" busy={record.isProcessing} disabled={!online}>
-            Reconcile
-          </Button>
-        </div>
+            ) : null}
+            {kind === 'cash_drawer' ? (
+              facilities.length > 0 ? (
+                <SelectField
+                  label="Facility"
+                  required
+                  value={facilityId}
+                  placeholder="Choose a facility"
+                  onChange={setFacilityId}
+                  options={facilities.map((f) => ({ value: f.id, label: f.name }))}
+                  error={local.facilityId ?? server.facilityId}
+                />
+              ) : (
+                <TextField
+                  label="Facility reference"
+                  required
+                  value={facilityId}
+                  onChange={setFacilityId}
+                  error={local.facilityId ?? server.facilityId}
+                />
+              )
+            ) : null}
+            <TextField
+              label={`First day (${dayClock})`}
+              type="date"
+              required
+              value={from}
+              onChange={setFrom}
+              error={local.periodStart ?? server.periodStart}
+            />
+            <TextField
+              label={`Last day (${dayClock})`}
+              type="date"
+              required
+              value={to}
+              onChange={setTo}
+              error={local.periodEnd ?? server.periodEnd}
+            />
+            <TextField
+              label="Settlement currency"
+              required
+              value={currency}
+              onChange={setCurrency}
+              error={local.currency ?? server.currency}
+            />
+            <TextField
+              label="Reported total"
+              inputMode="decimal"
+              required
+              value={reported}
+              onChange={setReported}
+              error={local.reportedMinor ?? server.reportedMinor}
+            />
+            <TextField label="External reference" value={reference} onChange={setReference} />
+          </div>
+          <TextArea label="Settlement notes" value={notes} onChange={setNotes} />
+          <div className="rf-actions">
+            <Button type="submit" busy={record.isProcessing} disabled={!online || locked}>
+              Reconcile
+            </Button>
+          </div>
+        </fieldset>
         <OfflineCaption action="recording a reconciliation" />
         {record.isProcessing ? <p role="status">Matching against the ledger…</p> : null}
         {record.data ? (
@@ -398,7 +430,14 @@ function RecordSettlement() {
               : ''}
           </div>
         ) : null}
-        <CommandError error={record.error} />
+        <LockedNote
+          error={record.error}
+          onNewRequest={() => {
+            record.reset();
+            same.forget();
+          }}
+        />
+        <CommandError error={record.error} onRetry={same.retry} />
       </form>
     </details>
   );
@@ -423,6 +462,8 @@ function RecordTender({ obligationId }: { obligationId: string }) {
     ],
   });
   const server = fieldErrorsOf(record.error);
+  const same = useSameRequest(record.submit);
+  const locked = outcomePending(record.error);
   return (
     <details className="rf-panel" open={obligationId !== ''}>
       <summary>Record a cash or external tender</summary>
@@ -452,8 +493,8 @@ function RecordTender({ obligationId }: { obligationId: string }) {
           if (!reference.trim()) errors.reference = 'Enter the evidence reference.';
           setLocal(errors);
           if (minor === null || Object.keys(errors).length > 0) return;
-          record
-            .submit({
+          same
+            .send({
               body: {
                 obligationId: obligation.trim(),
                 facilityId: facilityId.trim(),
@@ -470,68 +511,70 @@ function RecordTender({ obligationId }: { obligationId: string }) {
             .catch(() => undefined);
         }}
       >
-        <div className="rf-grid">
-          <TextField
-            label="Obligation reference"
-            required
-            value={obligation}
-            onChange={setObligation}
-            error={local.obligationId ?? server.obligationId}
-          />
-          {facilities.length > 0 ? (
-            <SelectField
-              label="Tender facility"
-              required
-              value={facilityId}
-              placeholder="Choose a facility"
-              onChange={setFacilityId}
-              options={facilities.map((f) => ({ value: f.id, label: f.name }))}
-              error={local.facilityId ?? server.facilityId}
-            />
-          ) : (
+        <fieldset className="rf-plain" disabled={locked}>
+          <div className="rf-grid">
             <TextField
-              label="Tender facility reference"
+              label="Obligation reference"
               required
-              value={facilityId}
-              onChange={setFacilityId}
-              error={local.facilityId ?? server.facilityId}
+              value={obligation}
+              onChange={setObligation}
+              error={local.obligationId ?? server.obligationId}
             />
-          )}
-          <SelectField
-            label="Tender kind"
-            value={tenderKind}
-            onChange={(v) => setTenderKind(v as Schema<'CashTenderKind'>)}
-            options={Object.entries(TENDER_KIND).map(([value, label]) => ({ value, label }))}
-          />
-          <TextField
-            label="Tender amount"
-            inputMode="decimal"
-            required
-            value={amount}
-            onChange={setAmount}
-            error={local.amountMinor ?? server.amountMinor}
-          />
-          <TextField
-            label="Tender currency"
-            required
-            value={currency}
-            onChange={setCurrency}
-            error={local.currency ?? server.currency}
-          />
-          <TextField
-            label="Evidence reference"
-            required
-            value={reference}
-            onChange={setReference}
-            error={local.reference ?? server['evidence.reference']}
-          />
-        </div>
-        <TextArea label="Evidence notes" value={notes} onChange={setNotes} />
-        <div className="rf-actions">
-          <Button type="submit" busy={record.isProcessing} disabled={!online}>
-            Record the tender
-          </Button>
-        </div>
+            {facilities.length > 0 ? (
+              <SelectField
+                label="Tender facility"
+                required
+                value={facilityId}
+                placeholder="Choose a facility"
+                onChange={setFacilityId}
+                options={facilities.map((f) => ({ value: f.id, label: f.name }))}
+                error={local.facilityId ?? server.facilityId}
+              />
+            ) : (
+              <TextField
+                label="Tender facility reference"
+                required
+                value={facilityId}
+                onChange={setFacilityId}
+                error={local.facilityId ?? server.facilityId}
+              />
+            )}
+            <SelectField
+              label="Tender kind"
+              value={tenderKind}
+              onChange={(v) => setTenderKind(v as Schema<'CashTenderKind'>)}
+              options={Object.entries(TENDER_KIND).map(([value, label]) => ({ value, label }))}
+            />
+            <TextField
+              label="Tender amount"
+              inputMode="decimal"
+              required
+              value={amount}
+              onChange={setAmount}
+              error={local.amountMinor ?? server.amountMinor}
+            />
+            <TextField
+              label="Tender currency"
+              required
+              value={currency}
+              onChange={setCurrency}
+              error={local.currency ?? server.currency}
+            />
+            <TextField
+              label="Evidence reference"
+              required
+              value={reference}
+              onChange={setReference}
+              error={local.reference ?? server['evidence.reference']}
+            />
+          </div>
+          <TextArea label="Evidence notes" value={notes} onChange={setNotes} />
+          <div className="rf-actions">
+            <Button type="submit" busy={record.isProcessing} disabled={!online || locked}>
+              Record the tender
+            </Button>
+          </div>
+        </fieldset>
         <OfflineCaption action="recording a tender" />
         {record.data ? (
           <p role="status">
@@ -545,7 +588,18 @@ function RecordTender({ obligationId }: { obligationId: string }) {
             . It is reconciled with the next cash drawer count.
           </p>
         ) : null}
-        <CommandError error={record.error} currency={currency.trim().toUpperCase() || null} />
+        <LockedNote
+          error={record.error}
+          onNewRequest={() => {
+            record.reset();
+            same.forget();
+          }}
+        />
+        <CommandError
+          error={record.error}
+          currency={currency.trim().toUpperCase() || null}
+          onRetry={same.retry}
+        />
       </form>
     </details>
   );

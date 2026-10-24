@@ -190,6 +190,36 @@ describe('SCR-S-14 ProgramScreen', () => {
     );
   });
 
+  it('a second save carries the revision the first save returned', async () => {
+    const user = userEvent.setup();
+    let saved = false;
+    let patches = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /programs/{id}': () =>
+          fakeResponse(200, program(saved ? { revision: 3, name: 'Spring academy plus' } : {})),
+        'PATCH /programs/{id}': () => {
+          patches += 1;
+          saved = true;
+          return fakeResponse(200, program({ revision: 2 + patches, name: 'Spring academy plus' }));
+        },
+      }),
+    });
+    render(app.at(`/programs/${PROGRAM_ID}`));
+    await screen.findByRole('heading', { name: 'Spring academy' });
+    await user.click(screen.getByText('Edit program definition'));
+    const name = screen.getAllByLabelText(/^Program name/)[0]!;
+    await user.clear(name);
+    await user.type(name, 'Spring academy plus');
+    await user.click(screen.getByRole('button', { name: 'Save program' }));
+    await screen.findByRole('heading', { name: 'Spring academy plus' });
+    await user.click(screen.getByRole('button', { name: 'Save program' }));
+    await waitFor(() => expect(patches).toBe(2));
+    const [first, second] = app.fake.requests.filter((r) => r.method === 'PATCH');
+    expect(first?.body).toMatchObject({ expectedRevision: 2 });
+    expect(second?.body).toMatchObject({ expectedRevision: 3 });
+  });
+
   it('shows a protected NOT_FOUND as not available, without implying the program exists', async () => {
     const app = createTestApp({
       routes: {

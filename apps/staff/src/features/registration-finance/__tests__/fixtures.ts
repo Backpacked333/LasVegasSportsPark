@@ -242,7 +242,9 @@ export function application(overrides: Partial<Model<'Application'>> = {}): Mode
     offeringId: OFFERING_ID,
     participantPersonId: PERSON_ID,
     intent: 'youth',
-    status: 'awaiting_review',
+    // The API keeps an application that failed eligibility in `submitted` (only eligible ones
+    // move to `awaiting_review`), so the ineligible default is submitted.
+    status: 'submitted',
     submittedBy: actor('customer', 'Sam Rivera'),
     submittedByPersonId: ADULT_ID,
     payerPersonId: ADULT_ID,

@@ -7,6 +7,7 @@
 import { presentationForError } from '@sportspark/api-client';
 import { useState } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
+import { Button } from '../../ui/Button';
 import { SelectField } from './fields';
 import { PUBLICATION_STATE } from './labels';
 
@@ -33,6 +34,16 @@ export function OfferingPicker({
   if (programs.error && presentationForError(programs.error) === 'unavailable') {
     return <p className="caption">{label}: programs are not available to you.</p>;
   }
+  // SPK-UX-008: "not available" only for a permission answer; offline or a failed read says so and
+  // offers Try again.
+  const failure = (error: typeof programs.error, what: string) =>
+    error
+      ? presentationForError(error) === 'offline'
+        ? `${what} could not load (offline)`
+        : presentationForError(error) === 'unavailable'
+          ? `${what} not available`
+          : `${what} could not load (${error.code})`
+      : null;
   const offeringOptions = (offerings.data?.items ?? [])
     .filter((o) => o.id !== excludeId)
     .map((o) => ({
@@ -48,9 +59,7 @@ export function OfferingPicker({
         placeholder={
           programs.data
             ? 'Choose a program'
-            : programs.error
-              ? 'Programs not available'
-              : 'Loading programs…'
+            : (failure(programs.error, 'Programs') ?? 'Loading programs…')
         }
         options={(programs.data?.items ?? []).map((p) => ({ value: p.id, label: p.name }))}
         onChange={(next) => {
@@ -69,13 +78,20 @@ export function OfferingPicker({
               ? offeringOptions.length > 0
                 ? 'Choose an offering'
                 : 'This program has no offerings'
-              : offerings.error
-                ? 'Offerings not available'
-                : 'Loading offerings…'
+              : (failure(offerings.error, 'Offerings') ?? 'Loading offerings…')
         }
         options={offeringOptions}
         onChange={onChange}
       />
+      {programs.error && !programs.data ? (
+        <Button variant="secondary" onClick={() => void programs.refetch()}>
+          Try again
+        </Button>
+      ) : offerings.error && !offerings.data ? (
+        <Button variant="secondary" onClick={() => void offerings.refetch()}>
+          Try again
+        </Button>
+      ) : null}
     </div>
   );
 }

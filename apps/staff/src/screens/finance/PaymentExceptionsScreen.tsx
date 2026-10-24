@@ -129,7 +129,9 @@ function ExceptionRow({ exception }: { exception: OperationalException }) {
 
 export function PaymentExceptionsScreen() {
   const navigate = useNavigate();
-  const [status, setStatus] = useState<ExceptionStatus | ''>('open');
+  // '' asks for the API's active set (open and acknowledged): an acknowledged unknown outcome is
+  // still unresolved and must stay visible (SCR-S-36).
+  const [status, setStatus] = useState<ExceptionStatus | ''>('');
   const [reference, setReference] = useState('');
   const [referenceError, setReferenceError] = useState<string | null>(null);
   const exceptions = useApiQuery({
@@ -171,7 +173,7 @@ export function PaymentExceptionsScreen() {
       <SelectField
         label="Exceptions"
         value={status}
-        placeholder="All statuses"
+        placeholder="Open or acknowledged"
         onChange={(v) => setStatus(v as ExceptionStatus | '')}
         options={Object.entries(EXCEPTION_STATUS).map(([value, badge]) => ({
           value,
@@ -182,17 +184,40 @@ export function PaymentExceptionsScreen() {
         query={exceptions}
         label="finance exceptions"
         isEmpty={(page) => page.items.filter((e) => e.category.startsWith('finance.')).length === 0}
-        empty={{
-          title: 'No unknown outcomes',
-          description:
-            'There are no unknown or conflicting payment or refund outcomes and no checkout needs recovery.',
-        }}
+        empty={
+          status === ''
+            ? {
+                title: 'No unknown outcomes',
+                description:
+                  'There are no open or acknowledged unknown or conflicting payment or refund outcomes, and no checkout needs recovery.',
+              }
+            : {
+                title: `No ${EXCEPTION_STATUS[status].label} finance exceptions`,
+                description: 'No finance exception has this status.',
+              }
+        }
         unavailableOffline={['reconciling']}
       >
         {(page) => (
           <>
-            {EXCEPTION_GROUPS.map((group) => {
+            {[
+              ...EXCEPTION_GROUPS,
+              // Every finance exception is shown: a category not listed above (for example one a
+              // later release adds) is never dropped.
+              {
+                title: 'Finance exceptions of another kind',
+                categories: page.items
+                  .map((e) => e.category)
+                  .filter(
+                    (c) =>
+                      c.startsWith('finance.') &&
+                      !EXCEPTION_GROUPS.some((g) => g.categories.includes(c)),
+                  ),
+              },
+            ].map((group) => {
               const items = page.items.filter((e) => group.categories.includes(e.category));
+              if (group.title === 'Finance exceptions of another kind' && items.length === 0)
+                return null;
               return (
                 <section key={group.title} className="rf-panel" aria-label={group.title}>
                   <h3>
