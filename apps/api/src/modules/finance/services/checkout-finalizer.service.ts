@@ -2,12 +2,12 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   CheckoutMachine,
   DomainError,
-  PaymentAttemptMachine,
   errors,
   type CheckoutRecovery,
   type CompensateCheckoutInput,
   type Principal,
   type QuoteDiscountLine,
+  type QuotePolicyReferences,
   type RecoverCheckoutInput,
   type AbortCheckoutInput,
 } from '@sportspark/contracts';
@@ -245,7 +245,20 @@ export class CheckoutFinalizer {
   ): Promise<void> {
     const organizationId = checkout.organization_id;
     const now = this.clock.now();
-    const resolved = await this.policy.resolve(organizationId, now, trx);
+    // SPK-PAY-002: the purchase keeps its policy basis. The compensation method comes from the
+    // refund policy version recorded on the order (the engineering default when none was), never
+    // from a version approved after the quote (POL-009; DEC-009 pending).
+    const order = await trx
+      .selectFrom('orders')
+      .select('policy_references')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', checkout.order_id)
+      .executeTakeFirstOrThrow();
+    const resolved = await this.policy.resolveRecorded(
+      organizationId,
+      order.policy_references as unknown as QuotePolicyReferences,
+      trx,
+    );
     let plan: CompensationMethod = DEFINITIVE.has(error.code)
       ? resolved.config.compensation
       : 'manual';
@@ -450,7 +463,14 @@ export class CheckoutFinalizer {
       .execute();
   }
 
-  /** The compensation finished: pending participation released, checkout and operation compensated. */
+  /**
+   * The compensation finished: pending participation released, the credits the family applied at
+   * checkout restored, what the order still asks of the payer ended (installment plan, scheduled
+   * installments, open future obligations), checkout and operation compensated (SPK-AT-006,
+   * SPK-PAY-006, SPK-PAY-009, §4.11 step 10). One transaction for the refund path
+   * (`onRefundSettled`), the credit path and staff `compensate`; a replay finds the checkout
+   * compensated and does nothing.
+   */
   async completeCompensationInTrx(
     trx: Trx,
     checkout: CheckoutRow,
@@ -488,6 +508,23 @@ export class CheckoutFinalizer {
         );
       }
     }
+    // SPK-PAY-009: the refund or compensation credit covers what was received as money; credits
+    // redeemed against the order are given back as they were.
+    const restoredCreditMinor = await this.restoreAppliedCredits(
+      trx,
+      checkout,
+      actor,
+      correlationId,
+    );
+    // SPK-PAY-006: no installment is ever collected for a registration the family did not receive.
+    const ended = await this.cancelOrderPlanInTrx(
+      trx,
+      organizationId,
+      checkout.order_id,
+      'checkout_compensated',
+      actor,
+      correlationId,
+    );
     await this.baskets.finishCheckout(trx, organizationId, checkout.basket_id, 'abandoned', actor);
     const now = this.clock.now();
     await trx
@@ -515,7 +552,7 @@ export class CheckoutFinalizer {
       .where('revision', '=', checkout.revision)
       .execute();
     await this.operations.transition(trx, checkout.operation_id, 'compensated', {
-      result: { checkoutId: checkout.id, ...outcome },
+      result: { checkoutId: checkout.id, ...outcome, restoredCreditMinor },
     });
     await this.audit.record(trx, {
       organizationId,
@@ -527,7 +564,12 @@ export class CheckoutFinalizer {
       afterRevision: checkout.revision + 1,
       correlationId,
       operationId: checkout.operation_id,
-      details: outcome,
+      details: {
+        ...outcome,
+        restoredCreditMinor,
+        canceledInstallmentIds: ended.installmentIds,
+        canceledObligationIds: ended.obligationIds,
+      },
     });
     await this.outbox.enqueue(trx, FinanceEvents.checkoutCompensated, {
       organizationId,
@@ -537,6 +579,95 @@ export class CheckoutFinalizer {
       operationId: checkout.operation_id,
       payload: { organizationId, checkoutId: checkout.id, orderId: checkout.order_id, ...outcome },
     });
+  }
+
+  /**
+   * Restores every credit redeemed against the order (SPK-PAY-009, §4.11 step 10). The order's
+   * obligation stays settled, so the restoration is booked like the compensation itself (refunds
+   * to credits payable), never by reopening the receivable. Idempotent per redemption.
+   */
+  private async restoreAppliedCredits(
+    trx: Trx,
+    checkout: CheckoutRow,
+    actor: Principal,
+    correlationId: string | null,
+  ): Promise<number> {
+    const redemptions = await trx
+      .selectFrom('credit_redemptions')
+      .select('id')
+      .where('organization_id', '=', checkout.organization_id)
+      .where('kind', '=', 'redeem')
+      .where('reference_type', '=', 'order')
+      .where('reference_id', '=', checkout.order_id)
+      .orderBy('created_at')
+      .orderBy('id')
+      .execute();
+    let restored = 0;
+    for (const redemption of redemptions) {
+      restored += await this.facts.reverseCreditRedemption(
+        trx,
+        checkout.organization_id,
+        redemption.id,
+        actor,
+        correlationId,
+        { compensation: { personId: checkout.payer_person_id, orderId: checkout.order_id } },
+      );
+    }
+    return restored;
+  }
+
+  /**
+   * Ends what an order still asks of the payer: its active installment plan, the scheduled and
+   * failed installments, and every open obligation (each cancellation posts the reversal of its
+   * receivable; settled obligations stay as they are). Used by abort and by compensation
+   * (SPK-PAY-006, SPK-AT-006, §4.11 step 10).
+   */
+  private async cancelOrderPlanInTrx(
+    trx: Trx,
+    organizationId: string,
+    orderId: string,
+    reason: string,
+    actor: Principal,
+    correlationId: string | null,
+  ): Promise<{ installmentIds: string[]; obligationIds: string[] }> {
+    const now = this.clock.now();
+    await trx
+      .updateTable('installment_plans')
+      .set((eb) => ({ status: 'canceled', canceled_at: now, revision: eb('revision', '+', 1) }))
+      .where('organization_id', '=', organizationId)
+      .where('order_id', '=', orderId)
+      .where('status', '=', 'active')
+      .execute();
+    const installments = await trx
+      .updateTable('installments')
+      .set((eb) => ({ status: 'canceled', revision: eb('revision', '+', 1) }))
+      .where('organization_id', '=', organizationId)
+      .where('plan_id', 'in', (eb) =>
+        eb
+          .selectFrom('installment_plans')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('order_id', '=', orderId),
+      )
+      .where('status', 'in', ['scheduled', 'failed'])
+      .returning('id')
+      .execute();
+    const obligations = await trx
+      .selectFrom('obligations')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('order_id', '=', orderId)
+      .orderBy('due_at')
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const canceled: string[] = [];
+    for (const obligation of obligations) {
+      if (obligation.status !== 'open') continue;
+      await this.facts.cancelObligation(trx, obligation, reason, actor, correlationId);
+      canceled.push(obligation.id);
+    }
+    return { installmentIds: installments.map((i) => i.id), obligationIds: canceled };
   }
 
   /** Outbox handler on `finance.refund_settled` for compensation refunds. */
@@ -594,13 +725,15 @@ export class CheckoutFinalizer {
   ): Promise<CheckoutRow> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const checkout = await this.load(trx, organizationId, id, true);
-      if (!checkout) throw errors.protectedNotFound('checkout');
+      // §4.10: a staff-only command is authorized before the record is read, so a caller without
+      // the role gets the same answer whether or not the checkout exists.
       await this.authorization.require(principal, FinanceActions.recoverCheckout, {
         type: 'checkout',
         id,
         organizationId,
       });
+      const checkout = await this.load(trx, organizationId, id, true);
+      if (!checkout) throw errors.protectedNotFound('checkout');
       assertExpectedRevision(input.expectedRevision, checkout.revision);
       if (checkout.status !== 'recovery_required') {
         throw errors.invalidTransition('Checkout', checkout.status, 'recovered');
@@ -651,13 +784,14 @@ export class CheckoutFinalizer {
   ): Promise<CheckoutRow> {
     const organizationId = organizationOf(principal);
     const row = await this.uow.run(async ({ trx }) => {
-      const checkout = await this.load(trx, organizationId, id, true);
-      if (!checkout) throw errors.protectedNotFound('checkout');
+      // §4.10: authorized before the record is read (no existence oracle for non-finance callers).
       await this.authorization.require(principal, FinanceActions.recoverCheckout, {
         type: 'checkout',
         id,
         organizationId,
       });
+      const checkout = await this.load(trx, organizationId, id, true);
+      if (!checkout) throw errors.protectedNotFound('checkout');
       assertExpectedRevision(input.expectedRevision, checkout.revision);
       if (checkout.status !== 'recovery_required') {
         throw errors.invalidTransition('Checkout', checkout.status, 'compensate');
@@ -756,25 +890,17 @@ export class CheckoutFinalizer {
       .where('status', 'in', ['created', 'action_required', 'processing', 'unknown'])
       .forUpdate()
       .execute();
-    for (const attempt of live) {
-      if (attempt.status !== 'created' || attempt.submitted_at) {
-        // SPK-PAY-007: money may be moving; reconcile before giving the place up.
-        throw errors.paymentOutcomeUnknown({
-          paymentAttemptId: attempt.id,
-          status: attempt.status,
-        });
-      }
-      await trx
-        .updateTable('payment_attempts')
-        .set({
-          status: PaymentAttemptMachine.next('created', 'cancel'),
-          failure_reason: 'checkout_aborted',
-          resolved_at: now,
-          revision: attempt.revision + 1,
-        })
-        .where('id', '=', attempt.id)
-        .where('revision', '=', attempt.revision)
-        .execute();
+    const pending = live[0];
+    if (pending) {
+      // SPK-PAY-007, SPK-AT-028, §5.8: money may be moving; reconcile before giving the place up.
+      // A `created` attempt is no exception: `submitted_at` is a local marker that a restore or a
+      // lossy failover can roll back while the provider keeps the charge, so only provider
+      // evidence resolves it (the stranded-attempt sweep in PaymentsService.reconcileStale looks
+      // it up by its idempotency key and cancels it on "no record"), never an assumption here.
+      throw errors.paymentOutcomeUnknown({
+        paymentAttemptId: pending.id,
+        status: pending.status,
+      });
     }
     const order = await trx
       .selectFrom('orders')
@@ -794,16 +920,7 @@ export class CheckoutFinalizer {
       })
       .where('id', '=', order.id)
       .execute();
-    const obligations = await trx
-      .selectFrom('obligations')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .where('order_id', '=', order.id)
-      .forUpdate()
-      .execute();
-    for (const obligation of obligations) {
-      await this.facts.cancelObligation(trx, obligation, reason, actor, correlationId);
-    }
+    await this.cancelOrderPlanInTrx(trx, organizationId, order.id, reason, actor, correlationId);
     const redemptions = await trx
       .selectFrom('credit_redemptions')
       .select('id')
@@ -837,22 +954,6 @@ export class CheckoutFinalizer {
         correlationId,
       });
     }
-    await trx
-      .updateTable('installment_plans')
-      .set((eb) => ({ status: 'canceled', canceled_at: now, revision: eb('revision', '+', 1) }))
-      .where('organization_id', '=', organizationId)
-      .where('order_id', '=', order.id)
-      .where('status', '=', 'active')
-      .execute();
-    await trx
-      .updateTable('installments')
-      .set((eb) => ({ status: 'canceled', revision: eb('revision', '+', 1) }))
-      .where('organization_id', '=', organizationId)
-      .where('plan_id', 'in', (eb) =>
-        eb.selectFrom('installment_plans').select('id').where('order_id', '=', order.id),
-      )
-      .where('status', 'in', ['scheduled', 'failed'])
-      .execute();
     await this.baskets.finishCheckout(trx, organizationId, checkout.basket_id, 'abandoned', actor);
     await trx
       .updateTable('checkouts')
@@ -900,29 +1001,33 @@ export class CheckoutFinalizer {
   ): Promise<void> {
     const checkout = await this.load(trx, organizationId, checkoutId, true);
     if (!checkout || !CheckoutMachine.can(checkout.status, 'abort')) return;
+    // Every live attempt counts, an unsubmitted `created` one included (see abortInTrx).
     const live = await trx
       .selectFrom('payment_attempts')
-      .select(['id', 'status'])
+      .select(['id', 'status', 'submitted_at'])
       .where('organization_id', '=', organizationId)
       .where('checkout_id', '=', checkoutId)
-      .where((eb) =>
-        eb.or([
-          eb('status', 'in', ['action_required', 'processing', 'unknown']),
-          eb.and([eb('status', '=', 'created'), eb('submitted_at', 'is not', null)]),
-        ]),
-      )
+      .where('status', 'in', ['created', 'action_required', 'processing', 'unknown'])
       .executeTakeFirst();
     if (live) {
       // Reconciliation decides first; check again later (SPK-PAY-007).
+      const config = this.policy.configuration;
+      let availableAt = minutesFrom(this.clock.now(), config.checkoutAbandonGraceMinutes);
+      if (live.status === 'action_required' && live.submitted_at) {
+        // An open challenge is canceled at the provider once it is abandoned
+        // (PaymentsService.cancelAbandoned, DEC-019 pending); look again only after that.
+        const afterCancel = minutesFrom(
+          new Date(live.submitted_at),
+          config.actionRequiredCancelAfterMinutes + config.checkoutAbandonGraceMinutes,
+        );
+        if (afterCancel > availableAt) availableAt = afterCancel;
+      }
       await this.outbox.enqueue(trx, FinanceEvents.checkoutExpiryDue, {
         organizationId,
         aggregateType: 'checkout',
         aggregateId: checkoutId,
         correlationId,
-        availableAt: minutesFrom(
-          this.clock.now(),
-          this.policy.configuration.checkoutAbandonGraceMinutes,
-        ),
+        availableAt,
         payload: { organizationId, checkoutId },
       });
       return;

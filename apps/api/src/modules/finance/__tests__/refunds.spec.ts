@@ -1,16 +1,25 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { newId } from '@sportspark/contracts';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { TestApp } from '../../../testing';
-import { createCapturedPaymentFixture } from '../testing/finance-fixtures';
+import { PaymentOutcomeUnknownError, type CreateRefundRequest } from '../finance.ports';
+import { FakePaymentTokens } from '../providers/fake-payment.provider';
+import { createCapturedPaymentFixture, createCreditFixture } from '../testing/finance-fixtures';
 import {
+  MINUTE,
   adult,
   balanceOf,
+  basketFor,
   deliver,
+  drain,
   financeTestApp,
   ledgerTotals,
+  offering,
   post,
   processInbox,
   provider,
+  quoteFor,
   staff,
+  worker,
   type Actor,
 } from './support';
 
@@ -216,5 +225,216 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
     expect((await t.http.get(`/v1/payments/${paymentAttemptId}`).set(payer.header)).status).toBe(
       200,
     );
+  });
+
+  it('§4.10 / §4.14: finance-only money commands answer a customer the same way whether or not the record exists', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 30_000,
+    });
+    const refund = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 100,
+      reason: 'Goodwill',
+    });
+    expect(refund.status).toBe(201);
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: payer.personId,
+      amountMinor: 500,
+      status: 'pending_approval',
+    });
+    const setup = await offering(t, { basePriceMinor: 30_000 });
+    const { basketId } = await basketFor(t, payer, [setup]);
+    const quote = await quoteFor(t, payer, basketId, {
+      paymentPlan: { kind: 'installments', count: 3 },
+    });
+    const checkout = await post(t, '/v1/registration-checkouts', payer.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      authorizeFutureInstallments: true,
+    });
+    const order = await t.http
+      .get(`/v1/orders/${checkout.body.orderId as string}`)
+      .set(payer.header);
+    const plan = await t.http
+      .get(`/v1/installment-plans/${order.body.installmentPlanId as string}`)
+      .set(payer.header);
+    const installmentId = plan.body.installments[1].id as string;
+    const stranger = await adult(t);
+    const commands: Array<[(id: string) => string, string, Record<string, unknown>]> = [
+      [(id) => `/v1/payments/${id}/reconcile`, paymentAttemptId, {}],
+      [(id) => `/v1/payments/${id}/refunds`, paymentAttemptId, { amountMinor: 1, reason: 'x' }],
+      [(id) => `/v1/refunds/${id}/reconcile`, refund.body.id as string, {}],
+      [(id) => `/v1/credits/${id}/approve`, creditId, {}],
+      [(id) => `/v1/installments/${id}/collect`, installmentId, {}],
+      [
+        (id) => `/v1/installments/${id}/extend`,
+        installmentId,
+        { dueAt: '2027-06-01T15:00:00Z', reason: 'x' },
+      ],
+      [
+        (id) => `/v1/registration-checkouts/${id}/recover`,
+        checkout.body.id as string,
+        { reason: 'x' },
+      ],
+      [
+        (id) => `/v1/registration-checkouts/${id}/compensate`,
+        checkout.body.id as string,
+        { method: 'credit', reason: 'x' },
+      ],
+    ];
+    for (const [path, existingId, body] of commands) {
+      const existing = await post(t, path(existingId), stranger.header, body);
+      const missing = await post(t, path(newId()), stranger.header, body);
+      expect({ path: path(':id'), status: existing.status, code: existing.body.code }).toEqual({
+        path: path(':id'),
+        status: missing.status,
+        code: missing.body.code,
+      });
+      expect(existing.status).toBe(403);
+    }
+  });
+
+  it('SPK-PAY-008 / SPK-AT-007: reconciling a refund whose provider call is still in flight keeps its reservation; no second refund over-refunds', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 10_000,
+    });
+    const p = provider(t);
+    const original = p.createRefund.bind(p);
+    let entered!: () => void;
+    const inFlight = new Promise<void>((resolve) => (entered = resolve));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const spy = vi.spyOn(p, 'createRefund').mockImplementationOnce(async (request) => {
+      entered();
+      await gate;
+      return original(request);
+    });
+    const firstCall = post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'A',
+    }).then((r) => r);
+    await inFlight; // the refund is `processing`; the provider call has not returned yet
+    const pending = await t.db
+      .selectFrom('refund_attempts')
+      .select('id')
+      .where('payment_attempt_id', '=', paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    const reconciled = await post(t, `/v1/refunds/${pending.id}/reconcile`, finance.header);
+    expect(reconciled.status).toBe(201);
+    expect(reconciled.body).toMatchObject({
+      status: 'processing',
+      reservationStatus: 'reserved',
+      refundable: { reservedMinor: 6_000, availableMinor: 4_000 },
+    });
+    const second = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'B',
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe('REFUND_PENDING');
+    release();
+    const first = await firstCall;
+    spy.mockRestore();
+    expect(first.body).toMatchObject({
+      status: 'succeeded',
+      refundable: { refundedMinor: 6_000, reservedMinor: 0 },
+    });
+    const sent = p.refundCalls.filter((c) => c.metadata.refundAttemptId === pending.id);
+    expect(sent.map((c) => c.amountMinor)).toEqual([6_000]);
+    const attempts = await t.db
+      .selectFrom('refund_attempts')
+      .select('id')
+      .where('payment_attempt_id', '=', paymentAttemptId)
+      .execute();
+    expect(attempts).toHaveLength(1);
+  });
+
+  it('SPK-PAY-008 / SPK-AT-007: right after a timeout the provider\'s "no record yet" keeps the reservation; the refund settles once the provider shows it', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 10_000,
+    });
+    const p = provider(t);
+    let unsent: CreateRefundRequest | null = null;
+    const spy = vi.spyOn(p, 'createRefund').mockImplementationOnce(async (request) => {
+      unsent = request; // the request timed out before the provider recorded it
+      throw new PaymentOutcomeUnknownError('timeout (simulated)');
+    });
+    const uncertain = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'Timed out',
+    });
+    spy.mockRestore();
+    expect(uncertain.body).toMatchObject({ status: 'unknown', reservationStatus: 'reserved' });
+    const early = await post(
+      t,
+      `/v1/refunds/${uncertain.body.id as string}/reconcile`,
+      finance.header,
+    );
+    expect(early.body).toMatchObject({
+      status: 'unknown',
+      reservationStatus: 'reserved',
+      refundable: { reservedMinor: 6_000 },
+    });
+    const second = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'Second',
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe('REFUND_PENDING');
+    // The provider then records the refund; the sweep finds it after the threshold.
+    await p.createRefund(unsent as unknown as CreateRefundRequest);
+    t.clock.advance(16 * MINUTE);
+    await worker(t).runOnce();
+    const settled = await t.http
+      .get(`/v1/refunds/${uncertain.body.id as string}`)
+      .set(finance.header);
+    expect(settled.body).toMatchObject({
+      status: 'succeeded',
+      reservationStatus: 'settled',
+      refundable: { refundedMinor: 6_000, reservedMinor: 0 },
+    });
+    await drain(t);
+  });
+
+  it('SPK-PAY-008: a refund the provider still has no record of after the threshold is failed and released, forced or swept', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 10_000,
+    });
+    const p = provider(t);
+    const spy = vi.spyOn(p, 'createRefund').mockImplementation(async () => {
+      throw new PaymentOutcomeUnknownError('never reached the provider (simulated)');
+    });
+    const forced = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 3_000,
+      reason: 'Forced',
+    });
+    const swept = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 3_000,
+      reason: 'Swept',
+    });
+    spy.mockRestore();
+    expect([forced.body.status, swept.body.status]).toEqual(['unknown', 'unknown']);
+    t.clock.advance(16 * MINUTE);
+    const reconciled = await post(
+      t,
+      `/v1/refunds/${forced.body.id as string}/reconcile`,
+      finance.header,
+    );
+    expect(reconciled.body).toMatchObject({
+      status: 'failed',
+      reservationStatus: 'released',
+      failureReason: 'provider_has_no_record',
+    });
+    await worker(t).runOnce();
+    const sweptNow = await t.http.get(`/v1/refunds/${swept.body.id as string}`).set(finance.header);
+    expect(sweptNow.body).toMatchObject({
+      status: 'failed',
+      reservationStatus: 'released',
+      refundable: { reservedMinor: 0, refundedMinor: 0, availableMinor: 10_000 },
+    });
+    await drain(t);
   });
 });

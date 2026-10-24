@@ -441,6 +441,10 @@ export class PaymentsService {
           `${target} reported after ${attempt.status}`,
           correlationId,
         );
+        if (target === 'succeeded') {
+          // ...but the money the provider captured is received money all the same.
+          return this.recordCaptureAfterResolution(trx, attempt, evidence, correlationId);
+        }
         return unchanged(true);
       }
     } else {
@@ -511,6 +515,74 @@ export class PaymentsService {
       await this.onFailed(trx, updated, correlationId);
     }
     return { attempt: updated, changed: true, receipt, overpaymentCreditId, conflict: false };
+  }
+
+  /**
+   * §4.11 ("provider success ... must remain visible as received money"), SPK-PAY-007, SPK-PAY-011:
+   * the provider reports a capture for an attempt recorded as failed or canceled. The recorded
+   * state is not flipped (the machine, its database guard and payment_attempts_one_success_idx
+   * forbid it) and the conflict exception stays open for review, but the money is recorded through
+   * the normal capture path: receipt, journal, refundable funds and the purpose follow-up. A
+   * checkout still awaiting payment finalizes on it (so no second charge is taken); money for a
+   * checkout that was already paid or aborted is held as visible excess with an exception; an
+   * installment's obligation settles. One receipt per attempt makes a repeated report a no-op.
+   */
+  private async recordCaptureAfterResolution(
+    trx: Trx,
+    attempt: PaymentAttemptRow,
+    evidence: PaymentEvidence,
+    correlationId: string | null,
+  ): Promise<EvidenceOutcome> {
+    const organizationId = attempt.organization_id;
+    const recorded = await trx
+      .selectFrom('receipts')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('payment_attempt_id', '=', attempt.id)
+      .executeTakeFirst();
+    if (recorded) {
+      return { attempt, changed: false, receipt: null, overpaymentCreditId: null, conflict: true };
+    }
+    let row = attempt;
+    if (!attempt.provider_reference && evidence.providerReference) {
+      // A refund names the provider's payment; an attempt canceled for "no record" never had one.
+      await trx
+        .updateTable('payment_attempts')
+        .set({ provider_reference: evidence.providerReference, revision: attempt.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', attempt.id)
+        .where('revision', '=', attempt.revision)
+        .execute();
+      row = (await this.load(trx, organizationId, attempt.id)) as PaymentAttemptRow;
+    }
+    const captured = await this.onCaptured(
+      trx,
+      { ...row, processor_fee_minor: evidence.feeMinor ?? 0 },
+      correlationId,
+    );
+    await this.audit.record(trx, {
+      organizationId,
+      actor: financeSystem(organizationId, `finance.evidence.${evidence.source}`),
+      action: `finance.payment_captured_after_${attempt.status}`,
+      targetType: 'payment_attempt',
+      targetId: attempt.id,
+      beforeRevision: attempt.revision,
+      afterRevision: row.revision,
+      correlationId,
+      details: {
+        recordedStatus: attempt.status,
+        receiptId: captured.receipt.id,
+        source: evidence.source,
+        inboxEventId: evidence.inboxEventId ?? null,
+      },
+    });
+    return {
+      attempt: row,
+      changed: true,
+      receipt: captured.receipt,
+      overpaymentCreditId: captured.overpaymentCreditId,
+      conflict: true,
+    };
   }
 
   private async conflict(
@@ -653,6 +725,8 @@ export class PaymentsService {
         .updateTable('checkouts')
         .set({
           status: CheckoutMachine.next(checkout.status, 'payment_succeeded'),
+          // The attempt that actually captured (a compensation refund targets it).
+          payment_attempt_id: attempt.id,
           failure_code: null,
           failure_details: null,
           revision: checkout.revision + 1,
@@ -834,20 +908,26 @@ export class PaymentsService {
     correlationId: string | null,
   ): Promise<PaymentAttempt> {
     const organizationId = organizationOf(principal);
-    const row = await this.load(this.db, organizationId, id);
-    if (!row) throw errors.protectedNotFound('payment');
+    // §4.10: a finance-only command is authorized before the record is read, so a caller without
+    // the role gets the same answer whether or not the payment exists.
     await this.authorization.require(principal, FinanceActions.reconcilePayment, {
       type: 'payment_attempt',
       id,
       organizationId,
     });
+    const row = await this.load(this.db, organizationId, id);
+    if (!row) throw errors.protectedNotFound('payment');
     const outcome = await this.reconcile(organizationId, id, correlationId, { force: true });
     return toPaymentAttempt(outcome.attempt);
   }
 
   /**
-   * Reconciles one unresolved attempt from the provider's record. "No record" for an attempt that
-   * was submitted long enough ago is authoritative absence: nothing was charged (canceled).
+   * Reconciles one unresolved attempt from the provider's record. A record the provider has is
+   * applied at once (forced or not). "No record" is authoritative absence (nothing was charged:
+   * canceled) only for an attempt never handed to the provider, decided under the row lock, or
+   * one last handed to it (submitted, or gone unknown) at least `reconcileAfterMinutes` ago;
+   * before that the attempt stays as it is and new charges stay refused (SPK-PAY-007: a timeout
+   * is not proof of failure, and a provider may not show a just-submitted request yet).
    */
   async reconcile(
     organizationId: string,
@@ -882,8 +962,17 @@ export class PaymentsService {
       if (since > threshold) return unchanged;
     }
     const found = await this.provider.retrievePayment(row.id);
-    return this.uow.run(({ trx }) =>
-      this.applyEvidence(
+    return this.uow.run(async ({ trx }) => {
+      if (!found) {
+        const current = await this.load(trx, organizationId, id, true);
+        if (!current) throw errors.notFound('payment attempt', id);
+        const unchangedNow: EvidenceOutcome = { ...unchanged, attempt: current };
+        // Evidence arrived meanwhile: a stale empty lookup must not contradict it.
+        if (PaymentAttemptMachine.isTerminal(current.status)) return unchangedNow;
+        // Too early to call it absence: stays as it is (unknown keeps refusing new charges).
+        if (!this.absenceIsAuthoritative(current, threshold)) return unchangedNow;
+      }
+      return this.applyEvidence(
         trx,
         organizationId,
         id,
@@ -905,14 +994,131 @@ export class PaymentsService {
               source: 'reconciliation',
             },
         correlationId,
-      ),
+      );
+    });
+  }
+
+  /**
+   * SPK-PAY-007: "no record" proves nothing was charged only for an attempt never handed to the
+   * provider (checked under the row lock, so `execute()` can no longer submit it) or last handed
+   * to it (submitted, or gone unknown) at least `reconcileAfterMinutes` ago.
+   */
+  private absenceIsAuthoritative(row: PaymentAttemptRow, threshold: Date): boolean {
+    const instants = [row.submitted_at, row.unknown_since]
+      .filter((v): v is Date => v !== null && v !== undefined)
+      .map((v) => new Date(v).getTime());
+    if (instants.length === 0) return true;
+    return Math.max(...instants) <= threshold.getTime();
+  }
+
+  /**
+   * Worker sweep (SPK-PAY-007, §4.11 step 10; DEC-019 pending: the challenge validity window and
+   * the cancel semantics depend on the processor): a payment challenge (`action_required`) still
+   * open `actionRequiredCancelAfterMinutes` after submission is abandoned. The provider is asked to
+   * cancel it, outside any transaction, and its answer is recorded as evidence: `canceled` lets the
+   * checkout's expiry timer abort it and reverse its effects; a capture that won the race is
+   * recorded as any capture (finalization or compensation follows). Without an answer the attempt
+   * stays live, an owned exception says so, and the next pass asks again (cancel is idempotent).
+   * `processing` is never canceled: the processor resolves it and reconciliation records it.
+   */
+  async cancelAbandoned(limit = 50): Promise<number> {
+    if (this.uow.current()) {
+      throw errors.internal('a provider call must never run inside a database transaction (§4.11)');
+    }
+    const threshold = minutesFrom(
+      this.clock.now(),
+      -this.policy.configuration.actionRequiredCancelAfterMinutes,
     );
+    const rows = await this.db
+      .selectFrom('payment_attempts')
+      .select(['id', 'organization_id'])
+      .where('status', '=', 'action_required')
+      .where('submitted_at', '<=', threshold)
+      .orderBy('submitted_at')
+      .limit(limit)
+      .execute();
+    let changed = 0;
+    for (const row of rows) {
+      try {
+        let result: ProviderPaymentResult | null;
+        try {
+          result = await this.provider.cancelPayment(row.id);
+        } catch (error) {
+          // A thrown error is an unknown outcome (the port's contract): nothing is assumed.
+          this.logger.warn(`payment ${row.id}: cancel outcome unknown (${String(error)})`);
+          await this.uow.run(({ trx }) =>
+            this.raiseCancelUnanswered(trx, row.organization_id, row.id),
+          );
+          continue;
+        }
+        const outcome = await this.uow.run(({ trx }) =>
+          this.applyEvidence(
+            trx,
+            row.organization_id,
+            row.id,
+            result
+              ? {
+                  status: result.status,
+                  providerReference: result.providerReference,
+                  amountMinor: result.amountMinor,
+                  currency: result.currency,
+                  feeMinor: result.feeMinor,
+                  failureReason: result.failureReason,
+                  actionPayload: result.actionPayload,
+                  source: 'reconciliation',
+                }
+              : {
+                  status: 'canceled',
+                  providerReference: null,
+                  failureReason: 'provider_has_no_record',
+                  source: 'reconciliation',
+                },
+            null,
+          ),
+        );
+        if (outcome.changed) changed += 1;
+      } catch (error) {
+        this.logger.warn(`cancel of abandoned payment ${row.id} failed: ${String(error)}`);
+      }
+    }
+    return changed;
+  }
+
+  private async raiseCancelUnanswered(
+    trx: Trx,
+    organizationId: string,
+    attemptId: string,
+  ): Promise<void> {
+    const attempt = await this.load(trx, organizationId, attemptId);
+    if (!attempt || attempt.status !== 'action_required') return;
+    await this.exceptions.raise(trx, {
+      organizationId,
+      category: 'finance.payment_action_abandoned',
+      severity: 'high',
+      title:
+        'An abandoned payment challenge could not be canceled at the provider; it is retried and the checkout stays open',
+      affectedType: 'payment_attempt',
+      affectedId: attemptId,
+      ownerQueue: 'finance_operator',
+      dedupeKey: `payment-action-abandoned:${attemptId}`,
+      details: {
+        purpose: attempt.purpose,
+        checkoutId: attempt.checkout_id,
+        obligationId: attempt.obligation_id,
+        amountMinor: attempt.amount_minor,
+        currency: attempt.currency,
+      },
+    });
   }
 
   /** Worker sweep: unresolved attempts older than the reconciliation threshold. */
   async reconcileStale(limit = 50): Promise<number> {
     const minutes = this.policy.configuration.reconcileAfterMinutes;
     const threshold = minutesFrom(this.clock.now(), -minutes);
+    const abandonedBefore = minutesFrom(
+      this.clock.now(),
+      -this.policy.configuration.actionRequiredCancelAfterMinutes,
+    );
     const submitted = await this.db
       .selectFrom('payment_attempts')
       .select(['id', 'organization_id', 'status'])
@@ -922,6 +1128,13 @@ export class PaymentsService {
           eb('unknown_since', '<=', threshold),
           eb.and([eb('unknown_since', 'is', null), eb('submitted_at', '<=', threshold)]),
         ]),
+      )
+      // Abandoned challenges belong to cancelAbandoned: they never leave this set otherwise and
+      // would fill the page, starving the reconciliation of unknown outcomes (SPK-PAY-007).
+      .where((eb) =>
+        eb.not(
+          eb.and([eb('status', '=', 'action_required'), eb('submitted_at', '<=', abandonedBefore)]),
+        ),
       )
       .orderBy('created_at')
       .limit(limit)

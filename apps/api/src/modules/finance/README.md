@@ -13,7 +13,8 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 (`POST /v1/registration-quotes`, `POST /v1/registration-checkouts`, `POST /v1/payments/{id}/refunds`),
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
-**Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses `0600`)
+**Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses `0600`,
+`0601` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -28,7 +29,7 @@ writes another module's tables (§4.2); composite foreign keys reference their r
 `providers/fake-payment.provider.spec.ts`). Statements below are verified unless marked proposed
 or pending.
 
-## Tables (migration `0600_finance_core.sql`)
+## Tables (migration `0600_finance_core.sql`, indexes added in `0601`)
 
 | Table                          | Purpose                                                                                                                                                                                                                                                                                         |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -60,7 +61,9 @@ carry `revision` and `touch_updated_at`.
 - **§4.7 invariant 5 (no duplicate financial effect from replay):** one receipt per payment
   attempt and per tender; one journal per `(source, purpose)`; one obligation per source fact and
   debtor; one checkout per quote and one live checkout per basket; one live payment attempt per
-  checkout, per installment and per payer and obligation; one succeeded attempt per checkout; one
+  checkout, per installment and per payer and obligation; one live checkout or installment charge
+  per obligation (`0601`: the checkout charge names the obligation it pays, so the installment
+  worker can never charge the same debt beside it); one succeeded attempt per checkout; one
   credit per source fact; one redemption per credit and reference; one reversal per journal, entry
   and redemption.
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
@@ -102,17 +105,22 @@ carry `revision` and `touch_updated_at`.
 Every consequential POST is `@Idempotent()` and zod-validated; quote and checkout bodies are
 strict and carry no amounts. Customer-private records (quotes, checkouts, orders, payments,
 refunds, credits, obligations, contribution requests, plans) answer `NOT_FOUND` to anyone without
-authority (§4.10); organization scope comes from the token. A captain sees a team obligation's
-totals and each requested contribution's amount and status, never a player's payment or method.
+authority (§4.10); organization scope comes from the token. Finance-only commands (refund,
+reconcile, approve a credit, collect or extend an installment, recover or compensate a checkout)
+are authorized before the record is read, so a caller without the role gets `ACCESS_DENIED`
+whether or not the record exists. A captain sees a team obligation's totals and each requested
+contribution's amount and status, never a player's payment or method.
 
 ## Ports
 
 - `PAYMENT_PROVIDER_PORT` (`PaymentProviderPort`, `finance.ports.ts`): `createPayment`,
-  `retrievePayment`, `createRefund`, `retrieveRefund`, `verifyWebhook`; every call carries the
+  `retrievePayment`, `cancelPayment` (abandoned challenges), `createRefund`, `retrieveRefund`,
+  `verifyWebhook`; every call carries the
   attempt id as idempotency key; a thrown error is an unknown outcome. Only
   `FakePaymentProvider` exists (deterministic by payment-method token: succeed, require action,
   decline, asynchronous processing, timeout after capture, timeout after decline, unreachable;
-  scriptable payments and refunds; signed webhooks for duplicates and reordering). The port refuses
+  scriptable payments, cancels and refunds; signed webhooks for duplicates and reordering). An
+  adapter must bound `createRefund` below the reconciliation threshold. The port refuses
   to start in production (DEC-019 pending).
 - Registers `FINANCE_POLICY_IMPL` for enrollment (`FinancePolicyAdapter`): cancellation
   consequences from the approved cancellation policy content (`refundBasisPoints` /
@@ -129,8 +137,9 @@ totals and each requested contribution's amount and status, never a player's pay
   on its timer `finance.installment_notice_due`. All are idempotent under replay.
 - Inbox handler `finance.apply_payment_event` for provider `fake-payments`.
 - `FinanceWorker` (outside any transaction; started in non-test processes, `runOnce()` in tests):
-  executes requested refunds (customer and compensation), reconciles stale or unknown payment and
-  refund attempts with the provider, collects due installments and retries.
+  executes requested refunds (customer and compensation), cancels abandoned payment challenges at
+  the provider, reconciles stale or unknown payment and refund attempts with the provider, collects
+  due installments and retries (only for plans whose checkout was paid and fulfilled).
 
 ## Events (`finance.events.ts`)
 
@@ -157,30 +166,51 @@ totals and each requested contribution's amount and status, never a player's pay
   installments, basket).
 - **Payment uncertainty (SPK-PAY-007):** a timeout is `unknown` with a critical exception owned by
   the finance operator; retries and aborts are refused until a webhook, staff reconciliation or the
-  worker sweep resolves it; "no provider record" for a submitted attempt is authoritative absence.
+  worker sweep resolves it. A record the provider has is applied at once; "no provider record" is
+  authoritative absence only for an attempt never handed to the provider (decided under the row
+  lock) or one submitted or gone unknown at least the reconciliation threshold ago, also when staff
+  force the reconciliation. Every live attempt, an unsubmitted `created` one included, blocks abort
+  and the abandonment timer until provider evidence resolves it (the stranded-attempt sweep looks it
+  up), so a restored database never cancels a capture by assumption (SPK-AT-028). A payment
+  challenge still open an hour after submission is treated as abandoned and canceled at the
+  provider (proposed, DEC-019 pending); a cancel without an answer keeps the attempt live with an
+  exception `finance.payment_action_abandoned`.
 - **Webhooks (§4.11):** authenticated, recorded once in the inbox, applied through the state
   machine: duplicates do nothing, an older non-terminal event never moves a resolved attempt back,
-  and a contradiction (`succeeded` after `failed`) raises `finance.payment_evidence_conflict` and
-  changes nothing. Unmatched events raise `finance.unmatched_provider_event`.
+  and a contradiction raises `finance.payment_evidence_conflict` without changing the recorded
+  state. A capture reported after `failed` or `canceled` is still received money: it is recorded
+  once (receipt, journal, refundable funds) and follows the capture path (a checkout still awaiting
+  payment finalizes on it instead of charging again; money for a resolved checkout is held as
+  visible excess), and it can be refunded. Unmatched events raise `finance.unmatched_provider_event`.
 - **Finalization (SPK-AT-023):** confirmations go through enrollment's `EnrollmentPort` in one
   transaction with the order and checkout; an unexpected failure leaves the checkout `finalizing`
   for the durable follow-up; replays confirm nothing twice and post no journal.
 - **Recovery (§4.11, SPK-AT-006):** a refused finalization after payment is `recovery_required`
   (checkout, order fulfillment, operation) with exception `finance.fulfillment_incomplete`; a place
-  taken by a waitlist offer is never displaced; definitive failures are compensated per policy
-  (refund by default), others wait for staff `recover` or `compensate`.
+  taken by a waitlist offer is never displaced; definitive failures are compensated per the refund
+  policy the order recorded (refund by default; a version approved after the quote does not
+  apply, SPK-PAY-002), others wait for staff `recover` or `compensate`. Completing a compensation
+  restores the credits redeemed at checkout (booked refunds → credits payable, the receivable is
+  not reopened) and cancels the installment plan, its scheduled installments and open obligations.
 - **Refunds (SPK-PAY-008, SPK-AT-007):** reserved by conditional UPDATE before execution; of two
-  concurrent 60% refunds exactly one reserves (also under PostgreSQL); an unknown result keeps the
-  reservation (REFUND_PENDING) until evidence settles or releases it.
+  concurrent 60% refunds exactly one reserves (also under PostgreSQL); an unknown or in-flight
+  result keeps the reservation (REFUND_PENDING) until evidence settles or releases it; "no provider
+  record" releases it only once the refund was submitted at least the reconciliation threshold
+  ago.
 - **Team billing (SPK-PAY-004/005, SPK-AT-022):** contribution payments that together exceed the
   remaining balance allocate exactly the remaining amount; the excess stays visible on the receipt
   and the obligation (`excessMinor`), sits in `overpayment_liability`, and is held as a credit
-  pending finance approval with an exception (POL-015 proposed default).
+  pending finance approval with an exception (POL-015 proposed default). A contribution request is
+  payable only while its obligation is open. Redeeming a credit into a team obligation needs the
+  same authority as paying it (responsible payer, or the captain in the contributions model).
 - **Installments (SPK-PAY-006):** explicit authorization at checkout; due now is the first
   installment; notices three days before; collection by the worker with the authorized method; a
   failure is a financial state plus exception `finance.installment_failed` and event
   `finance.installment_failed` — the enrollment stays as it is (participation consequences are
-  evaluated separately, POL-017); extensions reset the attempts.
+  evaluated separately, POL-017); extensions reset the attempts and the notice, which goes out the
+  plan's lead time before the new date; nothing is collected while the checkout's own payment is
+  pending or its registration is not fulfilled; retry and notice terms come from the policy the
+  quote recorded.
 - **Cash (SPK-PAY-012):** permitted staff only, facility-scoped, with evidence; against an existing
   obligation or through the checkout (holds and capacity apply); reconciled per cash drawer.
 - **Reconciliation (SPK-PAY-010/011):** balances are computed from journal entries; the report
@@ -196,12 +226,22 @@ minutes after its hold expiry; overpayment held as credit pending approval (POL-
 compensation of an unfulfillable paid checkout by refund (POL-009, DEC-009); installments enabled,
 at most three, every 30 days, three attempts 72 hours apart, notice three days before (POL-016,
 DEC-008); finance-issued credits without expiry (POL-010); unknown outcomes reconciled after 15
-minutes; percentage taxes and fees rounded half up per line (DEC-007).
+minutes; a payment challenge abandoned 60 minutes after submission is canceled at the provider
+(DEC-019); a credit is applied to a given obligation once, with the amount chosen in that one
+application (whether repeated partial use is allowed is pending, POL-010 / DEC-058); percentage
+taxes and fees rounded half up per line (DEC-007).
 
 ## Known gaps
 
 - Disputes and chargebacks are not modelled: the fake provider reports none and the dispute flow
   depends on the processor (DEC-019); the report shows zero with that note.
+- A refund released after the reconciliation threshold ("no provider record") that the provider
+  later reports as succeeded is not re-reserved or re-booked: it stays visible as the critical
+  exception `finance.refund_evidence_conflict` (a design decision against the refundable check is
+  pending).
+- Compensation does not yet release the order's discount redemptions (per-person discount limits),
+  and an open future installment obligation partly paid before compensation is canceled for its
+  full amount (the same as abort).
 - `written_off` obligations, credit revocation and the accounting of credit expiry (breakage) have
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
 - Revenue recognition (deferred → earned) and the accounting export are not implemented (DEC-022).

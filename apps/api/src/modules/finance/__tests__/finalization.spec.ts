@@ -2,9 +2,11 @@ import { errors } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
+import { createPolicyVersionFixture } from '../../catalog';
 import { ENROLLMENT_PORT, EnrollmentsService, type EnrollmentPort } from '../../enrollment';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import { CheckoutFinalizer } from '../services/checkout-finalizer.service';
+import { createCreditFixture } from '../testing/finance-fixtures';
 import {
   adult,
   basketFor,
@@ -17,8 +19,11 @@ import {
   type Actor,
 } from './support';
 
-/** Makes the enrollment port fail the next N confirmations (a stopped worker or a domain refusal). */
-const flaky = { failures: 0, kind: 'crash' as 'crash' | 'domain' };
+/**
+ * Makes the enrollment port fail the next N confirmations: a stopped worker, a domain refusal, or
+ * the place being gone (a definitive failure compensated per policy, SPK-AT-006).
+ */
+const flaky = { failures: 0, kind: 'crash' as 'crash' | 'domain' | 'capacity' };
 
 function flakyEnrollmentPort(real: EnrollmentsService): EnrollmentPort {
   return new Proxy(real, {
@@ -29,6 +34,9 @@ function flakyEnrollmentPort(real: EnrollmentsService): EnrollmentPort {
             flaky.failures -= 1;
             if (flaky.kind === 'domain') {
               throw errors.resourceConflict('Enrollment refused the confirmation (simulated).');
+            }
+            if (flaky.kind === 'capacity') {
+              throw errors.capacityUnavailable('The place was taken (simulated).');
             }
             throw new Error('worker stopped after the registration commit (simulated)');
           }
@@ -226,6 +234,189 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
       .where('id', '=', checkout.enrollmentIds[0] as string)
       .executeTakeFirstOrThrow();
     expect(enrollment.status).toBe('canceled');
+    await drain(t);
+  });
+
+  it('SPK-PAY-009 / §4.11 step 10: staff credit compensation gives back the credit applied at checkout beside a credit for the card part', async () => {
+    const setup = await offering(t, { basePriceMinor: 10_000 });
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: parent.personId,
+      amountMinor: 4_000,
+    });
+    const { basketId } = await basketFor(t, parent, [setup]);
+    const quote = await quoteFor(t, parent, basketId, { creditIds: [creditId] });
+    flaky.kind = 'domain';
+    flaky.failures = 1;
+    const res = await post(t, '/v1/registration-checkouts', parent.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+    });
+    expect(res.body).toMatchObject({
+      status: 'recovery_required',
+      payment: { amountMinor: 6_000 },
+    });
+    const compensated = await post(
+      t,
+      `/v1/registration-checkouts/${res.body.id as string}/compensate`,
+      finance.header,
+      { method: 'credit', reason: 'Family accepted a credit' },
+    );
+    expect(compensated.status).toBe(201);
+    expect(compensated.body.status).toBe('compensated');
+    const compensation = await t.http
+      .get(`/v1/credits/${compensated.body.recovery.creditId as string}`)
+      .set(parent.header);
+    expect(compensation.body).toMatchObject({ sourceKind: 'compensation', originalMinor: 6_000 });
+    const original = await t.http.get(`/v1/credits/${creditId}`).set(parent.header);
+    expect(original.body).toMatchObject({ remainingMinor: 4_000, status: 'active' });
+    expect(Number(compensation.body.remainingMinor) + Number(original.body.remainingMinor)).toBe(
+      10_000,
+    );
+    await drain(t);
+  });
+
+  it('SPK-PAY-009 / §4.11 step 10: compensating a checkout paid entirely with a credit gives the credit back', async () => {
+    const setup = await offering(t, { basePriceMinor: 5_000 });
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: parent.personId,
+      amountMinor: 5_000,
+    });
+    const { basketId } = await basketFor(t, parent, [setup]);
+    const quote = await quoteFor(t, parent, basketId, { creditIds: [creditId] });
+    expect(quote.dueNowMinor).toBe(0);
+    flaky.kind = 'domain';
+    flaky.failures = 1;
+    const res = await post(t, '/v1/registration-checkouts', parent.header, { quoteId: quote.id });
+    expect(res.body).toMatchObject({ status: 'recovery_required', paymentKind: 'none' });
+    const compensated = await post(
+      t,
+      `/v1/registration-checkouts/${res.body.id as string}/compensate`,
+      finance.header,
+      { method: 'credit', reason: 'Place could not be confirmed' },
+    );
+    expect(compensated.body).toMatchObject({
+      status: 'compensated',
+      recovery: { plan: 'credit', creditId: null },
+    });
+    const restored = await t.http.get(`/v1/credits/${creditId}`).set(parent.header);
+    expect(restored.body).toMatchObject({ remainingMinor: 5_000, status: 'active' });
+    await drain(t);
+  });
+});
+
+describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with DEC-008 / DEC-009 pending)', () => {
+  let t: TestApp;
+  let parent: Actor;
+  let finance: Actor;
+
+  beforeAll(async () => {
+    t = await financeTestApp({
+      configure: (builder) =>
+        builder
+          .overrideProvider(ENROLLMENT_PORT)
+          .useFactory({ factory: flakyEnrollmentPort, inject: [EnrollmentsService] }),
+    });
+    parent = await adult(t);
+    finance = await staff(t, ['finance_operator']);
+  });
+  afterAll(async () => {
+    flaky.failures = 0;
+    await t.close();
+  });
+
+  async function installmentQuote() {
+    const setup = await offering(t, { basePriceMinor: 30_000 });
+    const { basketId } = await basketFor(t, parent, [setup]);
+    return quoteFor(t, parent, basketId, { paymentPlan: { kind: 'installments', count: 3 } });
+  }
+
+  async function planFor(quoteId: string) {
+    const res = await post(t, '/v1/registration-checkouts', parent.header, {
+      quoteId,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      authorizeFutureInstallments: true,
+    });
+    expect(res.body.status).toBe('completed');
+    const order = await t.http.get(`/v1/orders/${res.body.orderId as string}`).set(parent.header);
+    const plan = await t.http
+      .get(`/v1/installment-plans/${order.body.installmentPlanId as string}`)
+      .set(finance.header);
+    return plan.body as {
+      retryPolicy: { maxAttempts: number };
+      noticePolicy: { daysBefore: number };
+      installments: Array<{ id: string }>;
+    };
+  }
+
+  it("SPK-PAY-002 / POL-016: installment terms come from the policy the quote recorded, not one approved since; extensions use the plan's notice lead time", async () => {
+    const before = await installmentQuote();
+    await createPolicyVersionFixture(t, {
+      kind: 'installment',
+      key: 'finance',
+      content: { retryMaxAttempts: 5, noticeDaysBefore: 7 },
+    });
+    const basis = await planFor(before.id);
+    expect(basis).toMatchObject({
+      retryPolicy: { maxAttempts: 3 },
+      noticePolicy: { daysBefore: 3 },
+    });
+    const after = await installmentQuote();
+    const current = await planFor(after.id);
+    expect(current).toMatchObject({
+      retryPolicy: { maxAttempts: 5 },
+      noticePolicy: { daysBefore: 7 },
+    });
+    // POL-016: an extended installment is announced the plan's lead time before its new date.
+    const second = current.installments[1] as { id: string };
+    const extended = await post(t, `/v1/installments/${second.id}/extend`, finance.header, {
+      dueAt: '2027-02-20T15:00:00Z',
+      reason: 'Payer asked',
+    });
+    expect(extended.status).toBe(201);
+    const timers = await t.db
+      .selectFrom('outbox_events')
+      .select('available_at')
+      .where('event_type', '=', 'finance.installment_notice_due')
+      .where('aggregate_id', '=', second.id)
+      .orderBy('available_at', 'desc')
+      .execute();
+    expect(new Date(timers[0]?.available_at as Date).toISOString()).toBe(
+      '2027-02-13T15:00:00.000Z',
+    );
+  });
+
+  it('SPK-PAY-002 / SPK-AT-006: the compensation method comes from the refund policy the order recorded, not one approved after the quote', async () => {
+    const setup = await offering(t, { basePriceMinor: 8_000 });
+    const { basketId } = await basketFor(t, parent, [setup]);
+    const quote = await quoteFor(t, parent, basketId);
+    await createPolicyVersionFixture(t, {
+      kind: 'refund',
+      key: 'finance',
+      content: { compensation: 'credit' },
+    });
+    flaky.kind = 'capacity';
+    flaky.failures = 1;
+    const res = await post(t, '/v1/registration-checkouts', parent.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+    });
+    // No refund policy when the family bought: the engineering default (refund) applies.
+    expect(res.body).toMatchObject({
+      status: 'recovery_required',
+      recovery: { plan: 'refund', reasonCode: 'CAPACITY_UNAVAILABLE' },
+    });
+    await drain(t);
+    // A purchase made under the new policy is compensated by it.
+    const later = await offering(t, { basePriceMinor: 8_000 });
+    const { basketId: laterBasket } = await basketFor(t, parent, [later]);
+    const laterQuote = await quoteFor(t, parent, laterBasket);
+    flaky.kind = 'capacity';
+    flaky.failures = 1;
+    const credited = await post(t, '/v1/registration-checkouts', parent.header, {
+      quoteId: laterQuote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+    });
+    expect(credited.body).toMatchObject({ status: 'compensated', recovery: { plan: 'credit' } });
     await drain(t);
   });
 });

@@ -1,3 +1,5 @@
+import { newId } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
@@ -6,10 +8,12 @@ import {
   MINUTE,
   adult,
   basketFor,
+  deliver,
   drain,
   financeTestApp,
   offering,
   post,
+  processInbox,
   provider,
   quoteFor,
   staff,
@@ -235,6 +239,177 @@ describe('credits (SPK-PAY-009, §4.7 invariant 7)', () => {
       ],
     });
   });
+
+  it('SPK-PAY-009 / SPK-PAY-002: a quote listing the same credit twice is rejected; listed once it applies once', async () => {
+    const setup = await offering(t, { basePriceMinor: 10_000 });
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: owner.personId,
+      amountMinor: 3_000,
+    });
+    const { basketId } = await basketFor(t, owner, [setup]);
+    const twice = await post(t, '/v1/registration-quotes', owner.header, {
+      basketId,
+      creditIds: [creditId, creditId],
+    });
+    expect(twice.status).toBe(400);
+    expect(twice.body.code).toBe('VALIDATION_FAILED');
+    const stored = await t.db
+      .selectFrom('quotes')
+      .select('id')
+      .where('basket_id', '=', basketId)
+      .execute();
+    expect(stored).toEqual([]);
+    const once = await quoteFor(t, owner, basketId, { creditIds: [creditId] });
+    expect(once).toMatchObject({
+      totalMinor: 10_000,
+      creditsAppliedMinor: 3_000,
+      dueNowMinor: 7_000,
+      appliedCredits: [{ creditId, amountMinor: 3_000 }],
+    });
+  });
+
+  it('SPK-PAY-002 / SPK-PAY-009: a checkout refuses a stored quote whose applied credits repeat a credit, and records nothing', async () => {
+    const setup = await offering(t, { basePriceMinor: 10_000 });
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: owner.personId,
+      amountMinor: 3_000,
+    });
+    const { basketId } = await basketFor(t, owner, [setup]);
+    const valid = await quoteFor(t, owner, basketId, { creditIds: [creditId] });
+    // A quote stored before duplicates were refused: the same credit counted twice.
+    const row = await t.db
+      .selectFrom('quotes')
+      .selectAll()
+      .where('id', '=', valid.id)
+      .executeTakeFirstOrThrow();
+    const lines = await t.db
+      .selectFrom('quote_lines')
+      .selectAll()
+      .where('quote_id', '=', valid.id)
+      .execute();
+    const forgedId = newId();
+    const applied = [
+      { creditId, amountMinor: 3_000 },
+      { creditId, amountMinor: 3_000 },
+    ];
+    await t.db
+      .insertInto('quotes')
+      .values({
+        ...row,
+        id: forgedId,
+        credits_applied_minor: 6_000,
+        due_now_minor: 4_000,
+        applied_credits: json(applied),
+        future_obligations: json(row.future_obligations),
+        discount_codes: json(row.discount_codes),
+        discounts: json(row.discounts),
+        policy_references: json(row.policy_references),
+        requested_by: json(row.requested_by),
+      })
+      .execute();
+    for (const line of lines) {
+      await t.db
+        .insertInto('quote_lines')
+        .values({
+          ...line,
+          id: newId(),
+          quote_id: forgedId,
+          discount_lines: json(line.discount_lines),
+          charge_lines: json(line.charge_lines),
+          policy_references: json(line.policy_references),
+        })
+        .execute();
+    }
+    const res = await post(t, '/v1/registration-checkouts', owner.header, {
+      quoteId: forgedId,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+    });
+    expect(res.status).toBe(500);
+    const orders = await t.db
+      .selectFrom('orders')
+      .select('id')
+      .where('quote_id', '=', forgedId)
+      .execute();
+    expect(orders).toEqual([]);
+    const credit = await t.http.get(`/v1/credits/${creditId}`).set(owner.header);
+    expect(credit.body).toMatchObject({ remainingMinor: 3_000, status: 'active', redemptions: [] });
+  });
+
+  it('SPK-PAY-009 / §4.9: a second application of the same credit to the same obligation is refused (409 CREDIT_ALREADY_APPLIED), never a silent no-op', async () => {
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: owner.personId,
+      amountMinor: 5_000,
+    });
+    const obligationId = await createObligationFixture(t, {
+      debtorPersonId: owner.personId,
+      amountMinor: 4_000,
+    });
+    const first = await post(t, `/v1/credits/${creditId}/redeem`, owner.header, {
+      obligationId,
+      amountMinor: 1_000,
+    });
+    expect(first.status).toBe(201);
+    expect(first.body.remainingMinor).toBe(4_000);
+    const second = await post(t, `/v1/credits/${creditId}/redeem`, owner.header, {
+      obligationId,
+      amountMinor: 1_000,
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.details.code).toBe('CREDIT_ALREADY_APPLIED');
+    const credit = await t.db
+      .selectFrom('credits')
+      .select(['remaining_minor', 'revision'])
+      .where('id', '=', creditId)
+      .executeTakeFirstOrThrow();
+    expect(credit.remaining_minor).toBe(4_000);
+    const obligation = await t.http.get(`/v1/obligations/${obligationId}`).set(owner.header);
+    expect(obligation.body.totals).toMatchObject({ allocatedMinor: 1_000, remainingMinor: 3_000 });
+    const redemptions = await t.db
+      .selectFrom('credit_redemptions')
+      .select('id')
+      .where('credit_id', '=', creditId)
+      .execute();
+    expect(redemptions).toHaveLength(1);
+    // The audit records the one redemption that happened, with the revision it produced.
+    const audits = await t.db
+      .selectFrom('audit_records')
+      .select(['after_revision'])
+      .where('action', '=', 'finance.redeem_credit')
+      .where('target_id', '=', creditId)
+      .execute();
+    expect(audits).toEqual([{ after_revision: credit.revision }]);
+  });
+
+  it('SPK-PAY-009: concurrent applications of one credit to one obligation apply it once and refuse the other (never a 500)', async () => {
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: owner.personId,
+      amountMinor: 5_000,
+    });
+    const obligationId = await createObligationFixture(t, {
+      debtorPersonId: owner.personId,
+      amountMinor: 4_000,
+    });
+    const results = await Promise.all(
+      [1_000, 1_500].map((amountMinor) =>
+        post(t, `/v1/credits/${creditId}/redeem`, owner.header, { obligationId, amountMinor }),
+      ),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    const refused = results.find((r) => r.status === 409);
+    expect(refused?.body.details.code).toBe('CREDIT_ALREADY_APPLIED');
+    const redemptions = await t.db
+      .selectFrom('credit_redemptions')
+      .select('amount_minor')
+      .where('credit_id', '=', creditId)
+      .execute();
+    expect(redemptions).toHaveLength(1);
+    const credit = await t.db
+      .selectFrom('credits')
+      .select('remaining_minor')
+      .where('id', '=', creditId)
+      .executeTakeFirstOrThrow();
+    expect(credit.remaining_minor).toBe(5_000 - Number(redemptions[0]?.amount_minor));
+  });
 });
 
 describe('installments (SPK-PAY-006)', () => {
@@ -391,5 +566,185 @@ describe('installments (SPK-PAY-006)', () => {
     expect(after.body.installments[1].status).toBe('paid');
     await drain(t);
     t.clock.advance(5 * MINUTE);
+  });
+
+  it('SPK-PAY-006 / POL-016: an extended installment gets a notice for its new due date; a timer for the old date sends nothing', async () => {
+    t.clock.set('2027-03-01T15:00:00Z');
+    const quote = await planCheckout(9_000);
+    const res = await post(t, '/v1/registration-checkouts', payer.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      authorizeFutureInstallments: true,
+    });
+    expect(res.body.status).toBe('completed');
+    const order = await t.http.get(`/v1/orders/${res.body.orderId as string}`).set(payer.header);
+    const planId = order.body.installmentPlanId as string;
+    const plan = await t.http.get(`/v1/installment-plans/${planId}`).set(finance.header);
+    const [, second, third] = plan.body.installments as Array<{ id: string; dueAt: string }>;
+    expect(second?.dueAt).toBe('2027-03-31T15:00:00.000Z');
+    expect(third?.dueAt).toBe('2027-04-30T15:00:00.000Z');
+    const notices = async (installmentId: string) =>
+      (
+        await t.db
+          .selectFrom('outbox_events')
+          .select('payload')
+          .where('event_type', '=', 'finance.installment_notice')
+          .where('aggregate_id', '=', installmentId)
+          .orderBy('occurred_at')
+          .execute()
+      ).map((e) => (e.payload as { dueAt: string }).dueAt);
+    // The notice for the second installment goes out three days before it falls due...
+    t.clock.set('2027-03-28T15:00:01Z');
+    await drain(t);
+    expect(await notices(second?.id as string)).toEqual(['2027-03-31T15:00:00.000Z']);
+    // ...then the installment is extended: the new due date gets its own notice.
+    const extended = await post(
+      t,
+      `/v1/installments/${second?.id as string}/extend`,
+      finance.header,
+      {
+        dueAt: '2027-04-20T15:00:00Z',
+        reason: 'Payer asked for three weeks',
+      },
+    );
+    expect(extended.status).toBe(201);
+    expect(extended.body.installments[1]).toMatchObject({
+      status: 'scheduled',
+      noticeSentAt: null,
+    });
+    t.clock.set('2027-04-17T15:00:01Z');
+    await drain(t);
+    expect(await notices(second?.id as string)).toEqual([
+      '2027-03-31T15:00:00.000Z',
+      '2027-04-20T15:00:00.000Z',
+    ]);
+    // Extended before its first notice: the timer for the old date announces nothing early.
+    const moved = await post(t, `/v1/installments/${third?.id as string}/extend`, finance.header, {
+      dueAt: '2027-05-30T15:00:00Z',
+      reason: 'Aligned with the payday',
+    });
+    expect(moved.status).toBe(201);
+    t.clock.set('2027-04-27T15:00:01Z');
+    await drain(t);
+    expect(await notices(third?.id as string)).toEqual([]);
+    t.clock.set('2027-05-27T15:00:01Z');
+    await drain(t);
+    expect(await notices(third?.id as string)).toEqual(['2027-05-30T15:00:00.000Z']);
+  });
+});
+
+describe('installments: no charge beside the checkout payment of the same debt (SPK-PAY-007, §4.7 invariant 5)', () => {
+  let t: TestApp;
+  let payer: Actor;
+  let finance: Actor;
+
+  beforeAll(async () => {
+    t = await financeTestApp();
+    payer = await adult(t);
+    finance = await staff(t, ['finance_operator']);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  async function pendingPlanCheckout(token: string) {
+    const setup = await offering(t, { basePriceMinor: 30_000 });
+    const { basketId } = await basketFor(t, payer, [setup]);
+    const quote = await quoteFor(t, payer, basketId, {
+      paymentPlan: { kind: 'installments', count: 3 },
+    });
+    const res = await post(t, '/v1/registration-checkouts', payer.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: token },
+      authorizeFutureInstallments: true,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('awaiting_payment');
+    const order = await t.http.get(`/v1/orders/${res.body.orderId as string}`).set(payer.header);
+    const plan = await t.http
+      .get(`/v1/installment-plans/${order.body.installmentPlanId as string}`)
+      .set(finance.header);
+    const first = plan.body.installments[0] as { id: string; obligationId: string };
+    return { checkout: res.body as Record<string, unknown> & { id: string }, first };
+  }
+
+  async function installmentRow(id: string) {
+    return t.db
+      .selectFrom('installments')
+      .select(['status', 'attempt_count'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+  }
+
+  const scenarios = [
+    { name: 'processing', token: FakePaymentTokens.processing, settle: true },
+    { name: 'action_required', token: FakePaymentTokens.requireAction, settle: true },
+    { name: 'unknown', token: FakePaymentTokens.timeout, settle: false },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    it(`SPK-PAY-007: the worker never collects the due-now installment while the checkout payment is ${scenario.name}`, async () => {
+      const { checkout, first } = await pendingPlanCheckout(scenario.token);
+      const payment = checkout['payment'] as { id: string; status: string };
+      expect(payment.status).toBe(scenario.name);
+      // The checkout charge names the debt it pays (payment_attempts_live_obligation_idx).
+      const attempt = await t.db
+        .selectFrom('payment_attempts')
+        .select('obligation_id')
+        .where('id', '=', payment.id)
+        .executeTakeFirstOrThrow();
+      expect(attempt.obligation_id).toBe(first.obligationId);
+      const calls = provider(t).paymentCalls.length;
+      const succeededBefore = provider(t).chargeCount('succeeded');
+      const summary = await worker(t).runOnce();
+      expect(summary.installmentsCollected).toBe(0);
+      expect(provider(t).paymentCalls.length).toBe(calls);
+      expect(await installmentRow(first.id)).toEqual({ status: 'scheduled', attempt_count: 1 });
+      // Staff cannot collect it either while the checkout's own payment is pending.
+      const manual = await post(t, `/v1/installments/${first.id}/collect`, finance.header, {});
+      expect(manual.status).toBe(409);
+      expect(manual.body.details.code).toBe('CHECKOUT_PAYMENT_PENDING');
+      expect(provider(t).paymentCalls.length).toBe(calls);
+      // The checkout payment completes: the first installment is paid by it, exactly once.
+      if (scenario.settle) provider(t).settlePayment(payment.id, 'succeeded');
+      await deliver(t, provider(t).paymentWebhook(payment.id));
+      await processInbox(t);
+      const done = await t.http.get(`/v1/registration-checkouts/${checkout.id}`).set(payer.header);
+      expect(done.body.status).toBe('completed');
+      expect((await installmentRow(first.id)).status).toBe('paid');
+      expect(provider(t).chargeCount('succeeded')).toBe(
+        succeededBefore + (scenario.settle ? 1 : 0),
+      );
+      const attempts = await t.db
+        .selectFrom('payment_attempts')
+        .select('id')
+        .where('order_id', '=', checkout['orderId'] as string)
+        .execute();
+      expect(attempts).toHaveLength(1);
+      const overpayments = await t.db
+        .selectFrom('credits')
+        .select('id')
+        .where('owner_person_id', '=', payer.personId)
+        .where('source_kind', '=', 'overpayment')
+        .execute();
+      expect(overpayments).toEqual([]);
+    });
+  }
+
+  it('SPK-PAY-006 / SPK-PAY-007: a declined checkout payment never turns into an installment charge or an installment failure', async () => {
+    const { checkout, first } = await pendingPlanCheckout(FakePaymentTokens.decline);
+    expect(checkout['payment']).toMatchObject({ status: 'failed' });
+    const calls = provider(t).paymentCalls.length;
+    const summary = await worker(t).runOnce();
+    expect(summary.installmentsCollected).toBe(0);
+    expect(provider(t).paymentCalls.length).toBe(calls);
+    expect(await installmentRow(first.id)).toEqual({ status: 'scheduled', attempt_count: 1 });
+    const failures = await t.db
+      .selectFrom('operational_exceptions')
+      .select('id')
+      .where('category', '=', 'finance.installment_failed')
+      .where('affected_id', '=', first.id)
+      .execute();
+    expect(failures).toEqual([]);
   });
 });
