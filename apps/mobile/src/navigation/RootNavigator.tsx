@@ -14,6 +14,12 @@ export function RootNavigator() {
         <Stack.Screen name="pass" options={{ title: 'Facility pass' }} />
         <Stack.Screen name="inbox" options={{ title: 'Notifications' }} />
         <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
+        <Stack.Screen name="onboarding" options={{ title: 'Account setup' }} />
+        <Stack.Screen name="recovery" options={{ title: 'Account recovery' }} />
+        <Stack.Screen name="invitations/[id]" options={{ title: 'Invitation' }} />
+        <Stack.Screen name="family" options={{ title: 'Family and permissions' }} />
+        <Stack.Screen name="preferences" options={{ title: 'Preferences' }} />
+        <Stack.Screen name="link" options={{ title: 'Link' }} />
         <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
       </Stack>
     </UpdateGate>
