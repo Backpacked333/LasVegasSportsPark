@@ -13,4 +13,5 @@ export * from './migration';
 export * from './operations';
 export * from './reporting';
 export * from './scheduling';
+export * from './support';
 export * from './workforce';

@@ -11,6 +11,7 @@ import type { IdentityTables } from './identity';
 import type { MigrationTables } from './migration';
 import type { ReportingTables } from './reporting';
 import type { SchedulingTables } from './scheduling';
+import type { SupportTables } from './support';
 import type { WorkforceTables } from './workforce';
 
 export * from './core';
@@ -26,6 +27,7 @@ export * from './identity';
 export * from './migration';
 export * from './reporting';
 export * from './scheduling';
+export * from './support';
 export * from './workforce';
 
 /**
@@ -47,4 +49,5 @@ export interface Database
     MigrationTables,
     ReportingTables,
     SchedulingTables,
+    SupportTables,
     WorkforceTables {}
