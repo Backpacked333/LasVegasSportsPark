@@ -12,6 +12,7 @@
  *   DEC-052 / DEC-022 (pending). Rates are DEC-011 (pending): nothing here invents a rate.
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -182,9 +183,15 @@ function FeeRow({ fee, name }: { fee: FeeSubmission; name: string }) {
   const badge = FEE_STATUS[fee.status];
   const actions = FEE_ACTIONS[fee.status];
   const outcome = (k: string) => commands.outcome(`${k}|${fee.id}`);
-  const error = (['approve', 'adjust', 'reject'] as const)
-    .map((k) => outcome(k).error)
-    .find(Boolean);
+  const failedKind = (['approve', 'adjust', 'reject'] as const).find((k) => outcome(k).error);
+  const error = failedKind ? outcome(failedKind).error : undefined;
+  const queryClient = useQueryClient();
+  // Stale version (SPK-UX-008): clear the refusal and re-read the list, so the next attempt
+  // carries the current revision as a new intent.
+  const reload = () => {
+    if (failedKind) commands.reset(`${failedKind}|${fee.id}`);
+    void queryClient.invalidateQueries({ queryKey: FEES_KEY });
+  };
   const differs = fee.submittedAmountMinor !== fee.computedAmountMinor;
   const a = assignment.data;
   const title = a ? `${a.targetTitle}: ${humanize(a.role)}` : 'Assignment';
@@ -310,7 +317,14 @@ function FeeRow({ fee, name }: { fee: FeeSubmission; name: string }) {
           </div>
         </form>
       ) : null}
-      {error ? <CommandError error={error} subject="This submission" /> : null}
+      {error ? (
+        <CommandError
+          error={error}
+          onRetry={failedKind === 'approve' ? approve : failedKind ? confirm : undefined}
+          onReload={reload}
+          subject="This submission"
+        />
+      ) : null}
     </li>
   );
 }

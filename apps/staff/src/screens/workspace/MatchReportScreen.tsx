@@ -62,6 +62,9 @@ export function MatchReportScreen() {
   );
 }
 
+/** AbandonmentDetails.minutePlayed and an incident minute are 0 to 200 (SubmitResultBody). */
+const MAX_MINUTE = 200;
+
 interface IncidentDraft {
   kind: (typeof INCIDENT_KINDS)[number] | '';
   severity: (typeof SEVERITIES)[number] | '';
@@ -103,26 +106,44 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
   const [incidents, setIncidents] = useState<IncidentDraft[]>([]);
   const [problems, setProblems] = useState<Record<string, string>>({});
   const apiErrors = fieldErrorsOf(submit.error);
-  const needsScore = classification === 'completed' || classification === 'abandoned';
+  // SubmitResultBody (SPK-RESULT-002): scores are required for a completed or forfeited match and
+  // optional for an abandoned one; minutes are 0 to 200.
+  const needsScore = classification === 'completed' || classification === 'forfeit';
+  const showsScore = needsScore || classification === 'abandoned';
+  const minuteOf = (v: string): number | null => {
+    if (!/^\d{1,3}$/.test(v.trim())) return null;
+    const n = Number(v.trim());
+    return n <= MAX_MINUTE ? n : null;
+  };
 
   const send = () => {
     const next: Record<string, string> = {};
     if (!classification) next.classification = 'Choose how the match ended.';
     const score = (v: string) => (/^\d{1,3}$/.test(v.trim()) ? Number(v.trim()) : null);
+    const homeGiven = homeScore.trim() !== '';
+    const awayGiven = awayScore.trim() !== '';
     if (needsScore && (score(homeScore) === null || score(awayScore) === null)) {
       next.score = 'Enter both scores as whole numbers.';
+    } else if (
+      classification === 'abandoned' &&
+      (homeGiven || awayGiven) &&
+      (score(homeScore) === null || score(awayScore) === null)
+    ) {
+      next.score = 'Enter both scores as whole numbers, or leave both empty.';
     }
     if (classification === 'forfeit' && !forfeiting)
       next.forfeiting = 'Choose the team that forfeited.';
     if (
       classification === 'abandoned' &&
-      (!/^\d{1,3}$/.test(minutePlayed.trim()) || !abandonReason.trim())
+      (minuteOf(minutePlayed) === null || !abandonReason.trim())
     ) {
-      next.abandonment = 'Give the minute the match stopped and the reason.';
+      next.abandonment = `Give the minute the match stopped (0 to ${MAX_MINUTE}) and the reason.`;
     }
     incidents.forEach((i, n) => {
       if (!i.kind || !i.severity || !i.summary.trim())
         next[`incident${n}`] = 'Each incident needs a kind, a severity and a summary.';
+      else if (i.minute.trim() && minuteOf(i.minute) === null)
+        next[`incident${n}`] = `An incident minute is a whole number from 0 to ${MAX_MINUTE}.`;
     });
     setProblems(next);
     if (Object.keys(next).length > 0 || !classification) return;
@@ -132,21 +153,21 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
       summary: i.summary.trim(),
       ...(i.narrative.trim() ? { narrative: i.narrative.trim() } : {}),
       ...(i.teamEntryId ? { teamEntryId: i.teamEntryId } : {}),
-      ...(/^\d{1,3}$/.test(i.minute.trim()) ? { minute: Number(i.minute.trim()) } : {}),
+      ...(minuteOf(i.minute) !== null ? { minute: minuteOf(i.minute) as number } : {}),
     }));
     void submit
       .submit({
         path: { id: fixtureId },
         body: {
           classification,
-          ...(needsScore
+          ...(needsScore || (classification === 'abandoned' && homeGiven && awayGiven)
             ? { homeScore: Number(homeScore.trim()), awayScore: Number(awayScore.trim()) }
             : {}),
           ...(classification === 'forfeit' ? { forfeitingEntryId: forfeiting } : {}),
           ...(classification === 'abandoned'
             ? {
                 abandonment: {
-                  minutePlayed: Number(minutePlayed.trim()),
+                  minutePlayed: minuteOf(minutePlayed) as number,
                   reason: abandonReason.trim(),
                 },
               }
@@ -158,6 +179,13 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
       })
       .catch(() => undefined);
   };
+
+  // API field errors this form renders next to a field; any other path is shown with the code.
+  const rendered = new Set<string>([
+    ...(showsScore ? ['homeScore', 'awayScore'] : []),
+    ...(classification === 'forfeit' ? ['forfeitingEntryId'] : []),
+  ]);
+  const unrenderedApiErrors = Object.keys(apiErrors).some((k) => !rendered.has(k));
 
   return (
     <>
@@ -200,7 +228,11 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
           send();
         }}
       >
-        <fieldset className="ops-fieldset">
+        <fieldset
+          className="ops-fieldset"
+          aria-invalid={problems.classification ? true : undefined}
+          aria-describedby={problems.classification ? 'report-classification-error' : undefined}
+        >
           <legend>How did the match end?</legend>
           {CLASSIFICATIONS.map((c) => (
             <label key={c} className="ops-check">
@@ -214,12 +246,18 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
             </label>
           ))}
           {problems.classification ? (
-            <span className="error-text">{problems.classification}</span>
+            <span className="error-text" id="report-classification-error" role="alert">
+              {problems.classification}
+            </span>
           ) : null}
         </fieldset>
-        {needsScore ? (
-          <fieldset className="ops-fieldset">
-            <legend>Score</legend>
+        {showsScore ? (
+          <fieldset
+            className="ops-fieldset"
+            aria-invalid={problems.score ? true : undefined}
+            aria-describedby={problems.score ? 'report-score-error' : undefined}
+          >
+            <legend>{needsScore ? 'Score' : 'Score when the match stopped (optional)'}</legend>
             <TextField
               label={`${home} score`}
               value={homeScore}
@@ -234,7 +272,11 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
               inputMode="numeric"
               error={apiErrors.awayScore}
             />
-            {problems.score ? <span className="error-text">{problems.score}</span> : null}
+            {problems.score ? (
+              <span className="error-text" id="report-score-error" role="alert">
+                {problems.score}
+              </span>
+            ) : null}
           </fieldset>
         ) : null}
         {classification === 'forfeit' ? (
@@ -248,7 +290,11 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
           />
         ) : null}
         {classification === 'abandoned' ? (
-          <fieldset className="ops-fieldset">
+          <fieldset
+            className="ops-fieldset"
+            aria-invalid={problems.abandonment ? true : undefined}
+            aria-describedby={problems.abandonment ? 'report-abandonment-error' : undefined}
+          >
             <legend>Abandonment</legend>
             <TextField
               label="Minute the match stopped"
@@ -263,7 +309,9 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
               rows={2}
             />
             {problems.abandonment ? (
-              <span className="error-text">{problems.abandonment}</span>
+              <span className="error-text" id="report-abandonment-error" role="alert">
+                {problems.abandonment}
+              </span>
             ) : null}
           </fieldset>
         ) : null}
@@ -310,7 +358,7 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
             </span>
           ) : null}
         </div>
-        {submit.error && Object.keys(apiErrors).length === 0 ? (
+        {submit.error && (Object.keys(apiErrors).length === 0 || unrenderedApiErrors) ? (
           <CommandError error={submit.error} onRetry={send} subject="This fixture" />
         ) : null}
         {submit.data ? (
@@ -347,8 +395,15 @@ function IncidentEditor({
   onRemove: () => void;
 }) {
   const n = index + 1;
+  const errorId = `incident-${index}-error`;
   return (
-    <div className="ops-section" role="group" aria-label={`Incident ${n}`}>
+    <div
+      className="ops-section"
+      role="group"
+      aria-label={`Incident ${n}`}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={error ? errorId : undefined}
+    >
       <SelectField
         label={`Incident ${n} kind`}
         value={incident.kind}
@@ -390,7 +445,11 @@ function IncidentEditor({
         onChange={(v) => onChange({ ...incident, minute: v })}
         inputMode="numeric"
       />
-      {error ? <span className="error-text">{error}</span> : null}
+      {error ? (
+        <span className="error-text" id={errorId} role="alert">
+          {error}
+        </span>
+      ) : null}
       <Button variant="secondary" onClick={onRemove} aria-label={`Remove incident ${n}`}>
         Remove
       </Button>

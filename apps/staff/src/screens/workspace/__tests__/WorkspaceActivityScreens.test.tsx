@@ -112,6 +112,61 @@ describe('SCR-W-04 WorkspaceAttendanceScreen', () => {
   });
 });
 
+describe('SCR-W-04 a fast second tap (SPK-ENTRY-005)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('corrects the observation just recorded instead of sending a second first observation', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes([workspaceItem(SESSION_ASSIGNMENT, [])], {
+        // The refetch has not caught up: the person still shows no current observation.
+        'GET /attendance': {
+          status: 200,
+          body: {
+            activity: {
+              type: 'session',
+              id: SESSION_1,
+              offeringId: OFFERING,
+              sessionId: SESSION_1,
+              eventId: null,
+            },
+            people: [
+              {
+                personId: CHILD_1,
+                effectiveState: null,
+                status: 'recorded',
+                currentObservationIds: [],
+                history: [],
+              },
+            ],
+          },
+        },
+        'POST /attendance-observations': {
+          status: 201,
+          body: {
+            observation: { id: '0192f1a0-0000-7000-8000-0000000006b1', observedState: 'present' },
+            duplicate: false,
+            conflict: null,
+          },
+        },
+      }),
+    });
+    render(app.at(`${BASE}/attendance`));
+    const alex = await screen.findByRole('listitem', { name: 'Alex Rivera' });
+    await user.click(within(alex).getByRole('button', { name: 'Present: Alex Rivera' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/attendance-observations')).toHaveLength(
+        1,
+      ),
+    );
+    await user.click(within(alex).getByRole('button', { name: 'Late: Alex Rivera' }));
+    expect(
+      await screen.findByRole('form', { name: 'Correct attendance for Alex Rivera' }),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/attendance-observations')).toHaveLength(1);
+  });
+});
+
 describe('SCR-W-05 MatchReportScreen', () => {
   beforeEach(() => window.localStorage.clear());
 
@@ -191,6 +246,115 @@ describe('SCR-W-05 MatchReportScreen', () => {
     expect(within(form).getByRole('button', { name: 'Submit report' })).toBeDisabled();
     expect(within(form).getByRole('radio', { name: 'Forfeit' })).toBeChecked();
     expect(within(form).getByText(/queued submission is pending DEC-032/)).toBeInTheDocument();
+  });
+});
+
+describe('SCR-W-05 MatchReportScreen (SubmitResultBody rules)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('a forfeit report sends both scores and the forfeiting team', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': { status: 200, body: [] },
+        'POST /fixtures/{id}/results': {
+          status: 201,
+          body: {
+            id: '0192f1a0-0000-7000-8000-0000000005a2',
+            fixtureId: FIXTURE_1,
+            revisionNo: 1,
+            status: 'submitted',
+            classification: 'forfeit',
+            homeScore: 3,
+            awayScore: 0,
+            submittedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Referee' },
+            submittedAt: '2026-10-24T12:00:00.000Z',
+          },
+        },
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const form = await screen.findByRole('form', { name: 'Match report' });
+    await user.click(within(form).getByRole('radio', { name: 'Forfeit' }));
+    await user.click(within(form).getByRole('button', { name: 'Submit report' }));
+    expect(within(form).getByRole('alert')).toHaveTextContent('Enter both scores');
+    await user.type(within(form).getByLabelText('Red score'), '3');
+    await user.type(within(form).getByLabelText('Blue score'), '0');
+    const team = within(form).getByLabelText('Team that forfeited');
+    await user.selectOptions(team, within(team).getAllByRole('option')[2] as HTMLOptionElement);
+    await user.click(within(form).getByRole('button', { name: 'Submit report' }));
+    await within(form).findByTestId('command-success');
+    const post = app.fake.requests.find(
+      (r) => r.route === '/fixtures/{id}/results' && r.method === 'POST',
+    );
+    expect(post?.body).toMatchObject({ classification: 'forfeit', homeScore: 3, awayScore: 0 });
+    expect((post?.body as { forfeitingEntryId?: string }).forfeitingEntryId).toBeTruthy();
+  });
+
+  it('refuses an abandonment minute over 200 with an announced message', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': { status: 200, body: [] },
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const form = await screen.findByRole('form', { name: 'Match report' });
+    await user.click(within(form).getByRole('radio', { name: 'Abandoned' }));
+    await user.type(within(form).getByLabelText('Minute the match stopped'), '250');
+    await user.type(within(form).getByLabelText('Reason for abandonment'), 'Lightning');
+    await user.click(within(form).getByRole('button', { name: 'Submit report' }));
+    expect(within(form).getByRole('alert')).toHaveTextContent('(0 to 200)');
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+});
+
+describe('SCR-W-04 / SCR-W-09 for a coach who may not read child records', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  const coachMe = () => {
+    const me = oneFacilityMe();
+    me.body.principal.staffRoles = ['coach'];
+    return me;
+  };
+  const presentAttendance = {
+    status: 200,
+    body: {
+      activity: {
+        type: 'session',
+        id: SESSION_1,
+        offeringId: OFFERING,
+        sessionId: SESSION_1,
+        eventId: null,
+      },
+      people: [
+        {
+          personId: CHILD_1,
+          effectiveState: 'present',
+          status: 'recorded',
+          currentObservationIds: [],
+          history: [],
+        },
+      ],
+    },
+  };
+
+  it('SCR-W-09: a present child stays offered for release with a reference when the name is not readable', async () => {
+    const app = createTestApp({
+      routes: routes([workspaceItem(SESSION_ASSIGNMENT, [])], {
+        'GET /me': coachMe(),
+        'GET /people/{id}': () =>
+          fakeResponse(404, { code: 'NOT_FOUND', message: 'x', nextAction: 'verify_reference' }),
+        'GET /attendance': presentAttendance,
+      }),
+    });
+    render(app.at(`${BASE}/release`));
+    expect(
+      await screen.findByRole('radio', {
+        name: `Participant, name not available (ref ${CHILD_1.slice(0, 8)})`,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No child is recorded present or late/)).toBeNull();
   });
 });
 

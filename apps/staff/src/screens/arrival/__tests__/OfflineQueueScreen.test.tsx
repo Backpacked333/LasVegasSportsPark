@@ -96,7 +96,6 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
 
   it('SPK-AT-018: synchronises once and keeps a conflict for review', async () => {
     seed();
-    const user = userEvent.setup();
     const app = createTestApp({
       routes: {
         'GET /me': oneFacilityMe(),
@@ -115,7 +114,7 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
       },
     });
     render(app.at('/arrival/offline'));
-    await user.click(await screen.findByRole('button', { name: 'Synchronise 1 now' }));
+    // Opened online with an item queued: it synchronises once on its own (§4.15).
     const kept = await screen.findByRole('list', { name: 'Observations kept for review' });
     expect(within(kept).getByText('Recorded with a conflict: kept for review')).toBeInTheDocument();
     expect(screen.getByTestId('sync-summary')).toHaveTextContent('0 synchronised, 1 for review');
@@ -154,7 +153,6 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
       },
     });
     render(app.at('/arrival/offline'));
-    await user.click(await screen.findByRole('button', { name: 'Synchronise 1 now' }));
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeInTheDocument();
     // Still queued, never presented as recorded.
     expect(screen.getByRole('table')).toBeInTheDocument();
@@ -171,7 +169,6 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
 
   it('shows the API’s refusal for an unapproved scope as not available', async () => {
     seed();
-    const user = userEvent.setup();
     const app = createTestApp({
       routes: {
         'GET /me': oneFacilityMe(),
@@ -186,7 +183,6 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
       },
     });
     render(app.at('/arrival/offline'));
-    await user.click(await screen.findByRole('button', { name: 'Synchronise 1 now' }));
     expect(await screen.findByTestId('command-unavailable')).toHaveTextContent(
       'entry.sync_offline',
     );

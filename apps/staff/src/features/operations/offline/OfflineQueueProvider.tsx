@@ -1,7 +1,9 @@
 /**
  * Offline queue context for the arrival, attendance and workspace screens (§4.15, SPK-AT-018,
  * SCR-S-31, SCR-W-10). One queue per device (browser profile), shared by every screen that queues
- * observations; it synchronises once when the connection returns, and on request.
+ * observations. It is mounted once in the signed-in shell, so it synchronises once when the
+ * connection returns wherever the viewer is, once when the dashboard opens online with items still
+ * queued (for example after a reload), and on request.
  *
  * Upload: `POST /v1/offline-sync` with the device id, the batch's client id, the facility, the
  * roster snapshot (reference and time) and the items. The idempotency key belongs to the batch
@@ -20,9 +22,9 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
+import { useApiQuery } from '../../../api/useApiQuery';
 import { useApi, useApp } from '../../../providers/AppProviders';
 import type { StaffServices } from '../../../providers/services';
-import { useOperatingFacility } from '../context';
 import {
   OfflineQueueStore,
   OfflineSyncRunner,
@@ -74,10 +76,11 @@ const OfflineQueueContext = createContext<OfflineQueueValue | null>(null);
 type SyncBody = Schema<'OfflineSyncRequest'>;
 
 export function OfflineQueueProvider({ children }: { children: ReactNode }) {
-  const { services, online } = useApp();
+  const { services, online, session } = useApp();
   const api = useApi();
   const queryClient = useQueryClient();
-  const { accountId } = useOperatingFacility();
+  const me = useApiQuery({ path: '/me' });
+  const accountId = me.data?.principal.accountId ?? session.session?.accountId ?? null;
   const { store, runner } = deviceFor(services);
   const state = useSyncExternalStore(store.subscribe, store.getState);
   const runtime = useSyncExternalStore(runner.subscribe, runner.getRuntime);
@@ -125,6 +128,15 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
     wasOnline.current = online;
     if (reconnected && mine.length > 0) void sync();
   }, [online, mine.length, sync]);
+
+  // Opened online with items still queued (a reload, or a reconnection while signed out): sync
+  // once per mount, as soon as the viewer's account is known.
+  const mountChecked = useRef(false);
+  useEffect(() => {
+    if (mountChecked.current || !accountId) return;
+    mountChecked.current = true;
+    if (online && mine.length > 0 && !runtime.syncing) void sync();
+  }, [accountId, online, mine.length, runtime.syncing, sync]);
 
   const value = useMemo<OfflineQueueValue>(
     () => ({

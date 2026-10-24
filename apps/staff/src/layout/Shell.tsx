@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
+import { OfflineQueueProvider } from '../features/operations/offline/OfflineQueueProvider';
 import { STAFF_AREAS, WORKSPACE_PATH } from '../navigation/areas';
 import { useApp } from '../providers/AppProviders';
 import { Button } from '../ui/Button';
@@ -21,48 +22,52 @@ export function Shell() {
   if (updateRequired) return <UpdateRequiredNotice error={updateRequired} />;
 
   return (
-    <div className="shell">
-      <a className="skip-link" href="#main">
-        Skip to main content
-      </a>
-      <header className="shell-header">
-        <Button
-          variant="secondary"
-          className="menu-button"
-          aria-expanded={menuOpen}
-          aria-controls="main-nav"
-          onClick={() => setMenuOpen((open) => !open)}
-        >
-          Menu
-        </Button>
-        <h1>Sportspark staff</h1>
-        <FacilitySwitcher />
-        <Button variant="secondary" onClick={() => void signOut()}>
-          Sign out
-        </Button>
-      </header>
-      <nav id="main-nav" className="shell-nav" aria-label="Main" data-open={menuOpen}>
-        <ul>
-          {STAFF_AREAS.map((area) => (
-            <li key={area.id}>
-              <NavLink to={area.path} onClick={() => setMenuOpen(false)}>
-                {area.title}
+    // One offline queue for the signed-in dashboard: it synchronises on reconnection wherever the
+    // viewer is (§4.15, SPK-AT-018).
+    <OfflineQueueProvider>
+      <div className="shell">
+        <a className="skip-link" href="#main">
+          Skip to main content
+        </a>
+        <header className="shell-header">
+          <Button
+            variant="secondary"
+            className="menu-button"
+            aria-expanded={menuOpen}
+            aria-controls="main-nav"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            Menu
+          </Button>
+          <h1>Sportspark staff</h1>
+          <FacilitySwitcher />
+          <Button variant="secondary" onClick={() => void signOut()}>
+            Sign out
+          </Button>
+        </header>
+        <nav id="main-nav" className="shell-nav" aria-label="Main" data-open={menuOpen}>
+          <ul>
+            {STAFF_AREAS.map((area) => (
+              <li key={area.id}>
+                <NavLink to={area.path} onClick={() => setMenuOpen(false)}>
+                  {area.title}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+          <ul aria-label="Workspace">
+            <li>
+              <NavLink to={WORKSPACE_PATH} onClick={() => setMenuOpen(false)}>
+                My assignments
               </NavLink>
             </li>
-          ))}
-        </ul>
-        <ul aria-label="Workspace">
-          <li>
-            <NavLink to={WORKSPACE_PATH} onClick={() => setMenuOpen(false)}>
-              My assignments
-            </NavLink>
-          </li>
-        </ul>
-      </nav>
-      <main id="main" className="shell-main" tabIndex={-1} key={location.pathname}>
-        <ConnectivityBanner />
-        <Outlet />
-      </main>
-    </div>
+          </ul>
+        </nav>
+        <main id="main" className="shell-main" tabIndex={-1} key={location.pathname}>
+          <ConnectivityBanner />
+          <Outlet />
+        </main>
+      </div>
+    </OfflineQueueProvider>
   );
 }

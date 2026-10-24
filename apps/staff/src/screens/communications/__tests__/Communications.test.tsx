@@ -345,8 +345,11 @@ describe('SCR-S-40 Delivery status', () => {
     );
     expect(screen.getByText(/DEC-041/)).toBeInTheDocument();
     expect(screen.getByText('Retrying a failed delivery is not available yet')).toBeInTheDocument();
-    const sam = await screen.findByRole('listitem', { name: 'Sam Rivera' });
-    const deliveries = within(sam).getByRole('list', { name: 'Deliveries to Sam Rivera' });
+    const first = 'Recipient 1 (staff role: front_desk)';
+    const sam = await screen.findByRole('listitem', { name: first });
+    const deliveries = within(sam).getByRole('list', { name: `Deliveries to ${first}` });
+    // SPK-COMMS-006: recipients are not read one by one (the person read carries contacts).
+    expect(app.fake.requests.some((r) => r.route === '/people/{id}')).toBe(false);
     expect(within(deliveries).getByText(/Push/)).toBeInTheDocument();
     expect(within(deliveries).getByText(/Provider rejected/)).toBeInTheDocument();
     expect(

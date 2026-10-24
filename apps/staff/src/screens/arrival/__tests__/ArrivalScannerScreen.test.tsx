@@ -18,6 +18,8 @@ import {
   checkin,
   householdScan,
   oneFacilityMe,
+  scanPerson,
+  sessionActivity,
   syncBatch,
   visit,
 } from '../../../features/operations/testing';
@@ -226,6 +228,84 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     expect(recheck?.body).toEqual({ expectedRevision: 2 });
   });
 
+  it('SPK-ENTRY-004: a check-in already held at scan time is read with its issues and can be checked again', async () => {
+    const user = userEvent.setup();
+    const scanWithHeld = householdScan();
+    scanWithHeld.people[1] = scanPerson(CHILD_1, 'Alex', 'child', 'household_member', [
+      {
+        ...sessionActivity(SESSION_1, 'Junior skills'),
+        checkin: { id: CHECKIN_1, status: 'held' },
+      },
+    ]);
+    const app = createTestApp({
+      routes: routes({
+        'POST /passes/scan': { status: 200, body: scanWithHeld },
+        'GET /session-checkins/{id}': {
+          status: 200,
+          body: checkin(
+            CHECKIN_1,
+            CHILD_1,
+            SESSION_1,
+            'held',
+            [
+              {
+                code: 'missing_acknowledgment',
+                severity: 'blocking',
+                message: 'The participation waiver has not been acknowledged.',
+                nextAction: 'complete_acknowledgment',
+                reference: null,
+              },
+            ],
+            5,
+          ),
+        },
+        'POST /session-checkins/{id}/recheck': {
+          status: 200,
+          body: checkin(CHECKIN_1, CHILD_1, SESSION_1, 'admitted', [], 6),
+        },
+      }),
+    });
+    render(app.at('/arrival'));
+    await scan(user);
+    expect(await screen.findByText(/participation waiver/)).toBeInTheDocument();
+    expect(screen.getByText('Blocking')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByText('Checked in to Junior skills')).toBeInTheDocument();
+    const recheck = app.fake.requests.find((r) => r.route === '/session-checkins/{id}/recheck');
+    expect(recheck?.body).toEqual({ expectedRevision: 5 });
+  });
+
+  it('SPK-ENTRY-001: a recorded arrival stays "Arrived" while a later arrival fails', async () => {
+    const user = userEvent.setup();
+    let posts = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /visits': () => {
+          posts += 1;
+          return posts === 1
+            ? fakeResponse(201, { visits: [visit(VISIT_1, CHILD_1)] })
+            : fakeResponse(500, apiErrorBody('INTERNAL_ERROR'));
+        },
+      }),
+    });
+    render(app.at('/arrival'));
+    const people = await scan(user);
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Record arrival at the facility for Alex Rivera' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Record selected' }));
+    const alex = within(people).getByRole('listitem', { name: 'Alex Rivera' });
+    expect(await within(alex).findByText('Arrived')).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Record arrival at the facility for Blake Rivera' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Record selected' }));
+    await waitFor(() => expect(posts).toBe(2));
+    expect(within(alex).getByText('Arrived')).toBeInTheDocument();
+    const blake = within(people).getByRole('listitem', { name: 'Blake Rivera' });
+    expect(within(blake).queryByText('Arrived')).toBeNull();
+  });
+
   it('§4.15 / SPK-AT-018: queues arrivals offline against the scan and synchronises them once on reconnection', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
@@ -292,6 +372,57 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     expect(await screen.findByTestId('last-sync')).toHaveTextContent('1 synchronised');
     // Synchronised once: nothing is left to send.
     expect(screen.queryByRole('button', { name: 'Synchronise now' })).toBeNull();
+  });
+
+  it('§4.15 / SPK-AT-018: reconnecting on another area, or reopening online, synchronises the queue once', async () => {
+    const user = userEvent.setup();
+    const syncRoute = (req: FakeRequest) => {
+      const body = req.body as { items: { clientObservationId: string }[] };
+      return fakeResponse(
+        201,
+        syncBatch(
+          body.items.map((i) => ({
+            clientObservationId: i.clientObservationId,
+            kind: 'arrival',
+            outcome: 'accepted',
+          })),
+        ),
+      );
+    };
+    // Queue offline, move to Today, reconnect there.
+    const app = createTestApp({ routes: routes({ 'POST /offline-sync': syncRoute }) });
+    const view = render(app.at('/arrival'));
+    await scan(user);
+    act(() => app.connectivity.set(false));
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Record arrival at the facility for Alex Rivera' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Queue selected arrivals' }));
+    await screen.findByText('1 arrival queued on this device: not yet recorded');
+    await user.click(screen.getByRole('link', { name: 'Today' }));
+    act(() => app.connectivity.set(true));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/offline-sync')).toHaveLength(1),
+    );
+    view.unmount();
+
+    // Items still queued on this device when the dashboard closed are sent once on reopening.
+    window.localStorage.clear();
+    const offline = createTestApp({ routes: routes({ 'POST /offline-sync': syncRoute }) });
+    const first = render(offline.at('/arrival'));
+    await scan(user);
+    act(() => offline.connectivity.set(false));
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Record arrival at the facility for Alex Rivera' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Queue selected arrivals' }));
+    await screen.findByText('1 arrival queued on this device: not yet recorded');
+    first.unmount();
+    const reopened = createTestApp({ routes: routes({ 'POST /offline-sync': syncRoute }) });
+    render(reopened.at('/today'));
+    await waitFor(() =>
+      expect(reopened.fake.requests.filter((r) => r.route === '/offline-sync')).toHaveLength(1),
+    );
   });
 
   it('marks person lookup without a pass as not available (no person search in the API)', async () => {

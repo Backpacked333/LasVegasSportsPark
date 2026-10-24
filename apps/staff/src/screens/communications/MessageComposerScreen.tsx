@@ -28,7 +28,12 @@ import {
   TextField,
   fieldErrorsOf,
 } from '../../features/operations/fields';
-import { humanize, idList, instantFromLocalInput } from '../../features/operations/format';
+import {
+  humanize,
+  idList,
+  inputZoneHint,
+  instantFromZonedInput,
+} from '../../features/operations/format';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
@@ -138,7 +143,7 @@ export function Composer({
     }
     setProblems(next);
     if (Object.keys(next).length > 0 || !category) return;
-    const when = instantFromLocalInput(scheduledFor);
+    const when = instantFromZonedInput(scheduledFor, facility.timezone);
     void command
       .submit({
         body: {
@@ -203,7 +208,11 @@ export function Composer({
             {label}
           </label>
         ))}
-        {problems.category ? <span className="error-text">{problems.category}</span> : null}
+        {problems.category ? (
+          <span className="error-text" id="compose-category-error" role="alert">
+            {problems.category}
+          </span>
+        ) : null}
       </fieldset>
       <fieldset className="ops-fieldset">
         <legend>Audience</legend>
@@ -278,7 +287,11 @@ export function Composer({
             rows={2}
           />
           <TextAreaField label="After (new details)" value={after} onChange={setAfter} rows={2} />
-          {problems.details ? <span className="error-text">{problems.details}</span> : null}
+          {problems.details ? (
+            <span className="error-text" id="compose-details-error" role="alert">
+              {problems.details}
+            </span>
+          ) : null}
         </fieldset>
       ) : null}
       <CheckboxField
@@ -292,7 +305,7 @@ export function Composer({
         type="datetime-local"
         value={scheduledFor}
         onChange={setScheduledFor}
-        hint="A reminder that becomes obsolete before it is sent is suppressed."
+        hint={`${inputZoneHint(facility.timezone)} A reminder that becomes obsolete before it is sent is suppressed.`}
         error={apiErrors.scheduledFor}
       />
       <div className="ops-actions">

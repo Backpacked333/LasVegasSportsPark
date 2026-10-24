@@ -261,10 +261,20 @@ function AttendanceRow({
   const history = record?.history ?? [];
   const current = history.filter((h) => currentIds.includes(h.id));
 
+  // A first observation just recorded is the current one even before the attendance refetch
+  // returns: a second tap corrects it with a reason instead of sending a second first observation,
+  // which the API would keep as a conflict (SPK-ENTRY-005).
+  const justRecorded =
+    recordOutcome.status === 'success'
+      ? (recordOutcome.data as { observation?: { id?: string; observedState?: ObservedState } })
+          ?.observation
+      : undefined;
+  const headIds = currentIds.length > 0 ? currentIds : justRecorded?.id ? [justRecorded.id] : [];
+  const effective = record?.effectiveState ?? justRecorded?.observedState ?? null;
   const choose = (state: ObservedState) => {
-    if (currentIds.length === 1 && online) {
-      if (record?.effectiveState === state) return;
-      setCorrecting({ observationId: currentIds[0] as string, state });
+    if (headIds.length === 1 && online) {
+      if (effective === state) return;
+      setCorrecting({ observationId: headIds[0] as string, state });
       return;
     }
     onRecord(state);

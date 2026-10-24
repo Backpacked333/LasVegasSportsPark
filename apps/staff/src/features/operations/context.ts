@@ -5,7 +5,8 @@
  * Names: the API has no minimal "display name" read, so each person is read with
  * `GET /v1/people/{id}` and only the given and family names are used; contact points and dates of
  * birth in that payload are never rendered, logged or put in a URL (§4.14 child data minimized).
- * A person the viewer may not read (NOT_FOUND, ACCESS_DENIED) is shown as "Name not available".
+ * A person the viewer may not read (NOT_FOUND, ACCESS_DENIED) is shown as "Participant, name not
+ * available" with a short reference.
  */
 import { useMemo } from 'react';
 import { nameUnavailable, usePersonNameRecords } from '../../api/person-names';
@@ -94,10 +95,16 @@ export function usePersonNames(ids: readonly string[]): ReadonlyMap<string, Pers
   }, [records]);
 }
 
+/**
+ * The label of a listed person. A person whose name the viewer may not read (an assigned coach or
+ * official reading a child: identity.read_person is not granted to them) keeps a short opaque
+ * reference, so rows and buttons stay distinguishable (SPK-UX-009) without revealing more.
+ */
 export function nameOf(names: ReadonlyMap<string, PersonName>, id: string): string {
   const entry = names.get(id);
+  const ref = id.slice(0, 8);
   if (!entry || entry.status === 'loading') return 'Loading name…';
-  if (entry.status === 'unavailable') return 'Name not available';
-  if (entry.status === 'error') return 'Name could not load';
+  if (entry.status === 'unavailable') return `Participant, name not available (ref ${ref})`;
+  if (entry.status === 'error') return `Name could not load (ref ${ref})`;
   return entry.name;
 }

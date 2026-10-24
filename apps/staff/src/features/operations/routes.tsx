@@ -30,15 +30,11 @@ import {
 } from '../../screens/workspace/WorkspaceActivityScreens';
 import { WorkspaceScreen } from '../../screens/workspace/WorkspaceScreen';
 import { WORKSPACE_TABS } from './AreaTabs';
-import { OfflineQueueProvider } from './offline/OfflineQueueProvider';
 import './operations.css';
 
+/** The offline queue provider is mounted once in the shell (layout/Shell.tsx), above all areas. */
 function OperationsLayout() {
-  return (
-    <OfflineQueueProvider>
-      <Outlet />
-    </OfflineQueueProvider>
-  );
+  return <Outlet />;
 }
 
 const ROUTES: readonly [path: string, element: ReactElement][] = [

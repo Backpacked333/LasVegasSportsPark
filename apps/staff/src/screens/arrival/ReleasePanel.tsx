@@ -110,7 +110,13 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
         if (v.personId && v.visitorCategory === 'participant') ids.add(v.personId);
       }
     }
-    for (const p of scanned?.people ?? []) if (p.kind === 'child') ids.add(p.personId);
+    // A scanned household child is a candidate only at the desk and only when on site; in an
+    // activity (SCR-W-09) the candidates are this session's present or late people only.
+    if (!activity) {
+      for (const p of scanned?.people ?? []) {
+        if (p.kind === 'child' && p.onSite) ids.add(p.personId);
+      }
+    }
     return [...ids];
   }, [activity, attendance.data, onSite.data, scanned]);
   const names = usePersonNames(candidateIds);
@@ -120,10 +126,14 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
       ? (knownNames.get(r.collectorPersonId) ?? 'the identified collector')
       : (r.collectorDescription ?? 'the described collector');
   // Only children: a person record the viewer can read with kind "child", or a scanned dependent.
+  // In an activity, every present or late person comes from the coach's own session attendance:
+  // keep them even when the name is not readable (a coach may not read child records), labelled
+  // with a short reference, so the empty state never hides children who are present.
   const children = candidateIds.filter((id) => {
     const scannedPerson = scanned?.people.find((p) => p.personId === id);
     if (scannedPerson) return scannedPerson.kind === 'child';
     const entry = names.get(id);
+    if (activity && (entry?.status === 'unavailable' || entry?.status === 'error')) return true;
     return entry?.status === 'loading' || (entry?.status === 'ok' && entry.kind === 'child');
   });
   const awaiting = children.filter((id) => !released.includes(id));

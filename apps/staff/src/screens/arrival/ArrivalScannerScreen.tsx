@@ -287,6 +287,12 @@ function ArrivalSelection({
       for (const v of recorded.visits) if (v.personId) visits[v.personId] = v.id;
       visits = { ...visits };
       setVisitIds(visits);
+      // Recorded people are no longer "arriving": their row shows Arrived from now on (SPK-ENTRY-001).
+      setArriving((prev) => {
+        const next = { ...prev };
+        for (const v of recorded.visits) if (v.personId) delete next[v.personId];
+        return next;
+      });
     }
     for (const { person, activity } of selectedCheckins) {
       const ref = activityFromDetail(activity.activity);
@@ -365,9 +371,7 @@ function ArrivalSelection({
                 setCheckins((prev) => ({ ...prev, [checkinKey(person.personId, a)]: value }))
               }
               commands={commands}
-              arrivalRecorded={
-                visitsOutcome.status === 'success' && visitIds[person.personId] !== undefined
-              }
+              arrivalRecorded={visitIds[person.personId] !== undefined}
             />
           ))}
         </ul>
@@ -509,6 +513,19 @@ function ActivityCheckin({
   const ref = activityFromDetail(activity.activity);
   const attendanceLink = ref ? `/arrival/attendance${activitySearch(ref)}` : null;
 
+  if (activity.checkin && !fromCommand && activity.checkin.status === 'held') {
+    // SPK-ENTRY-004: a check-in already held when the pass is scanned is read with its issues and
+    // revision, so it is actionable ("Check again") like a fresh one.
+    return (
+      <HeldCheckin
+        checkinId={activity.checkin.id}
+        title={activity.title}
+        when={when}
+        commands={commands}
+        recheckKey={recheckKey}
+      />
+    );
+  }
   if (activity.checkin && !fromCommand) {
     const badge = CHECKIN_STATUS[activity.checkin.status];
     return (
@@ -561,6 +578,62 @@ function ActivityCheckin({
       ) : null}
       {outcome.status === 'error' && outcome.error ? (
         <CommandError error={outcome.error} subject="This check-in" />
+      ) : null}
+    </li>
+  );
+}
+
+function HeldCheckin({
+  checkinId,
+  title,
+  when,
+  commands,
+  recheckKey,
+}: {
+  checkinId: string;
+  title: string;
+  when: string;
+  commands: ReturnType<typeof useKeyedCommands>;
+  recheckKey: string;
+}) {
+  const held = useApiQuery({
+    path: '/session-checkins/{id}',
+    request: { path: { id: checkinId } },
+  });
+  const recheck = commands.outcome(recheckKey);
+  const current = (recheck.data as SessionCheckin | undefined) ?? held.data;
+  if (!current) {
+    return (
+      <li>
+        <StatusBadge tone="warning" label={`Check-in held: ${title}`} />{' '}
+        <span className="caption">{when}</span>
+        {held.error ? (
+          <CommandError
+            error={held.error}
+            onRetry={() => void held.refetch()}
+            subject="This check-in"
+          />
+        ) : (
+          <span className="caption"> Reading the check-in…</span>
+        )}
+      </li>
+    );
+  }
+  return (
+    <li>
+      <CheckinOutcome
+        checkin={current}
+        title={title}
+        busy={recheck.status === 'pending'}
+        onRecheck={() =>
+          void commands.run(recheckKey, 'post', '/session-checkins/{id}/recheck', {
+            path: { id: current.id },
+            body: { expectedRevision: current.revision },
+          })
+        }
+      />
+      {recheck.status === 'error' && recheck.error ? (
+        <CommandError error={recheck.error} subject="This check-in" />
       ) : null}
     </li>
   );

@@ -20,7 +20,6 @@ import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, COMMUNICATIONS_TABS } from '../../features/operations/AreaTabs';
-import { nameOf, usePersonNames } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import { formatInstant, humanize } from '../../features/operations/format';
 import {
@@ -263,10 +262,19 @@ function DeliveryStatus({ notification: n }: { notification: Notification }) {
   );
 }
 
+/**
+ * SPK-COMMS-006 "names and a count, never a shared contact list": recipients are identified by
+ * their position and basis, without reading each person's record (the person read carries contact
+ * points). A recipient display name needs the API to add it to NotificationRecipient (README gap).
+ */
+function recipientLabel(r: Deliveries['recipients'][number], index: number): string {
+  const subjects = r.subjectPersonIds.length;
+  return `Recipient ${index + 1} (${RECIPIENT_BASIS[r.basis]}${r.basisDetail ? `: ${r.basisDetail}` : ''}${
+    subjects > 0 ? `, for ${subjects} ${subjects === 1 ? 'person' : 'people'}` : ''
+  })`;
+}
+
 function DeliveryDetail({ data }: { data: Deliveries }) {
-  const names = usePersonNames(
-    useMemo(() => data.recipients.map((r) => r.personId), [data.recipients]),
-  );
   const counts = useMemo(() => {
     const c = new Map<string, number>();
     for (const a of data.attempts) c.set(a.status, (c.get(a.status) ?? 0) + 1);
@@ -312,10 +320,10 @@ function DeliveryDetail({ data }: { data: Deliveries }) {
         A push notification is not proof of delivery: only confirmed deliveries say so.
       </p>
       <ul className="list" aria-label="Recipients and deliveries">
-        {data.recipients.map((r) => {
+        {data.recipients.map((r, index) => {
           const attempts = data.attempts.filter((a) => a.recipientId === r.id);
           const status = RECIPIENT_STATUS[r.status];
-          const name = nameOf(names, r.personId);
+          const name = recipientLabel(r, index);
           return (
             <li key={r.id} aria-label={name}>
               <div className="row-text">

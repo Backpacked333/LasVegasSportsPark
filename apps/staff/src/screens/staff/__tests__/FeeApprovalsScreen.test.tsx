@@ -67,6 +67,39 @@ describe('SCR-S-34 FeeApprovalsScreen', () => {
     );
   });
 
+  it('SPK-UX-008 stale version: Reload re-reads the list and the next approve carries the new revision', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    let approvals = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /fee-submissions': () => {
+          reads += 1;
+          return fakeResponse(200, {
+            items: [feeSubmission(reads > 1 ? { revision: 3 } : {})],
+            nextCursor: null,
+          });
+        },
+        'POST /fee-submissions/{id}/approve': () => {
+          approvals += 1;
+          return approvals === 1
+            ? fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' }))
+            : fakeResponse(200, feeSubmission({ status: 'approved', revision: 4 }));
+        },
+      }),
+    });
+    render(app.at('/staff/fees'));
+    const name = 'Approve Jordan Lee: U12 Red v Blue: Referee';
+    await user.click(await screen.findByRole('button', { name }));
+    await user.click(await screen.findByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(reads).toBe(2));
+    await user.click(await screen.findByRole('button', { name }));
+    await waitFor(() => expect(approvals).toBe(2));
+    const posts = app.fake.requests.filter((r) => r.route === '/fee-submissions/{id}/approve');
+    expect(posts[1]?.body).toEqual({ expectedRevision: 3 });
+    expect(posts[1]?.headers['idempotency-key']).not.toBe(posts[0]?.headers['idempotency-key']);
+  });
+
   it('adjusts with an amount in minor units and a reason', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

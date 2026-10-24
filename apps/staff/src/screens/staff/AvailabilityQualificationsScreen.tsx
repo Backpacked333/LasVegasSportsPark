@@ -12,6 +12,7 @@
  *   evidence, the viewer, or a record id typed in.
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -30,7 +31,8 @@ import {
   formatInstant,
   formatRange,
   humanize,
-  instantFromLocalInput,
+  inputZoneHint,
+  instantFromZonedInput,
 } from '../../features/operations/format';
 import { AVAILABILITY_KIND, QUALIFICATION_STATUS } from '../../features/operations/labels';
 import { useNow } from '../../providers/AppProviders';
@@ -133,7 +135,13 @@ function QualificationRow({
   const actions = QUALIFICATION_ACTIONS[q.status];
   const label = `${humanize(q.kind)}${q.level ? ` (${q.level})` : ''}`;
   const outcomeOf = (k: string) => commands.outcome(`${k}|${q.id}`);
-  const error = ['verify', 'reject', 'revoke'].map((k) => outcomeOf(k).error).find(Boolean);
+  const failedKind = (['verify', 'reject', 'revoke'] as const).find((k) => outcomeOf(k).error);
+  const error = failedKind ? outcomeOf(failedKind).error : undefined;
+  const queryClient = useQueryClient();
+  const reload = () => {
+    if (failedKind) commands.reset(`${failedKind}|${q.id}`);
+    void queryClient.invalidateQueries({ queryKey: QUALIFICATIONS_KEY });
+  };
   const run = (k: 'verify' | 'reject' | 'revoke') => {
     if (k !== 'verify' && !reason.trim()) {
       setMissing(true);
@@ -217,12 +225,20 @@ function QualificationRow({
           </Button>
         </form>
       ) : null}
-      {error ? <CommandError error={error} subject="This evidence" /> : null}
+      {error ? (
+        <CommandError
+          error={error}
+          onRetry={failedKind ? () => run(failedKind) : undefined}
+          onReload={reload}
+          subject="This evidence"
+        />
+      ) : null}
     </li>
   );
 }
 
 function RecordQualification() {
+  const { timezone } = useOperatingFacility();
   const [open, setOpen] = useState(false);
   const [personId, setPersonId] = useState('');
   const [kind, setKind] = useState('');
@@ -244,8 +260,8 @@ function RecordQualification() {
     );
   }
   const submit = () => {
-    const from = instantFromLocalInput(validFrom);
-    const to = instantFromLocalInput(validTo);
+    const from = instantFromZonedInput(validFrom, timezone);
+    const to = instantFromZonedInput(validTo, timezone);
     const next: Record<string, string> = {};
     if (!kind.trim()) next.kind = 'Name the qualification.';
     if (!from) next.validFrom = 'Give the date it is valid from.';
@@ -307,6 +323,7 @@ function RecordQualification() {
         type="datetime-local"
         value={validFrom}
         onChange={setValidFrom}
+        hint={inputZoneHint(timezone)}
         required
         error={missing.validFrom ?? apiErrors.validFrom}
       />
@@ -315,6 +332,7 @@ function RecordQualification() {
         type="datetime-local"
         value={validTo}
         onChange={setValidTo}
+        hint={inputZoneHint(timezone)}
         error={apiErrors.validTo}
       />
       <CheckboxField
@@ -409,6 +427,11 @@ function WindowRow({ window: w }: { window: Availability }) {
   const withdraw = useApiCommand('post', '/availability/{id}/withdraw', {
     invalidate: [AVAILABILITY_KEY],
   });
+  const queryClient = useQueryClient();
+  const reload = () => {
+    withdraw.reset();
+    void queryClient.invalidateQueries({ queryKey: AVAILABILITY_KEY });
+  };
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [missing, setMissing] = useState(false);
@@ -464,12 +487,15 @@ function WindowRow({ window: w }: { window: Availability }) {
           </Button>
         </form>
       ) : null}
-      {withdraw.error ? <CommandError error={withdraw.error} onRetry={submit} /> : null}
+      {withdraw.error ? (
+        <CommandError error={withdraw.error} onRetry={submit} onReload={reload} />
+      ) : null}
     </li>
   );
 }
 
 function AddWindow({ personId }: { personId: string | null }) {
+  const { timezone } = useOperatingFacility();
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [kind, setKind] = useState<'available' | 'unavailable' | ''>('');
@@ -478,8 +504,8 @@ function AddWindow({ personId }: { personId: string | null }) {
   const command = useApiCommand('post', '/availability', { invalidate: [AVAILABILITY_KEY] });
   const apiErrors = fieldErrorsOf(command.error);
   const submit = () => {
-    const s = instantFromLocalInput(start);
-    const e = instantFromLocalInput(end);
+    const s = instantFromZonedInput(start, timezone);
+    const e = instantFromZonedInput(end, timezone);
     const next: Record<string, string> = {};
     if (!s) next.start = 'Give the start.';
     if (!e) next.end = 'Give the end.';
@@ -513,6 +539,7 @@ function AddWindow({ personId }: { personId: string | null }) {
         type="datetime-local"
         value={start}
         onChange={setStart}
+        hint={inputZoneHint(timezone)}
         required
         error={missing.start ?? apiErrors['interval.start']}
       />
@@ -521,6 +548,7 @@ function AddWindow({ personId }: { personId: string | null }) {
         type="datetime-local"
         value={end}
         onChange={setEnd}
+        hint={inputZoneHint(timezone)}
         required
         error={missing.end ?? apiErrors['interval.end'] ?? apiErrors.interval}
       />
