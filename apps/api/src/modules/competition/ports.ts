@@ -133,6 +133,12 @@ export interface EvaluatePlayerOptions {
   actorIsStaff?: boolean;
   /** Evaluate a player who already is on the roster (readiness) rather than a new addition. */
   existingMembership?: boolean;
+  /**
+   * The reasons reach a caller who is not staff (a captain, co-captain, player or guardian): no
+   * restricted record ids and no person-derived detail such as a computed age or other-team
+   * counts (SPK-CAP-002, SPK-DISC-004). Codes, limits and reference dates stay.
+   */
+  restricted?: boolean;
 }
 
 /** SPK-CAP-004, SPK-COMP-005: explainable eligibility with reason, source, responsible role and action. */

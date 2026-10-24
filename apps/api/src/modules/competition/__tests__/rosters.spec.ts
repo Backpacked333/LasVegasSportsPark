@@ -375,7 +375,8 @@ describe('rosters, eligibility, invitations and join requests (SPK-COMP-005, SPK
             expect.objectContaining({
               code: 'suspended',
               severity: 'blocking',
-              source: { type: 'suspension', id: 'suspension-1' },
+              // SPK-CAP-002 / SPK-DISC-004: only staff learn the suspension record id
+              source: { type: 'suspension', id: actor === leagueManager ? 'suspension-1' : null },
             }),
           ]),
         );
@@ -1047,5 +1048,84 @@ describe('rosters, eligibility, invitations and join requests (SPK-COMP-005, SPK
       .query({ includeHistory: 'true' });
     expect(history.status).toBe(200);
     expect(history.body.members).toHaveLength(2);
+  });
+  it('SPK-CAP-002 / SPK-DISC-004: captains see eligibility codes without suspension basis, suspension ids or computed ages', async () => {
+    const youth = await createSeasonFixture(t, { startsOn: '2027-01-10', endsOn: '2027-04-10' });
+    const u12 = await createDivisionFixture(t, {
+      seasonId: youth.seasonId,
+      criteria: { ageBand: { minAge: 6, maxAge: 12 } },
+    });
+    const team = await teamOf(youth.seasonId, { divisionId: u12 });
+    const tooOld = await createPersonFixture(t, { kind: 'child', dateOfBirth: '2014-01-05' });
+    const banned = await adultCustomer(t);
+    const leak = (body: unknown) => {
+      const text = JSON.stringify(body);
+      expect(text).not.toContain('card accumulation');
+      expect(text).not.toContain('suspension-1');
+      expect(text).not.toMatch(/Age \d+/);
+    };
+    const adultTeam = await teamOf(season.seasonId);
+    const explain = (actor: Actor, personId: string, entryId = team.teamEntryId) =>
+      t.http.get(`/v1/team-entries/${entryId}/eligibility`).set(actor.header).query({ personId });
+
+    // explain: an age band reason keeps the code, the limit and the reference date only
+    const age = await explain(team.captain, tooOld);
+    expect(age.status).toBe(200);
+    expect(age.body.reasons).toEqual([
+      expect.objectContaining({
+        code: 'above_division_age',
+        source: { type: 'division', id: u12 },
+      }),
+    ]);
+    expect(age.body.reasons[0].message).toContain('12');
+    expect(age.body.reasons[0].message).toContain('2027-01-10');
+    leak(age.body);
+
+    suspended.add(banned.personId);
+    // explain, roster add, invitation and join-request approval: codes only for the captain
+    const explained = await explain(adultTeam.captain, banned.personId, adultTeam.teamEntryId);
+    expect(explained.body.reasons).toEqual([
+      expect.objectContaining({ code: 'suspended', source: { type: 'suspension', id: null } }),
+    ]);
+    leak(explained.body);
+    const added = await add(adultTeam.teamEntryId, adultTeam.captain, banned.personId);
+    expect(added.status).toBe(422);
+    expect(reasonCodes(added.body)).toEqual(['suspended']);
+    leak(added.body);
+    const invited = await post(
+      `/team-entries/${adultTeam.teamEntryId}/invitations`,
+      adultTeam.captain,
+      { recipientPersonId: banned.personId },
+    );
+    expect(invited.status).toBe(422);
+    expect(reasonCodes(invited.body)).toEqual(['suspended']);
+    leak(invited.body);
+    suspended.delete(banned.personId);
+    const requested = await post(
+      `/team-entries/${adultTeam.teamEntryId}/join-requests`,
+      banned,
+      {},
+    );
+    expect(requested.status).toBe(201);
+    suspended.add(banned.personId);
+    const approval = await post(`/join-requests/${requested.body.id}/decide`, adultTeam.captain, {
+      decision: 'approve',
+    });
+    expect(approval.status).toBe(422);
+    expect(reasonCodes(approval.body)).toEqual(['suspended']);
+    leak(approval.body);
+
+    // staff still see the suspension id and the computed age
+    const staffExplained = await explain(leagueManager, banned.personId, adultTeam.teamEntryId);
+    expect(staffExplained.body.reasons).toEqual([
+      expect.objectContaining({
+        code: 'suspended',
+        source: { type: 'suspension', id: 'suspension-1' },
+      }),
+    ]);
+    expect(JSON.stringify(staffExplained.body)).not.toContain('card accumulation');
+    suspended.delete(banned.personId);
+    const staffAge = await explain(leagueManager, tooOld);
+    expect(staffAge.body.reasons[0].message).toContain('Age 13 on 2027-01-10');
   });
 });

@@ -20,6 +20,7 @@ import {
   type Reader,
 } from '../competition.queries';
 import {
+  RESTRICTED_SOURCE_TYPES,
   ROSTER_LIMIT_STATUSES,
   ageOn,
   criteriaOf,
@@ -89,7 +90,14 @@ export class EligibilityService implements EligibilityPort {
     const membershipStatus = options.membershipStatus ?? 'active';
     const existing = options.existingMembership ?? false;
     const reasons: EligibilityReason[] = [];
-    const add = (r: ReasonInput) => reasons.push(r);
+    const restricted = options.restricted ?? false;
+    // SPK-CAP-002 / SPK-DISC-004: a caller who is not staff never learns restricted record ids.
+    const add = (r: ReasonInput) =>
+      reasons.push(
+        restricted && RESTRICTED_SOURCE_TYPES.has(r.source.type)
+          ? { ...r, source: { type: r.source.type, id: null } }
+          : r,
+      );
 
     const person = await this.people.loadPerson(db, organizationId, personId);
     if (!person) {
@@ -164,7 +172,9 @@ export class EligibilityService implements EligibilityPort {
           add({
             code: 'below_division_age',
             severity: 'blocking',
-            message: `Age ${age} on ${reference} is below the division minimum of ${band.minAge}.`,
+            message: restricted
+              ? `Below the division minimum age of ${band.minAge} on ${reference}.`
+              : `Age ${age} on ${reference} is below the division minimum of ${band.minAge}.`,
             source: { type: 'division', id: division.id },
             responsibleRole: 'league_manager',
             requiredAction: 'Place the player in a division whose age band applies.',
@@ -174,7 +184,9 @@ export class EligibilityService implements EligibilityPort {
           add({
             code: 'above_division_age',
             severity: 'blocking',
-            message: `Age ${age} on ${reference} is above the division maximum of ${band.maxAge}.`,
+            message: restricted
+              ? `Above the division maximum age of ${band.maxAge} on ${reference}.`
+              : `Age ${age} on ${reference} is above the division maximum of ${band.maxAge}.`,
             source: { type: 'division', id: division.id },
             responsibleRole: 'league_manager',
             requiredAction: 'Place the player in a division whose age band applies.',
@@ -286,7 +298,9 @@ export class EligibilityService implements EligibilityPort {
       add({
         code: 'multi_team_limit',
         severity: 'blocking',
-        message: `The person is already on ${others.length} other team(s) this season; the limit is ${limit}.`,
+        message: restricted
+          ? `The person has reached the season limit of ${limit} team(s).`
+          : `The person is already on ${others.length} other team(s) this season; the limit is ${limit}.`,
         source: { type: 'rule_set', id: context.ruleSet.id },
         responsibleRole: 'league_manager',
         requiredAction: 'Remove the player from another team or approve an exception.',
@@ -346,7 +360,8 @@ export class EligibilityService implements EligibilityPort {
       add({
         code: 'suspended',
         severity: 'blocking',
-        message: `The person is suspended (${suspension.reason})${suspension.until ? ` until ${suspension.until}` : ''}.`,
+        // Never the suspension's basis text (staff free text): staff read the suspension by id.
+        message: `The person has an active suspension in scope${suspension.until ? ` until ${suspension.until}` : ''}.`,
         source: { type: 'suspension', id: suspension.id },
         responsibleRole: 'league_manager',
         requiredAction: 'The suspension must end or be lifted before the player can be added.',

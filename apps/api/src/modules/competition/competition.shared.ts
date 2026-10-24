@@ -50,6 +50,17 @@ export function organizationOf(principal: Principal): string {
   return principal.organizationId;
 }
 
+/**
+ * Source records customers (captains, players, guardians) may learn about only through the issue
+ * itself: their ids are restricted (SPK-DISC-004, SPK-CAP-002, §4.10).
+ */
+export const RESTRICTED_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  'suspension',
+  'dispute',
+  'audit_record',
+  'incident',
+]);
+
 export function isStaffLike(principal: Principal): boolean {
   return principal.kind === 'staff' || principal.kind === 'system';
 }

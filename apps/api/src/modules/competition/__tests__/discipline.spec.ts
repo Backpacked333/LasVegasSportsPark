@@ -131,16 +131,20 @@ describe('discipline and disputes (SPK-DISC-001..005, SPK-RESULT-005, SPK-AT-013
     const reason = asSubstitute.body.details.reasons.find(
       (r: { code: string }) => r.code === 'suspended',
     );
+    // SPK-CAP-002 / SPK-DISC-004: the captain sees the code, never the suspension record id
     expect(reason).toMatchObject({
       severity: 'blocking',
-      source: { type: 'suspension', id: suspensionId },
+      source: { type: 'suspension', id: null },
       responsibleRole: 'league_manager',
     });
-    // staff cannot bypass it either
+    // staff cannot bypass it either; staff see the suspension id
     const byStaff = await post(`/team-entries/${a.teamEntryId}/roster`, leagueManager, {
       changes: [{ action: 'add', personId: player.personId, status: 'guest' }],
     });
     expect(byStaff.status).toBe(422);
+    expect(
+      byStaff.body.details.reasons.find((r: { code: string }) => r.code === 'suspended').source,
+    ).toEqual({ type: 'suspension', id: suspensionId });
     // another competition is unaffected (SPK-DISC-002 "do not assume every suspension applies across every program")
     const otherCompetition = await eligibility(
       elsewhere.teamEntryId,

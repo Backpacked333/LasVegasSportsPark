@@ -241,6 +241,8 @@ export class RosterService implements RosterPort {
         membershipStatus: query.status,
         actorIsStaff: isStaffLike(principal),
         existingMembership: open !== null && statusAt(open) !== null,
+        // SPK-CAP-002 / SPK-DISC-004: captains get codes, limits and dates, never restricted detail
+        restricted: !isStaffLike(principal),
       },
     );
   }
@@ -290,6 +292,7 @@ export class RosterService implements RosterPort {
           {
             membershipStatus: 'active',
             actorIsStaff: isStaffLike(principal),
+            restricted: !isStaffLike(principal),
           },
           trx,
         );
@@ -622,6 +625,7 @@ export class RosterService implements RosterPort {
         {
           membershipStatus: 'active',
           actorIsStaff: false,
+          restricted: !isStaffLike(principal),
         },
         trx,
       );
@@ -865,6 +869,8 @@ export class RosterService implements RosterPort {
       {
         membershipStatus: input.status,
         actorIsStaff: input.actorIsStaff,
+        // the 422 details reach the caller: a captain approving or adding sees codes only
+        restricted: !input.actorIsStaff,
       },
       trx,
     );

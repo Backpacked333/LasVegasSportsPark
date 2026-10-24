@@ -178,6 +178,11 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
 - `ELIGIBILITY_PORT` → `evaluatePlayer(organizationId, teamEntryId, personId, at, options)`:
   explainable reasons (code, severity blocking/warning/info/unknown, source record, responsible
   role, required action — SPK-READY-003). Unknown evidence is never a pass (SPK-READY-002).
+  A suspension reason never embeds the suspension's basis text; with `options.restricted` (every
+  roster path whose reasons reach a captain, player or guardian) restricted source ids
+  (suspension, dispute, incident, audit record) are null and age and multi-team reasons carry
+  the limit and reference date, never the computed age or other-team count (SPK-CAP-002,
+  SPK-DISC-004).
 - `SUSPENSION_CHECK_PORT` (interface + `SUSPENSION_CHECK_IMPL` token): answered by this module's
   own `DisciplineService` (part 2); an implementation registered elsewhere under
   `SUSPENSION_CHECK_IMPL` takes precedence (none is registered today). Resolved by the small
@@ -258,7 +263,9 @@ identifiers only.
   the prior entry and returning prior players as suggestions; the prior season's rows are not
   touched (tested byte-identical) and nothing is charged.
 - Captains see display names and readiness codes only; dates of birth, contacts, payment
-  instruments and notes never appear in competition responses (SPK-CAP-002).
+  instruments and notes never appear in competition responses (SPK-CAP-002). Customer-facing
+  eligibility reasons (explain, invitation and roster 422 details, join requests) carry codes,
+  limits and reference dates, never suspension bases, restricted record ids or computed ages.
 - Pending invitations expire lazily on an acceptance attempt by the token holder.
 
 ## Behaviour notes, part 2 — verified

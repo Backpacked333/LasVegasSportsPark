@@ -22,7 +22,13 @@ import {
   type FormsCheckPort,
 } from '../competition-matches.ports';
 import { loadRuleSetRow, loadSeasonRow } from '../competition.queries';
-import { isStaffLike, iso, organizationOf, ruleSetContentOf } from '../competition.shared';
+import {
+  RESTRICTED_SOURCE_TYPES,
+  isStaffLike,
+  iso,
+  organizationOf,
+  ruleSetContentOf,
+} from '../competition.shared';
 import {
   READINESS_CHECK_REGISTRY,
   SUSPENSION_CHECK_PORT,
@@ -36,11 +42,8 @@ import { FixturesService } from './fixtures.service';
 import { RosterService } from './roster.service';
 import { TeamEntriesService } from './team-entries.service';
 
-/** Source records customers may learn about only through the issue itself (SPK-DISC-004, §4.10). */
 /** Readiness checks registered by the workforce module carry this prefix (required officials). */
 export const WORKFORCE_CHECK_PREFIX = 'workforce.';
-
-const RESTRICTED_SOURCES = new Set(['suspension', 'dispute', 'audit_record', 'incident']);
 
 interface IssueInput {
   code: string;
@@ -107,7 +110,7 @@ export class ReadinessService {
         // SPK-DISC-004 / §4.10: discipline, dispute and audit record ids are restricted; customers
         // see the reason, the responsible role and the action, never the restricted record id.
         source:
-          restricted && RESTRICTED_SOURCES.has(input.source.type)
+          restricted && RESTRICTED_SOURCE_TYPES.has(input.source.type)
             ? { type: input.source.type, id: null }
             : input.source,
         responsibleRole: input.responsibleRole,
