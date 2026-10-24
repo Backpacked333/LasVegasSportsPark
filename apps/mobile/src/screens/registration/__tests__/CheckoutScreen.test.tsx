@@ -213,6 +213,52 @@ describe('SCR-C-14 CheckoutScreen', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/forms?basketId=${IDS.basket}`);
   });
 
+  it('§4.9: after MISSING_ACKNOWLEDGMENT the next "Hold my places" is a new intent (the API would replay the stored refusal)', async () => {
+    let holds = 0;
+    const app = renderCheckout({
+      routes: routes({
+        'GET /baskets/{id}': { status: 200, body: basket() },
+        'POST /baskets/{id}/hold': () => {
+          holds += 1;
+          return holds === 1
+            ? fakeResponse(
+                422,
+                apiErrorBody('MISSING_ACKNOWLEDGMENT', { nextAction: 'complete_acknowledgment' }),
+              )
+            : fakeResponse(200, HELD);
+        },
+      }),
+    });
+    const hold = await screen.findByRole('button', { name: 'Hold my places' });
+    await act(async () => {
+      fireEvent.press(hold);
+    });
+    await screen.findByRole('button', { name: 'Complete required forms' });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Hold my places' }));
+    });
+    const keys = app.fake.requests
+      .filter((r) => r.route === '/baskets/{id}/hold')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  it('remembers the quote before paying, so a restart mid-payment can find the checkout again', async () => {
+    const app = renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () => new Promise<Response>(() => undefined),
+      }),
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Succeeds at once' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $226.00' }));
+    });
+    await waitFor(() =>
+      expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote),
+    );
+  });
+
   it('QUOTE_EXPIRED: gets a new price and moves the checkout to it', async () => {
     const app = renderCheckout({
       routes: routes({

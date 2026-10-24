@@ -58,7 +58,7 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(
       screen.getByText('All places in this basket are confirmed together, or none are.'),
     ).toBeOnTheScreen();
-    expect(screen.getAllByLabelText('Base price: $120.00')).toHaveLength(2);
+    expect(screen.getAllByLabelText('Base price each: $120.00')).toHaveLength(2);
     expect(screen.getByLabelText('Subtotal: $240.00')).toBeOnTheScreen();
     expect(await screen.findByText('Required form for Ada: 1 still to sign.')).toBeOnTheScreen();
     expect(screen.getByLabelText('Ada: Autumn Youth Program. Not held yet')).toBeOnTheScreen();
@@ -241,6 +241,15 @@ describe('SCR-C-11 BasketScreen', () => {
     });
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/waitlist/${IDS.entry}`);
     expect(app.progressStore.snapshot().waitlistEntryIds).toEqual([IDS.entry]);
+  });
+
+  it('a checkout whose answer never arrived (app closed mid-payment) is found again from the basket', async () => {
+    renderBasket({
+      progress: { basketId: IDS.basket, quoteId: IDS.quote, pendingCheckoutQuoteId: IDS.quote },
+      routes: routes({ 'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) } }),
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Check your payment' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/checkout/${IDS.quote}`);
   });
 
   it('§4.10: a basket of another household reads not available', async () => {

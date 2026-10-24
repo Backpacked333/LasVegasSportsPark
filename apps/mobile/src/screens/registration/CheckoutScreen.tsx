@@ -131,10 +131,18 @@ function CheckoutContent({
   const pay = useCallback(
     async (body: CheckoutBody) => {
       setFailure(null);
+      // Saved before sending: if the app is closed before the answer arrives, the basket and the
+      // resume card lead back here, and re-posting this quote returns the existing checkout.
+      await update({ quoteId: quote.id, pendingCheckoutQuoteId: quote.id });
       try {
         const result = await checkout.submit({ body });
         setUnknownOutcome(null);
-        await update({ basketId: quote.basketId, quoteId: quote.id, checkoutId: result.id });
+        await update({
+          basketId: quote.basketId,
+          quoteId: quote.id,
+          checkoutId: result.id,
+          pendingCheckoutQuoteId: null,
+        });
         router.replace(registrationRoutes.outcome(result.id));
       } catch (error) {
         const apiError = error as ApiError;
@@ -209,7 +217,7 @@ function CheckoutContent({
     return (
       <Section title="Checkout started">
         <Body>A checkout already exists for this price. It is never charged twice.</Body>
-        {progress.checkoutId ? (
+        {progress.checkoutId && progress.quoteId === quote.id ? (
           <Button
             label="See your payment and registration"
             onPress={() =>

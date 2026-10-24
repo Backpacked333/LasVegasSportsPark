@@ -18,6 +18,7 @@
  * known status is shown with its age.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -27,7 +28,7 @@ import { CommandError } from '../../features/registration/CommandError';
 import { DevPaymentMethodPicker } from '../../features/registration/dev';
 import { formatInstant, formatMoney } from '../../features/registration/format';
 import { useParticipantNames } from '../../features/registration/participants';
-import { useRegistrationProgress } from '../../features/registration/progress';
+import { useRegistrationProgress, type ProgressPatch } from '../../features/registration/progress';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import {
@@ -54,7 +55,26 @@ export const OUTCOME_POLL_MS = 5_000;
 
 const TERMINAL: readonly Checkout['status'][] = ['completed', 'compensated', 'aborted'];
 
-function RetryPayment({ checkout }: { checkout: Checkout }) {
+/** Answers to a payment retry that mean the new attempt may still take effect (SPK-PAY-007). */
+export function retryOutcomeUnknown(error: ApiError): boolean {
+  return (
+    error.isOffline ||
+    error.code === 'IDEMPOTENCY_IN_PROGRESS' ||
+    error.code === 'PAYMENT_OUTCOME_UNKNOWN' ||
+    error.code === 'INTERNAL_ERROR'
+  );
+}
+
+function RetryPayment({
+  checkout,
+  confirming,
+  onUnknown,
+}: {
+  checkout: Checkout;
+  /** The last retry got no definite answer: offer only "Check again" with the same request. */
+  confirming: boolean;
+  onUnknown: () => void;
+}) {
   const { reachable } = useConnectivity();
   const [token, setToken] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
@@ -67,9 +87,29 @@ function RetryPayment({ checkout }: { checkout: Checkout }) {
     try {
       await retry.submit({ path: { id: checkout.id }, body: { paymentMethodToken: token } });
     } catch (error) {
-      setFailure(error as ApiError);
+      const apiError = error as ApiError;
+      if (retryOutcomeUnknown(apiError)) {
+        // Never shown as a failure: the new attempt may be processing or already captured.
+        onUnknown();
+        return;
+      }
+      setFailure(apiError);
     }
   };
+  if (confirming) {
+    return (
+      <ButtonRow>
+        <Button
+          label="Check again"
+          variant="secondary"
+          onPress={() => void submit()}
+          disabled={reachable === false}
+          busy={retry.isProcessing}
+          accessibilityHint="Asks about the same payment again; it is never charged twice"
+        />
+      </ButtonRow>
+    );
+  }
   if (!DevPaymentMethodPicker) {
     return (
       <StateView
@@ -98,7 +138,23 @@ function RetryPayment({ checkout }: { checkout: Checkout }) {
 
 function OutcomeContent({ checkout }: { checkout: Checkout }) {
   const router = useRouter();
-  const { update } = useRegistrationProgress();
+  const queryClient = useQueryClient();
+  const { progress, update } = useRegistrationProgress();
+  /** A payment retry got no definite answer; cleared when the API reports a new attempt. */
+  const [retryUnknown, setRetryUnknown] = useState(false);
+  const paymentId = checkout.payment?.id ?? null;
+  useEffect(() => {
+    setRetryUnknown(false);
+  }, [paymentId]);
+  useEffect(() => {
+    if (!retryUnknown) return undefined;
+    // Re-read the checkout until the API reports the new attempt (polling is off for a failed one).
+    const reread = () =>
+      void queryClient.invalidateQueries({ queryKey: ['api', '/registration-checkouts/{id}'] });
+    reread();
+    const timer = setInterval(reread, OUTCOME_POLL_MS);
+    return () => clearInterval(timer);
+  }, [retryUnknown, queryClient]);
   const operation = useApiQuery({
     path: '/operations/{id}',
     request: { path: { id: checkout.operationId } },
@@ -122,9 +178,17 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
   const terminal = TERMINAL.includes(checkout.status);
 
   // A finished checkout is no longer "in progress" on this device (the record stays in the API).
+  // Only what this checkout owns is forgotten: an older outcome never erases a newer basket or a
+  // checkout whose payment is still unknown.
   useEffect(() => {
-    if (terminal) void update({ basketId: null, quoteId: null, checkoutId: null });
-  }, [terminal, update]);
+    if (!terminal) return;
+    const patch: ProgressPatch = {};
+    if (progress.checkoutId === checkout.id) patch.checkoutId = null;
+    if (progress.basketId === checkout.basketId) patch.basketId = null;
+    if (progress.quoteId === checkout.quoteId) patch.quoteId = null;
+    if (progress.pendingCheckoutQuoteId === checkout.quoteId) patch.pendingCheckoutQuoteId = null;
+    if (Object.keys(patch).length > 0) void update(patch);
+  }, [terminal, update, progress, checkout.id, checkout.basketId, checkout.quoteId]);
 
   const status = checkoutStatus(checkout);
   const payment = checkout.payment;
@@ -145,7 +209,15 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
 
       {payment ? (
         <Section title="Payment">
-          <StatusBadge {...paymentStatus(payment)} testID="outcome-payment" />
+          {retryUnknown ? (
+            <StatusBadge
+              tone="warning"
+              label="Payment outcome being confirmed. Do not pay again."
+              testID="outcome-payment"
+            />
+          ) : (
+            <StatusBadge {...paymentStatus(payment)} testID="outcome-payment" />
+          )}
           <Detail label="Amount" value={formatMoney(payment.amountMinor, payment.currency)} />
           {payment.status === 'unknown' ? (
             <Body>
@@ -168,7 +240,7 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
               />
             )
           ) : null}
-          {payment.failureReason && payment.status === 'failed' ? (
+          {payment.failureReason && payment.status === 'failed' && !retryUnknown ? (
             <Body>{payment.failureReason}</Body>
           ) : null}
         </Section>
@@ -179,11 +251,17 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
       ) : null}
 
       {checkout.nextAction === 'retry_payment' && payment && payment.status !== 'succeeded' ? (
-        <Section title="Pay with another method">
+        <Section title={retryUnknown ? 'Checking your new payment' : 'Pay with another method'}>
           <Body>
-            The payment did not go through. Your places stay held only until the hold ends.
+            {retryUnknown
+              ? 'No answer came back for your new payment. It may still go through, so do not pay again: this screen checks it.'
+              : 'The payment did not go through. Your places stay held only until the hold ends.'}
           </Body>
-          <RetryPayment checkout={checkout} />
+          <RetryPayment
+            checkout={checkout}
+            confirming={retryUnknown}
+            onUnknown={() => setRetryUnknown(true)}
+          />
         </Section>
       ) : null}
 
@@ -234,9 +312,7 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
               ? enrollment
                 ? enrollmentStatus(enrollment, offeringName, placement)
                 : { tone: 'pending' as const, label: 'Checking this registration' }
-              : checkout.status === 'compensated' || checkout.status === 'aborted'
-                ? { tone: 'neutral' as const, label: 'Not registered' }
-                : { tone: 'pending' as const, label: 'Waiting for the payment outcome' };
+              : outcomeLineStatus(checkout, retryUnknown);
             return (
               <View
                 key={line.id}
@@ -267,6 +343,28 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
       </ButtonRow>
     </View>
   );
+}
+
+/**
+ * A line's words before the checkout completed, consistent with the badges above it (SPK-UX-004,
+ * SPK-UX-010, journeys.md section 3).
+ */
+export function outcomeLineStatus(
+  checkout: Pick<Checkout, 'status' | 'payment'>,
+  retryUnknown = false,
+): { tone: 'pending' | 'neutral' | 'warning'; label: string } {
+  if (checkout.status === 'compensated' || checkout.status === 'aborted') {
+    return { tone: 'neutral', label: 'Not registered' };
+  }
+  if (checkout.status === 'recovery_required') {
+    return { tone: 'warning', label: 'Payment received. Registration being completed.' };
+  }
+  if (checkout.status === 'finalizing') return { tone: 'pending', label: 'Payment processing' };
+  const payment = checkout.payment?.status;
+  if (!retryUnknown && (payment === 'failed' || payment === 'canceled')) {
+    return { tone: 'neutral', label: 'Not registered yet' };
+  }
+  return { tone: 'pending', label: 'Waiting for the payment outcome' };
 }
 
 export function CheckoutOutcomeScreen({ checkoutId }: { checkoutId: string }) {

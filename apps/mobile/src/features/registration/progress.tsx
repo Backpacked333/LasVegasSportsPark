@@ -26,6 +26,12 @@ export interface RegistrationProgress {
   basketId: string | null;
   quoteId: string | null;
   checkoutId: string | null;
+  /**
+   * The quote whose checkout was sent but whose answer has not arrived yet (saved before sending,
+   * cleared when the checkout id is known). After a restart mid-payment it is the only way back to
+   * the outcome: re-posting `{quoteId}` returns the existing checkout for that quote.
+   */
+  pendingCheckoutQuoteId: string | null;
   /** Newest first, at most MAX_WAITLIST_ENTRIES. */
   waitlistEntryIds: string[];
 }
@@ -34,6 +40,7 @@ export const EMPTY_PROGRESS: RegistrationProgress = Object.freeze({
   basketId: null,
   quoteId: null,
   checkoutId: null,
+  pendingCheckoutQuoteId: null,
   waitlistEntryIds: [],
 }) as RegistrationProgress;
 
@@ -82,6 +89,7 @@ export function parseProgress(raw: string | null, accountId: string | null): Reg
       basketId: idOrNull(value.basketId),
       quoteId: idOrNull(value.quoteId),
       checkoutId: idOrNull(value.checkoutId),
+      pendingCheckoutQuoteId: idOrNull(value.pendingCheckoutQuoteId),
       waitlistEntryIds: entries
         .map(idOrNull)
         .filter((id): id is string => id !== null)

@@ -30,12 +30,13 @@ import {
 } from '../../features/registration/forms';
 import { formatInstant } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
-import { useApiRecords } from '../../features/registration/queries';
+import { useApiRecords, type RecordState } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { Body, ButtonRow, ChoiceRow, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -89,7 +90,7 @@ function useRequirements(source: FormsSource) {
 }
 
 function FormCard({
-  policy,
+  policy: record,
   policyVersionId,
   participantPersonId,
   participantName,
@@ -98,7 +99,8 @@ function FormCard({
   offline,
   onSigned,
 }: {
-  policy: PolicyVersion | undefined;
+  /** The policy version's read: wording, loading or its error (SPK-UX-008). */
+  policy: RecordState<PolicyVersion> | undefined;
   policyVersionId: string;
   participantPersonId: string;
   participantName: string;
@@ -108,6 +110,7 @@ function FormCard({
   onSigned: () => void;
 }) {
   const { services } = useApp();
+  const policy = record?.data;
   const [agreed, setAgreed] = useState(false);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const sign = useApiCommand('post', '/acknowledgments', {
@@ -148,6 +151,15 @@ function FormCard({
         formWording(policy.content).map((paragraph, i) => (
           <Body key={`${policyVersionId}-${i}`}>{paragraph}</Body>
         ))
+      ) : record?.error ? (
+        <QueryErrorView
+          error={record.error}
+          onRetry={record.refetch}
+          unavailable={{
+            title: 'Form wording not available',
+            description: 'Ask the front desk about this form.',
+          }}
+        />
       ) : (
         <Body muted>Loading the wording…</Body>
       )}
@@ -199,7 +211,7 @@ function FormsContent({ source }: { source: FormsSource }) {
   const names = useParticipantNames(participants);
 
   if (query.error && !query.data) {
-    return <CommandError error={query.error} onRetry={() => void query.refetch()} />;
+    return <QueryErrorView error={query.error} onRetry={() => void query.refetch()} />;
   }
   if (requirements === undefined || me.isPending) {
     return <StateView variant="loading" label="required forms" />;
@@ -255,14 +267,14 @@ function FormsContent({ source }: { source: FormsSource }) {
         return (
           <Section key={personId} title={name === 'You' ? 'Your forms' : `Forms for ${name}`}>
             {status.error(personId) ? (
-              <CommandError error={status.error(personId)} onRetry={status.refetch} />
+              <QueryErrorView error={status.error(personId) as ApiError} onRetry={status.refetch} />
             ) : null}
             {list.map((policyVersionId) => {
               const ack = status.acknowledgment(personId, policyVersionId);
               return (
                 <FormCard
                   key={policyVersionId}
-                  policy={policies[policyVersionId]?.data}
+                  policy={policies[policyVersionId]}
                   policyVersionId={policyVersionId}
                   participantPersonId={personId}
                   participantName={name}

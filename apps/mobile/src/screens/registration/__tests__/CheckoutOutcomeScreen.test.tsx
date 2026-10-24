@@ -18,7 +18,7 @@ import {
   payment,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
-import { CheckoutOutcomeScreen } from '../CheckoutOutcomeScreen';
+import { CheckoutOutcomeScreen, outcomeLineStatus } from '../CheckoutOutcomeScreen';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -207,6 +207,82 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
       screen.getByText('Your payment was returned to you as a credit on your account.'),
     ).toBeOnTheScreen();
     expect(screen.getAllByLabelText('Not registered')).toHaveLength(2);
+  });
+
+  it('an older finished checkout forgets only what it owns: a newer checkout and basket stay remembered', async () => {
+    const NEWER_CHECKOUT = '0192f1a0-0000-7000-8000-0000000c0c02';
+    const NEWER_BASKET = '0192f1a0-0000-7000-8000-0000000c0b02';
+    const app = renderOutcome({
+      progress: { basketId: NEWER_BASKET, quoteId: null, checkoutId: NEWER_CHECKOUT },
+      routes: routes(),
+    });
+    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    await act(async () => undefined);
+    expect(app.progressStore.snapshot().checkoutId).toBe(NEWER_CHECKOUT);
+    expect(app.progressStore.snapshot().basketId).toBe(NEWER_BASKET);
+  });
+
+  it('SPK-PAY-007: a payment retry with no answer is never shown as failed, and only "Check again" is offered', async () => {
+    let posts = 0;
+    const app = renderOutcome({
+      routes: routes({
+        'GET /registration-checkouts/{id}': {
+          status: 200,
+          body: checkout({
+            status: 'awaiting_payment',
+            payment: payment({ status: 'failed', failureReason: 'The card was declined.' }),
+            receipt: null,
+            nextAction: 'retry_payment',
+          }),
+        },
+        'POST /registration-checkouts/{id}/payments': () => {
+          posts += 1;
+          throw new TypeError('Network request failed');
+        },
+      }),
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Succeeds at once' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try this payment method' }));
+    });
+    expect(
+      (await screen.findAllByLabelText('Payment outcome being confirmed. Do not pay again.'))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('The card was declined.')).toBeNull();
+    expect(screen.queryByText(/The payment did not go through/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try this payment method' })).toBeNull();
+    expect(screen.queryAllByLabelText(/Not registered yet$/)).toHaveLength(0);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    const keys = app.fake.requests
+      .filter((r) => r.route === '/registration-checkouts/{id}/payments')
+      .map((r) => r.headers['idempotency-key']);
+    expect(posts).toBe(2);
+    expect(keys[1]).toBe(keys[0]);
+    // The checkout is re-read while the new attempt's outcome is unknown.
+    expect(
+      app.fake.requests.filter((r) => r.route === '/registration-checkouts/{id}').length,
+    ).toBeGreaterThan(1);
+  });
+
+  it('SPK-UX-010: line words agree with the badges above them before the checkout completes', () => {
+    expect(outcomeLineStatus({ status: 'recovery_required', payment: null }).label).toBe(
+      'Payment received. Registration being completed.',
+    );
+    expect(outcomeLineStatus({ status: 'finalizing', payment: null }).label).toBe(
+      'Payment processing',
+    );
+    expect(
+      outcomeLineStatus({ status: 'awaiting_payment', payment: payment({ status: 'failed' }) })
+        .label,
+    ).toBe('Not registered yet');
+    expect(
+      outcomeLineStatus({ status: 'awaiting_payment', payment: payment({ status: 'unknown' }) })
+        .label,
+    ).toBe('Waiting for the payment outcome');
+    expect(outcomeLineStatus({ status: 'aborted', payment: null }).label).toBe('Not registered');
   });
 
   it('§4.10: a checkout of another account reads not available', async () => {

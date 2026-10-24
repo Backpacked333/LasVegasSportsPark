@@ -43,23 +43,16 @@ export function QueryBoundary<T>({
   const offline = reachable === false;
   const retry = () => void query.refetch();
 
+  // §4.10, §4.14: once the API answers NOT_FOUND or ACCESS_DENIED (access revoked, removed from a
+  // roster), cached data of that record is no longer shown, even though the query keeps it.
+  if (query.error && presentationForError(query.error) === 'unavailable') {
+    return <StateView variant="unavailable" />;
+  }
   if (query.data === undefined) {
     if (query.error) {
-      const presentation = presentationForError(query.error);
-      if (presentation === 'unavailable') return <StateView variant="unavailable" />;
-      if (presentation === 'offline') {
-        return (
-          <StateView
-            variant="offline-stale"
-            offline
-            updatedAt={null}
-            now={now}
-            unavailableActions={unavailableOffline}
-            onRetry={retry}
-          />
-        );
-      }
-      return <StateView variant="error" error={query.error} onRetry={retry} />;
+      return (
+        <QueryErrorView error={query.error} onRetry={retry} unavailableOffline={unavailableOffline} />
+      );
     }
     if (query.fetchStatus === 'paused' || offline) {
       return (
@@ -99,4 +92,39 @@ export function QueryBoundary<T>({
       {isEmpty?.(query.data) ? <StateView variant="empty" {...empty} /> : children(query.data)}
     </View>
   );
+}
+
+/**
+ * A read that failed with nothing to show (SPK-UX-008): protected NOT_FOUND or a permission
+ * restriction is "not available"; no connection is the offline state with "Try again"; anything
+ * else shows the code and "Try again". Commands use their own CommandError wording instead.
+ */
+export function QueryErrorView({
+  error,
+  onRetry,
+  unavailableOffline,
+  unavailable,
+}: {
+  error: ApiError;
+  onRetry: () => void;
+  unavailableOffline?: string[];
+  /** Words for "not available" on this screen; default: the generic wording. */
+  unavailable?: { title?: string; description?: string };
+}) {
+  const now = useNow();
+  const presentation = presentationForError(error);
+  if (presentation === 'unavailable') return <StateView variant="unavailable" {...unavailable} />;
+  if (presentation === 'offline') {
+    return (
+      <StateView
+        variant="offline-stale"
+        offline
+        updatedAt={null}
+        now={now}
+        unavailableActions={unavailableOffline}
+        onRetry={onRetry}
+      />
+    );
+  }
+  return <StateView variant="error" error={error} onRetry={onRetry} />;
 }

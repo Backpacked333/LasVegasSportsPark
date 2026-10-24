@@ -19,6 +19,8 @@ export interface RecordState<T> {
   data: T | undefined;
   error: ApiError | null;
   loading: boolean;
+  /** Reads this one record again (the "Try again" of its error state). */
+  refetch: () => void;
 }
 
 /** `useApiRecords('/people/{id}', ids)` → one state per id, keyed by id. */
@@ -50,6 +52,7 @@ export function useApiRecords<P extends GetPath>(
       data: result?.data?.data,
       error: (result?.error as ApiError | null) ?? null,
       loading: result?.isPending ?? true,
+      refetch: () => void result?.refetch(),
     };
   });
   return out;

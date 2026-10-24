@@ -132,10 +132,14 @@ function LineCard({
         <StatusBadge {...status} />
       </View>
       {line.price ? (
-        <Detail
-          label="Base price"
-          value={formatMoney(line.price.basePriceMinor * line.quantity, line.price.currency)}
-        />
+        // Only the amount the API sent; line totals belong to the quote (SPK-PAY-001, SCR-C-12).
+        <>
+          <Detail
+            label="Base price each"
+            value={formatMoney(line.price.basePriceMinor, line.price.currency)}
+          />
+          {line.quantity > 1 ? <Detail label="Quantity" value={String(line.quantity)} /> : null}
+        </>
       ) : (
         <Detail label="Price" value="No price published" />
       )}
@@ -323,6 +327,20 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
           <Button
             label="See your payment"
             onPress={() => router.push(registrationRoutes.outcome(progress.checkoutId as string))}
+          />
+        ) : basket.status === 'checking_out' &&
+          (progress.pendingCheckoutQuoteId ?? progress.quoteId) ? (
+          // The checkout's answer never arrived (the app was closed mid-payment): the checkout
+          // screen re-reads it for this quote, and the API returns the existing checkout.
+          <Button
+            label="Check your payment"
+            onPress={() =>
+              router.push(
+                registrationRoutes.checkout(
+                  (progress.pendingCheckoutQuoteId ?? progress.quoteId) as string,
+                ),
+              )
+            }
           />
         ) : null}
         {basket.status === 'held' ? (

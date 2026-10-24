@@ -41,10 +41,14 @@ export function QueryBoundary<T>({
   const { online, services } = useApp();
   const retry = () => void query.refetch();
 
+  // §4.10, §4.14: once the API answers NOT_FOUND or ACCESS_DENIED (access revoked, record moved
+  // out of reach), cached data of that record is no longer shown, although the query keeps it.
+  if (query.error && presentationForError(query.error) === 'unavailable') {
+    return <StateView variant="unavailable" />;
+  }
   if (query.data === undefined) {
     if (query.error) {
       const presentation = presentationForError(query.error);
-      if (presentation === 'unavailable') return <StateView variant="unavailable" />;
       if (presentation === 'offline') {
         return (
           <StateView
@@ -80,8 +84,13 @@ export function QueryBoundary<T>({
     query.updatedAt !== null &&
     now.getTime() - query.updatedAt.getTime() > threshold;
   const refreshFailed = query.error !== null && presentationForError(query.error) === 'offline';
+  // A refresh the API refused for another reason (5xx, gateway): the shown data is older than it
+  // looks, so the code and "Try again" appear above it instead of a silent success (SPK-UX-008).
+  const refreshError =
+    query.error !== null && presentationForError(query.error) === 'error' ? query.error : null;
   return (
     <div>
+      {refreshError ? <StateView variant="error" error={refreshError} onRetry={retry} /> : null}
       {!online || refreshFailed || stale ? (
         <StateView
           variant="offline-stale"

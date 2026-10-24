@@ -148,6 +148,59 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`);
   });
 
+  it('STALE_REVISION on the second line: Reload takes the reloaded basket, and the retry carries its revision under a new key', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'POST /baskets/{id}/lines': addLineHandler((_req, call) =>
+          call === 2
+            ? fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' }))
+            : null,
+        ),
+        'GET /baskets/{id}': {
+          status: 200,
+          body: basket({ lines: [line({ participantPersonId: IDS.childA })], revision: 7 }),
+        },
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada' }));
+    fireEvent.press(screen.getByRole('checkbox', { name: 'Ben' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
+    });
+    expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    });
+    await waitFor(() => expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull());
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+    });
+    const lines = app.fake.requests.filter((r) => r.route === '/baskets/{id}/lines');
+    expect(lines).toHaveLength(3);
+    expect(lines[2]?.body).toMatchObject({ participantPersonId: IDS.childB, expectedRevision: 7 });
+    expect(lines[2]?.headers['idempotency-key']).not.toBe(lines[1]?.headers['idempotency-key']);
+  });
+
+  it('never starts a second basket while the remembered one is still unread', async () => {
+    const app = createRegistrationTestApp({
+      progress: { basketId: IDS.basket },
+      routes: routes({
+        'GET /baskets/{id}': () =>
+          fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
+    fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada' }));
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+    });
+    expect(app.fake.requests.filter((r) => r.route === '/baskets')).toHaveLength(0);
+  });
+
   it('SPK-AT-004: a duplicate equivalent registration is explained without revealing who holds it', async () => {
     const app = createRegistrationTestApp({
       routes: routes({

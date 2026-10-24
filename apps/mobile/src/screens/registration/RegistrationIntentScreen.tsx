@@ -33,7 +33,7 @@ import { Body, ButtonRow, ChoiceRow, Section, Title } from '../../features/regis
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -82,8 +82,11 @@ function IntentChooser({ offering }: { offering: Offering }) {
     return <StateView variant="loading" label="your family" />;
   }
   if (me.error) {
-    return <CommandError error={me.error} onRetry={() => void me.refetch()} />;
+    return <QueryErrorView error={me.error} onRetry={() => void me.refetch()} />;
   }
+  // The remembered basket is still being read, or could not be read: never start a second basket
+  // in the meantime (that would orphan the open one).
+  const basketUnknown = progress.basketId !== null && current.data === undefined;
   if (participants.length === 0) {
     return (
       <StateView
@@ -107,13 +110,14 @@ function IntentChooser({ offering }: { offering: Offering }) {
     setFailure(null);
     try {
       let basket: Basket | null = lastBasket ?? openBasket;
+      if (!basket && basketUnknown) return;
       if (!basket) {
         // SPK-REG-004 proposed default; partial fulfillment is never offered (DEC-026).
         basket = await createBasket.submit({
           body: { fulfillmentMode: 'all_or_nothing', acceptPartialFulfillment: false },
         });
         setLastBasket(basket);
-        await update({ basketId: basket.id, quoteId: null, checkoutId: null });
+        await update({ basketId: basket.id, quoteId: null });
       }
       for (const personId of selected) {
         if (added.includes(personId)) continue;
@@ -193,10 +197,20 @@ function IntentChooser({ offering }: { offering: Offering }) {
           })}
         </Section>
       ) : null}
+      {basketUnknown && current.error ? (
+        <QueryErrorView error={current.error} onRetry={() => void current.refetch()} />
+      ) : null}
       <CommandError
         error={failure}
         onRetry={() => void submit()}
-        onReload={() => void current.refetch()}
+        onReload={() => {
+          // STALE_REVISION: the basket changed elsewhere. Drop the basket this screen last saw and
+          // take the reloaded one, so the next attempt carries its revision (a new intent).
+          setLastBasket(null);
+          setFailure(null);
+          addLine.reset();
+          void current.refetch();
+        }}
       />
       {basketIntent ? (
         <ButtonRow>
@@ -207,8 +221,8 @@ function IntentChooser({ offering }: { offering: Offering }) {
                 : 'Add to your basket'
             }
             onPress={() => void submit()}
-            disabled={pending.length === 0 || offline}
-            busy={working}
+            disabled={pending.length === 0 || offline || (basketUnknown && !current.error)}
+            busy={working || (basketUnknown && !current.error && current.fetchStatus === 'fetching')}
           />
           {offline ? (
             <Body muted>Adding to your basket needs a connection. Your choices are kept.</Body>

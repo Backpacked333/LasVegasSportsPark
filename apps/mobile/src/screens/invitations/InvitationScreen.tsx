@@ -280,7 +280,10 @@ export function grantsBySubject(
   const add = (id: string) => {
     if (!subjects.includes(id)) subjects.push(id);
   };
-  for (const relationship of result.relationships) add(relationship.subjectPersonId);
+  // `Relationship` is published as nullable at the component (reported OpenAPI issue).
+  for (const relationship of result.relationships) {
+    if (relationship) add(relationship.subjectPersonId);
+  }
   for (const grant of result.grants) add(grant.subjectPersonId);
   return subjects.map((personId) => {
     const granted = result.grants

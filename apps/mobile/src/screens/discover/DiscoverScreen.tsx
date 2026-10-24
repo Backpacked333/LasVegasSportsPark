@@ -108,19 +108,34 @@ function useOfferingPages(query: { kind?: OfferingKind; organization?: string },
 function ResumeCard() {
   const router = useRouter();
   const { progress } = useRegistrationProgress();
-  if (!progress.checkoutId && !progress.basketId && progress.waitlistEntryIds.length === 0) {
+  if (
+    !progress.checkoutId &&
+    !progress.pendingCheckoutQuoteId &&
+    !progress.basketId &&
+    progress.waitlistEntryIds.length === 0
+  ) {
     return null;
   }
   return (
     <View style={styles.resume} testID="discover-resume">
-      {progress.checkoutId ? (
+      {progress.pendingCheckoutQuoteId ? (
+        // A checkout was sent and its answer never arrived: that payment comes first.
+        <Button
+          label="Check your payment and registration"
+          onPress={() =>
+            router.push(registrationRoutes.checkout(progress.pendingCheckoutQuoteId as string))
+          }
+        />
+      ) : progress.checkoutId ? (
         <Button
           label="Check your payment and registration"
           onPress={() => router.push(registrationRoutes.outcome(progress.checkoutId as string))}
         />
-      ) : progress.basketId ? (
+      ) : null}
+      {progress.basketId ? (
         <Button
           label="Continue your registration"
+          variant={progress.pendingCheckoutQuoteId || progress.checkoutId ? 'secondary' : undefined}
           onPress={() => router.push(registrationRoutes.basket(progress.basketId as string))}
         />
       ) : null}

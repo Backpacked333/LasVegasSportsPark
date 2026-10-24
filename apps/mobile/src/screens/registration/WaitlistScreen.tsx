@@ -77,7 +77,7 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
         body: { expectedRevision: offer.revision },
       });
       if (result.basket) {
-        await update({ basketId: result.basket.id, quoteId: null, checkoutId: null });
+        await update({ basketId: result.basket.id, quoteId: null });
         router.push(registrationRoutes.basket(result.basket.id));
       } else {
         refetch();

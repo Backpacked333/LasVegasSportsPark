@@ -8,6 +8,7 @@
  * States: loading per entry; empty (none joined here); ready; not available; offline (each entry
  * with the age of what is shown, through the foundation banner).
  */
+import { presentationForError } from '@sportspark/api-client';
 import { Stack, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useParticipantNames } from '../../features/registration/participants';
@@ -19,6 +20,7 @@ import { Body, Section } from '../../features/registration/ui';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { ListRow } from '../../ui/ListRow';
+import { QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 
@@ -55,7 +57,19 @@ function WaitlistList() {
             return <StateView key={id} variant="loading" label="waitlist entry" />;
           }
           const entry = record.data;
-          if (!entry) {
+          // Only a protected NOT_FOUND or a permission restriction reads as not available; a
+          // temporary failure keeps its code and "Try again" (SPK-UX-008).
+          if (
+            !entry ||
+            (record.error && presentationForError(record.error) === 'unavailable')
+          ) {
+            if (record.error && presentationForError(record.error) !== 'unavailable') {
+              return (
+                <View key={id} testID={`waitlist-row-${id}`}>
+                  <QueryErrorView error={record.error} onRetry={record.refetch} />
+                </View>
+              );
+            }
             return (
               <ListRow
                 key={id}

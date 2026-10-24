@@ -174,7 +174,8 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
   const appliedCodes = quote.discounts.map((d) => d.code).filter((c): c is string => c !== null);
   const [code, setCode] = useState('');
   const [credits, setCredits] = useState<string[]>(quote.appliedCredits.map((c) => c.creditId));
-  const [failure, setFailure] = useState<ApiError | null>(null);
+  /** The failed attempt and its own arguments: "Try again" repeats exactly that request (§4.9). */
+  const [failure, setFailure] = useState<{ error: ApiError; retry: () => void } | null>(null);
   const requote = useApiCommand('post', '/registration-quotes');
   const usable = quoteIsUsable(quote, now);
   const m = (v: number) => formatMoney(v, quote.currency);
@@ -189,10 +190,13 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
       setCode('');
       router.replace(registrationRoutes.quote(next.id));
     } catch (error) {
-      setFailure(error as ApiError);
+      setFailure({
+        error: error as ApiError,
+        retry: () => void newQuote(discountCodes, creditIds),
+      });
     }
   };
-  const codeError = discountCodeError(failure);
+  const codeError = discountCodeError(failure?.error ?? null);
   const creditsChanged =
     [...credits].sort().join() !==
     quote.appliedCredits
@@ -295,10 +299,10 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
         </>
       ) : null}
       <CommandError
-        error={failure}
-        onRetry={() => void newQuote(appliedCodes, credits)}
+        error={failure?.error ?? null}
+        onRetry={failure?.retry}
         onReload={refetch}
-        onRequote={() => void newQuote(appliedCodes, credits)}
+        onRequote={failure?.retry ?? (() => void newQuote(appliedCodes, credits))}
       />
       <ButtonRow>
         {usable ? (
@@ -308,12 +312,19 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
             disabled={offline}
           />
         ) : quote.status === 'consumed' ? (
-          progress.checkoutId ? (
+          progress.checkoutId && progress.quoteId === quote.id ? (
             <Button
               label="See your payment"
               onPress={() => router.push(registrationRoutes.outcome(progress.checkoutId as string))}
             />
-          ) : null
+          ) : (
+            // The checkout for this price is not known on this device (its answer never arrived):
+            // the checkout screen re-reads it, and the API returns the existing checkout.
+            <Button
+              label="Check your payment"
+              onPress={() => router.push(registrationRoutes.checkout(quote.id))}
+            />
+          )
         ) : (
           <Button
             label="Get a new price"

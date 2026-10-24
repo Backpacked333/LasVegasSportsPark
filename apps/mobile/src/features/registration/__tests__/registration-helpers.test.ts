@@ -172,6 +172,7 @@ describe('registration progress on the device (§4.13, SPK-UX-001)', () => {
       basketId: IDS.basket,
       quoteId: null,
       checkoutId: IDS.checkout,
+      pendingCheckoutQuoteId: null,
       waitlistEntryIds: [IDS.entry],
     });
     expect(JSON.parse(backend.value as string).accountId).toBe(TEST_SESSION.accountId);
