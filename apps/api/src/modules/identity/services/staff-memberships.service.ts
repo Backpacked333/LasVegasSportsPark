@@ -19,6 +19,7 @@ import {
   UnitOfWork,
   assertExpectedRevision,
   ensureUpdated,
+  executorFor,
   snapshotActor,
   type Clock,
   type Trx,
@@ -277,8 +278,22 @@ export class StaffMembershipsService implements StaffDirectoryPort {
     });
   }
 
+  /**
+   * One membership, or null. Reads through the active transaction when called from another
+   * module's command or handler (executorFor), so it sees that transaction's own writes.
+   */
+  async find(organizationId: string, id: string): Promise<StaffMembership | null> {
+    const row = await executorFor(this.db)
+      .selectFrom('staff_memberships')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .executeTakeFirst();
+    return row ? toStaffMembership(row) : null;
+  }
+
   async listForPerson(organizationId: string, personId: string): Promise<StaffMembership[]> {
-    const rows = await this.db
+    const rows = await executorFor(this.db)
       .selectFrom('staff_memberships')
       .selectAll()
       .where('organization_id', '=', organizationId)

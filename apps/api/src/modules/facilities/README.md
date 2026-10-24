@@ -70,10 +70,13 @@ multi-step commands recorded as operations (`facilities.approve_restriction`,
   `applyClosure`), then activates the restriction with the conflict units of the affected
   resource (read through `ResourcesService`). A subdivision restriction blocks only that
   subdivision's unit (the other half stays bookable; a whole-pitch booking is rejected because the
-  pitch shares the unit); a whole-pitch restriction blocks every subdivision. The port calls run
-  between this module's transactions (a nested transaction through the root database deadlocks
-  under PGlite and would not be atomic on PostgreSQL either); an interruption leaves the
-  restriction `approved` and `POST …/approve` resumes it (closure id recorded as soon as created).
+  pitch shares the unit); a whole-pitch restriction blocks every subdivision. Approval, the
+  closure commands and the activation run in ONE transaction (scheduling's commands join it;
+  `UnitOfWork.run` is reentrant), so an interruption or a refused step leaves the restriction as it
+  was, never `approved` with the field still bookable (§4.7 invariant 12; **Verified**,
+  `__tests__/restrictions.spec.ts` "approval, closure and activation commit together"). A
+  restriction left `approved` by an earlier version is still resumed by `POST …/approve`. Release
+  (lift the closure, then release) is one transaction in the same way.
   Exactly one closure backs a restriction (SPK-FAC-004, SPK-AT-021): the closure id is linked under
   the restriction's row lock, a concurrent or retried approval that created its own closure uses the
   linked one instead (audit `facilities.restriction_closure_superseded`; its own closure stays

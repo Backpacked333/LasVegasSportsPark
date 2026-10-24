@@ -157,9 +157,15 @@ Part 2 (contracts in `packages/contracts/src/api/competition-matches.ts`):
 
 Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Creating or renewing an entry and every
-fixture command create an `operation` (`GET /v1/operations/{id}`); fixture scheduling runs the
-scheduling port between two transactions so a conflict leaves the fixture `unscheduled` and the
-operation `failed` with the reason (§4.9, §4.12).
+fixture command create an `operation` (`GET /v1/operations/{id}`). A fixture command and its
+scheduling event commit in one transaction (the scheduling command joins it; `UnitOfWork.run` is
+reentrant): a refused scheduling step (for example a conflict) is recorded, so the fixture stays
+`unscheduled` and the operation `failed` with the reason, and any other failure rolls the whole
+command back, so no event exists that its fixture does not reference (§4.7 invariant 12, §4.9,
+§4.12). The `scheduling.event_changed` follow-up applies the event's current state, read inside its
+own transaction, never the payload's change: late or reordered deliveries converge on the latest
+state and never relink a canceled event (§4.12, §4.6; **Verified**,
+`__tests__/fixture-sync-order.spec.ts`).
 
 ## Ports (`ports.ts`, provided by `CompetitionModule`)
 

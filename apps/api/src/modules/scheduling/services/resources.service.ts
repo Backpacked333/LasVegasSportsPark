@@ -29,6 +29,7 @@ import {
   AuditWriter,
   AuthorizationService,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -222,7 +223,7 @@ export class ResourcesService {
 
   async getResource(principal: Principal, resourceId: string): Promise<Resource> {
     const organizationId = organizationOf(principal);
-    const row = await this.loadResource(this.db, organizationId, resourceId);
+    const row = await this.loadResource(executorFor(this.db), organizationId, resourceId);
     if (!row) throw errors.notFound('resource', resourceId);
     await this.authorization.require(principal, SchedulingActions.readInventory, {
       type: 'resource',
@@ -230,7 +231,7 @@ export class ResourcesService {
       organizationId,
       facilityId: row.facility_id,
     });
-    return this.resourceView(this.db, row);
+    return this.resourceView(executorFor(this.db), row);
   }
 
   async listResources(principal: Principal, facilityId: string): Promise<Resource[]> {
@@ -240,7 +241,7 @@ export class ResourcesService {
       organizationId,
       facilityId,
     });
-    const rows = await this.db
+    const rows = await executorFor(this.db)
       .selectFrom('resources')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -248,7 +249,7 @@ export class ResourcesService {
       .orderBy('name')
       .execute();
     const out: Resource[] = [];
-    for (const row of rows) out.push(await this.resourceView(this.db, row));
+    for (const row of rows) out.push(await this.resourceView(executorFor(this.db), row));
     return out;
   }
 
@@ -371,7 +372,7 @@ export class ResourcesService {
       organizationId,
       facilityId,
     });
-    const rows = await this.db
+    const rows = await executorFor(this.db)
       .selectFrom('resource_configurations')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -379,7 +380,7 @@ export class ResourcesService {
       .orderBy('name')
       .execute();
     const out: ResourceConfiguration[] = [];
-    for (const row of rows) out.push(await this.configurationView(this.db, row));
+    for (const row of rows) out.push(await this.configurationView(executorFor(this.db), row));
     return out;
   }
 
@@ -439,14 +440,14 @@ export class ResourcesService {
       organizationId,
       facilityId,
     });
-    const rows = await this.db
+    const rows = await executorFor(this.db)
       .selectFrom('conflict_units')
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('facility_id', '=', facilityId)
       .orderBy('name')
       .execute();
-    const mappings = await this.db
+    const mappings = await executorFor(this.db)
       .selectFrom('resource_conflict_units')
       .select(['resource_id', 'conflict_unit_id'])
       .where('organization_id', '=', organizationId)
@@ -560,7 +561,7 @@ export class ResourcesService {
       organizationId,
       facilityId,
     });
-    let q = this.db
+    let q = executorFor(this.db)
       .selectFrom('operating_hours')
       .selectAll()
       .where('organization_id', '=', organizationId)

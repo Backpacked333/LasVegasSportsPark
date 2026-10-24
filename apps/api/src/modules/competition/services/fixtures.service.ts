@@ -32,6 +32,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  executorFor,
   snapshotActor,
   type Clock,
   type HandlerContext,
@@ -118,127 +119,137 @@ export class FixturesService implements FixturePort {
       organizationId,
     });
     const id = newId();
-    const plan = await this.uow.run(async ({ trx }): Promise<Plan> => {
-      const season = await loadSeasonRow(trx, organizationId, input.seasonId);
-      if (!season) throw errors.notFound('season', input.seasonId);
-      if (season.status === 'completed' || season.status === 'archived') {
-        throw errors.invalidTransition('Season', season.status, 'add_fixture');
-      }
-      const home = await this.loadEntry(trx, organizationId, input.seasonId, input.homeEntryId);
-      const away = input.awayEntryId
-        ? await this.loadEntry(trx, organizationId, input.seasonId, input.awayEntryId)
-        : null;
-      if (input.divisionId) {
-        const division = await trx
-          .selectFrom('divisions')
-          .select('id')
-          .where('organization_id', '=', organizationId)
-          .where('season_id', '=', input.seasonId)
-          .where('id', '=', input.divisionId)
-          .executeTakeFirst();
-        if (!division) throw errors.notFound('division', input.divisionId);
-        for (const entry of [home, away]) {
-          if (entry && entry.division_id !== null && entry.division_id !== input.divisionId) {
-            throw errors.validation('Both entries must be placed in the fixture division.', {
-              teamEntryId: entry.id,
-              divisionId: entry.division_id,
-            });
+    // §4.7 invariant 12, §4.11: the fixture, its scheduling event and the recorded outcome commit
+    // in one transaction (scheduling's commands join it; UnitOfWork.run is reentrant). A refused
+    // scheduling step is recorded (operation failed) and committed before it is reported; anything
+    // else rolls the whole command back, so no event exists that its fixture does not reference.
+    const outcome = await this.uow.run(async () => {
+      const plan = await this.uow.run(async ({ trx }): Promise<Plan> => {
+        const season = await loadSeasonRow(trx, organizationId, input.seasonId);
+        if (!season) throw errors.notFound('season', input.seasonId);
+        if (season.status === 'completed' || season.status === 'archived') {
+          throw errors.invalidTransition('Season', season.status, 'add_fixture');
+        }
+        const home = await this.loadEntry(trx, organizationId, input.seasonId, input.homeEntryId);
+        const away = input.awayEntryId
+          ? await this.loadEntry(trx, organizationId, input.seasonId, input.awayEntryId)
+          : null;
+        if (input.divisionId) {
+          const division = await trx
+            .selectFrom('divisions')
+            .select('id')
+            .where('organization_id', '=', organizationId)
+            .where('season_id', '=', input.seasonId)
+            .where('id', '=', input.divisionId)
+            .executeTakeFirst();
+          if (!division) throw errors.notFound('division', input.divisionId);
+          for (const entry of [home, away]) {
+            if (entry && entry.division_id !== null && entry.division_id !== input.divisionId) {
+              throw errors.validation('Both entries must be placed in the fixture division.', {
+                teamEntryId: entry.id,
+                divisionId: entry.division_id,
+              });
+            }
           }
         }
-      }
-      await trx
-        .insertInto('fixtures')
-        .values({
-          id,
-          organization_id: organizationId,
-          season_id: input.seasonId,
-          division_id: input.divisionId ?? null,
-          round: input.round ?? null,
-          home_entry_id: input.homeEntryId,
-          away_entry_id: input.awayEntryId ?? null,
-          scheduling_event_id: null,
-          scheduled_start: null,
-          scheduled_end: null,
-          notes: input.notes ?? null,
-          created_by: json(snapshotActor(principal)),
-        })
-        .execute();
-      const operationId = await this.operations.create(trx, {
-        organizationId,
-        kind: 'competition.create_fixture',
-        requestedBy: principal,
-        correlationId,
-        input: { fixtureId: id, schedule: input.schedule ?? null },
-        status: 'running',
-      });
-      await this.audit.record(trx, {
-        organizationId,
-        actor: principal,
-        action: CompetitionActions.manageFixtures.id,
-        targetType: 'fixture',
-        targetId: id,
-        afterRevision: 1,
-        reason: input.reason ?? null,
-        correlationId,
-        operationId,
-        details: {
-          operation: 'create',
-          seasonId: input.seasonId,
-          homeEntryId: input.homeEntryId,
-          awayEntryId: input.awayEntryId ?? null,
-        },
-      });
-      await this.outbox.enqueue(trx, CompetitionEvents.fixtureCreated, {
-        organizationId,
-        aggregateType: 'fixture',
-        aggregateId: id,
-        payload: {
-          fixtureId: id,
-          seasonId: input.seasonId,
-          divisionId: input.divisionId ?? null,
-          homeEntryId: input.homeEntryId,
-          awayEntryId: input.awayEntryId ?? null,
-          operationId,
-        },
-        correlationId,
-        operationId,
-      });
-      const fixture = await trx
-        .selectFrom('fixtures')
-        .selectAll()
-        .where('id', '=', id)
-        .executeTakeFirstOrThrow();
-      if (!input.schedule) {
-        await this.operations.transition(trx, operationId, 'succeeded', {
-          result: { fixtureId: id },
+        await trx
+          .insertInto('fixtures')
+          .values({
+            id,
+            organization_id: organizationId,
+            season_id: input.seasonId,
+            division_id: input.divisionId ?? null,
+            round: input.round ?? null,
+            home_entry_id: input.homeEntryId,
+            away_entry_id: input.awayEntryId ?? null,
+            scheduling_event_id: null,
+            scheduled_start: null,
+            scheduled_end: null,
+            notes: input.notes ?? null,
+            created_by: json(snapshotActor(principal)),
+          })
+          .execute();
+        const operationId = await this.operations.create(trx, {
+          organizationId,
+          kind: 'competition.create_fixture',
+          requestedBy: principal,
+          correlationId,
+          input: { fixtureId: id, schedule: input.schedule ?? null },
+          status: 'running',
         });
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: CompetitionActions.manageFixtures.id,
+          targetType: 'fixture',
+          targetId: id,
+          afterRevision: 1,
+          reason: input.reason ?? null,
+          correlationId,
+          operationId,
+          details: {
+            operation: 'create',
+            seasonId: input.seasonId,
+            homeEntryId: input.homeEntryId,
+            awayEntryId: input.awayEntryId ?? null,
+          },
+        });
+        await this.outbox.enqueue(trx, CompetitionEvents.fixtureCreated, {
+          organizationId,
+          aggregateType: 'fixture',
+          aggregateId: id,
+          payload: {
+            fixtureId: id,
+            seasonId: input.seasonId,
+            divisionId: input.divisionId ?? null,
+            homeEntryId: input.homeEntryId,
+            awayEntryId: input.awayEntryId ?? null,
+            operationId,
+          },
+          correlationId,
+          operationId,
+        });
+        const fixture = await trx
+          .selectFrom('fixtures')
+          .selectAll()
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow();
+        if (!input.schedule) {
+          await this.operations.transition(trx, operationId, 'succeeded', {
+            result: { fixtureId: id },
+          });
+          return {
+            fixture,
+            operationId,
+            step: 'none',
+            nextStatus: 'unscheduled',
+            change: 'edited',
+            reason: null,
+          };
+        }
         return {
           fixture,
           operationId,
-          step: 'none',
-          nextStatus: 'unscheduled',
-          change: 'edited',
-          reason: null,
+          step: 'create_event',
+          nextStatus: 'scheduled',
+          change: 'scheduled',
+          schedule: input.schedule,
+          reason: input.reason ?? null,
+        };
+      });
+      if (plan.step === 'none') {
+        return {
+          result: {
+            fixture: toFixture(plan.fixture),
+            operationId: plan.operationId,
+            operationStatus: 'succeeded',
+          } satisfies FixtureCommandResult,
         };
       }
-      return {
-        fixture,
-        operationId,
-        step: 'create_event',
-        nextStatus: 'scheduled',
-        change: 'scheduled',
-        schedule: input.schedule,
-        reason: input.reason ?? null,
-      };
+      return this.execute(principal, plan, correlationId);
     });
-    if (plan.step === 'none') {
-      return {
-        fixture: toFixture(plan.fixture),
-        operationId: plan.operationId,
-        operationStatus: 'succeeded',
-      };
-    }
-    return this.execute(principal, plan, correlationId);
+    if ('failure' in outcome) throw outcome.failure;
+    return outcome.result;
   }
 
   async update(
@@ -248,149 +259,161 @@ export class FixturesService implements FixturePort {
     correlationId: string | null,
   ): Promise<FixtureCommandResult> {
     const organizationId = organizationOf(principal);
-    const plan = await this.uow.run(async ({ trx }): Promise<Plan> => {
-      const fixture = await this.loadFixture(trx, organizationId, id, { forUpdate: true });
-      if (!fixture) throw errors.notFound('fixture', id);
-      await this.authorization.require(principal, CompetitionActions.manageFixtures, {
-        type: 'fixture',
-        id,
-        organizationId,
-      });
-      assertExpectedRevision(input.expectedRevision, fixture.revision);
-      const reason = input.reason ?? null;
-      const operationId = await this.operations.create(trx, {
-        organizationId,
-        kind: `competition.${input.action}_fixture`,
-        requestedBy: principal,
-        correlationId,
-        input: { fixtureId: id, action: input.action, schedule: input.schedule ?? null },
-        status: 'running',
-      });
-      const hasEvent = fixture.scheduling_event_id !== null;
-      switch (input.action) {
-        case 'edit': {
-          if (input.divisionId) {
-            const division = await trx
-              .selectFrom('divisions')
-              .select('id')
+    // §4.7 invariant 12: one transaction, as in create.
+    const outcome = await this.uow.run(async () => {
+      const plan = await this.uow.run(async ({ trx }): Promise<Plan> => {
+        const fixture = await this.loadFixture(trx, organizationId, id, { forUpdate: true });
+        if (!fixture) throw errors.notFound('fixture', id);
+        await this.authorization.require(principal, CompetitionActions.manageFixtures, {
+          type: 'fixture',
+          id,
+          organizationId,
+        });
+        assertExpectedRevision(input.expectedRevision, fixture.revision);
+        const reason = input.reason ?? null;
+        const operationId = await this.operations.create(trx, {
+          organizationId,
+          kind: `competition.${input.action}_fixture`,
+          requestedBy: principal,
+          correlationId,
+          input: { fixtureId: id, action: input.action, schedule: input.schedule ?? null },
+          status: 'running',
+        });
+        const hasEvent = fixture.scheduling_event_id !== null;
+        switch (input.action) {
+          case 'edit': {
+            if (input.divisionId) {
+              const division = await trx
+                .selectFrom('divisions')
+                .select('id')
+                .where('organization_id', '=', organizationId)
+                .where('season_id', '=', fixture.season_id)
+                .where('id', '=', input.divisionId)
+                .executeTakeFirst();
+              if (!division) throw errors.notFound('division', input.divisionId);
+            }
+            const updated = await trx
+              .updateTable('fixtures')
+              .set({
+                round: input.round === undefined ? fixture.round : input.round,
+                division_id:
+                  input.divisionId === undefined ? fixture.division_id : input.divisionId,
+                notes: input.notes === undefined ? fixture.notes : input.notes,
+                revision: fixture.revision + 1,
+              })
               .where('organization_id', '=', organizationId)
-              .where('season_id', '=', fixture.season_id)
-              .where('id', '=', input.divisionId)
-              .executeTakeFirst();
-            if (!division) throw errors.notFound('division', input.divisionId);
+              .where('id', '=', id)
+              .where('revision', '=', fixture.revision)
+              .returningAll()
+              .executeTakeFirstOrThrow();
+            await this.operations.transition(trx, operationId, 'succeeded', {
+              result: { fixtureId: id },
+            });
+            await this.recordChange(
+              trx,
+              principal,
+              fixture,
+              updated,
+              'edited',
+              reason,
+              correlationId,
+              operationId,
+            );
+            return {
+              fixture: updated,
+              operationId,
+              step: 'none',
+              nextStatus: updated.status,
+              change: 'edited',
+              reason,
+            };
           }
-          const updated = await trx
-            .updateTable('fixtures')
-            .set({
-              round: input.round === undefined ? fixture.round : input.round,
-              division_id: input.divisionId === undefined ? fixture.division_id : input.divisionId,
-              notes: input.notes === undefined ? fixture.notes : input.notes,
-              revision: fixture.revision + 1,
-            })
-            .where('organization_id', '=', organizationId)
-            .where('id', '=', id)
-            .where('revision', '=', fixture.revision)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-          await this.operations.transition(trx, operationId, 'succeeded', {
-            result: { fixtureId: id },
-          });
-          await this.recordChange(
-            trx,
-            principal,
-            fixture,
-            updated,
-            'edited',
-            reason,
-            correlationId,
-            operationId,
-          );
-          return {
-            fixture: updated,
-            operationId,
-            step: 'none',
-            nextStatus: updated.status,
-            change: 'edited',
-            reason,
-          };
-        }
-        case 'schedule': {
-          const next = FixtureMachine.next(fixture.status, 'schedule');
-          return {
-            fixture,
-            operationId,
-            step: hasEvent ? 'move_event' : 'create_event',
-            nextStatus: next,
-            change: 'scheduled',
-            schedule: input.schedule,
-            reason,
-          };
-        }
-        case 'reschedule': {
-          if (fixture.status !== 'scheduled') {
-            throw errors.invalidTransition('Fixture', fixture.status, 'reschedule');
+          case 'schedule': {
+            const next = FixtureMachine.next(fixture.status, 'schedule');
+            return {
+              fixture,
+              operationId,
+              step: hasEvent ? 'move_event' : 'create_event',
+              nextStatus: next,
+              change: 'scheduled',
+              schedule: input.schedule,
+              reason,
+            };
           }
-          return {
-            fixture,
-            operationId,
-            step: hasEvent ? 'move_event' : 'create_event',
-            nextStatus: 'scheduled',
-            change: 'rescheduled',
-            schedule: input.schedule,
-            reason,
-          };
+          case 'reschedule': {
+            if (fixture.status !== 'scheduled') {
+              throw errors.invalidTransition('Fixture', fixture.status, 'reschedule');
+            }
+            return {
+              fixture,
+              operationId,
+              step: hasEvent ? 'move_event' : 'create_event',
+              nextStatus: 'scheduled',
+              change: 'rescheduled',
+              schedule: input.schedule,
+              reason,
+            };
+          }
+          case 'postpone': {
+            const next = FixtureMachine.next(fixture.status, 'postpone');
+            return {
+              fixture,
+              operationId,
+              step: hasEvent ? 'cancel_event' : 'none',
+              nextStatus: next,
+              change: 'postponed',
+              reason,
+            };
+          }
+          case 'unschedule': {
+            const next = FixtureMachine.next(fixture.status, 'unschedule');
+            return {
+              fixture,
+              operationId,
+              step: hasEvent ? 'cancel_event' : 'none',
+              nextStatus: next,
+              change: 'unscheduled',
+              reason,
+            };
+          }
+          case 'cancel': {
+            const next = FixtureMachine.next(fixture.status, 'cancel');
+            return {
+              fixture,
+              operationId,
+              step: hasEvent ? 'cancel_event' : 'none',
+              nextStatus: next,
+              change: 'canceled',
+              reason,
+            };
+          }
         }
-        case 'postpone': {
-          const next = FixtureMachine.next(fixture.status, 'postpone');
-          return {
-            fixture,
-            operationId,
-            step: hasEvent ? 'cancel_event' : 'none',
-            nextStatus: next,
-            change: 'postponed',
-            reason,
-          };
-        }
-        case 'unschedule': {
-          const next = FixtureMachine.next(fixture.status, 'unschedule');
-          return {
-            fixture,
-            operationId,
-            step: hasEvent ? 'cancel_event' : 'none',
-            nextStatus: next,
-            change: 'unscheduled',
-            reason,
-          };
-        }
-        case 'cancel': {
-          const next = FixtureMachine.next(fixture.status, 'cancel');
-          return {
-            fixture,
-            operationId,
-            step: hasEvent ? 'cancel_event' : 'none',
-            nextStatus: next,
-            change: 'canceled',
-            reason,
-          };
-        }
+      });
+      if (plan.change === 'edited') {
+        return {
+          result: {
+            fixture: toFixture(plan.fixture),
+            operationId: plan.operationId,
+            operationStatus: 'succeeded',
+          } satisfies FixtureCommandResult,
+        };
       }
+      return this.execute(principal, plan, correlationId);
     });
-    if (plan.change === 'edited') {
-      return {
-        fixture: toFixture(plan.fixture),
-        operationId: plan.operationId,
-        operationStatus: 'succeeded',
-      };
-    }
-    return this.execute(principal, plan, correlationId);
+    if ('failure' in outcome) throw outcome.failure;
+    return outcome.result;
   }
 
-  /** Steps 2 and 3 of a scheduling command: the scheduling port, then the recorded outcome. */
+  /**
+   * Steps 2 and 3 of a scheduling command, inside the command's transaction: the scheduling port
+   * (whose command joins it), then the recorded outcome. A refused scheduling step is returned as
+   * `failure` after recording it, for the caller to commit and report.
+   */
   private async execute(
     principal: Principal,
     plan: Plan,
     correlationId: string | null,
-  ): Promise<FixtureCommandResult> {
+  ): Promise<{ result: FixtureCommandResult } | { failure: DomainError }> {
     const organizationId = organizationOf(principal);
     const { fixture, operationId } = plan;
     let event: Event | null = null;
@@ -433,11 +456,11 @@ export class FixturesService implements FixturePort {
         }
       }
     } catch (error) {
+      // Anything but a refusal rolls the whole command back (nothing half-applied).
+      if (!DomainError.is(error)) throw error;
       await this.uow.run(async ({ trx }) => {
         await this.operations.transition(trx, operationId, 'failed', {
-          error: DomainError.is(error)
-            ? { code: error.code, message: error.message, details: error.details }
-            : { code: 'INTERNAL_ERROR', message: 'scheduling failed' },
+          error: { code: error.code, message: error.message, details: error.details },
         });
         await this.audit.record(trx, {
           organizationId,
@@ -447,17 +470,13 @@ export class FixturesService implements FixturePort {
           targetId: fixture.id,
           correlationId,
           operationId,
-          details: {
-            step: plan.step,
-            outcome: 'failed',
-            code: DomainError.is(error) ? error.code : 'INTERNAL_ERROR',
-          },
+          details: { step: plan.step, outcome: 'failed', code: error.code },
         });
       });
-      throw error;
+      return { failure: error };
     }
     const scheduledNow = event !== null && event.status === 'published';
-    return this.uow.run(async ({ trx }) => {
+    const result = await this.uow.run(async ({ trx }): Promise<FixtureCommandResult> => {
       const before = await this.loadFixture(trx, organizationId, fixture.id, { forUpdate: true });
       if (!before) throw errors.notFound('fixture', fixture.id);
       const nextStatus: FixtureStatus =
@@ -514,6 +533,7 @@ export class FixturesService implements FixturePort {
       );
       return { fixture: toFixture(updated), operationId, operationStatus: 'succeeded' };
     });
+    return { result };
   }
 
   /** RSVP by the player, a guardian with register, or staff (SPK-CAP-003, §4.8). Not attendance, not eligibility. */
@@ -602,12 +622,12 @@ export class FixturesService implements FixturePort {
   // -------------------------------------------------------------------------------------------
   async get(principal: Principal, id: string): Promise<FixtureDetail> {
     const organizationId = organizationOf(principal);
-    const fixture = await this.loadFixture(this.db, organizationId, id);
+    const fixture = await this.loadFixture(executorFor(this.db), organizationId, id);
     if (!fixture) throw errors.protectedNotFound('fixture');
     const now = this.clock.now();
     const at = fixture.scheduled_start ? new Date(fixture.scheduled_start) : now;
     await this.authorizeRead(principal, fixture, at);
-    return this.detail(this.db, organizationId, fixture, at, principal.personId);
+    return this.detail(executorFor(this.db), organizationId, fixture, at, principal.personId);
   }
 
   async listForSeason(
@@ -616,7 +636,7 @@ export class FixturesService implements FixturePort {
     query: ListSeasonFixturesQuery,
   ): Promise<Page<Fixture>> {
     const organizationId = organizationOf(principal);
-    const season = await loadSeasonRow(this.db, organizationId, seasonId);
+    const season = await loadSeasonRow(executorFor(this.db), organizationId, seasonId);
     if (!season) throw errors.notFound('season', seasonId);
     await this.authorization.require(
       principal,
@@ -624,7 +644,7 @@ export class FixturesService implements FixturePort {
       readTarget(principal, 'season', seasonId, organizationId),
     );
     const cursor = decodeCursor(query.cursor, Cursor);
-    let q = this.db
+    let q = executorFor(this.db)
       .selectFrom('fixtures')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -677,9 +697,6 @@ export class FixturesService implements FixturePort {
       forUpdate: true,
     });
     if (!fixture) return;
-    const stale =
-      fixture.scheduling_event_id !== null && fixture.scheduling_event_id !== payload.eventId;
-    if (stale) return;
     const system: Principal = {
       kind: 'system',
       organizationId,
@@ -690,8 +707,24 @@ export class FixturesService implements FixturePort {
       sessionId: null,
       actorLabel: 'competition.sync_fixture_schedule',
     };
-    if (payload.change === 'canceled') {
-      if (fixture.status !== 'scheduled' || fixture.scheduling_event_id !== payload.eventId) return;
+    // §4.12, §4.6: deliveries can arrive late and out of order (a retried event is overtaken by
+    // later ones), and the payload carries no ordering token. So the fixture follows the event's
+    // CURRENT state, read inside this handler's transaction (the read joins it), never the
+    // payload's `change`/`after`: every delivery, in any order, converges on the latest committed
+    // state, and a late `moved` can never relink a canceled event or undo a postponement.
+    let current: Event | null;
+    try {
+      current = await this.scheduling.getEvent(system, payload.eventId);
+    } catch (error) {
+      if (DomainError.is(error) && error.code === 'NOT_FOUND') return;
+      throw error;
+    }
+    if (current.sourceType !== 'fixture' || current.sourceId !== fixture.id) return;
+    // the fixture moved on to another event (rescheduled through a new one): this one is stale
+    if (fixture.scheduling_event_id !== null && fixture.scheduling_event_id !== current.id) return;
+    if (current.status === 'canceled') {
+      // EventMachine: canceled is terminal, so a canceled event is never linked again.
+      if (fixture.status !== 'scheduled' || fixture.scheduling_event_id !== current.id) return;
       const updated = await ctx.trx
         .updateTable('fixtures')
         .set({
@@ -719,29 +752,30 @@ export class FixturesService implements FixturePort {
         );
       return;
     }
-    const after = payload.after;
-    if (!after || after.status !== 'published') return;
+    if (current.status !== 'published') return;
     if (
       fixture.status !== 'unscheduled' &&
       fixture.status !== 'postponed' &&
       fixture.status !== 'scheduled'
     )
       return;
+    const scheduledStart = new Date(current.scheduledStart).toISOString();
+    const scheduledEnd = new Date(current.scheduledEnd).toISOString();
     const unchanged =
       fixture.status === 'scheduled' &&
-      fixture.scheduling_event_id === payload.eventId &&
+      fixture.scheduling_event_id === current.id &&
       fixture.scheduled_start !== null &&
-      new Date(fixture.scheduled_start).toISOString() === after.scheduledStart &&
+      new Date(fixture.scheduled_start).toISOString() === scheduledStart &&
       fixture.scheduled_end !== null &&
-      new Date(fixture.scheduled_end).toISOString() === after.scheduledEnd;
+      new Date(fixture.scheduled_end).toISOString() === scheduledEnd;
     if (unchanged) return;
     const updated = await ctx.trx
       .updateTable('fixtures')
       .set({
         status: 'scheduled',
-        scheduling_event_id: payload.eventId,
-        scheduled_start: after.scheduledStart,
-        scheduled_end: after.scheduledEnd,
+        scheduling_event_id: current.id,
+        scheduled_start: scheduledStart,
+        scheduled_end: scheduledEnd,
         revision: fixture.revision + 1,
       })
       .where('organization_id', '=', organizationId)
@@ -770,7 +804,7 @@ export class FixturesService implements FixturePort {
     fixtureId: string,
     trx?: Trx,
   ): Promise<FixtureSummary | null> {
-    const row = await this.loadFixture(trx ?? this.db, organizationId, fixtureId);
+    const row = await this.loadFixture(trx ?? executorFor(this.db), organizationId, fixtureId);
     return row ? toFixtureSummary(row) : null;
   }
 
@@ -779,7 +813,7 @@ export class FixturesService implements FixturePort {
     seasonId: string,
     trx?: Trx,
   ): Promise<FixtureSummary[]> {
-    const rows = await (trx ?? this.db)
+    const rows = await (trx ?? executorFor(this.db))
       .selectFrom('fixtures')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -796,7 +830,7 @@ export class FixturesService implements FixturePort {
     window: { from?: Date; to?: Date } = {},
     trx?: Trx,
   ): Promise<FixtureSummary[]> {
-    let q = (trx ?? this.db)
+    let q = (trx ?? executorFor(this.db))
       .selectFrom('fixtures')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -884,7 +918,7 @@ export class FixturesService implements FixturePort {
   }
 
   private async titleOf(organizationId: string, fixture: FixtureRow): Promise<string> {
-    const names = await this.db
+    const names = await executorFor(this.db)
       .selectFrom('team_entries')
       .innerJoin('teams', (join) =>
         join
@@ -907,7 +941,7 @@ export class FixturesService implements FixturePort {
 
   private async formatOf(organizationId: string, fixture: FixtureRow): Promise<string | null> {
     if (!fixture.division_id) return null;
-    const division = await this.db
+    const division = await executorFor(this.db)
       .selectFrom('divisions')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -996,10 +1030,20 @@ export class FixturesService implements FixturePort {
     const persons = new Set<string>();
     for (const entryId of [fixture.home_entry_id, fixture.away_entry_id]) {
       if (!entryId) continue;
-      for (const r of await rosterRowsEffectiveAt(this.db, organizationId, entryId, at)) {
+      for (const r of await rosterRowsEffectiveAt(
+        executorFor(this.db),
+        organizationId,
+        entryId,
+        at,
+      )) {
         if (statusAt(r) !== null) persons.add(r.person_id);
       }
-      for (const r of await effectiveRoles(this.db, organizationId, entryId, this.clock.now()))
+      for (const r of await effectiveRoles(
+        executorFor(this.db),
+        organizationId,
+        entryId,
+        this.clock.now(),
+      ))
         persons.add(r.person_id);
     }
     if (persons.has(principal.personId)) {
@@ -1011,7 +1055,7 @@ export class FixturesService implements FixturePort {
     }
     for (const subject of persons) {
       if (subject === principal.personId) continue;
-      const person = await this.people.loadPerson(this.db, organizationId, subject);
+      const person = await this.people.loadPerson(executorFor(this.db), organizationId, subject);
       if (!person || person.kind !== 'child') continue;
       const guardian = await this.authorization.decide(principal, CompetitionActions.readFixture, {
         ...base,

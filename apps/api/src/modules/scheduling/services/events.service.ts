@@ -18,6 +18,7 @@ import {
   AuditWriter,
   AuthorizationService,
   UnitOfWork,
+  executorFor,
 } from '../../../kernel';
 import { DATABASE } from '../../../kernel/tokens';
 import type {
@@ -284,7 +285,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
   /** Staff in scope, a committed participant (self) or a guardian with view permission; otherwise not found (§4.10). */
   async getEvent(principal: Principal, eventId: string): Promise<Event> {
     const organizationId = organizationOf(principal);
-    const event = await this.db
+    const event = await executorFor(this.db)
       .selectFrom('events')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -314,7 +315,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
       facilityId: query.facilityId,
     });
     const cursor = decodeCursor(query.cursor, Cursor);
-    let q = this.db
+    let q = executorFor(this.db)
       .selectFrom('events')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -350,7 +351,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
     const organizationId = organizationOf(principal);
     let facilityId = query.facilityId ?? null;
     if (query.resourceId) {
-      const resource = await this.db
+      const resource = await executorFor(this.db)
         .selectFrom('resources')
         .select(['facility_id'])
         .where('organization_id', '=', organizationId)
@@ -365,7 +366,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
       organizationId,
       facilityId,
     });
-    let q = this.db
+    let q = executorFor(this.db)
       .selectFrom('reservations as r')
       .innerJoin('events as e', (join) =>
         join.onRef('e.id', '=', 'r.event_id').onRef('e.organization_id', '=', 'r.organization_id'),
@@ -401,7 +402,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
     input: FindAvailableSlotsInput,
   ): Promise<Interval[]> {
     const organizationId = organizationOf(principal);
-    const resource = await this.db
+    const resource = await executorFor(this.db)
       .selectFrom('resources')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -414,7 +415,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
       facilityId: resource.facility_id,
     });
     if (resource.status === 'closed') return [];
-    const facility = await this.db
+    const facility = await executorFor(this.db)
       .selectFrom('facilities')
       .select(['id', 'organization_id', 'timezone', 'settings'])
       .where('organization_id', '=', organizationId)
@@ -433,7 +434,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
     const searchStart = new Date(windowStart.getTime() - setup * 60_000);
     const searchEnd = new Date(windowEnd.getTime() + cleanup * 60_000);
 
-    const units = await this.db
+    const units = await executorFor(this.db)
       .selectFrom('resource_conflict_units')
       .select('conflict_unit_id')
       .where('organization_id', '=', organizationId)
@@ -442,7 +443,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
     const unitIds = units.map((u) => u.conflict_unit_id);
     const busy: Array<{ start: number; end: number }> = [];
     if (unitIds.length > 0) {
-      const reserved = await this.db
+      const reserved = await executorFor(this.db)
         .selectFrom('reservation_units')
         .select([sql<string>`lower(occupied)`.as('start'), sql<string>`upper(occupied)`.as('end')])
         .where('organization_id', '=', organizationId)
@@ -453,7 +454,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
       for (const r of reserved) {
         busy.push({ start: new Date(r.start).getTime(), end: new Date(r.end).getTime() });
       }
-      const closures = await this.db
+      const closures = await executorFor(this.db)
         .selectFrom('closures')
         .select([sql<string>`lower(during)`.as('start'), sql<string>`upper(during)`.as('end')])
         .where('organization_id', '=', organizationId)
@@ -479,7 +480,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         busy.push({ start: new Date(c.start).getTime(), end: new Date(c.end).getTime() });
       }
     }
-    const hours = await this.db
+    const hours = await executorFor(this.db)
       .selectFrom('operating_hours')
       .select(['resource_id', 'weekday', 'opens_at', 'closes_at'])
       .where('organization_id', '=', organizationId)

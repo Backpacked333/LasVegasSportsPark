@@ -387,20 +387,20 @@ export class ReplacementsService {
       const summary = { originalId: original.id, replacementId: replacement.id };
       if (!endsAccess) {
         await this.operations.transition(trx, operationId, 'succeeded', { result: summary });
+      } else {
+        // SPK-STAFF-004: the original's access ends in this transaction (identity joins it).
+        await this.access.end(
+          principal,
+          assignmentId,
+          organizationId,
+          operationId,
+          body.reason,
+          correlationId,
+          summary,
+        );
       }
       return { originalRow, replacement, operationId, endsAccess, uncovered, summary };
     });
-    if (result.endsAccess) {
-      await this.access.end(
-        principal,
-        assignmentId,
-        organizationId,
-        result.operationId,
-        body.reason,
-        correlationId,
-        result.summary,
-      );
-    }
     const now = this.clock.now();
     const original = await this.assignments.load(this.db, organizationId, assignmentId);
     return {

@@ -18,6 +18,7 @@ import {
   OperationalExceptions,
   Outbox,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -66,14 +67,14 @@ export class ClosuresService implements ClosurePort {
       organizationId,
       facilityId: input.facilityId,
     });
-    await this.writer.loadFacility(this.db, organizationId, input.facilityId);
+    await this.writer.loadFacility(executorFor(this.db), organizationId, input.facilityId);
     if (input.resourceId) {
-      await this.writer.loadResources(this.db, organizationId, input.facilityId, [
+      await this.writer.loadResources(executorFor(this.db), organizationId, input.facilityId, [
         input.resourceId,
       ]);
     }
     return this.computeImpact(
-      this.db,
+      executorFor(this.db),
       organizationId,
       input.facilityId,
       input.resourceId ?? null,
@@ -313,7 +314,7 @@ export class ClosuresService implements ClosurePort {
 
   async getClosure(principal: Principal, closureId: string): Promise<Closure> {
     const organizationId = organizationOf(principal);
-    const closure = await this.load(this.db, organizationId, closureId);
+    const closure = await this.load(executorFor(this.db), organizationId, closureId);
     if (!closure) throw errors.notFound('closure', closureId);
     await this.authorization.require(principal, SchedulingActions.readInventory, {
       type: 'closure',
@@ -335,7 +336,7 @@ export class ClosuresService implements ClosurePort {
       organizationId,
       facilityId,
     });
-    let q = this.baseQuery(this.db)
+    let q = this.baseQuery(executorFor(this.db))
       .where('organization_id', '=', organizationId)
       .where('facility_id', '=', facilityId)
       .orderBy(sql`lower(during)`)

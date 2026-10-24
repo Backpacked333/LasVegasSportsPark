@@ -18,6 +18,7 @@ import {
   AuditWriter,
   AuthorizationService,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -179,7 +180,7 @@ export class EventSeriesService {
 
   async getSeries(principal: Principal, seriesId: string): Promise<EventSeries> {
     const organizationId = organizationOf(principal);
-    const series = await this.load(this.db, organizationId, seriesId);
+    const series = await this.load(executorFor(this.db), organizationId, seriesId);
     if (!series) throw errors.notFound('event series', seriesId);
     await this.authorization.require(principal, SchedulingActions.readSchedule, {
       type: 'event_series',
@@ -187,7 +188,7 @@ export class EventSeriesService {
       organizationId,
       facilityId: series.facility_id,
     });
-    const events = await this.db
+    const events = await executorFor(this.db)
       .selectFrom('events')
       .select('id')
       .where('organization_id', '=', organizationId)

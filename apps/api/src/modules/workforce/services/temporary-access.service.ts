@@ -1,10 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { DomainError, systemPrincipal, type Principal } from '@sportspark/contracts';
-import type { Db } from '@sportspark/db';
+import { isSerializationFailure, type Db } from '@sportspark/db';
 import {
   AuditWriter,
   CLOCK,
-  DATABASE,
   OperationalExceptions,
   OperationsService,
   Outbox,
@@ -27,21 +26,24 @@ const accessActor = (organizationId: string): Principal =>
 
 /**
  * Time-bounded access for temporary and substitute work (SPK-STAFF-004). The access is a staff
- * membership created and ended through identity's exported StaffMembershipsService — this module
- * never writes identity tables. The membership runs from acceptance until the activity's end plus
- * the policy's trailing hours; the principal resolver stops granting its roles at that instant,
- * so access expires on schedule while the assignment, its audit trail and its fee records remain.
+ * membership created, moved and ended through identity's exported StaffMembershipsService — this
+ * module never writes identity tables. The membership runs from acceptance until the activity's
+ * end plus the policy's trailing hours; the principal resolver stops granting its roles at that
+ * instant, so access expires on schedule while the assignment, its audit trail and its fee records
+ * remain.
  *
- * Identity commands run their own transactions, so each call happens between this module's
- * transactions and its outcome is recorded as a fact: granted, ended, or failed (the operation
- * is then `recovery_required` and a `workforce.temporary_access_failed` exception names it).
+ * Every method runs inside the caller's transaction (the acceptance, the withdrawal, or an outbox
+ * handler's): identity's command joins it (UnitOfWork.run is reentrant), so the assignment and the
+ * membership change commit together and a stop between them cannot leave access `pending` or a
+ * membership the assignment does not reference (§4.7 invariants 3 and 12). Identity refusing the
+ * change is recorded as a fact in the same transaction: the access is `failed`, the operation is
+ * `recovery_required` and a `workforce.temporary_access_failed` exception names it.
  */
 @Injectable()
 export class TemporaryAccessService {
   private readonly logger = new Logger(TemporaryAccessService.name);
 
   constructor(
-    @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(WORKFORCE_POLICY) private readonly policy: WorkforcePolicy,
     private readonly uow: UnitOfWork,
@@ -57,7 +59,7 @@ export class TemporaryAccessService {
     return row.engagement !== 'regular' && this.policy.temporaryAccess.roles[row.kind].length > 0;
   }
 
-  /** Grants access after the acceptance committed. Identity failures are recorded, never thrown. */
+  /** Grants access within the acceptance's transaction. Identity failures are recorded, never thrown. */
   async grant(
     principal: Principal,
     assignmentId: string,
@@ -65,7 +67,7 @@ export class TemporaryAccessService {
     operationId: string,
     correlationId: string | null,
   ): Promise<void> {
-    const row = await this.load(this.db, organizationId, assignmentId);
+    const row = await this.load(this.uow.reader(), organizationId, assignmentId);
     if (!row || row.access_status !== 'pending' || row.status !== 'accepted') {
       await this.uow.run(({ trx }) =>
         this.operations.transition(trx, operationId, 'succeeded', {
@@ -93,6 +95,8 @@ export class TemporaryAccessService {
       );
       membershipId = membership.id;
     } catch (error) {
+      // A serialization failure or deadlock is retried by the outermost unit of work.
+      if (isSerializationFailure(error)) throw error;
       await this.recordFailure(principal, row, operationId, 'grant', error, correlationId);
       return;
     }
@@ -151,8 +155,9 @@ export class TemporaryAccessService {
   }
 
   /**
-   * Ends granted access early (withdrawal). The membership row stays in identity as history; the
-   * assignment keeps its window with the end moved to the withdrawal instant.
+   * Ends granted access early (withdrawal, by a person or by a follow-up such as a canceled
+   * fixture). The membership row stays in identity as history; the assignment keeps its window
+   * with the end moved to the withdrawal instant.
    */
   async end(
     principal: Principal,
@@ -163,7 +168,7 @@ export class TemporaryAccessService {
     correlationId: string | null,
     extraResult: Record<string, unknown> = {},
   ): Promise<void> {
-    const row = await this.load(this.db, organizationId, assignmentId);
+    const row = await this.load(this.uow.reader(), organizationId, assignmentId);
     if (!row || row.access_status !== 'granted' || !row.access_membership_id) {
       await this.uow.run(({ trx }) =>
         this.operations.transition(trx, operationId, 'succeeded', {
@@ -182,6 +187,7 @@ export class TemporaryAccessService {
       );
     } catch (error) {
       // A membership that already ended (or expired and was ended) is the outcome we want.
+      if (isSerializationFailure(error)) throw error;
       const alreadyEnded = DomainError.is(error) && error.code === 'INVALID_TRANSITION';
       if (!alreadyEnded) {
         await this.recordFailure(principal, row, operationId, 'end', error, correlationId);
@@ -242,11 +248,119 @@ export class TemporaryAccessService {
     });
   }
 
+  /**
+   * Moves the end of granted access with a rescheduled activity (new end plus the trailing hours),
+   * so access neither outlives a game brought forward nor expires before a game moved later
+   * (SPK-STAFF-004). Called from the retime follow-up inside its transaction; no operation.
+   */
+  async move(
+    principal: Principal,
+    row: AssignmentRow,
+    activityEnd: Date,
+    correlationId: string | null,
+  ): Promise<void> {
+    if (row.access_status !== 'granted' || !row.access_membership_id) return;
+    const membershipId = row.access_membership_id;
+    const until = addHours(activityEnd, this.policy.temporaryAccess.trailHours);
+    if (row.access_until && new Date(row.access_until).getTime() === until.getTime()) return;
+    const from = row.access_from ? new Date(row.access_from) : this.clock.now();
+    if (until.getTime() <= from.getTime()) {
+      // Moved to before the access began: nothing of the window is left.
+      return this.endWithoutOperation(
+        principal,
+        row,
+        'The activity moved before the access began.',
+        correlationId,
+      );
+    }
+    try {
+      const membership = await this.memberships.find(row.organization_id, membershipId);
+      if (!membership || membership.status !== 'active') return;
+      await this.memberships.update(
+        accessActor(row.organization_id),
+        membershipId,
+        {
+          effectiveTo: until.toISOString(),
+          expectedRevision: membership.revision,
+          reason: `Activity rescheduled (assignment ${row.id})`,
+        },
+        correlationId,
+      );
+    } catch (error) {
+      // An ended membership needs no move; anything else is an owned failure (never thrown, so
+      // the retime itself still commits).
+      if (isSerializationFailure(error)) throw error;
+      if (DomainError.is(error) && error.code === 'INVALID_TRANSITION') return;
+      await this.recordFailure(principal, row, null, 'move', error, correlationId);
+      return;
+    }
+    await this.uow.run(async ({ trx }) => {
+      const current = await this.load(trx, row.organization_id, row.id, true);
+      if (!current) return;
+      await trx
+        .updateTable('assignments')
+        .set({ access_until: until, revision: current.revision + 1 })
+        .where('organization_id', '=', row.organization_id)
+        .where('id', '=', row.id)
+        .where('revision', '=', current.revision)
+        .execute();
+      await this.audit.record(trx, {
+        organizationId: row.organization_id,
+        actor: principal,
+        action: 'workforce.temporary_access_moved',
+        targetType: 'assignment',
+        targetId: row.id,
+        beforeRevision: current.revision,
+        afterRevision: current.revision + 1,
+        correlationId,
+        details: {
+          staffMembershipId: membershipId,
+          before: current.access_until ? new Date(current.access_until).toISOString() : null,
+          until: until.toISOString(),
+        },
+      });
+      await this.outbox.enqueue(trx, WorkforceEvents.temporaryAccessChanged, {
+        organizationId: row.organization_id,
+        aggregateType: 'assignment',
+        aggregateId: row.id,
+        correlationId,
+        payload: {
+          assignmentId: row.id,
+          personId: row.person_id,
+          status: 'granted',
+          staffMembershipId: membershipId,
+          from: from.toISOString(),
+          until: until.toISOString(),
+        },
+      });
+    });
+  }
+
+  /** `end` for a follow-up that has no operation of its own (a retime that left no window). */
+  private async endWithoutOperation(
+    principal: Principal,
+    row: AssignmentRow,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<void> {
+    const operationId = await this.uow.run(({ trx }) =>
+      this.operations.create(trx, {
+        organizationId: row.organization_id,
+        kind: 'workforce.end_temporary_access',
+        requestedBy: principal,
+        correlationId,
+        input: { assignmentId: row.id },
+        status: 'running',
+      }),
+    );
+    await this.end(principal, row.id, row.organization_id, operationId, reason, correlationId);
+  }
+
   private async recordFailure(
     principal: Principal,
     row: AssignmentRow,
-    operationId: string,
-    step: 'grant' | 'end',
+    operationId: string | null,
+    step: 'grant' | 'end' | 'move',
     error: unknown,
     correlationId: string | null,
   ): Promise<void> {
@@ -298,16 +412,20 @@ export class TemporaryAccessService {
         title:
           step === 'grant'
             ? `Time-bounded access could not be granted for assignment ${row.id}`
-            : `Time-bounded access could not be ended for assignment ${row.id}`,
+            : step === 'end'
+              ? `Time-bounded access could not be ended for assignment ${row.id}`
+              : `Time-bounded access could not follow the rescheduled assignment ${row.id}`,
         affectedType: 'assignment',
         affectedId: row.id,
         ownerQueue: 'system_administrator',
         dedupeKey: `${TEMPORARY_ACCESS_FAILED}:${step}:${row.id}`,
         details: { step, code, message, staffMembershipId: row.access_membership_id },
       });
-      await this.operations.transition(trx, operationId, 'recovery_required', {
-        error: { code, message, details: { step, assignmentId: row.id } },
-      });
+      if (operationId) {
+        await this.operations.transition(trx, operationId, 'recovery_required', {
+          error: { code, message, details: { step, assignmentId: row.id } },
+        });
+      }
     });
   }
 

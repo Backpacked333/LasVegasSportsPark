@@ -40,6 +40,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  executorFor,
   snapshotActor,
   type Clock,
   type Trx,
@@ -800,7 +801,8 @@ export class RosterService implements RosterPort {
     at: Date,
     trx?: Trx,
   ): Promise<EffectiveRosterMember[]> {
-    const db = trx ?? this.db;
+    // Called from other modules' commands and handlers: read through their transaction.
+    const db = trx ?? executorFor(this.db);
     const rows = await rosterRowsEffectiveAt(db, organizationId, teamEntryId, at);
     const roles = rolesByPerson(await effectiveRoles(db, organizationId, teamEntryId, at));
     const out: EffectiveRosterMember[] = [];

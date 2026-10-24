@@ -1,6 +1,6 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { json, seedOrganization } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { OutboxDispatcher } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
@@ -9,6 +9,7 @@ import {
   ClosuresService,
   createScheduledEvent,
   EventsService,
+  ResourcesService,
   seedPitchWithHalves,
   type PitchFixture,
 } from '../../scheduling';
@@ -459,6 +460,66 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
     expect(exception).toMatchObject({ owner_queue: 'scheduler', status: 'open' });
     const approveAgain = await post(`/v1/maintenance-restrictions/${proposed.body.id}/approve`, {});
     expect(approveAgain.body.code).toBe('INVALID_TRANSITION');
+  });
+
+  it('§4.7-12 / SPK-AT-021: approval, closure and activation commit together; a failure in between leaves nothing applied', async () => {
+    const proposed = await post('/v1/maintenance-restrictions', {
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      kind: 'closed',
+      interval: { start: at('2026-11-26', '08:00'), end: at('2026-11-26', '12:00') },
+      reason: 'Irrigation repair',
+      approve: false,
+    });
+    expect(proposed.status).toBe(201);
+    const closuresBefore = await t.db
+      .selectFrom('closures')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    // the process fails after scheduling created and applied the closure, before activation
+    const resources = t.app.get(ResourcesService);
+    const spy = vi
+      .spyOn(resources, 'getResource')
+      .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+    const crashed = await post(`/v1/maintenance-restrictions/${proposed.body.id}/approve`, {});
+    spy.mockRestore();
+    expect(crashed.status).toBe(500);
+    const row = await t.db
+      .selectFrom('restrictions')
+      .select(['status', 'revision', 'scheduling_closure_id', 'approved_at'])
+      .where('id', '=', proposed.body.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({
+      status: 'proposed',
+      revision: proposed.body.revision,
+      scheduling_closure_id: null,
+      approved_at: null,
+    });
+    const closuresAfter = await t.db
+      .selectFrom('closures')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    expect(Number(closuresAfter.n)).toBe(Number(closuresBefore.n));
+    const running = await t.db
+      .selectFrom('operations')
+      .select('id')
+      .where('kind', '=', 'facilities.approve_restriction')
+      .where('status', '=', 'running')
+      .execute();
+    expect(running).toEqual([]);
+    // the half is still bookable, and a retried approval activates it
+    const bookable = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.southHalfId],
+      start: at('2026-11-26', '13:00'),
+      end: at('2026-11-26', '14:00'),
+    });
+    expect(bookable.status).toBe('published');
+    const approved = await post(`/v1/maintenance-restrictions/${proposed.body.id}/approve`, {});
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body.status).toBe('active');
+    await restrictions.release(operator, approved.body.id, { reason: 'repaired' });
   });
 
   it('a closure lifted in scheduling without a facilities release is surfaced, never reopened silently (SPK-FAC-004)', async () => {

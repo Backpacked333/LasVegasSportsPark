@@ -34,6 +34,7 @@ import {
   OperationsService,
   Outbox,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -542,7 +543,7 @@ export class ScheduleDraftsService {
 
   async get(principal: Principal, draftId: string): Promise<ScheduleDraft> {
     const organizationId = organizationOf(principal);
-    const draft = await this.load(this.db, organizationId, draftId);
+    const draft = await this.load(executorFor(this.db), organizationId, draftId);
     if (!draft) throw errors.notFound('schedule draft', draftId);
     await this.authorization.require(principal, SchedulingActions.manageDrafts, {
       type: 'schedule_draft',
@@ -550,7 +551,7 @@ export class ScheduleDraftsService {
       organizationId,
       facilityId: draft.facility_id,
     });
-    return this.view(this.db, organizationId, draftId);
+    return this.view(executorFor(this.db), organizationId, draftId);
   }
 
   async list(
@@ -564,7 +565,7 @@ export class ScheduleDraftsService {
       organizationId,
       facilityId,
     });
-    let q = this.db
+    let q = executorFor(this.db)
       .selectFrom('schedule_drafts')
       .select('id')
       .where('organization_id', '=', organizationId)
@@ -572,7 +573,8 @@ export class ScheduleDraftsService {
       .orderBy('created_at', 'desc');
     if (status) q = q.where('status', '=', status);
     const out: ScheduleDraft[] = [];
-    for (const row of await q.execute()) out.push(await this.view(this.db, organizationId, row.id));
+    for (const row of await q.execute())
+      out.push(await this.view(executorFor(this.db), organizationId, row.id));
     return out;
   }
 
