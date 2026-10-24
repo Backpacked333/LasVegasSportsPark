@@ -7,6 +7,10 @@ import { EventChanged, FIXTURE_OBLIGATION_IMPL, SchedulingModule } from '../sche
 import {
   ASSIGNMENT_CHECK_IMPL,
   ASSIGNMENT_CHECK_PORT,
+  CHANGE_NOTICE_CHECK_IMPL,
+  CHANGE_NOTICE_CHECK_PORT,
+  changeNoticesUnknown,
+  type ChangeNoticeCheckPort,
   FINANCIAL_CONDITIONS_IMPL,
   FINANCIAL_CONDITIONS_PORT,
   FORMS_CHECK_IMPL,
@@ -38,7 +42,6 @@ import {
   SUSPENSION_CHECK_IMPL,
   SUSPENSION_CHECK_PORT,
   TEAM_ENTRY_QUERY_PORT,
-  noSuspensions,
   type SuspensionCheckPort,
 } from './ports';
 import { BracketsService } from './services/brackets.service';
@@ -59,24 +62,40 @@ import { TeamAuthority } from './services/team-authority.service';
 import { TeamEntriesService } from './services/team-entries.service';
 import { TeamsService } from './services/teams.service';
 
+/**
+ * SUSPENSION_CHECK_PORT: an external SUSPENSION_CHECK_IMPL when one is registered, else the
+ * module's DisciplineService. Only a found implementation is cached.
+ */
+function suspensionAuthority(moduleRef: ModuleRef): SuspensionCheckPort {
+  let external: SuspensionCheckPort | null = null;
+  const resolve = (): SuspensionCheckPort => {
+    if (external) return external;
+    try {
+      external = moduleRef.get<SuspensionCheckPort>(SUSPENSION_CHECK_IMPL, { strict: false });
+    } catch {
+      external = null;
+    }
+    return external ?? moduleRef.get(DisciplineService, { strict: true });
+  };
+  return {
+    activeSuspensions: (organizationId, personId, at, scope, trx) =>
+      resolve().activeSuspensions(organizationId, personId, at, scope, trx),
+  };
+}
+
 const providers: Provider[] = [
   TeamAuthority,
   // Kernel registration: the authorization step "team role" reads effective team_roles rows.
   { provide: TEAM_AUTHORITY_IMPL, useExisting: TeamAuthority },
   // Discipline (part 2) is the suspension authority (SPK-CAP-004 "suspension status", SPK-AT-013).
-  // The port stays lazy so the eligibility service and the discipline service have no cycle.
+  // An implementation registered elsewhere under SUSPENSION_CHECK_IMPL (a future cross-program
+  // authority, or a test double) takes precedence; otherwise this module's own discipline records
+  // answer. Both are resolved at call time, so the eligibility and discipline services have no cycle.
   {
     provide: SUSPENSION_CHECK_PORT,
     inject: [ModuleRef],
-    useFactory: (moduleRef: ModuleRef): SuspensionCheckPort =>
-      lazyPort<SuspensionCheckPort>(
-        moduleRef,
-        SUSPENSION_CHECK_IMPL,
-        noSuspensions,
-        'no SUSPENSION_CHECK_IMPL registered: eligibility evaluates without suspensions',
-      ),
+    useFactory: (moduleRef: ModuleRef): SuspensionCheckPort => suspensionAuthority(moduleRef),
   },
-  { provide: SUSPENSION_CHECK_IMPL, useExisting: DisciplineService },
   { provide: READINESS_CHECK_REGISTRY, useClass: InMemoryReadinessCheckRegistry },
   // Ports other modules fill in later (workforce assignments, catalog forms, finance conditions):
   // deterministic defaults report "unknown", never "ok" (SPK-READY-002).
@@ -111,6 +130,17 @@ const providers: Provider[] = [
         FINANCIAL_CONDITIONS_IMPL,
         financialConditionsUnknown,
         'no FINANCIAL_CONDITIONS_IMPL registered: financial conditions are reported as unknown',
+      ),
+  },
+  {
+    provide: CHANGE_NOTICE_CHECK_PORT,
+    inject: [ModuleRef],
+    useFactory: (moduleRef: ModuleRef): ChangeNoticeCheckPort =>
+      lazyPort<ChangeNoticeCheckPort>(
+        moduleRef,
+        CHANGE_NOTICE_CHECK_IMPL,
+        changeNoticesUnknown,
+        'no CHANGE_NOTICE_CHECK_IMPL registered: change notice delivery is reported as unknown',
       ),
   },
   CompetitionsService,
@@ -188,11 +218,11 @@ const providers: Provider[] = [
     FIXTURE_PORT,
     ELIGIBILITY_PORT,
     SUSPENSION_CHECK_PORT,
-    SUSPENSION_CHECK_IMPL,
     READINESS_CHECK_REGISTRY,
     ASSIGNMENT_CHECK_PORT,
     FORMS_CHECK_PORT,
     FINANCIAL_CONDITIONS_PORT,
+    CHANGE_NOTICE_CHECK_PORT,
   ],
 })
 export class CompetitionModule implements OnModuleInit {

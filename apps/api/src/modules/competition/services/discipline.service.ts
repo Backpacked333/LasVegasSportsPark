@@ -14,6 +14,8 @@ import {
   type ListSuspensionsQuery,
   type OverturnDecisionInput,
   type Principal,
+  type ResultCard,
+  type RuleSetContent,
   type Suspension,
   type SuspensionTerms,
   type UpdateIncidentInput,
@@ -26,7 +28,7 @@ import {
   type IncidentsTable,
   type SuspensionsTable,
 } from '@sportspark/db';
-import { sql, type Selectable } from 'kysely';
+import { sql, type Selectable, type SqlBool } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -42,6 +44,7 @@ import {
 } from '../../../kernel';
 import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
+import { ASSIGNMENT_CHECK_PORT, type AssignmentCheckPort } from '../competition-matches.ports';
 import { toAppeal, toDecision, toIncident, toSuspension } from '../competition-matches.shared';
 import {
   AppealMachine,
@@ -51,6 +54,7 @@ import {
 } from '../competition-matches.state-machines';
 import type { Reader } from '../competition.queries';
 import { isStaffLike, organizationOf } from '../competition.shared';
+import { DISCIPLINE_MANAGER_ROLES } from '../competition-matches.policy';
 import type { ActiveSuspension, SuspensionCheckPort, SuspensionScope } from '../ports';
 
 type SuspensionRow = Selectable<SuspensionsTable>;
@@ -72,6 +76,7 @@ export class DisciplineService implements SuspensionCheckPort {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    @Inject(ASSIGNMENT_CHECK_PORT) private readonly assignments: AssignmentCheckPort,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -113,8 +118,9 @@ export class DisciplineService implements SuspensionCheckPort {
   }
 
   /**
-   * A published result serves one match of every active match-count suspension of the people on
-   * the fixture's rosters within scope (SPK-DISC-002 completion criteria). Idempotent per fixture.
+   * A published result of a match that took place serves one match of every active match-count
+   * suspension, approved before kickoff, of the people on the fixture's rosters within scope
+   * (SPK-DISC-002 completion criteria). Idempotent per fixture (`served_fixture_ids`).
    */
   async serveFixture(
     trx: Trx,
@@ -144,6 +150,8 @@ export class DisciplineService implements SuspensionCheckPort {
         ]),
       )
       .where(sql<boolean>`not (served_fixture_ids @> array[${input.fixtureId}]::uuid[])`)
+      // A match played before the suspension was approved does not serve it.
+      .where('approved_at', '<=', input.at)
       .where((eb) =>
         eb.or([eb('effective_from', 'is', null), eb('effective_from', '<=', input.at)]),
       )
@@ -204,6 +212,174 @@ export class DisciplineService implements SuspensionCheckPort {
     return served;
   }
 
+  /**
+   * SPK-DISC-003 "discipline may affect event eligibility only through the approved rule set": the
+   * cards of a newly official result propose (never activate) the suspensions the season's
+   * rule-set version prescribes. A sending-off (red, or a second yellow when the rule set treats it
+   * as red) proposes `redCardSuspensionMatches`; reaching a multiple of
+   * `yellowAccumulationThreshold` yellow cards in the season proposes
+   * `yellowAccumulationSuspensionMatches`. Each proposal names the fixture and result revision it
+   * came from and exists at most once per person, fixture and rule (partial unique index), so a
+   * replay or a re-published correction never duplicates it. A league manager approves or
+   * overturns it with history (authorized review). Scope: the competition the card was shown in
+   * (proposed default, DEC-010 pending).
+   */
+  async proposeFromRuleSet(
+    trx: Trx,
+    principal: Principal,
+    input: {
+      organizationId: string;
+      fixtureId: string;
+      resultRevisionId: string;
+      seasonId: string;
+      competitionId: string;
+      ruleSet: { id: string; name: string; version: number; cards: RuleSetContent['cards'] };
+      resultCards: ResultCard[];
+      correlationId: string | null;
+      operationId: string | null;
+    },
+  ): Promise<string[]> {
+    const rules = input.ruleSet.cards;
+    const label = `${input.ruleSet.name} v${input.ruleSet.version}`;
+    const proposals: Array<{
+      personId: string;
+      kind: 'red_card' | 'yellow_accumulation';
+      matches: number;
+      basis: string;
+    }> = [];
+    const sentOff = new Set<string>();
+    for (const card of input.resultCards) {
+      if (card.kind === 'red' || (card.kind === 'second_yellow' && rules.secondYellowIsRed)) {
+        sentOff.add(card.personId);
+      }
+    }
+    if (rules.redCardSuspensionMatches > 0) {
+      for (const personId of sentOff) {
+        proposals.push({
+          personId,
+          kind: 'red_card',
+          matches: rules.redCardSuspensionMatches,
+          basis: `Sent off in fixture ${input.fixtureId}: rule set ${label} prescribes ${rules.redCardSuspensionMatches} match(es).`,
+        });
+      }
+    }
+    const threshold = rules.yellowAccumulationThreshold;
+    const countsAsYellow = (card: ResultCard) =>
+      card.kind === 'yellow' || (card.kind === 'second_yellow' && !rules.secondYellowIsRed);
+    const here = new Map<string, number>();
+    for (const card of input.resultCards) {
+      if (countsAsYellow(card)) here.set(card.personId, (here.get(card.personId) ?? 0) + 1);
+    }
+    if (threshold !== null && rules.yellowAccumulationSuspensionMatches > 0 && here.size > 0) {
+      // Official results of the season, this one included (it is official in this transaction).
+      const official = await trx
+        .selectFrom('result_revisions as r')
+        .innerJoin('fixtures as f', (join) =>
+          join
+            .onRef('f.organization_id', '=', 'r.organization_id')
+            .onRef('f.id', '=', 'r.fixture_id'),
+        )
+        .select(['r.details'])
+        .where('r.organization_id', '=', input.organizationId)
+        .where('f.season_id', '=', input.seasonId)
+        .where('r.status', '=', 'official')
+        .execute();
+      const totals = new Map<string, number>();
+      for (const row of official) {
+        const cards = ((row.details as { cards?: ResultCard[] }).cards ?? []).filter(
+          countsAsYellow,
+        );
+        for (const card of cards) {
+          totals.set(card.personId, (totals.get(card.personId) ?? 0) + 1);
+        }
+      }
+      for (const [personId, count] of here) {
+        const total = totals.get(personId) ?? count;
+        const before = total - count;
+        if (Math.floor(total / threshold) > Math.floor(before / threshold)) {
+          proposals.push({
+            personId,
+            kind: 'yellow_accumulation',
+            matches: rules.yellowAccumulationSuspensionMatches,
+            basis: `${total} yellow card(s) this season reached the accumulation threshold of ${threshold}: rule set ${label} prescribes ${rules.yellowAccumulationSuspensionMatches} match(es).`,
+          });
+        }
+      }
+    }
+    const created: string[] = [];
+    for (const proposal of proposals) {
+      const id = newId();
+      const inserted = await trx
+        .insertInto('suspensions')
+        .values({
+          id,
+          organization_id: input.organizationId,
+          subject_person_id: proposal.personId,
+          decision_id: null,
+          basis: proposal.basis,
+          scope: 'competitions',
+          competition_ids: [input.competitionId],
+          effective_from: null,
+          effective_to: null,
+          match_count: proposal.matches,
+          completion_criteria: `${proposal.matches} match(es) of the subject's team in the competition, played after approval, are served.`,
+          source_kind: proposal.kind,
+          source_fixture_id: input.fixtureId,
+          source_result_revision_id: input.resultRevisionId,
+          approved_by: null,
+          approved_at: null,
+          overturned_at: null,
+          overturned_by: null,
+          overturn_reason: null,
+          created_by: json(snapshotActor(principal)),
+        })
+        .onConflict((oc) =>
+          oc
+            .columns(['organization_id', 'subject_person_id', 'source_fixture_id', 'source_kind'])
+            .where(sql<SqlBool>`source_kind <> 'manual'`)
+            .doNothing(),
+        )
+        .returning('id')
+        .executeTakeFirst();
+      if (!inserted) continue;
+      created.push(id);
+      await this.audit.record(trx, {
+        organizationId: input.organizationId,
+        actor: principal,
+        action: MatchActions.manageDiscipline.id,
+        targetType: 'suspension',
+        targetId: id,
+        afterRevision: 1,
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+        details: {
+          operation: 'propose_from_rule_set',
+          sourceKind: proposal.kind,
+          fixtureId: input.fixtureId,
+          resultRevisionId: input.resultRevisionId,
+          ruleSetId: input.ruleSet.id,
+          matchCount: proposal.matches,
+        },
+      });
+      await this.outbox.enqueue(trx, MatchEvents.suspensionChanged, {
+        organizationId: input.organizationId,
+        aggregateType: 'suspension',
+        aggregateId: id,
+        payload: {
+          suspensionId: id,
+          subjectPersonId: proposal.personId,
+          status: 'proposed',
+          previousStatus: null,
+          matchesServed: 0,
+          servedFixtureId: null,
+        },
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+      });
+    }
+    return created;
+  }
+
   // -------------------------------------------------------------------------------------------
   // Incidents (SPK-DISC-001/004/005)
   // -------------------------------------------------------------------------------------------
@@ -218,6 +394,28 @@ export class DisciplineService implements SuspensionCheckPort {
         type: 'incident',
         organizationId,
       });
+      // SPK-STAFF-005: an official reports incidents of a fixture they hold an accepted
+      // assignment for (proposed assignments do not count); league management reports any.
+      if (
+        principal.kind === 'staff' &&
+        !principal.staffRoles.some((r) => DISCIPLINE_MANAGER_ROLES.includes(r))
+      ) {
+        const assigned =
+          input.fixtureId !== undefined &&
+          principal.personId !== null &&
+          (await this.assignments.isAcceptedOfficial(
+            organizationId,
+            input.fixtureId,
+            principal.personId,
+            trx,
+          ));
+        if (!assigned) {
+          throw errors.accessDenied(
+            'An official reports incidents only for a fixture they are assigned to and have accepted.',
+            { action: MatchActions.reportIncident.id, fixtureId: input.fixtureId ?? null },
+          );
+        }
+      }
       let seasonId = input.seasonId ?? null;
       let competitionId = input.competitionId ?? null;
       if (input.fixtureId) {
@@ -724,6 +922,9 @@ export class DisciplineService implements SuspensionCheckPort {
         effective_to: input.terms.effectiveTo ?? null,
         match_count: input.terms.matchCount ?? null,
         completion_criteria: input.terms.completionCriteria,
+        source_kind: 'manual',
+        source_fixture_id: null,
+        source_result_revision_id: null,
         approved_by: null,
         approved_at: null,
         overturned_at: null,
@@ -1047,14 +1248,14 @@ export class DisciplineService implements SuspensionCheckPort {
         })
         .returningAll()
         .executeTakeFirstOrThrow();
-      if (input.suspensionId) {
-        await trx
-          .updateTable('suspensions')
-          .set({ appeal_status: 'pending', revision: sql`revision + 1` })
-          .where('organization_id', '=', organizationId)
-          .where('id', '=', input.suspensionId)
-          .execute();
-      }
+      // SPK-DISC-002 "appeal status": the appealed suspension, or every live suspension the
+      // appealed decision created, shows the pending appeal.
+      await this.setAppealStatus(
+        trx,
+        organizationId,
+        { suspensionId: input.suspensionId ?? null, decisionId: input.decisionId ?? null },
+        'pending',
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -1128,7 +1329,16 @@ export class DisciplineService implements SuspensionCheckPort {
         .where('revision', '=', row.revision)
         .returningAll()
         .executeTakeFirstOrThrow();
-      // A granted appeal overturns what it appealed; a denied one records the outcome on it.
+      // A granted appeal overturns what it appealed; a denied one records the outcome on it; a
+      // withdrawn one leaves no pending appeal.
+      if (next === 'withdrawn') {
+        await this.setAppealStatus(
+          trx,
+          organizationId,
+          { suspensionId: row.suspension_id, decisionId: row.decision_id },
+          'none',
+        );
+      }
       if (row.suspension_id && decided) {
         const suspension = await this.loadSuspension(trx, organizationId, row.suspension_id, {
           forUpdate: true,
@@ -1180,6 +1390,14 @@ export class DisciplineService implements SuspensionCheckPort {
             correlationId,
           );
         }
+      }
+      if (row.decision_id && decided) {
+        await this.setAppealStatus(
+          trx,
+          organizationId,
+          { suspensionId: null, decisionId: row.decision_id, includeClosed: true },
+          next === 'granted' ? 'granted' : 'denied',
+        );
       }
       await this.audit.record(trx, {
         organizationId,
@@ -1236,6 +1454,26 @@ export class DisciplineService implements SuspensionCheckPort {
   // -------------------------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------------------------
+  private async setAppealStatus(
+    trx: Trx,
+    organizationId: string,
+    target: { suspensionId: string | null; decisionId: string | null; includeClosed?: boolean },
+    status: Suspension['appealStatus'],
+  ): Promise<void> {
+    if (!target.suspensionId && !target.decisionId) return;
+    let q = trx
+      .updateTable('suspensions')
+      .set({ appeal_status: status, revision: sql`revision + 1` })
+      .where('organization_id', '=', organizationId);
+    q = target.suspensionId
+      ? q.where('id', '=', target.suspensionId)
+      : q.where('decision_id', '=', target.decisionId as string);
+    if (!target.suspensionId && !target.includeClosed) {
+      q = q.where('status', 'in', ['proposed', 'active']);
+    }
+    await q.execute();
+  }
+
   private async loadSuspension(
     db: Reader,
     organizationId: string,

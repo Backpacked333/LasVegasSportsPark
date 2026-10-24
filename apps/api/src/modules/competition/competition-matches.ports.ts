@@ -92,3 +92,31 @@ export const financialConditionsUnknown: FinancialConditionsPort = {
     },
   ],
 };
+
+/**
+ * Communications: whether the notice of a material fixture change reached both teams
+ * (SPK-READY-001 "material change notifications"). Delivery evidence is the communications
+ * module's; until it registers, the notice is reported as unknown, never as delivered.
+ */
+export interface ChangeNoticeCheckPort {
+  changeNotices(
+    organizationId: string,
+    context: FixtureConditionContext & { changedAt: Date; schedulingEventId: string | null },
+    trx?: Trx,
+  ): Promise<ConditionFinding[]>;
+}
+export const CHANGE_NOTICE_CHECK_PORT = Symbol('CHANGE_NOTICE_CHECK_PORT');
+export const CHANGE_NOTICE_CHECK_IMPL = Symbol('CHANGE_NOTICE_CHECK_IMPL');
+export const changeNoticesUnknown: ChangeNoticeCheckPort = {
+  changeNotices: async (_organizationId, context) => [
+    {
+      status: 'unknown',
+      code: 'change_notification_unknown',
+      message: `The fixture changed materially on ${context.changedAt.toISOString()}; delivery of the change notice is not confirmed.`,
+      source: { type: 'fixture', id: context.fixtureId },
+      responsibleRole: 'league_manager',
+      requiredAction: 'Confirm both teams received the change notice.',
+      deadline: null,
+    },
+  ],
+};

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
-import { createStaffMemberFixture } from '../../identity';
+import { seedOrganization } from '@sportspark/db';
+import { authHeaderForPerson, createStaffMemberFixture } from '../../identity';
 import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
 import { ASSIGNMENT_CHECK_IMPL, type AssignmentCheckPort } from '../competition-matches.ports';
 import {
@@ -368,7 +369,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
       new Date(before.published_at ?? 0).toISOString(),
     );
     expect(superseded.superseded_at).not.toBeNull();
-    // standings now reflect the draw: Aces 1 + 1 = 2 pointsâ€¦ wait, Aces drew f1 and f2 â†’ 2 points
+    // standings now reflect the draw: Aces drew f1 (corrected) and f2 â†’ 2 points
     expect(
       published.body.standings.rows.find(
         (r: { teamEntryId: string }) => r.teamEntryId === a.teamEntryId,
@@ -503,6 +504,34 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
     expect(nodes.body.map((n: { id: string }) => n.id)).toEqual([final.body.id]);
   });
 
+  it('SPK-STAFF-005 / SPK-DISC-001: an official reports incidents only for a fixture they accepted; the restricted record is readable by league management only', async () => {
+    const assigned = await post('/incidents', official, {
+      kind: 'operational',
+      fixtureId: f1,
+      severity: 'low',
+      summary: 'Goal net torn at the north end',
+      narrative: 'Restricted: net replaced at half time.',
+    });
+    expect(assigned.status).toBe(201);
+    expect(assigned.body).toMatchObject({ fixtureId: f1, seasonId: season.seasonId });
+    const f4 = await scheduleFixture(b, d, '2027-02-06', '18:00', '19:00');
+    const unassigned = await post('/incidents', official, {
+      kind: 'operational',
+      fixtureId: f4,
+      severity: 'low',
+      summary: 'Lights flickered',
+    });
+    expect(unassigned.status).toBe(403);
+    const withoutFixture = await post('/incidents', official, {
+      kind: 'complaint',
+      severity: 'low',
+      summary: 'Spectator complaint',
+    });
+    expect(withoutFixture.status).toBe(403);
+    expect((await get(`/incidents/${assigned.body.id}`, official)).status).toBe(404);
+    expect((await get(`/incidents/${assigned.body.id}`, leagueManager)).status).toBe(200);
+  });
+
   it('Â§4.10: roster players read published results only; outsiders and other organizations get NOT_FOUND; incident narratives never appear in result views', async () => {
     const asPlayer = await get(`/fixtures/${f1}/results`, a.player);
     expect(asPlayer.status).toBe(200);
@@ -515,12 +544,12 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
     const stranger = await adultCustomer(t);
     expect((await get(`/fixtures/${f1}/results`, stranger)).status).toBe(404);
     expect((await get(`/results/${f1Official}`, stranger)).status).toBe(404);
-    const otherOrg = await (await import('@sportspark/db')).seedOrganization(t.db);
+    const otherOrg = await seedOrganization(t.db);
     const foreign = await createStaffMemberFixture(t, {
       roles: ['league_manager'],
       organizationId: otherOrg.organizationId,
     });
-    const header = await (await import('../../identity')).authHeaderForPerson(t, foreign.personId);
+    const header = await authHeaderForPerson(t, foreign.personId);
     const foreignRead = await t.http.get(`/v1/fixtures/${f1}/results`).set(header);
     expect(foreignRead.status).toBe(404);
     const foreignPublish = await t.http

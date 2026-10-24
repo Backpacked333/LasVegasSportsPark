@@ -239,8 +239,14 @@ export const ReturnResultBody = withCommandMeta({})
   .openapi('ReturnResultRequest');
 export type ReturnResultInput = z.infer<typeof ReturnResultBody>;
 
-/** `POST /v1/results/{id}/publish`: submitted → official; a correction requires a reason. */
-export const PublishResultBody = withCommandMeta({})
+/**
+ * `POST /v1/results/{id}/publish`: submitted → official; a correction requires a reason. A
+ * correction that touches published history first raises a management review task; the reviewing
+ * league manager publishes it by naming that open task in `reviewExceptionId` (SPK-RESULT-004).
+ */
+export const PublishResultBody = withCommandMeta({
+  reviewExceptionId: z.uuid().optional(),
+})
   .extend({ expectedRevision: Revision })
   .openapi('PublishResultRequest');
 export type PublishResultInput = z.infer<typeof PublishResultBody>;
@@ -309,8 +315,14 @@ export const PublishResultOutcomeSchema = z
     /** False when the correction needs management review (SPK-RESULT-004): nothing was rewritten. */
     published: z.boolean(),
     supersededRevisionId: z.uuid().nullable(),
+    /** The review task raised (published false) or decided by this publication (published true). */
     reviewExceptionId: z.uuid().nullable(),
+    /** Recomputed league standings; null for a playoff game or when nothing was published. */
     standings: StandingsSchema.nullable(),
+    /** Suspensions the rule set proposes from the result's cards, awaiting approval (SPK-DISC-003). */
+    proposedSuspensionIds: z.array(z.uuid()),
+    /** Bracket nodes that recorded the winner or received an entry (bracket progression). */
+    progressedBracketNodeIds: z.array(z.uuid()),
     operationId: z.uuid(),
   })
   .openapi('PublishResultOutcome');
@@ -389,7 +401,10 @@ export const AllowedStartTimeSchema = z
   .openapi('AllowedStartTime');
 export type AllowedStartTime = z.infer<typeof AllowedStartTimeSchema>;
 
-/** SPK-FIX-003 fairness preferences; `hard` makes a preference a constraint (DEC-049). */
+/**
+ * SPK-FIX-003 fairness preferences; `hard` makes a preference a constraint (DEC-049).
+ * `approved_convenience` is coach or family convenience, used only with an approval reference.
+ */
 export const FairnessPreferenceKindSchema = z
   .enum([
     'home_away_balance',
@@ -398,6 +413,7 @@ export const FairnessPreferenceKindSchema = z
     'early_late_distribution',
     'no_repeated_opponents',
     'preferred_availability',
+    'approved_convenience',
   ])
   .openapi('FairnessPreferenceKind');
 export type FairnessPreferenceKind = z.infer<typeof FairnessPreferenceKindSchema>;
@@ -407,9 +423,11 @@ export const FairnessPreferenceSchema = z
     kind: FairnessPreferenceKindSchema,
     hard: z.boolean().default(false),
     weight: z.number().int().min(1).max(100).default(1),
-    /** preferred_availability: entries and the weekday/time pairs they prefer. */
+    /** preferred_availability / approved_convenience: the entry and the weekday/time pairs it prefers. */
     teamEntryId: z.uuid().optional(),
     startTimes: z.array(AllowedStartTimeSchema).max(50).optional(),
+    /** approved_convenience: the approval it rests on (who approved, where it is recorded). */
+    approvalReference: z.string().trim().min(1).max(200).optional(),
   })
   .openapi('FairnessPreference');
 export type FairnessPreference = z.infer<typeof FairnessPreferenceSchema>;
@@ -877,6 +895,10 @@ export const SuspensionSchema = z
     matchesServed: z.number().int(),
     servedFixtureIds: z.array(z.uuid()),
     completionCriteria: z.string(),
+    /** `manual`, or proposed by the approved rule set from a result's cards (SPK-DISC-003). */
+    sourceKind: z.enum(['manual', 'red_card', 'yellow_accumulation']),
+    sourceFixtureId: z.uuid().nullable(),
+    sourceResultRevisionId: z.uuid().nullable(),
     status: SuspensionStatusSchema,
     approvedBy: ActorSnapshotSchema.nullable(),
     approvedAt: Instant.nullable(),

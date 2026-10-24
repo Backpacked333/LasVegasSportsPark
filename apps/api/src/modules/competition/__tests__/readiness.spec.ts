@@ -8,6 +8,7 @@ import {
   type PitchFixture,
 } from '../../scheduling';
 import { READINESS_CHECK_REGISTRY, type ReadinessCheckRegistry } from '../ports';
+import { createSuspensionFixture } from '../testing/competition-matches-fixtures';
 import {
   addRosterMemberFixture,
   createDivisionFixture,
@@ -246,6 +247,56 @@ describe('match readiness (SPK-READY-001..004, §4.8 GET /fixtures/{id}/readines
       source: { type: 'closure', id: expect.any(String) },
       responsibleRole: 'scheduler',
     });
+  });
+
+  it('SPK-READY-002/003 / SPK-DISC-004: a check that cannot answer is unknown, never a pass; a pending suspension is unknown with its source for staff, while customers see the issue without the restricted record id', async () => {
+    const fixtureId = await scheduled(home, away, '2027-02-13');
+    const registry = t.app.get<ReadinessCheckRegistry>(READINESS_CHECK_REGISTRY);
+    registry.registerCheck('facilities.lighting', async () => {
+      throw new Error('lighting controller offline');
+    });
+    const suspensionId = await createSuspensionFixture(t, {
+      subjectPersonId: (home.players[0] as Actor).personId,
+      status: 'proposed',
+      scope: 'competitions',
+      competitionIds: [season.competitionId],
+      matchCount: 1,
+    });
+    const staff = await readiness(fixtureId, leagueManager);
+    expect(staff.status).toBe(200);
+    const lighting = staff.body.issues.find(
+      (i: { code: string }) => i.code === 'check_unavailable',
+    );
+    expect(lighting).toMatchObject({
+      severity: 'unknown',
+      source: { type: 'readiness_check', id: 'facilities.lighting' },
+    });
+    expect(
+      staff.body.checks.find((c: { name: string }) => c.name === 'facilities.lighting'),
+    ).toMatchObject({ status: 'unknown', issueCount: 1 });
+    const pending = staff.body.issues.find(
+      (i: { code: string }) => i.code === 'suspension_pending_approval',
+    );
+    // SPK-READY-003: reason, source record, responsible role, required action, last evaluation, deadline
+    expect(pending).toEqual({
+      code: 'suspension_pending_approval',
+      severity: 'unknown',
+      message: expect.any(String),
+      source: { type: 'suspension', id: suspensionId },
+      responsibleRole: 'league_manager',
+      requiredAction: expect.any(String),
+      lastEvaluatedAt: staff.body.evaluatedAt,
+      deadline: staff.body.scheduledStart,
+    });
+    // readiness is derived on read: nothing is stored for the fixture (SPK-READY-004)
+    expect(staff.body.status).not.toBe('ready');
+    const asPlayer = await readiness(fixtureId, away.players[0] as Actor);
+    expect(asPlayer.status).toBe(200);
+    const redacted = asPlayer.body.issues.find(
+      (i: { code: string }) => i.code === 'suspension_pending_approval',
+    );
+    expect(redacted.source).toEqual({ type: 'suspension', id: null });
+    expect(JSON.stringify(asPlayer.body)).not.toContain(suspensionId);
   });
 
   it('§4.10: roster players and captains read readiness; outsiders get NOT_FOUND', async () => {

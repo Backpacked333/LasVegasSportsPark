@@ -41,6 +41,11 @@ export const MatchEvents = {
       classification: ResultClassificationSchema,
       supersededRevisionId: z.uuid().nullable(),
       standingsProjectionId: z.uuid().nullable(),
+      /** Set when the correction was published by a management review decision (SPK-RESULT-004). */
+      reviewExceptionId: z.uuid().nullable(),
+      /** Published bracket nodes and played games the reviewed correction affects; not rewritten. */
+      affectedBracketNodeIds: z.array(z.uuid()),
+      affectedFixtureIds: z.array(z.uuid()),
       operationId: z.uuid(),
     }),
   ),

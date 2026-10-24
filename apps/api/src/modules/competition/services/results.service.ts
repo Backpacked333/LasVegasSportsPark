@@ -12,6 +12,7 @@ import {
   type ReturnResultInput,
   type RuleSetContent,
   type SubmitResultInput,
+  systemPrincipal,
 } from '@sportspark/contracts';
 import { json, type Db, type FixturesTable, type ResultRevisionsTable } from '@sportspark/db';
 import type { Selectable } from 'kysely';
@@ -33,7 +34,7 @@ import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { RESULT_CORRECTION_REVIEW } from '../competition-matches.policy';
 import { ASSIGNMENT_CHECK_PORT, type AssignmentCheckPort } from '../competition-matches.ports';
-import { toResultRevision, withRuleSetRoles } from '../competition-matches.shared';
+import { detailsOf, toResultRevision, withRuleSetRoles } from '../competition-matches.shared';
 import { ResultMachine } from '../competition-matches.state-machines';
 import {
   loadRuleSetRow,
@@ -49,7 +50,7 @@ import {
   type SeasonRow,
 } from '../competition.shared';
 import { FixtureMachine } from '../competition.state-machines';
-import { BracketsService } from './brackets.service';
+import { BracketsService, type CorrectionImpact } from './brackets.service';
 import { DisciplineService } from './discipline.service';
 import { FixturesService } from './fixtures.service';
 import { StandingsService } from './standings.service';
@@ -61,7 +62,36 @@ interface FixtureContext {
   fixture: FixtureRow;
   season: SeasonRow;
   ruleSetId: string;
+  ruleSetName: string;
+  ruleSetVersion: number;
   rules: RuleSetContent;
+}
+
+const reviewDedupeKey = (revisionId: string): string => `result_correction:${revisionId}`;
+
+/** Winner and loser of a decided game (forfeit: the forfeiting side loses); null when undecided. */
+function sidesOf(
+  revision: RevisionRow,
+  fixture: FixtureRow,
+): { winnerEntryId: string | null; loserEntryId: string | null } {
+  const home = fixture.home_entry_id;
+  const away = fixture.away_entry_id;
+  if (!away) return { winnerEntryId: null, loserEntryId: null };
+  if (revision.classification === 'forfeit' && revision.forfeiting_entry_id) {
+    const loser = revision.forfeiting_entry_id;
+    return { winnerEntryId: loser === home ? away : home, loserEntryId: loser };
+  }
+  if (
+    revision.classification === 'completed' &&
+    revision.home_score !== null &&
+    revision.away_score !== null &&
+    revision.home_score !== revision.away_score
+  ) {
+    return revision.home_score > revision.away_score
+      ? { winnerEntryId: home, loserEntryId: away }
+      : { winnerEntryId: away, loserEntryId: home };
+  }
+  return { winnerEntryId: null, loserEntryId: null };
 }
 
 /**
@@ -160,7 +190,7 @@ export class ResultsService {
           home_score: input.homeScore ?? null,
           away_score: input.awayScore ?? null,
           forfeiting_entry_id: input.forfeitingEntryId ?? null,
-          details: json(this.detailsOf(input, incidentIds)),
+          details: json(this.detailsFromInput(input, incidentIds)),
           submitted_by: json(snapshotActor(principal)),
           submitted_by_person_id: principal.personId,
           submitted_at: now,
@@ -246,7 +276,9 @@ export class ResultsService {
           home_score: input.homeScore ?? null,
           away_score: input.awayScore ?? null,
           forfeiting_entry_id: input.forfeitingEntryId ?? null,
-          details: json(this.detailsOf(input, [...(previous.incidentIds ?? []), ...incidentIds])),
+          details: json(
+            this.detailsFromInput(input, [...(previous.incidentIds ?? []), ...incidentIds]),
+          ),
           submitted_by: json(snapshotActor(principal)),
           submitted_by_person_id: principal.personId,
           submitted_at: now,
@@ -336,6 +368,31 @@ export class ResultsService {
         correlationId,
         details: { transitions: [revision.status, next] },
       });
+      // A correction waiting for management review that is returned closes its review task.
+      const task = await trx
+        .selectFrom('operational_exceptions')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('dedupe_key', '=', reviewDedupeKey(revisionId))
+        .where('status', 'in', ['open', 'acknowledged'])
+        .executeTakeFirst();
+      if (task) {
+        await this.exceptions.transition(
+          trx,
+          systemPrincipal(organizationId, 'competition.result_correction_review'),
+          task.id,
+          'resolved',
+          {
+            reason: input.reason,
+            correlationId: correlationId ?? undefined,
+            resolution: {
+              outcome: 'correction_returned',
+              resultRevisionId: revisionId,
+              reviewedBy: snapshotActor(principal),
+            },
+          },
+        );
+      }
       await this.outbox.enqueue(trx, MatchEvents.resultReturned, {
         organizationId,
         aggregateType: 'result_revision',
@@ -351,7 +408,12 @@ export class ResultsService {
     });
   }
 
-  /** `POST /v1/results/{id}/publish`: submitted → official (or management review for a risky correction). */
+  /**
+   * `POST /v1/results/{id}/publish`: submitted → official. A correction that would touch published
+   * history (SPK-RESULT-004) is not published: a management review task is raised instead, and the
+   * correction is published only when the reviewing manager names that open task
+   * (`reviewExceptionId`), which records the decision and resolves the task.
+   */
   async publish(
     principal: Principal,
     revisionId: string,
@@ -375,6 +437,14 @@ export class ResultsService {
       );
       assertExpectedRevision(input.expectedRevision, revision.revision);
       const next = ResultMachine.next(revision.status, 'publish');
+      const official = await this.officialOf(trx, organizationId, revision.fixture_id, {
+        forUpdate: true,
+      });
+      if (!official && input.reviewExceptionId) {
+        throw errors.validation('Only a correction of an official result is reviewed.', {
+          reviewExceptionId: input.reviewExceptionId,
+        });
+      }
       const operationId = await this.operations.create(trx, {
         organizationId,
         kind: 'competition.publish_result',
@@ -383,80 +453,30 @@ export class ResultsService {
         input: { resultRevisionId: revisionId, fixtureId: revision.fixture_id },
         status: 'running',
       });
-      const official = await this.officialOf(trx, organizationId, revision.fixture_id, {
-        forUpdate: true,
-      });
+      const isBracketGame = await this.brackets.isBracketFixture(
+        trx,
+        organizationId,
+        revision.fixture_id,
+      );
+      let reviewed: { exceptionId: string; impact: CorrectionImpact } | null = null;
       if (official) {
         if (!(revision.reason ?? input.reason)) {
           throw errors.validation('A correction of an official result requires a reason.');
         }
-        const impact = await this.brackets.correctionImpact(
-          trx,
-          organizationId,
-          revision.fixture_id,
-        );
-        if (impact.bracketNodeIds.length > 0 || impact.fixtureIds.length > 0) {
-          const exception = await this.exceptions.raise(trx, {
-            organizationId,
-            category: RESULT_CORRECTION_REVIEW.category,
-            severity: RESULT_CORRECTION_REVIEW.severity,
-            title: 'Result correction affects published history',
-            affectedType: 'result_revision',
-            affectedId: revisionId,
-            ownerQueue: RESULT_CORRECTION_REVIEW.ownerQueue,
-            dedupeKey: `result_correction:${revisionId}`,
-            details: {
-              fixtureId: revision.fixture_id,
-              officialRevisionId: official.id,
-              affectedBracketNodeIds: impact.bracketNodeIds,
-              affectedFixtureIds: impact.fixtureIds,
-              requestedBy: snapshotActor(principal),
-            },
-          });
-          await this.audit.record(trx, {
-            organizationId,
-            actor: principal,
-            action: MatchActions.publishResult.id,
-            targetType: 'result_revision',
-            targetId: revisionId,
-            beforeRevision: revision.revision,
-            afterRevision: revision.revision,
-            reason: input.reason ?? revision.reason,
-            correlationId,
-            operationId,
-            details: {
-              outcome: 'review_required',
-              exceptionId: exception.id,
-              affectedBracketNodeIds: impact.bracketNodeIds,
-              affectedFixtureIds: impact.fixtureIds,
-            },
-          });
-          await this.outbox.enqueue(trx, MatchEvents.resultCorrectionReviewRequired, {
-            organizationId,
-            aggregateType: 'result_revision',
-            aggregateId: revisionId,
-            payload: {
-              resultRevisionId: revisionId,
-              fixtureId: revision.fixture_id,
-              officialRevisionId: official.id,
-              exceptionId: exception.id,
-              affectedBracketNodeIds: impact.bracketNodeIds,
-              affectedFixtureIds: impact.fixtureIds,
-            },
+        const impact = await this.correctionImpact(trx, context, revision.id, isBracketGame);
+        if (input.reviewExceptionId) {
+          // The named task must be this correction's open review task (it is resolved below).
+          await this.assertReviewTask(trx, principal, input.reviewExceptionId, revisionId);
+          reviewed = { exceptionId: input.reviewExceptionId, impact };
+        } else if (impact.bracketNodeIds.length > 0 || impact.fixtureIds.length > 0) {
+          return this.requireReview(trx, principal, {
+            revision,
+            official,
+            impact,
+            input,
             correlationId,
             operationId,
           });
-          await this.operations.transition(trx, operationId, 'succeeded', {
-            result: { outcome: 'review_required', exceptionId: exception.id },
-          });
-          return {
-            revision: toResultRevision(revision),
-            published: false,
-            supersededRevisionId: null,
-            reviewExceptionId: exception.id,
-            standings: null,
-            operationId,
-          };
         }
       }
       const now = this.clock.now();
@@ -519,27 +539,79 @@ export class ResultsService {
         );
       }
 
-      // Served suspensions (SPK-DISC-002 completion by match count).
+      // Served suspensions (SPK-DISC-002 completion by match count): only a match that took place.
       const at = context.fixture.scheduled_start ? new Date(context.fixture.scheduled_start) : now;
-      const personIds = await this.rosterPersons(trx, organizationId, context.fixture, at);
-      await this.discipline.serveFixture(trx, principal, {
+      if (outcome) {
+        const personIds = await this.rosterPersons(trx, organizationId, context.fixture, at);
+        await this.discipline.serveFixture(trx, principal, {
+          organizationId,
+          fixtureId: revision.fixture_id,
+          competitionId: context.season.competition_id,
+          personIds,
+          at,
+          correlationId,
+          operationId,
+        });
+      }
+      // Cards propose the suspensions the approved rule set prescribes (SPK-DISC-003).
+      const proposedSuspensionIds = await this.discipline.proposeFromRuleSet(trx, principal, {
         organizationId,
         fixtureId: revision.fixture_id,
-        competitionId: context.season.competition_id,
-        personIds,
-        at,
-        correlationId,
-        operationId,
-      });
-
-      const standings = await this.standings.recompute(trx, principal, {
-        organizationId,
+        resultRevisionId: revisionId,
         seasonId: context.fixture.season_id,
-        divisionId: context.fixture.division_id,
-        triggerResultId: revisionId,
+        competitionId: context.season.competition_id,
+        ruleSet: {
+          id: context.ruleSetId,
+          name: context.ruleSetName,
+          version: context.ruleSetVersion,
+          cards: context.rules.cards,
+        },
+        resultCards: detailsOf(updated).cards,
         correlationId,
         operationId,
       });
+      // Bracket progression for a first official result of a playoff game (never for corrections).
+      const progressedBracketNodeIds =
+        isBracketGame && !official
+          ? await this.brackets.recordOutcome(trx, principal, {
+              organizationId,
+              fixtureId: revision.fixture_id,
+              ...sidesOf(updated, context.fixture),
+              correlationId,
+              operationId,
+            })
+          : [];
+      // League standings derive from league-phase official results only (SPK-RESULT-001).
+      const standings = isBracketGame
+        ? null
+        : await this.standings.recompute(trx, principal, {
+            organizationId,
+            seasonId: context.fixture.season_id,
+            divisionId: context.fixture.division_id,
+            triggerResultId: revisionId,
+            correlationId,
+            operationId,
+          });
+      if (reviewed) {
+        // The management review task is resolved by this decision; the published bracket and the
+        // downstream games are not rewritten here (they stay as published history).
+        await this.exceptions.transition(
+          trx,
+          systemPrincipal(organizationId, 'competition.result_correction_review'),
+          reviewed.exceptionId,
+          'resolved',
+          {
+            reason: updated.reason ?? undefined,
+            correlationId: correlationId ?? undefined,
+            resolution: {
+              outcome: 'correction_published',
+              resultRevisionId: revisionId,
+              supersededRevisionId: official?.id ?? null,
+              reviewedBy: snapshotActor(principal),
+            },
+          },
+        );
+      }
 
       await this.audit.record(trx, {
         organizationId,
@@ -555,7 +627,12 @@ export class ResultsService {
         details: {
           transitions: [revision.status, next],
           supersededRevisionId: official?.id ?? null,
-          standingsProjectionId: standings.id,
+          standingsProjectionId: standings?.id ?? null,
+          reviewExceptionId: reviewed?.exceptionId ?? null,
+          affectedBracketNodeIds: reviewed?.impact.bracketNodeIds ?? [],
+          affectedFixtureIds: reviewed?.impact.fixtureIds ?? [],
+          proposedSuspensionIds,
+          progressedBracketNodeIds,
           policyReferences: input.policyReferences ?? [],
         },
       });
@@ -571,7 +648,10 @@ export class ResultsService {
           status: next,
           classification: updated.classification,
           supersededRevisionId: official?.id ?? null,
-          standingsProjectionId: standings.id,
+          standingsProjectionId: standings?.id ?? null,
+          reviewExceptionId: reviewed?.exceptionId ?? null,
+          affectedBracketNodeIds: reviewed?.impact.bracketNodeIds ?? [],
+          affectedFixtureIds: reviewed?.impact.fixtureIds ?? [],
           operationId,
         },
         correlationId,
@@ -581,18 +661,183 @@ export class ResultsService {
         result: {
           resultRevisionId: revisionId,
           supersededRevisionId: official?.id ?? null,
-          standingsProjectionId: standings.id,
+          standingsProjectionId: standings?.id ?? null,
+          reviewExceptionId: reviewed?.exceptionId ?? null,
         },
       });
       return {
         revision: toResultRevision(updated),
         published: true,
         supersededRevisionId: official?.id ?? null,
-        reviewExceptionId: null,
+        reviewExceptionId: reviewed?.exceptionId ?? null,
         standings,
+        proposedSuspensionIds,
+        progressedBracketNodeIds,
         operationId,
       };
     });
+  }
+
+  /** Raises (or rejoins) the management review task; nothing is rewritten (SPK-RESULT-004, SPK-AT-014). */
+  private async requireReview(
+    trx: Trx,
+    principal: Principal,
+    input: {
+      revision: RevisionRow;
+      official: RevisionRow;
+      impact: CorrectionImpact;
+      input: PublishResultInput;
+      correlationId: string | null;
+      operationId: string;
+    },
+  ): Promise<PublishResultOutcome> {
+    const { revision, official, impact, correlationId, operationId } = input;
+    const organizationId = revision.organization_id;
+    const exception = await this.exceptions.raise(trx, {
+      organizationId,
+      category: RESULT_CORRECTION_REVIEW.category,
+      severity: RESULT_CORRECTION_REVIEW.severity,
+      title: 'Result correction affects published history',
+      affectedType: 'result_revision',
+      affectedId: revision.id,
+      ownerQueue: RESULT_CORRECTION_REVIEW.ownerQueue,
+      dedupeKey: reviewDedupeKey(revision.id),
+      details: {
+        fixtureId: revision.fixture_id,
+        officialRevisionId: official.id,
+        affectedBracketNodeIds: impact.bracketNodeIds,
+        affectedFixtureIds: impact.fixtureIds,
+        requestedBy: snapshotActor(principal),
+      },
+    });
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: MatchActions.publishResult.id,
+      targetType: 'result_revision',
+      targetId: revision.id,
+      beforeRevision: revision.revision,
+      afterRevision: revision.revision,
+      reason: input.input.reason ?? revision.reason,
+      correlationId,
+      operationId,
+      details: {
+        outcome: 'review_required',
+        exceptionId: exception.id,
+        affectedBracketNodeIds: impact.bracketNodeIds,
+        affectedFixtureIds: impact.fixtureIds,
+      },
+    });
+    if (!exception.deduplicated) {
+      await this.outbox.enqueue(trx, MatchEvents.resultCorrectionReviewRequired, {
+        organizationId,
+        aggregateType: 'result_revision',
+        aggregateId: revision.id,
+        payload: {
+          resultRevisionId: revision.id,
+          fixtureId: revision.fixture_id,
+          officialRevisionId: official.id,
+          exceptionId: exception.id,
+          affectedBracketNodeIds: impact.bracketNodeIds,
+          affectedFixtureIds: impact.fixtureIds,
+        },
+        correlationId,
+        operationId,
+      });
+    }
+    await this.operations.transition(trx, operationId, 'succeeded', {
+      result: { outcome: 'review_required', exceptionId: exception.id },
+    });
+    return {
+      revision: toResultRevision(revision),
+      published: false,
+      supersededRevisionId: null,
+      reviewExceptionId: exception.id,
+      standings: null,
+      proposedSuspensionIds: [],
+      progressedBracketNodeIds: [],
+      operationId,
+    };
+  }
+
+  /**
+   * What a correction would touch (SPK-RESULT-004): for a playoff game, the published nodes it
+   * plays or feeds and downstream games already played; for a league game, the published nodes
+   * whose standings seed would change if the correction became official.
+   */
+  private async correctionImpact(
+    trx: Trx,
+    context: FixtureContext,
+    candidateRevisionId: string,
+    isBracketGame: boolean,
+  ): Promise<CorrectionImpact> {
+    const { fixture } = context;
+    const organizationId = fixture.organization_id;
+    if (isBracketGame) return this.brackets.correctionImpact(trx, organizationId, fixture.id);
+    const depth = await this.brackets.publishedSeedDepth(
+      trx,
+      organizationId,
+      fixture.season_id,
+      fixture.division_id,
+    );
+    if (depth === 0) return { bracketNodeIds: [], fixtureIds: [] };
+    const before = await this.standings.seedOrder(
+      trx,
+      organizationId,
+      fixture.season_id,
+      fixture.division_id,
+    );
+    const after = await this.standings.seedOrder(
+      trx,
+      organizationId,
+      fixture.season_id,
+      fixture.division_id,
+      { fixtureId: fixture.id, resultRevisionId: candidateRevisionId },
+    );
+    const changed = new Set<number>();
+    for (let seed = 1; seed <= depth; seed += 1) {
+      if (before[seed - 1] !== after[seed - 1]) changed.add(seed);
+    }
+    return this.brackets.seedImpact(
+      trx,
+      organizationId,
+      fixture.season_id,
+      fixture.division_id,
+      changed,
+    );
+  }
+
+  /** The review task named by the manager must be the open one raised for this correction. */
+  private async assertReviewTask(
+    trx: Trx,
+    principal: Principal,
+    exceptionId: string,
+    revisionId: string,
+  ): Promise<void> {
+    if (!hasStaffRole(principal, ...RESULT_CORRECTION_REVIEW.reviewerRoles)) {
+      throw errors.accessDenied('Only league management decides a result correction review.', {
+        action: MatchActions.publishResult.id,
+      });
+    }
+    const task = await trx
+      .selectFrom('operational_exceptions')
+      .select(['id', 'category', 'affected_type', 'affected_id', 'status'])
+      .where('organization_id', '=', organizationOf(principal))
+      .where('id', '=', exceptionId)
+      .executeTakeFirst();
+    const matches =
+      task !== undefined &&
+      task.category === RESULT_CORRECTION_REVIEW.category &&
+      task.affected_type === 'result_revision' &&
+      task.affected_id === revisionId;
+    if (!matches) {
+      throw errors.validation('The review task does not belong to this correction.', {
+        reviewExceptionId: exceptionId,
+      });
+    }
+    if (task.status !== 'open' && task.status !== 'acknowledged') {
+      throw errors.invalidTransition('ResultCorrectionReview', task.status, 'publish');
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -647,7 +892,14 @@ export class ResultsService {
     if (!season) throw errors.notFound('season', fixture.season_id);
     const ruleSet = await loadRuleSetRow(db, organizationId, season.rule_set_id);
     if (!ruleSet) throw errors.notFound('rule_set', season.rule_set_id);
-    return { fixture, season, ruleSetId: ruleSet.id, rules: ruleSetContentOf(ruleSet) };
+    return {
+      fixture,
+      season,
+      ruleSetId: ruleSet.id,
+      ruleSetName: ruleSet.name,
+      ruleSetVersion: ruleSet.version,
+      rules: ruleSetContentOf(ruleSet),
+    };
   }
 
   private async loadRevision(
@@ -743,7 +995,7 @@ export class ResultsService {
     }
   }
 
-  private detailsOf(
+  private detailsFromInput(
     input: SubmitResultInput | ResubmitResultInput,
     incidentIds: string[],
   ): ResultDetails {
@@ -810,9 +1062,7 @@ export class ResultsService {
       .execute();
   }
 
-  private fixtureOutcomeOf(
-    revision: RevisionRow,
-  ): {
+  private fixtureOutcomeOf(revision: RevisionRow): {
     outcome: 'played' | 'forfeit' | 'abandoned';
     event: 'record_played' | 'forfeit' | 'abandon';
   } | null {

@@ -1,5 +1,6 @@
 import type { StaffRole } from '@sportspark/contracts';
 import { defineActions } from '../../kernel';
+import { DISCIPLINE_MANAGER_ROLES } from './competition-matches.policy';
 
 /** League administration (§2.1 "League manager: divisions, entries, rosters, fixtures, results"). */
 const LEAGUE_ADMINS: readonly StaffRole[] = [
@@ -22,7 +23,7 @@ const COMPETITION_READERS: readonly StaffRole[] = [
   'official',
 ];
 /** Discipline records are restricted (SPK-DISC-004): league management only. */
-const DISCIPLINE_MANAGERS: readonly StaffRole[] = ['league_manager', 'general_manager'];
+const DISCIPLINE_MANAGERS = DISCIPLINE_MANAGER_ROLES;
 
 /**
  * Competition actions, part 2 (§3.8, §3.9, §3.11, §3.12, §4.4 Matches and Discipline). Result

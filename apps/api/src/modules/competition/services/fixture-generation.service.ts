@@ -5,6 +5,7 @@ import {
   newId,
   type CreateFixtureSpecificationInput,
   type DraftChangeInput,
+  type FairnessPreference,
   type FixtureSpecification,
   type GenerateFixturesInput,
   type Principal,
@@ -28,7 +29,7 @@ import {
 import { ResourcesService, ScheduleDraftsService, resolveLocal } from '../../scheduling';
 import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
-import { solverDraftName } from '../competition-matches.policy';
+import { solverDraftName, unscheduledFixtureDeadline } from '../competition-matches.policy';
 import {
   specificationColumns,
   toFixtureSpecification,
@@ -37,8 +38,13 @@ import {
 } from '../competition-matches.shared';
 import { CompetitionEvents } from '../competition.events';
 import { loadRuleSetRow, loadSeasonRow, type Reader } from '../competition.queries';
-import { criteriaOf, organizationOf, ruleSetContentOf } from '../competition.shared';
-import { generateFixtures } from '../matches/fixture-generator';
+import {
+  criteriaOf,
+  organizationOf,
+  ruleSetContentOf,
+  type SeasonRow,
+} from '../competition.shared';
+import { addDays, generateFixtures } from '../matches/fixture-generator';
 
 interface GenerationPlan {
   runId: string;
@@ -110,6 +116,19 @@ export class FixtureGenerationService {
       const ruleSet = await loadRuleSetRow(trx, organizationId, season.rule_set_id);
       if (!ruleSet) throw errors.notFound('rule_set', season.rule_set_id);
       const rules = ruleSetContentOf(ruleSet);
+      const teamEntryIds = await this.entryIds(trx, organizationId, divisionId);
+      assertSpecificationConsistent(
+        {
+          gamesPerTeam: input.gamesPerTeam,
+          opponentFrequency: input.opponentFrequency,
+          startsOn: input.startsOn,
+          endsOn: input.endsOn,
+          fairnessPreferences: input.fairnessPreferences,
+        },
+        season,
+        teamEntryIds,
+        { requireTeams: false },
+      );
       const id = newId();
       await trx
         .insertInto('fixture_specifications')
@@ -160,7 +179,7 @@ export class FixtureGenerationService {
         payload: { specificationId: id, seasonId: division.season_id, divisionId },
         correlationId,
       });
-      return toFixtureSpecification(row, await this.entryIds(trx, organizationId, divisionId));
+      return toFixtureSpecification(row, teamEntryIds);
     });
   }
 
@@ -230,6 +249,19 @@ export class FixtureGenerationService {
         .execute();
       const teamEntryIds = entries.map((e) => e.id);
       const names = new Map(entries.map((e) => [e.id, e.name]));
+      // A specification error is a 422 before any run: never reported as "infeasible" (SPK-FIX-004).
+      assertSpecificationConsistent(
+        {
+          gamesPerTeam: spec.games_per_team,
+          opponentFrequency: spec.opponent_frequency,
+          startsOn: spec.starts_on,
+          endsOn: spec.ends_on,
+          fairnessPreferences: spec.fairness_preferences as FairnessPreference[],
+        },
+        season,
+        teamEntryIds,
+        { requireTeams: true },
+      );
       if (!input.dryRun) {
         const existing = await trx
           .selectFrom('fixtures')
@@ -265,7 +297,10 @@ export class FixtureGenerationService {
           playoffStructure: snapshot.playoffStructure,
           resolveInstant: (date, time) =>
             resolveLocal(date, time, facility.timezone)?.instant ?? null,
-          obligationDeadline: `${season.starts_on}T00:00:00.000Z`,
+          obligationDeadline: unscheduledFixtureDeadline(
+            this.clock.now(),
+            resolveLocal(addDays(season.ends_on, 1), '00:00', facility.timezone)?.instant ?? null,
+          ).toISOString(),
         },
         input.searchSettings,
         () => this.clock.now().getTime(),
@@ -540,5 +575,80 @@ export class FixtureGenerationService {
       .orderBy('id')
       .execute();
     return rows.map((r) => r.id);
+  }
+}
+
+/**
+ * SPK-FIX-001/002 specification consistency, checked before any solver run (a specification error
+ * is never reported as an infeasible run, SPK-FIX-004): the competition dates lie inside the
+ * season, a team-specific preference names an approved entry of the division, an approved
+ * convenience preference cites its approval (SPK-FIX-003, DEC-049), and once the division's teams
+ * are known, games per team equal (teams − 1) × opponent frequency for the round robin.
+ */
+export function assertSpecificationConsistent(
+  spec: {
+    gamesPerTeam: number;
+    opponentFrequency: number;
+    startsOn: string;
+    endsOn: string;
+    fairnessPreferences: FairnessPreference[];
+  },
+  season: Pick<SeasonRow, 'starts_on' | 'ends_on'>,
+  teamEntryIds: string[],
+  options: { requireTeams: boolean },
+): void {
+  if (spec.startsOn < season.starts_on || spec.endsOn > season.ends_on) {
+    throw errors.validation('The competition dates must lie within the season.', {
+      code: 'dates_outside_season',
+      season: { startsOn: season.starts_on, endsOn: season.ends_on },
+    });
+  }
+  for (const preference of spec.fairnessPreferences) {
+    const teamSpecific =
+      preference.kind === 'preferred_availability' || preference.kind === 'approved_convenience';
+    if (teamSpecific && (!preference.teamEntryId || !(preference.startTimes ?? []).length)) {
+      throw errors.validation('A team preference names the entry and its preferred times.', {
+        code: 'preference_incomplete',
+        kind: preference.kind,
+      });
+    }
+    if (
+      teamSpecific &&
+      preference.teamEntryId &&
+      teamEntryIds.length > 0 &&
+      !teamEntryIds.includes(preference.teamEntryId)
+    ) {
+      throw errors.validation('A team preference names an approved entry of the division.', {
+        code: 'preference_unknown_entry',
+        teamEntryId: preference.teamEntryId,
+      });
+    }
+    if (preference.kind === 'approved_convenience' && !preference.approvalReference) {
+      throw errors.validation('Coach or family convenience is used only when approved.', {
+        code: 'convenience_not_approved',
+        teamEntryId: preference.teamEntryId ?? null,
+      });
+    }
+  }
+  const teams = teamEntryIds.length;
+  if (teams < 2) {
+    if (!options.requireTeams) return;
+    throw errors.validation('At least two approved entries are needed to generate fixtures.', {
+      code: 'not_enough_teams',
+      teams,
+    });
+  }
+  const expected = (teams - 1) * spec.opponentFrequency;
+  if (spec.gamesPerTeam !== expected) {
+    throw errors.validation(
+      `${teams} teams meeting ${spec.opponentFrequency} time(s) play ${expected} games each, not ${spec.gamesPerTeam}.`,
+      {
+        code: 'games_per_team_inconsistent',
+        teams,
+        opponentFrequency: spec.opponentFrequency,
+        gamesPerTeam: spec.gamesPerTeam,
+        expectedGamesPerTeam: expected,
+      },
+    );
   }
 }

@@ -56,6 +56,8 @@ create table result_revisions (
   check (classification <> 'forfeit' or forfeiting_entry_id is not null),
   constraint result_revisions_submitted_fact check (status not in ('submitted', 'official', 'superseded') or submitted_at is not null),
   constraint result_revisions_published_fact check ((status in ('official', 'superseded')) = (published_at is not null)),
+  -- §4.7 invariant 8: an official (or superseded) row always names who published it.
+  constraint result_revisions_publisher_fact check (status not in ('official', 'superseded') or published_by is not null),
   constraint result_revisions_superseded_fact check ((status = 'superseded') = (superseded_at is not null))
 );
 -- Exactly one official result per fixture (§4.7 invariant 8).
@@ -117,6 +119,7 @@ create table standings_projections (
   season_id uuid not null,
   division_id uuid,
   rule_set_id uuid not null,
+  rule_set_version integer not null check (rule_set_version >= 1),
   computed_at timestamptz not null,
   source_result_ids uuid[] not null default '{}',
   rows jsonb not null default '[]'::jsonb,
@@ -351,6 +354,11 @@ create table suspensions (
   matches_served integer not null default 0 check (matches_served >= 0),
   served_fixture_ids uuid[] not null default '{}',
   completion_criteria text not null check (length(completion_criteria) between 1 and 2000),
+  -- SPK-DISC-003: `manual` (a decision or a direct proposal) or proposed by the approved rule set from
+  -- an official result's cards; rule-set proposals name the fixture and result revision they came from.
+  source_kind text not null default 'manual' check (source_kind in ('manual', 'red_card', 'yellow_accumulation')),
+  source_fixture_id uuid,
+  source_result_revision_id uuid,
   status text not null default 'proposed' check (status in ('proposed', 'active', 'served', 'overturned')),
   approved_by jsonb,
   approved_at timestamptz,
@@ -365,6 +373,9 @@ create table suspensions (
   unique (organization_id, id),
   foreign key (organization_id, subject_person_id) references persons (organization_id, id),
   foreign key (organization_id, decision_id) references disciplinary_decisions (organization_id, id),
+  foreign key (organization_id, source_fixture_id) references fixtures (organization_id, id),
+  foreign key (organization_id, source_result_revision_id) references result_revisions (organization_id, id),
+  constraint suspensions_source_fact check ((source_kind = 'manual') = (source_fixture_id is null)),
   constraint suspensions_period_or_matches check (match_count is not null or effective_from is not null),
   check (effective_to is null or effective_from is null or effective_from < effective_to),
   constraint suspensions_scope_named check (scope <> 'competitions' or cardinality(competition_ids) > 0),
@@ -373,6 +384,10 @@ create table suspensions (
   check ((status = 'overturned') = (overturned_at is not null))
 );
 create index suspensions_subject_idx on suspensions (organization_id, subject_person_id, status);
+-- A rule-set proposal is made once per person, fixture and rule (replays and re-publication of a
+-- correction never propose it twice; an overturned proposal is not proposed again).
+create unique index suspensions_rule_source_idx on suspensions (organization_id, subject_person_id, source_fixture_id, source_kind)
+  where source_kind <> 'manual';
 create trigger suspensions_touch before update on suspensions
   for each row execute function touch_updated_at();
 

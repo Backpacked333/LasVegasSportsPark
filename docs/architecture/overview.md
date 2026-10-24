@@ -54,8 +54,9 @@ registers the principal resolver and relationship authority (`PRINCIPAL_RESOLVER
 `RELATIONSHIP_AUTHORITY_IMPL`): a verified `(issuer, subject)` maps to an active account, its
 person and the staff memberships in effect at the clock; a relationship permission is exactly an
 unrevoked, unsuspended, currently effective `access_grants` row on an active relationship (see
-`apps/api/src/modules/identity/README.md`). The competition module registers team authority. Where
-a registration is absent the kernel falls back to deny-all.
+`apps/api/src/modules/identity/README.md`). The competition module registers team authority and
+scheduling's fixture-obligation check. Where a registration is absent the kernel falls back to
+deny-all.
 
 Two kernel limitations are worked around inside the identity module and documented in its README:
 `*_IMPL` tokens must be `useValue` providers (Nest probes the kernel's lazy proxy during
@@ -83,7 +84,7 @@ modes agree.
 | identity       | —                                          | principal resolver, relationship authority                                                         |
 | catalog        | identity                                   | —                                                                                                  |
 | scheduling     | — (facilities table in core)               | — (offers FIXTURE_OBLIGATION_IMPL hook)                                                            |
-| competition    | identity, scheduling                       | team authority; outbox handler syncing fixtures with `scheduling.event_changed`                    |
+| competition    | identity, scheduling                       | team authority, fixture obligations; outbox handler syncing fixtures (`scheduling.event_changed`)  |
 | workforce      | identity, scheduling, competition          | —                                                                                                  |
 | facilities     | scheduling                                 | outbox handlers (due timers, lifted closures)                                                      |
 | communications | identity, scheduling, competition          | outbox handlers (dispatch, schedule notices, revoked grants); inbox handler for messaging receipts |

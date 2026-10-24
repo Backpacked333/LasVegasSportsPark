@@ -238,9 +238,14 @@ function preference(
   return input.fairnessPreferences.find((p) => p.kind === kind);
 }
 
+/** Team-level time preferences: preferred availability and approved coach/family convenience. */
+function isTeamTimePreference(p: FairnessPreference): boolean {
+  return p.kind === 'preferred_availability' || p.kind === 'approved_convenience';
+}
+
 function preferredFor(input: GeneratorInput, teamEntryId: string): FairnessPreference[] {
   return input.fairnessPreferences.filter(
-    (p) => p.kind === 'preferred_availability' && p.teamEntryId === teamEntryId,
+    (p) => isTeamTimePreference(p) && p.teamEntryId === teamEntryId,
   );
 }
 
@@ -577,7 +582,8 @@ function evaluate(
         );
         break;
       }
-      case 'preferred_availability': {
+      case 'preferred_availability':
+      case 'approved_convenience': {
         const teamId = pref.teamEntryId;
         const state = teamId ? states.get(teamId) : undefined;
         if (!teamId || !state) {
@@ -842,14 +848,14 @@ export function generateFixtures(
     }
   }
   for (const pref of input.fairnessPreferences) {
-    if (pref.kind !== 'preferred_availability' || !pref.hard || !pref.teamEntryId) continue;
+    if (!isTeamTimePreference(pref) || !pref.hard || !pref.teamEntryId) continue;
     const matching = slots.filter((s) => matchesPreferred(s, [pref])).length;
     if (matching < gamesPerTeam) {
       return infeasible(
-        `A hard availability preference leaves ${matching} matching slot(s) for a team that must play ${gamesPerTeam} games.`,
+        `A hard ${pref.kind.replaceAll('_', ' ')} preference leaves ${matching} matching slot(s) for a team that must play ${gamesPerTeam} games.`,
         [
           {
-            constraint: 'preferred_availability',
+            constraint: pref.kind,
             hard: true,
             message: `Team ${pref.teamEntryId}: ${matching} preferred slot(s) for ${gamesPerTeam} games.`,
             gameKeys: [],

@@ -225,11 +225,73 @@ describe('competition matches schema invariants (migration 0450)', () => {
         })
         .execute(),
     ).rejects.toSatisfy(isCheckViolation);
+    // §4.7 invariant 8: an official row always names its publisher
+    const anonymous = db
+      .insertInto('result_revisions')
+      .values({
+        ...base,
+        id: newId(),
+        revision_no: 1,
+        status: 'official',
+        classification: 'completed',
+        home_score: 1,
+        away_score: 0,
+        published_at: clock.now(),
+        published_by: null,
+      })
+      .execute();
+    await expect(anonymous).rejects.toSatisfy(isCheckViolation);
+    await expect(anonymous.catch((e: unknown) => pgConstraintName(e))).resolves.toBe(
+      'result_revisions_publisher_fact',
+    );
     // a result of another organization's fixture is impossible (composite foreign key)
     await expect(
       createResultRevisionFixture(ctx, { fixtureId, organizationId: otherOrg.organizationId }),
     ).rejects.toSatisfy(isForeignKeyViolation);
     expect(home.teamEntryId).toBeDefined();
+  });
+
+  it('SPK-DISC-003: a rule-set suspension names the fixture it came from and exists once per person, fixture and rule', async () => {
+    const { fixtureId } = await fixtureWithTeams();
+    const person = await createPersonFixture(ctx, { kind: 'adult' });
+    const proposal = (overrides: Record<string, unknown> = {}) =>
+      db
+        .insertInto('suspensions')
+        .values({
+          id: newId(),
+          organization_id: ctx.organizationId,
+          subject_person_id: person,
+          basis: 'sent off',
+          scope: 'all',
+          match_count: 1,
+          completion_criteria: 'one match served',
+          source_kind: 'red_card',
+          source_fixture_id: fixtureId,
+          created_by: actor,
+          ...overrides,
+        })
+        .execute();
+    await proposal();
+    const duplicate = proposal();
+    await expect(duplicate).rejects.toSatisfy(isUniqueViolation);
+    await expect(duplicate.catch((e: unknown) => pgConstraintName(e))).resolves.toBe(
+      'suspensions_rule_source_idx',
+    );
+    // another rule for the same fixture is a different proposal
+    await proposal({ source_kind: 'yellow_accumulation' });
+    // a rule-set proposal always names its fixture; a manual one never does
+    await expect(proposal({ source_fixture_id: null })).rejects.toSatisfy(isCheckViolation);
+    await expect(proposal({ source_kind: 'manual' })).rejects.toSatisfy(isCheckViolation);
+    // the source fixture belongs to the same organization
+    await expect(
+      proposal({
+        organization_id: otherOrg.organizationId,
+        subject_person_id: await createPersonFixture(ctx, {
+          kind: 'adult',
+          organizationId: otherOrg.organizationId,
+        }),
+      }),
+    ).rejects.toSatisfy(isForeignKeyViolation);
   });
 
   it('standings projections are append-only', async () => {
@@ -243,6 +305,7 @@ describe('competition matches schema invariants (migration 0450)', () => {
         season_id: season.seasonId,
         division_id: null,
         rule_set_id: season.ruleSetId,
+        rule_set_version: 1,
         computed_at: clock.now(),
         rows: json([]),
         tiebreak_explanations: json([]),

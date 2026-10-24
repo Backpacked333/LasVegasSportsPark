@@ -110,16 +110,13 @@ export function toResultRevision(row: Selectable<ResultRevisionsTable>): ResultR
   };
 }
 
-export function toStandings(
-  row: Selectable<StandingsProjectionsTable>,
-  ruleSetVersion: number,
-): Standings {
+export function toStandings(row: Selectable<StandingsProjectionsTable>): Standings {
   return {
     id: row.id,
     seasonId: row.season_id,
     divisionId: row.division_id,
     ruleSetId: row.rule_set_id,
-    ruleSetVersion,
+    ruleSetVersion: row.rule_set_version,
     computedAt: iso(row.computed_at),
     sourceResultIds: row.source_result_ids,
     rows: row.rows as StandingsRow[],
@@ -300,6 +297,9 @@ export function toSuspension(row: Selectable<SuspensionsTable>): Suspension {
     matchesServed: row.matches_served,
     servedFixtureIds: row.served_fixture_ids,
     completionCriteria: row.completion_criteria,
+    sourceKind: row.source_kind,
+    sourceFixtureId: row.source_fixture_id,
+    sourceResultRevisionId: row.source_result_revision_id,
     status: row.status,
     approvedBy: actorOf(row.approved_by),
     approvedAt: isoOrNull(row.approved_at),

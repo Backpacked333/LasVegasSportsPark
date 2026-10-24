@@ -29,6 +29,11 @@ import { loadSeasonRow, type Reader } from '../competition.queries';
 import { organizationOf } from '../competition.shared';
 import { readTarget } from './competitions.service';
 
+function sourcesOf(node: Selectable<BracketNodesTable>): BracketSource[] {
+  const rule = node.source_rule as { home: BracketSource; away: BracketSource };
+  return [rule.home, rule.away];
+}
+
 export interface CorrectionImpact {
   /** Published nodes played by, or fed by the outcome of, the fixture. */
   bracketNodeIds: string[];
@@ -212,9 +217,9 @@ export class BracketsService {
   }
 
   /**
-   * SPK-RESULT-004 / SPK-AT-014: whether correcting the fixture's official result would touch a
-   * published bracket node or a downstream game already played. Nodes referencing the fixture's
-   * node through winner_of/loser_of are followed transitively.
+   * SPK-RESULT-004 / SPK-AT-014: whether correcting the official result of a fixture that is itself
+   * played in the bracket would touch published history: the published nodes it plays or feeds
+   * (through winner_of / loser_of, transitively) and downstream bracket games already played.
    */
   async correctionImpact(
     db: Reader,
@@ -228,29 +233,214 @@ export class BracketsService {
       .where('fixture_id', '=', fixtureId)
       .execute();
     if (nodes.length === 0) return { bracketNodeIds: [], fixtureIds: [] };
-    const all = await db
+    const all = await this.seasonNodes(db, organizationId, [
+      ...new Set(nodes.map((n) => n.season_id)),
+    ]);
+    return this.expand(db, organizationId, all, nodes, { originsArePlayed: true });
+  }
+
+  /** Whether the fixture is played in a bracket node (playoff game) rather than the league phase. */
+  async isBracketFixture(db: Reader, organizationId: string, fixtureId: string): Promise<boolean> {
+    const row = await db
+      .selectFrom('bracket_nodes')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('fixture_id', '=', fixtureId)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The highest seed used by a published node of the season and division scope (seeds come from
+   * the standings of that scope), or 0 when no published node is seeded from standings.
+   */
+  async publishedSeedDepth(
+    db: Reader,
+    organizationId: string,
+    seasonId: string,
+    divisionId: string | null,
+  ): Promise<number> {
+    let depth = 0;
+    for (const node of await this.scopeNodes(db, organizationId, seasonId, divisionId)) {
+      if (!node.published) continue;
+      for (const source of sourcesOf(node)) {
+        if (source.kind === 'seed') depth = Math.max(depth, source.seed);
+      }
+    }
+    return depth;
+  }
+
+  /**
+   * SPK-RESULT-004 / SPK-AT-014 for a league-phase correction: when the corrected standings change
+   * the entry holding a seed that a published node draws from, that node, every node it feeds and
+   * the downstream games already played are affected.
+   */
+  async seedImpact(
+    db: Reader,
+    organizationId: string,
+    seasonId: string,
+    divisionId: string | null,
+    changedSeeds: ReadonlySet<number>,
+  ): Promise<CorrectionImpact> {
+    if (changedSeeds.size === 0) return { bracketNodeIds: [], fixtureIds: [] };
+    const scope = await this.scopeNodes(db, organizationId, seasonId, divisionId);
+    const origins = scope.filter(
+      (n) =>
+        n.published &&
+        sourcesOf(n).some((source) => source.kind === 'seed' && changedSeeds.has(source.seed)),
+    );
+    if (origins.length === 0) return { bracketNodeIds: [], fixtureIds: [] };
+    const all = await this.seasonNodes(db, organizationId, [seasonId]);
+    return this.expand(db, organizationId, all, origins, { originsArePlayed: false });
+  }
+
+  /**
+   * Bracket progression (SPK-COMP-001 "bracket progression"): once a bracket game's first official
+   * result is published, the node records its winner and the nodes fed by it receive the winner
+   * or loser in a still-empty slot. A correction never moves entries here: it goes through
+   * management review (SPK-RESULT-004).
+   */
+  async recordOutcome(
+    trx: Trx,
+    principal: Principal,
+    input: {
+      organizationId: string;
+      fixtureId: string;
+      winnerEntryId: string | null;
+      loserEntryId: string | null;
+      correlationId: string | null;
+      operationId: string | null;
+    },
+  ): Promise<string[]> {
+    const { organizationId } = input;
+    const node = await trx
       .selectFrom('bracket_nodes')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('season_id', 'in', [...new Set(nodes.map((n) => n.season_id))])
+      .where('fixture_id', '=', input.fixtureId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!node || !input.winnerEntryId) return [];
+    const changed: string[] = [];
+    if (node.winner_entry_id === null) {
+      await this.progress(trx, principal, node, { winner_entry_id: input.winnerEntryId }, input);
+      changed.push(node.id);
+    }
+    const dependents = (await this.seasonNodes(trx, organizationId, [node.season_id])).filter((n) =>
+      sourcesOf(n).some(
+        (source) =>
+          (source.kind === 'winner_of' || source.kind === 'loser_of') && source.nodeId === node.id,
+      ),
+    );
+    for (const dependent of dependents) {
+      const rule = dependent.source_rule as { home: BracketSource; away: BracketSource };
+      const entryFor = (source: BracketSource): string | null =>
+        source.kind === 'winner_of' && source.nodeId === node.id
+          ? input.winnerEntryId
+          : source.kind === 'loser_of' && source.nodeId === node.id
+            ? input.loserEntryId
+            : null;
+      const set: { home_entry_id?: string; away_entry_id?: string } = {};
+      const home = entryFor(rule.home);
+      const away = entryFor(rule.away);
+      if (home && dependent.home_entry_id === null && dependent.away_entry_id !== home) {
+        set.home_entry_id = home;
+      }
+      if (away && dependent.away_entry_id === null && dependent.home_entry_id !== away) {
+        set.away_entry_id = away;
+      }
+      if (Object.keys(set).length === 0) continue;
+      const locked = await this.load(trx, organizationId, dependent.id, { forUpdate: true });
+      if (!locked) continue;
+      await this.progress(trx, principal, locked, set, input);
+      changed.push(dependent.id);
+    }
+    return changed;
+  }
+
+  private async progress(
+    trx: Trx,
+    principal: Principal,
+    node: Selectable<BracketNodesTable>,
+    set: { winner_entry_id?: string; home_entry_id?: string; away_entry_id?: string },
+    input: { fixtureId: string; correlationId: string | null; operationId: string | null },
+  ): Promise<void> {
+    await trx
+      .updateTable('bracket_nodes')
+      .set({ ...set, revision: node.revision + 1 })
+      .where('organization_id', '=', node.organization_id)
+      .where('id', '=', node.id)
+      .where('revision', '=', node.revision)
       .execute();
+    await this.audit.record(trx, {
+      organizationId: node.organization_id,
+      actor: principal,
+      action: MatchActions.manageBrackets.id,
+      targetType: 'bracket_node',
+      targetId: node.id,
+      beforeRevision: node.revision,
+      afterRevision: node.revision + 1,
+      correlationId: input.correlationId,
+      operationId: input.operationId,
+      details: { operation: 'progress', fixtureId: input.fixtureId, ...set },
+    });
+  }
+
+  private async scopeNodes(
+    db: Reader,
+    organizationId: string,
+    seasonId: string,
+    divisionId: string | null,
+  ): Promise<Array<Selectable<BracketNodesTable>>> {
+    let q = db
+      .selectFrom('bracket_nodes')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('season_id', '=', seasonId);
+    q = divisionId ? q.where('division_id', '=', divisionId) : q.where('division_id', 'is', null);
+    return q.execute();
+  }
+
+  private async seasonNodes(
+    db: Reader,
+    organizationId: string,
+    seasonIds: string[],
+  ): Promise<Array<Selectable<BracketNodesTable>>> {
+    return db
+      .selectFrom('bracket_nodes')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('season_id', 'in', seasonIds)
+      .execute();
+  }
+
+  /** The origins plus every node they feed (transitively): published ones and played games. */
+  private async expand(
+    db: Reader,
+    organizationId: string,
+    all: Array<Selectable<BracketNodesTable>>,
+    origins: Array<Selectable<BracketNodesTable>>,
+    options: { originsArePlayed: boolean },
+  ): Promise<CorrectionImpact> {
     const affected = new Map<string, Selectable<BracketNodesTable>>();
-    const frontier = [...nodes];
+    const frontier = [...origins];
     while (frontier.length > 0) {
       const current = frontier.pop() as Selectable<BracketNodesTable>;
       if (affected.has(current.id)) continue;
       affected.set(current.id, current);
       for (const candidate of all) {
-        const rule = candidate.source_rule as { home: BracketSource; away: BracketSource };
-        const feeds = [rule.home, rule.away].some(
+        const feeds = sourcesOf(candidate).some(
           (s) => (s.kind === 'winner_of' || s.kind === 'loser_of') && s.nodeId === current.id,
         );
         if (feeds) frontier.push(candidate);
       }
     }
     const bracketNodeIds = [...affected.values()].filter((n) => n.published).map((n) => n.id);
+    // When the origins are the corrected game's own nodes, their fixture is the corrected one.
     const downstreamFixtureIds = [...affected.values()]
-      .filter((n) => !nodes.some((origin) => origin.id === n.id) && n.fixture_id !== null)
+      .filter(
+        (n) => !(options.originsArePlayed && origins.some((o) => o.id === n.id)) && n.fixture_id,
+      )
       .map((n) => n.fixture_id as string);
     let fixtureIds: string[] = [];
     if (downstreamFixtureIds.length > 0) {
@@ -261,9 +451,9 @@ export class BracketsService {
         .where('id', 'in', downstreamFixtureIds)
         .where('status', 'in', ['played', 'forfeit'])
         .execute();
-      fixtureIds = played.map((f) => f.id);
+      fixtureIds = played.map((f) => f.id).sort();
     }
-    return { bracketNodeIds, fixtureIds };
+    return { bracketNodeIds: bracketNodeIds.sort(), fixtureIds };
   }
 
   private async load(

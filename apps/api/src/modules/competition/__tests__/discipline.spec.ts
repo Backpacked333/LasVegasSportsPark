@@ -357,6 +357,50 @@ describe('discipline and disputes (SPK-DISC-001..005, SPK-RESULT-005, SPK-AT-013
     expect(granted.body).toMatchObject({ status: 'granted', decisionReason: expect.any(String) });
     const lifted = await get(`/suspensions/${active.body.id}`, leagueManager);
     expect(lifted.body).toMatchObject({ status: 'overturned', appealStatus: 'granted' });
+
+    // SPK-DISC-002 "appeal status": an appeal against a decision shows on the suspension it
+    // created; a withdrawn appeal leaves none pending; a denied one is recorded there
+    const second = await post('/disciplinary-decisions', leagueManager, {
+      subjectPersonId: other.personId,
+      basis: 'violent conduct',
+      decision: 'suspension',
+      suspension: {
+        scope: 'competitions',
+        competitionIds: [season.competitionId],
+        matchCount: 2,
+        completionCriteria: 'two matches served',
+      },
+    });
+    expect(second.status).toBe(201);
+    const appealStatus = async () =>
+      (await get(`/suspensions/${second.body.suspensionId}`, leagueManager)).body.appealStatus;
+    const decisionAppeal = await post('/appeals', other, {
+      decisionId: second.body.id,
+      grounds: 'Self-defence.',
+    });
+    expect(decisionAppeal.status).toBe(201);
+    expect(await appealStatus()).toBe('pending');
+    const withdrawn = await post(`/appeals/${decisionAppeal.body.id}/decide`, leagueManager, {
+      action: 'withdraw',
+      expectedRevision: decisionAppeal.body.revision,
+    });
+    expect(withdrawn.body.status).toBe('withdrawn');
+    expect(await appealStatus()).toBe('none');
+    const renewed = await post('/appeals', other, {
+      decisionId: second.body.id,
+      grounds: 'Self-defence, with a witness statement.',
+    });
+    expect(renewed.status).toBe(201);
+    const denied = await post(`/appeals/${renewed.body.id}/decide`, leagueManager, {
+      action: 'deny',
+      expectedRevision: renewed.body.revision,
+      reason: 'The referee report stands.',
+    });
+    expect(denied.body.status).toBe('denied');
+    expect(await appealStatus()).toBe('denied');
+    expect(
+      (await get(`/disciplinary-decisions/${second.body.id}`, leagueManager)).body.status,
+    ).toBe('issued');
   });
 
   it('SPK-RESULT-005: a captain of a competing entry disputes within the protest window; the reviewer decides with a publication consequence; outsiders and late disputes are refused', async () => {

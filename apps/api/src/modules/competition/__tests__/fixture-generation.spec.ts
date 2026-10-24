@@ -220,14 +220,30 @@ describe('fixture generation (SPK-FIX-001..005, SPK-AT-010, SPK-AT-011)', () => 
       expectedRevision: draft.revision,
     });
     expect(publication.eventIds).toHaveLength(20);
+    // deadline: 7 days after the publication (proposed default), within the season
     expect(publication.summary.remainingObligations).toEqual([
       {
         code: 'unscheduled_fixtures',
         message: expect.stringContaining('1 fixture(s)'),
         owner: 'league_manager',
-        deadline: '2027-01-10T00:00:00.000Z',
+        deadline: '2026-10-30T12:00:00.000Z',
       },
     ]);
+    // SPK-AT-010 step 5: the incomplete season is a follow-up owned by the league manager
+    const incomplete = await t.db
+      .selectFrom('operational_exceptions')
+      .selectAll()
+      .where('organization_id', '=', t.organizationId)
+      .where('dedupe_key', '=', `incomplete_season:${season.seasonId}`)
+      .executeTakeFirstOrThrow();
+    expect(incomplete).toMatchObject({
+      category: 'competition.incomplete_season',
+      owner_queue: 'league_manager',
+      status: 'open',
+      affected_type: 'season',
+      affected_id: season.seasonId,
+    });
+    expect(new Date(incomplete.deadline_at ?? 0).toISOString()).toBe('2026-10-30T12:00:00.000Z');
     const dispatcher = t.app.get(OutboxDispatcher);
     await dispatcher.runOnce(200);
     await dispatcher.runOnce(200);
@@ -253,6 +269,121 @@ describe('fixture generation (SPK-FIX-001..005, SPK-AT-010, SPK-AT-011)', () => 
     expect(events).toHaveLength(20);
     expect(events.every((e) => e.kind === 'game' && e.status === 'published')).toBe(true);
     expect(new Set(events.map((e) => e.source_id)).size).toBe(20);
+
+    // publishing the last obligation leaves nothing unscheduled and resolves the follow-up
+    const rest = await drafts.create(schedulerPrincipal, {
+      facilityId: t.facilityId,
+      name: 'Rescheduled obligation',
+      changes: [
+        {
+          kind: 'create',
+          proposed: {
+            kind: 'game',
+            title: 'Aces v Bolts (round 99)',
+            scheduledStart: at('2027-04-17', '15:00'),
+            scheduledEnd: at('2027-04-17', '16:00'),
+            sourceType: 'fixture',
+            sourceId: extra,
+            commitments: [
+              { partyType: 'team', partyId: entries[0] as string, role: 'home_team' },
+              { partyType: 'team', partyId: entries[1] as string, role: 'away_team' },
+            ],
+          },
+          resourceIds: [pitch.pitchId],
+        },
+      ],
+    });
+    const complete = await drafts.publish(schedulerPrincipal, rest.id, {
+      expectedRevision: rest.revision,
+    });
+    expect(complete.summary.remainingObligations).toEqual([]);
+    const resolved = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['status', 'resolution'])
+      .where('id', '=', incomplete.id)
+      .executeTakeFirstOrThrow();
+    expect(resolved.status).toBe('resolved');
+  });
+
+  it('SPK-FIX-001 / SPK-FIX-004: a specification error is a 422 naming the inconsistency, never an infeasible solver run', async () => {
+    const runsBefore = await t.db
+      .selectFrom('solver_runs')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    // five teams at frequency 1 play four games each, not five (SPK-AT-010 step 7)
+    const inconsistent = await post(
+      `/divisions/${divisionId}/fixture-specifications`,
+      leagueManager,
+      specification({ gamesPerTeam: 5, opponentFrequency: 1 }),
+    );
+    expect(inconsistent.status).toBe(400);
+    expect(inconsistent.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'games_per_team_inconsistent', teams: 5, expectedGamesPerTeam: 4 },
+    });
+    const outside = await post(
+      `/divisions/${divisionId}/fixture-specifications`,
+      leagueManager,
+      specification({ startsOn: '2027-01-02' }),
+    );
+    expect(outside.status).toBe(400);
+    expect(outside.body.details.code).toBe('dates_outside_season');
+    // coach or family convenience is a preference only when approved (SPK-FIX-003, DEC-049)
+    const convenience = {
+      kind: 'approved_convenience',
+      hard: false,
+      weight: 3,
+      teamEntryId: entries[2],
+      startTimes: [{ weekday: 6, time: '11:00' }],
+    };
+    const unapproved = await post(
+      `/divisions/${divisionId}/fixture-specifications`,
+      leagueManager,
+      specification({ fairnessPreferences: [convenience] }),
+    );
+    expect(unapproved.status).toBe(400);
+    expect(unapproved.body.details.code).toBe('convenience_not_approved');
+    const approved = await post(
+      `/divisions/${divisionId}/fixture-specifications`,
+      leagueManager,
+      specification({
+        name: 'With approved convenience',
+        fairnessPreferences: [
+          { ...convenience, approvalReference: 'Program manager, coach availability form 12' },
+        ],
+      }),
+    );
+    expect(approved.status).toBe(201);
+    const preview = await post(
+      `/fixture-specifications/${approved.body.id}/generate`,
+      leagueManager,
+      { dryRun: true, searchSettings: { maxCandidates: 4, timeLimitMs: 5000, seed: 2 } },
+    );
+    expect(preview.status).toBe(201);
+    expect(preview.body.explanation.preferenceScores).toEqual([
+      expect.objectContaining({ kind: 'approved_convenience', hard: false, weight: 3 }),
+    ]);
+    // a division without approved entries: the specification is accepted, generation refuses
+    const empty = await createDivisionFixture(t, { seasonId: season.seasonId, name: 'Empty' });
+    const emptySpec = await post(
+      `/divisions/${empty}/fixture-specifications`,
+      leagueManager,
+      specification({ name: 'Nobody yet' }),
+    );
+    expect(emptySpec.status).toBe(201);
+    const refused = await post(
+      `/fixture-specifications/${emptySpec.body.id}/generate`,
+      leagueManager,
+      { dryRun: true },
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.details.code).toBe('not_enough_teams');
+    const runsAfter = await t.db
+      .selectFrom('solver_runs')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    // only the approved-convenience preview was recorded
+    expect(Number(runsAfter.n)).toBe(Number(runsBefore.n) + 1);
   });
 
   it('SPK-FIX-002: a published game that names no live fixture fails the publication as a blocking obligation', async () => {
@@ -345,7 +476,7 @@ describe('fixture generation (SPK-FIX-001..005, SPK-AT-010, SPK-AT-011)', () => 
     expect(run.body.completenessReport.remainingObligations[0]).toMatchObject({
       code: 'unscheduled_games',
       owner: 'league_manager',
-      deadline: '2027-01-10T00:00:00.000Z',
+      deadline: '2026-10-30T12:00:00.000Z',
     });
     expect(
       run.body.explanation.preferenceScores.map((s: { kind: string; hard: boolean }) => s.hard),

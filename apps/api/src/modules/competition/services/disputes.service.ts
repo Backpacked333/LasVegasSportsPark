@@ -75,7 +75,7 @@ export class DisputesService {
 
       // Eligible submitting role
       let submittingRole: string;
-      let teamEntryId: string | null = input.teamEntryId ?? null;
+      const teamEntryId: string | null = input.teamEntryId ?? null;
       if (isStaffLike(principal)) {
         await this.authorization.require(principal, MatchActions.submitDispute, {
           type: 'fixture',

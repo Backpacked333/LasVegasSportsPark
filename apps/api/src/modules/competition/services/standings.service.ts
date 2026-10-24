@@ -32,7 +32,7 @@ import { readTarget } from './competitions.service';
 
 /**
  * Standings projections (SPK-RESULT-001 official results only, SPK-RESULT-003 versioned rule
- * set with explained tiebreaks). `recompute` runs inside the publishing transaction so the table
+ * set with explained tiebreaks). League-phase games only: playoff games are bracket progression. `recompute` runs inside the publishing transaction so the table
  * and the result commit together; `get` serves the latest projection and computes live from the
  * official results when none has been stored yet.
  */
@@ -69,6 +69,7 @@ export class StandingsService {
         season_id: seasonId,
         division_id: divisionId,
         rule_set_id: computed.ruleSetId,
+        rule_set_version: computed.ruleSetVersion,
         computed_at: now,
         source_result_ids: computed.computation.countedResultIds,
         rows: json(computed.computation.rows),
@@ -92,7 +93,7 @@ export class StandingsService {
       correlationId: input.correlationId,
       operationId: input.operationId,
     });
-    return toStandings(row, computed.ruleSetVersion);
+    return toStandings(row);
   }
 
   /** `GET /v1/seasons/{id}/standings`: the latest projection, or a live computation when none exists. */
@@ -116,10 +117,7 @@ export class StandingsService {
       .limit(1);
     q = divisionId ? q.where('division_id', '=', divisionId) : q.where('division_id', 'is', null);
     const latest = await q.executeTakeFirst();
-    if (latest) {
-      const ruleSet = await loadRuleSetRow(this.db, organizationId, latest.rule_set_id);
-      return toStandings(latest, ruleSet?.version ?? 0);
-    }
+    if (latest) return toStandings(latest);
     const computed = await this.compute(this.db, organizationId, seasonId, divisionId);
     return {
       id: null,
@@ -134,11 +132,28 @@ export class StandingsService {
     };
   }
 
+  /**
+   * Entry ids in table order for the official results of the scope, optionally with one fixture's
+   * official result replaced by a candidate revision: how a correction would reorder the seeds a
+   * published bracket draws from (SPK-RESULT-004), computed without writing anything.
+   */
+  async seedOrder(
+    db: Reader,
+    organizationId: string,
+    seasonId: string,
+    divisionId: string | null,
+    replace?: { fixtureId: string; resultRevisionId: string },
+  ): Promise<string[]> {
+    const computed = await this.compute(db, organizationId, seasonId, divisionId, replace);
+    return computed.computation.rows.map((r) => r.teamEntryId);
+  }
+
   private async compute(
     db: Reader,
     organizationId: string,
     seasonId: string,
     divisionId: string | null,
+    replace?: { fixtureId: string; resultRevisionId: string },
   ): Promise<{ computation: StandingsComputation; ruleSetId: string; ruleSetVersion: number }> {
     const season = await loadSeasonRow(db, organizationId, seasonId);
     if (!season) throw errors.notFound('season', seasonId);
@@ -146,7 +161,7 @@ export class StandingsService {
     if (!ruleSet) throw errors.notFound('rule_set', season.rule_set_id);
     const rules = ruleSetContentOf(ruleSet);
 
-    let resultQuery = db
+    const base = db
       .selectFrom('result_revisions as r')
       .innerJoin('fixtures as f', (join) =>
         join
@@ -165,13 +180,33 @@ export class StandingsService {
         'f.away_entry_id',
       ])
       .where('r.organization_id', '=', organizationId)
-      .where('r.status', '=', 'official')
       .where('f.season_id', '=', seasonId)
       .where('f.away_entry_id', 'is not', null)
+      // Playoff games (played in a bracket node) never count in the league table.
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('bracket_nodes as bn')
+              .select('bn.id')
+              .whereRef('bn.organization_id', '=', 'f.organization_id')
+              .whereRef('bn.fixture_id', '=', 'f.id'),
+          ),
+        ),
+      );
+    let resultQuery = base
+      .where('r.status', '=', 'official')
       .orderBy('r.published_at')
       .orderBy('r.id');
     if (divisionId) resultQuery = resultQuery.where('f.division_id', '=', divisionId);
-    const resultRows = await resultQuery.execute();
+    let resultRows = await resultQuery.execute();
+    if (replace) {
+      const candidate = await base
+        .where('r.id', '=', replace.resultRevisionId)
+        .where('r.fixture_id', '=', replace.fixtureId)
+        .executeTakeFirst();
+      resultRows = resultRows.filter((r) => r.fixture_id !== replace.fixtureId);
+      if (candidate) resultRows.push(candidate);
+    }
     const results: OfficialResultInput[] = resultRows.map((r) => {
       const details = r.details as {
         cards?: ResultCard[];

@@ -13,14 +13,16 @@ import { sql } from 'kysely';
 import { CLOCK, DATABASE, type Clock } from '../../../kernel';
 import { ClosuresService, EventsService, ResourcesService } from '../../scheduling';
 import {
+  CHANGE_NOTICE_CHECK_PORT,
   FINANCIAL_CONDITIONS_PORT,
   FORMS_CHECK_PORT,
+  type ChangeNoticeCheckPort,
   type ConditionFinding,
   type FinancialConditionsPort,
   type FormsCheckPort,
 } from '../competition-matches.ports';
 import { loadRuleSetRow, loadSeasonRow } from '../competition.queries';
-import { iso, organizationOf, ruleSetContentOf } from '../competition.shared';
+import { isStaffLike, iso, organizationOf, ruleSetContentOf } from '../competition.shared';
 import {
   READINESS_CHECK_REGISTRY,
   SUSPENSION_CHECK_PORT,
@@ -33,6 +35,12 @@ import { EligibilityService } from './eligibility.service';
 import { FixturesService } from './fixtures.service';
 import { RosterService } from './roster.service';
 import { TeamEntriesService } from './team-entries.service';
+
+/** Source records customers may learn about only through the issue itself (SPK-DISC-004, §4.10). */
+/** Readiness checks registered by the workforce module carry this prefix (required officials). */
+export const WORKFORCE_CHECK_PREFIX = 'workforce.';
+
+const RESTRICTED_SOURCES = new Set(['suspension', 'dispute', 'audit_record', 'incident']);
 
 interface IssueInput {
   code: string;
@@ -72,6 +80,7 @@ export class ReadinessService {
     @Inject(SUSPENSION_CHECK_PORT) private readonly suspensions: SuspensionCheckPort,
     @Inject(FORMS_CHECK_PORT) private readonly forms: FormsCheckPort,
     @Inject(FINANCIAL_CONDITIONS_PORT) private readonly finance: FinancialConditionsPort,
+    @Inject(CHANGE_NOTICE_CHECK_PORT) private readonly notices: ChangeNoticeCheckPort,
   ) {}
 
   async evaluate(principal: Principal, fixtureId: string): Promise<FixtureReadiness> {
@@ -83,23 +92,33 @@ export class ReadinessService {
     const at = detail.scheduledStart ? new Date(detail.scheduledStart) : now;
     const deadline = detail.scheduledStart;
     const system = systemPrincipal(organizationId, 'competition.readiness');
-    const issues: FixtureReadinessIssue[] = [];
-    const checks: FixtureReadiness['checks'] = [];
+    // Issues remember the check that raised them, so each check's verdict is computed from its own
+    // issues whatever order the checks report in.
+    const issues: Array<FixtureReadinessIssue & { check: string }> = [];
+    const checkNames: string[] = [];
+    const restricted = !isStaffLike(principal);
     const add = (check: string, input: IssueInput): void => {
+      if (!checkNames.includes(check)) checkNames.push(check);
       issues.push({
+        check,
         code: input.code,
         severity: input.severity,
         message: input.message,
-        source: input.source,
+        // SPK-DISC-004 / §4.10: discipline, dispute and audit record ids are restricted; customers
+        // see the reason, the responsible role and the action, never the restricted record id.
+        source:
+          restricted && RESTRICTED_SOURCES.has(input.source.type)
+            ? { type: input.source.type, id: null }
+            : input.source,
         responsibleRole: input.responsibleRole,
         requiredAction: input.requiredAction,
         lastEvaluatedAt: evaluatedAt,
         deadline: input.deadline === undefined ? deadline : input.deadline,
       });
-      const outcome = checks.find((c) => c.name === check);
-      if (outcome) outcome.issueCount += 1;
     };
-    const check = (name: string) => checks.push({ name, status: 'ready', issueCount: 0 });
+    const check = (name: string) => {
+      if (!checkNames.includes(name)) checkNames.push(name);
+    };
 
     const season = await loadSeasonRow(this.db, organizationId, detail.seasonId);
     const ruleSet = season
@@ -193,11 +212,27 @@ export class ReadinessService {
     }
 
     // 3. Required officials and other registered checks (workforce, finance, facilities …).
-    check('officials');
+    //    Workforce registers its officials check under a `workforce.` name; a check that fails to
+    //    answer is reported as unknown evidence, never as a pass (SPK-READY-002).
     const registered = this.registry.checks();
+    const hasWorkforce = registered.some((c) => c.name.startsWith(WORKFORCE_CHECK_PREFIX));
+    if (!hasWorkforce) check('officials');
     for (const { name, check: run } of registered) {
-      if (!checks.some((c) => c.name === name)) check(name);
-      const found: ReadinessIssue[] = await run({ organizationId, fixtureId, at });
+      check(name);
+      let found: ReadinessIssue[];
+      try {
+        found = await run({ organizationId, fixtureId, at });
+      } catch {
+        add(name, {
+          code: 'check_unavailable',
+          severity: 'unknown',
+          message: `The ${name} check did not answer; its evidence is unknown.`,
+          source: { type: 'readiness_check', id: name },
+          responsibleRole: 'system_administrator',
+          requiredAction: 'Retry later; investigate the failing check if it persists.',
+        });
+        continue;
+      }
       for (const issue of found) {
         add(name, {
           code: issue.code,
@@ -210,7 +245,7 @@ export class ReadinessService {
         });
       }
     }
-    if (!registered.some((c) => c.name.startsWith('workforce.'))) {
+    if (!hasWorkforce) {
       // Until the workforce module registers its check, officials are unknown, never ok (SPK-STAFF-002).
       add('officials', {
         code: 'officials_unknown',
@@ -361,30 +396,29 @@ export class ReadinessService {
       });
     }
 
-    // 10. Material change notifications: a reschedule or postponement happened; delivery evidence
-    //     belongs to the communications module, so until it reports, the notification is unknown.
+    // 10. Material change notifications: the fixture's own change history (this module's audit
+    //     records) says whether a published game was moved or postponed; delivery evidence
+    //     belongs to the communications module (CHANGE_NOTICE_CHECK_PORT, unknown by default).
     check('notifications');
-    const changes = await this.db
+    const change = await this.db
       .selectFrom('audit_records')
       .select(['id', 'occurred_at'])
       .where('organization_id', '=', organizationId)
       .where('target_type', '=', 'fixture')
       .where('target_id', '=', fixtureId)
       .where(
-        sql<boolean>`details->>'change' in ('rescheduled', 'postponed', 'synced_from_scheduling')`,
+        sql<boolean>`(details->>'change' in ('rescheduled', 'postponed') or (details->>'change' = 'synced_from_scheduling' and details->>'previousStatus' = 'scheduled'))`,
       )
       .orderBy('occurred_at', 'desc')
       .limit(1)
-      .execute();
-    for (const change of changes) {
-      add('notifications', {
-        code: 'change_notification_unknown',
-        severity: 'unknown',
-        message: `The fixture changed materially on ${iso(change.occurred_at)}; delivery of the change notice is not confirmed.`,
-        source: { type: 'audit_record', id: change.id },
-        responsibleRole: 'league_manager',
-        requiredAction: 'Confirm both teams received the change notice.',
+      .executeTakeFirst();
+    if (change) {
+      const findings = await this.notices.changeNotices(organizationId, {
+        ...conditionContext,
+        changedAt: new Date(change.occurred_at),
+        schedulingEventId: detail.schedulingEventId,
       });
+      for (const finding of findings) this.addCondition(add, 'notifications', finding);
     }
 
     // 11. RSVP: informational only (SPK-READY-002 "a missing RSVP alone must not become a block").
@@ -409,8 +443,11 @@ export class ReadinessService {
       status: statusOf(issues),
       evaluatedAt,
       scheduledStart: detail.scheduledStart,
-      checks: summarize(checks, issues),
-      issues,
+      checks: checkNames.map((name) => {
+        const own = issues.filter((i) => i.check === name);
+        return { name, status: statusOf(own), issueCount: own.length };
+      }),
+      issues: issues.map(({ check: _check, ...issue }) => issue),
       sides,
     };
   }
@@ -439,17 +476,4 @@ export function statusOf(issues: Array<{ severity: EligibilitySeverity }>): Read
   if (issues.some((i) => i.severity === 'unknown')) return 'unknown';
   if (issues.some((i) => i.severity === 'warning')) return 'warning';
   return 'ready';
-}
-
-/** Per-check status from the issues recorded under it (issues are appended in check order). */
-function summarize(
-  checks: FixtureReadiness['checks'],
-  issues: FixtureReadinessIssue[],
-): FixtureReadiness['checks'] {
-  let offset = 0;
-  return checks.map((c) => {
-    const own = issues.slice(offset, offset + c.issueCount);
-    offset += c.issueCount;
-    return { name: c.name, issueCount: c.issueCount, status: statusOf(own) };
-  });
 }

@@ -16,6 +16,10 @@ export {
   FAIR_PLAY_POINTS,
   DEFAULT_SEARCH_SETTINGS,
   RESULT_CORRECTION_REVIEW,
+  INCOMPLETE_SEASON,
+  DISCIPLINE_MANAGER_ROLES,
+  UNSCHEDULED_FIXTURE_DEADLINE_DAYS,
+  unscheduledFixtureDeadline,
 } from './competition-matches.policy';
 export {
   ageOn,
@@ -38,8 +42,15 @@ export { StandingsService } from './services/standings.service';
 export { BracketsService, type CorrectionImpact } from './services/brackets.service';
 export { DisciplineService } from './services/discipline.service';
 export { DisputesService } from './services/disputes.service';
-export { FixtureGenerationService } from './services/fixture-generation.service';
-export { ReadinessService, statusOf as readinessStatusOf } from './services/readiness.service';
+export {
+  FixtureGenerationService,
+  assertSpecificationConsistent,
+} from './services/fixture-generation.service';
+export {
+  ReadinessService,
+  WORKFORCE_CHECK_PREFIX,
+  statusOf as readinessStatusOf,
+} from './services/readiness.service';
 export { FixtureObligationsService } from './services/fixture-obligations.service';
 export {
   computeStandings,

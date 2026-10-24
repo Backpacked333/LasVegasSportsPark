@@ -1,12 +1,5 @@
 import type { Generated } from 'kysely';
-import type {
-  GeneratedJson,
-  GeneratedTimestamp,
-  Json,
-  JsonObject,
-  NullableTimestamp,
-  Timestamp,
-} from './core';
+import type { GeneratedJson, GeneratedTimestamp, Json, NullableTimestamp, Timestamp } from './core';
 import type { DateOnly } from './identity';
 
 /**
@@ -55,6 +48,7 @@ export interface StandingsProjectionsTable {
   season_id: string;
   division_id: string | null;
   rule_set_id: string;
+  rule_set_version: number;
   computed_at: Timestamp;
   source_result_ids: Generated<string[]>;
   rows: GeneratedJson<unknown[]>;
@@ -194,6 +188,7 @@ export interface DisciplinaryDecisionsTable {
 export type SuspensionScope = 'all' | 'competitions';
 export type SuspensionStatus = 'proposed' | 'active' | 'served' | 'overturned';
 export type AppealStatusSummary = 'none' | 'pending' | 'granted' | 'denied';
+export type SuspensionSourceKind = 'manual' | 'red_card' | 'yellow_accumulation';
 export interface SuspensionsTable {
   id: string;
   organization_id: string;
@@ -208,6 +203,9 @@ export interface SuspensionsTable {
   matches_served: Generated<number>;
   served_fixture_ids: Generated<string[]>;
   completion_criteria: string;
+  source_kind: Generated<SuspensionSourceKind>;
+  source_fixture_id: string | null;
+  source_result_revision_id: string | null;
   status: Generated<SuspensionStatus>;
   approved_by: Json<Record<string, unknown>> | null;
   approved_at: NullableTimestamp;
@@ -272,8 +270,6 @@ export interface AppealsTable {
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
 }
-
-export type CompetitionMatchesJson = JsonObject;
 
 export interface CompetitionMatchesTables {
   result_revisions: ResultRevisionsTable;
