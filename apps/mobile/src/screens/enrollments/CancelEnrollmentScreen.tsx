@@ -53,6 +53,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
@@ -314,7 +315,7 @@ export function CancelEnrollmentRoute() {
   return (
     <>
       <Stack.Screen options={{ title: 'Cancellation preview' }} />
-      <CancelEnrollmentScreen enrollmentId={id} />
+      {id ? <CancelEnrollmentScreen enrollmentId={id} /> : <NotFoundScreen />}
     </>
   );
 }

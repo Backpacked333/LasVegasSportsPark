@@ -63,6 +63,19 @@ describe('SCR-C-32 EnrollmentsScreen', () => {
 
   beforeEach(() => mockRouter.push.mockClear());
 
+  it('SPK-UX-008: a family member whose name read failed (offline, 5xx) stays in the picker, with the code shown', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /people/{id}': () =>
+          fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+      }),
+    });
+    render(<EnrollmentsScreen />, { wrapper: app.wrapper });
+    const group = await screen.findByLabelText('Show enrollments for');
+    expect(await within(group).findByRole('radio', { name: 'Family member' })).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+  });
+
   it('SPK-REG-003: lists current enrollments and history as separate records with their own states', async () => {
     const app = createTestApp({ routes: routes() });
     render(<EnrollmentsScreen />, { wrapper: app.wrapper });

@@ -73,8 +73,12 @@ function CreditCard({ credit }: { credit: Credit }) {
       <Field label="Can be used for" value={uses} />
       <Field
         label="Expiry"
-        value={credit.expiresAt ? `Expires ${formatDay(credit.expiresAt)}` : 'No expiry date'}
+        value={credit.expiresAt ? `Expires ${formatDay(credit.expiresAt)}` : 'Expiry: not set'}
       />
+      {credit.expiresAt ? null : (
+        // No policy claim: whether and when credits expire is pending (SPK-PAY-009).
+        <Caption>Credit expiry rules are not decided yet (DEC-058, Finance).</Caption>
+      )}
       <Field label="Source" value={CREDIT_SOURCE_LABELS[credit.sourceKind]} />
       {credit.reason ? <Field label="Reason" value={credit.reason} /> : null}
       {credit.redemptions.length > 0 ? (

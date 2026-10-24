@@ -20,6 +20,8 @@ export interface RecordState<T> {
   data: T | undefined;
   error: ApiError | null;
   loading: boolean;
+  /** Reads this one record again. */
+  refetch: () => void;
 }
 
 /** One state per record id. */
@@ -53,6 +55,7 @@ export function useApiRecords<P extends GetPath>(
       data: result?.data?.data,
       error: (result?.error as ApiError | null) ?? null,
       loading: enabled && (result?.isPending ?? true),
+      refetch: () => void result?.refetch(),
     };
   });
   return out;

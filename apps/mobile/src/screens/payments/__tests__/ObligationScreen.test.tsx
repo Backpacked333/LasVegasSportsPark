@@ -176,10 +176,72 @@ describe('SCR-C-34 ObligationScreen', () => {
     ).toBeOnTheScreen();
     expect(screen.queryByLabelText('Payment failed')).toBeNull();
     expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    const reads = () => app.fake.requests.filter((r) => r.route === '/payments/{id}').length;
+    await waitFor(() => expect(reads()).toBeGreaterThan(0)); // the automatic first re-read
+    await settleApps();
+    const before = reads();
+    const count = (route: string) => app.fake.requests.filter((r) => r.route === route).length;
+    const balanceBefore = count('/obligations/{id}');
+    const planBefore = count('/installment-plans/{id}');
+    app.fake.set('GET /payments/{id}', {
+      status: 200,
+      body: paymentAttempt({ status: 'succeeded' }),
+    });
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });
-    expect(app.fake.requests.some((r) => r.route === '/payments/{id}')).toBe(true);
+    expect(reads()).toBe(before + 1);
+    // Settling the attempt re-reads the balance and the installments it changed.
+    await waitFor(() => expect(count('/obligations/{id}')).toBeGreaterThan(balanceBefore));
+    await waitFor(() => expect(count('/installment-plans/{id}')).toBeGreaterThan(planBefore));
+  });
+
+  it.each([
+    [
+      'IDEMPOTENCY_IN_PROGRESS',
+      () =>
+        fakeResponse(
+          409,
+          apiErrorBody('IDEMPOTENCY_IN_PROGRESS', { nextAction: 'retry_later_with_same_key' }),
+        ),
+    ],
+    ['a 502 without the error contract', () => fakeResponse(502, '<html>Bad gateway</html>')],
+  ])(
+    'SPK-PAY-007: %s is an unknown outcome, never "Something went wrong", and paying stays blocked',
+    async (_name, answer) => {
+      renderObligation({ 'POST /obligations/{id}/payments': answer });
+      await pay();
+      expect(await screen.findByTestId('payment-no-answer')).toBeOnTheScreen();
+      expect(screen.queryByText('Something went wrong')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    },
+  );
+
+  it('SPK-PAY-006: a plan authorized by someone else, or by no recorded person, never says "You authorized"', async () => {
+    const plan = installmentPlan({
+      authorization: {
+        authorizedAt: installmentPlan().authorization.authorizedAt,
+        authorizedByPersonId: null,
+      },
+    });
+    renderObligation({ 'GET /installment-plans/{id}': { status: 200, body: plan } });
+    expect(
+      await screen.findByLabelText(
+        `Authorization: Authorized on ${formatInstant(plan.authorization.authorizedAt)}`,
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/You authorized/)).toBeNull();
+  });
+
+  it('SPK-UX-008: a failed order read shows its code and Try again, never a silently missing section', async () => {
+    renderObligation({
+      'GET /orders/{id}': () =>
+        fakeResponse(
+          500,
+          apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+        ),
+    });
+    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
   });
 
   it('SPK-UX-004: "Payment processing" is its own state, distinct from received', async () => {

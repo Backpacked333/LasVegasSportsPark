@@ -103,7 +103,34 @@ describe('SCR-C-35 MakeupRedeemScreen', () => {
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
   });
 
-  it('SPK-AT-020: a redemption the database refused reads "Not available: already redeemed"', async () => {
+  it('SPK-AT-020: losing a simultaneous booking (STALE_REVISION, makeup now exhausted) reads "Not available: already redeemed"', async () => {
+    let exhausted = false;
+    const app = renderRedeem({
+      'GET /makeup-entitlements/{id}': () =>
+        fakeResponse(
+          200,
+          exhausted
+            ? makeup({ status: 'exhausted', redeemedCount: 1, redemptionLimit: 1, revision: 3 })
+            : makeup(),
+        ),
+      'POST /makeup-entitlements/{id}/redeem': () => {
+        exhausted = true; // the other guardian's booking committed first
+        return fakeResponse(
+          409,
+          apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' }),
+        );
+      },
+    });
+    await chooseAndBook();
+    expect(await screen.findByTestId('redeem-refused')).toHaveProp(
+      'accessibilityLabel',
+      'Not available: already redeemed',
+    );
+    expect(screen.queryByText(/This changed since you opened it/)).toBeNull();
+    expect(redeems(app)).toHaveLength(1);
+  });
+
+  it('a redemption the database refused (RESOURCE_CONFLICT) reads "Not available: already redeemed"', async () => {
     renderRedeem({
       'POST /makeup-entitlements/{id}/redeem': () =>
         fakeResponse(
@@ -153,14 +180,36 @@ describe('SCR-C-35 MakeupRedeemScreen', () => {
     ).toBeOnTheScreen();
   });
 
-  it('stale version: the makeup changed since it was opened, so Reload shows what is left', async () => {
-    renderRedeem({
-      'POST /makeup-entitlements/{id}/redeem': () =>
-        fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' })),
+  it('stale version: a makeup that changed but still has a booking left is re-read, the choice kept, and booking again is a new attempt', async () => {
+    let revision = 2;
+    let posts = 0;
+    const app = renderRedeem({
+      'GET /makeup-entitlements/{id}': () => fakeResponse(200, makeup({ revision })),
+      'POST /makeup-entitlements/{id}/redeem': () => {
+        posts += 1;
+        if (posts === 1) {
+          revision = 3;
+          return fakeResponse(
+            409,
+            apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' }),
+          );
+        }
+        return fakeResponse(201, sessionBooking());
+      },
     });
     await chooseAndBook();
-    expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Reload' })).toBeOnTheScreen();
+    expect(
+      await screen.findByText(
+        'This makeup changed since you opened it. Check your choice and book again.',
+      ),
+    ).toBeOnTheScreen();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Book this session' }));
+    });
+    const sent = redeems(app);
+    expect(sent).toHaveLength(2);
+    expect((sent[1]?.body as { expectedRevision: number }).expectedRevision).toBe(3);
+    expect(sent[1]?.headers['idempotency-key']).not.toBe(sent[0]?.headers['idempotency-key']);
   });
 
   it('a makeup with nothing left reads "Nothing left to book" and offers no booking', async () => {

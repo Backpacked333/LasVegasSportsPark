@@ -60,6 +60,26 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
     expect(screen.queryByLabelText('Registration pending')).toBeNull();
   });
 
+  it('SPK-PLACE-002: a confirmed enrollment whose placement cannot be read is never plain "Confirmed"', async () => {
+    renderDetail(enrollment({ placementRequestId: '0192f1a0-0000-7000-8000-00000000fe01' }), {
+      'GET /placement-requests/{id}': () =>
+        fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+    });
+    expect(
+      await screen.findByLabelText('Confirmed. Placement status not available yet.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Confirmed')).toBeNull();
+  });
+
+  it('SPK-UX-008: a failed order read shows its code, not "not available to this account"', async () => {
+    renderDetail(enrollment({ orderRef: IDS.order }), {
+      'GET /orders/{id}': () =>
+        fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' })),
+    });
+    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(screen.queryByText(/not available to this account/)).toBeNull();
+  });
+
   it('§4.11: a pending enrollment whose checkout needs recovery says the payment was received', async () => {
     renderDetail(enrollment({ status: 'pending', lastOperationId: IDS.operation }), {
       'GET /operations/{id}': {

@@ -30,16 +30,18 @@
  * recovery required (unknown outcome: "Do not pay again").
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
 import { DevPaymentMethodPicker } from '../../features/money/dev';
 import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
-import { useNameOf } from '../../features/money/people';
+import { useMe, useNameOf } from '../../features/money/people';
 import { param } from '../../features/money/routes';
+import { SecondaryRead } from '../../features/money/SecondaryRead';
 import {
   installmentPlanStatus,
   installmentStatus,
@@ -59,6 +61,7 @@ import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
 
@@ -137,17 +140,39 @@ function OrderSection({ order }: { order: Order }) {
   );
 }
 
+/**
+ * Who authorized the recurring charges, as recorded (SPK-PAY-006): "You" only when it was the
+ * signed-in person; another known person by name; otherwise just the date (a staff-assisted
+ * registration, or an unrecorded authorizer).
+ */
+export function authorizationText(
+  plan: Pick<InstallmentPlan, 'authorization'>,
+  selfId: string | null,
+  nameOf: (personId: string) => string,
+): string {
+  const at = formatInstant(plan.authorization.authorizedAt);
+  const by = plan.authorization.authorizedByPersonId;
+  if (by && selfId && by === selfId) return `You authorized these installments on ${at}`;
+  if (by) {
+    const name = nameOf(by);
+    if (name !== 'Participant' && name !== 'Loading name…') {
+      return `${name} authorized these installments on ${at}`;
+    }
+  }
+  return `Authorized on ${at}`;
+}
+
 function InstallmentsSection({ plan }: { plan: InstallmentPlan }) {
+  const me = useMe();
+  const selfId = me.data?.person?.id ?? null;
+  const nameOf = useNameOf();
   const failed = plan.installments.some((i) => i.status === 'failed');
   return (
     <Section title="Installments" testID="installments">
       <StatusBadge {...installmentPlanStatus(plan)} />
       <Field label="Plan total" value={formatMoney(plan.totalMinor, plan.currency)} />
       <Field label="Still to pay" value={formatMoney(plan.outstandingMinor, plan.currency)} />
-      <Field
-        label="Authorization"
-        value={`You authorized these installments on ${formatInstant(plan.authorization.authorizedAt)}`}
-      />
+      <Field label="Authorization" value={authorizationText(plan, selfId, nameOf)} />
       <Field
         label="Reminders"
         value={`Sent ${plan.noticePolicy.daysBefore} ${plan.noticePolicy.daysBefore === 1 ? 'day' : 'days'} before each due date`}
@@ -270,6 +295,25 @@ function PaymentResult({
   );
 }
 
+/** Everything a payment on an obligation can change: balances, installments, orders, credits. */
+const PAYMENT_EFFECT_KEYS: readonly (readonly unknown[])[] = [
+  ['api', '/obligations'],
+  ['api', '/obligations/{id}'],
+  ['api', '/installment-plans/{id}'],
+  ['api', '/orders/{id}'],
+  ['api', '/credits'],
+];
+
+/** Answers after which the payment may still go through (SPK-PAY-007, §4.9). */
+export function paymentMayHaveTakenEffect(error: ApiError): boolean {
+  return (
+    error.isOffline ||
+    error.code === 'IDEMPOTENCY_IN_PROGRESS' ||
+    error.code === 'INTERNAL_ERROR' ||
+    (error.status ?? 0) >= 500
+  );
+}
+
 function PaySection({
   obligation,
   onOutcome,
@@ -283,10 +327,7 @@ function PaySection({
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const pay = useApiCommand('post', '/obligations/{id}/payments', {
-    invalidate: [
-      ['api', '/obligations'],
-      ['api', '/obligations/{id}'],
-    ],
+    invalidate: PAYMENT_EFFECT_KEYS,
   });
   const [token, setToken] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
@@ -304,8 +345,10 @@ function PaySection({
     }
   };
 
-  // No answer (timeout, lost connection): this payment's outcome is unknown; ask again, same key.
-  const unknown = failure !== null && failure.isOffline;
+  // No definite answer: no response, still running under this key, or a server failure. The
+  // payment may still take effect, so it is never shown as a failure (SPK-PAY-007); "Check again"
+  // re-sends the same request under the same key.
+  const unknown = failure !== null && paymentMayHaveTakenEffect(failure);
   // The API refused because a payment for this balance is unresolved (SPK-PAY-007).
   const inProgressElsewhere = failure?.code === 'PAYMENT_OUTCOME_UNKNOWN';
   const disabled = !token || offline || blocked || unknown || inProgressElsewhere;
@@ -393,6 +436,18 @@ function ObligationDetail({ obligation }: { obligation: Obligation }) {
   });
   const attempt: PaymentAttempt | null = latest.data ?? outcome?.payment ?? null;
   const blocked = attempt !== null && paymentIsUnresolved(attempt.status);
+  const queryClient = useQueryClient();
+  const latestStatus = latest.data?.status;
+  // A re-read that settles the attempt (processing or unknown to succeeded or failed) changes the
+  // balance, the installments, the order and credits: read them again.
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    if (!latestStatus || paymentIsUnresolved(latestStatus)) return;
+    setRefreshing(true);
+    void Promise.all(
+      PAYMENT_EFFECT_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+    ).finally(() => setRefreshing(false));
+  }, [latestStatus, queryClient]);
   return (
     <View>
       <Totals obligation={obligation} />
@@ -404,11 +459,19 @@ function ObligationDetail({ obligation }: { obligation: Obligation }) {
           checking={latest.fetchStatus === 'fetching'}
         />
       ) : null}
-      {obligation.status === 'open' && obligation.totals.remainingMinor > 0 ? (
+      {obligation.status === 'open' && obligation.totals.remainingMinor > 0 && !refreshing ? (
         <PaySection obligation={obligation} onOutcome={setOutcome} blocked={blocked} />
       ) : null}
-      {order.data ? <OrderSection order={order.data} /> : null}
-      {plan.data ? <InstallmentsSection plan={plan.data} /> : null}
+      {obligation.orderId !== null ? (
+        <SecondaryRead query={order} label="the order" title="Order">
+          {(data) => <OrderSection order={data} />}
+        </SecondaryRead>
+      ) : null}
+      {planId !== null ? (
+        <SecondaryRead query={plan} label="the installments" title="Installments">
+          {(data) => <InstallmentsSection plan={data} />}
+        </SecondaryRead>
+      ) : null}
     </View>
   );
 }
@@ -440,7 +503,7 @@ export function ObligationRoute() {
   return (
     <>
       <Stack.Screen options={{ title: 'Balance' }} />
-      <ObligationScreen obligationId={id} />
+      {id ? <ObligationScreen obligationId={id} /> : <NotFoundScreen />}
     </>
   );
 }

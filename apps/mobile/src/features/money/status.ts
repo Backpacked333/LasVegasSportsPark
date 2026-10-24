@@ -60,6 +60,11 @@ export interface EnrollmentContext {
   transferTargetName?: string | null;
   /** The placement request of a confirmed enrollment, when it has one (SPK-PLACE-002). */
   placement?: PlacementRequest | null;
+  /**
+   * The enrollment has a placement request whose record is not known yet (loading, offline, a
+   * failed read): it is never shown as plain "Confirmed" (SPK-UX-004, SPK-PLACE-002).
+   */
+  placementUnknown?: boolean;
   /** Due date of the next scheduled installment of the enrollment's order (SPK-PAY-006). */
   nextInstallmentDueAt?: string | null;
   /** The checkout behind a pending enrollment is `recovery_required` (§4.11). */
@@ -77,6 +82,9 @@ export function enrollmentStatus(enrollment: Enrollment, context: EnrollmentCont
         ? { tone: 'warning', label: 'Payment received. We are completing your registration.' }
         : { tone: 'pending', label: 'Registration pending' };
     case 'confirmed': {
+      if (context.placementUnknown) {
+        return { tone: 'info', label: 'Confirmed. Placement status not available yet.' };
+      }
       const placement = context.placement?.status;
       if (placement === 'unassigned' || placement === 'proposed') {
         return {

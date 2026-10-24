@@ -46,8 +46,9 @@ import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
@@ -179,11 +180,11 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
     request: { path: { id: enrollment.offeringId } },
   });
   const programId = current.data?.programId;
-  const settled = current.data !== undefined || current.error !== null;
+  // Targets are the published offerings of the same program only: never listed without it.
   const offerings = useApiQuery({
     path: '/offerings',
-    request: { query: programId ? { programId, limit: 50 } : { limit: 50 } },
-    enabled: settled && enrollment.status === 'confirmed',
+    request: { query: { programId: programId ?? '', limit: 50 } },
+    enabled: programId !== undefined && enrollment.status === 'confirmed',
   });
   const previewCmd = useApiCommand('post', '/enrollments/{id}/transfer');
   const commitCmd = useApiCommand('post', '/enrollments/{id}/transfer', {
@@ -258,14 +259,18 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
     if (!targetId || !preview) return;
     const needsAck = preview.financialConsequence.kind !== 'none';
     if (needsAck && !acknowledged) return;
-    // Stale version: ask for the preview again; a changed consequence is never committed unseen.
+    // The consequence the customer reviewed: the acknowledged one, or "no money changes".
+    const reviewed = acknowledged ?? preview.financialConsequence;
+    // Stale version: ask for the preview again; a changed consequence is never committed unseen
+    // (SPK-REG-010, SPK-PAY-008), including "no money changes" that became a charge.
     const fresh = await runPreview(targetId);
     if (!fresh) return;
-    if (needsAck && acknowledged && !sameConsequence(fresh.financialConsequence, acknowledged)) {
+    if (!sameConsequence(fresh.financialConsequence, reviewed)) {
       setAcknowledged(null);
       setChanged(true);
       return;
     }
+    if (fresh.financialConsequence.kind !== 'none' && !acknowledged) return;
     if (transferBlockers(fresh).length > 0) return;
     await commit(targetId);
   };
@@ -297,32 +302,44 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
       </Section>
 
       <Section title="Move to">
-        <QueryBoundary
-          query={offerings}
-          label="activities to move to"
-          isEmpty={(page) => page.items.every((o) => o.id === enrollment.offeringId)}
-          empty={{
-            title: 'Nothing to move to',
-            description:
-              'There is no other published activity in this program right now. The front desk can help with other options.',
-          }}
-          unavailableOffline={['previewing a transfer', 'transferring']}
-        >
-          {() => (
-            <View accessibilityRole="radiogroup" accessibilityLabel="Activity to move to">
-              {choices.map((o) => (
-                <ChoiceRow
-                  key={o.id}
-                  mode="radio"
-                  label={o.name}
-                  detail={formatDateRange(o.startsOn, o.endsOn)}
-                  checked={targetId === o.id}
-                  onPress={() => choose(o.id)}
-                />
-              ))}
-            </View>
-          )}
-        </QueryBoundary>
+        {current.data === undefined && current.error ? (
+          // Without the current activity's program there is no list to choose from.
+          <QueryErrorView
+            error={current.error}
+            onRetry={() => void current.refetch()}
+            unavailable={{
+              title: 'Transfer not available here',
+              description: 'Transfers for this activity are handled by the front desk.',
+            }}
+          />
+        ) : (
+          <QueryBoundary
+            query={offerings}
+            label="activities to move to"
+            isEmpty={(page) => page.items.every((o) => o.id === enrollment.offeringId)}
+            empty={{
+              title: 'Nothing to move to',
+              description:
+                'There is no other published activity in this program right now. The front desk can help with other options.',
+            }}
+            unavailableOffline={['previewing a transfer', 'transferring']}
+          >
+            {() => (
+              <View accessibilityRole="radiogroup" accessibilityLabel="Activity to move to">
+                {choices.map((o) => (
+                  <ChoiceRow
+                    key={o.id}
+                    mode="radio"
+                    label={o.name}
+                    detail={formatDateRange(o.startsOn, o.endsOn)}
+                    checked={targetId === o.id}
+                    onPress={() => choose(o.id)}
+                  />
+                ))}
+              </View>
+            )}
+          </QueryBoundary>
+        )}
         <ButtonRow>
           <Button
             label="Preview transfer"
@@ -434,7 +451,7 @@ export function TransferEnrollmentRoute() {
   return (
     <>
       <Stack.Screen options={{ title: 'Transfer preview' }} />
-      <TransferEnrollmentScreen enrollmentId={id} />
+      {id ? <TransferEnrollmentScreen enrollmentId={id} /> : <NotFoundScreen />}
     </>
   );
 }

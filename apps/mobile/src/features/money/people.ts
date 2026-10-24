@@ -7,7 +7,7 @@
  * Child data is minimized (§4.14): only the given name is shown, nothing is logged, and person ids
  * never appear in a route (the selected person is screen state).
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp } from '../../providers/AppProviders';
 import { useApiRecords } from './records';
@@ -47,13 +47,27 @@ export function useAccountPeople() {
     people.push({ personId: person.id, displayName: 'You', self: true, permissions: null });
   }
   let namesLoading = false;
+  /** A name read that failed for a reason other than "not available" (offline, 5xx). */
+  let namesError: ApiError | null = null;
   for (const authority of others) {
     const record = records[authority.subjectPersonId];
     if (!record || record.loading) {
       namesLoading = true;
       continue;
     }
-    if (!record.data) continue;
+    if (!record.data) {
+      // Only a protected NOT_FOUND or a permission restriction leaves the person out; any other
+      // failure keeps them, with a neutral name and the error shown above the picker (SPK-UX-008).
+      if (!record.error || presentationForError(record.error) === 'unavailable') continue;
+      namesError ??= record.error;
+      people.push({
+        personId: authority.subjectPersonId,
+        displayName: 'Family member',
+        self: false,
+        permissions: authority.permissions,
+      });
+      continue;
+    }
     people.push({
       personId: authority.subjectPersonId,
       displayName: record.data.givenName,
@@ -61,7 +75,10 @@ export function useAccountPeople() {
       permissions: authority.permissions,
     });
   }
-  return { me, people, namesLoading };
+  const refetchNames = () => {
+    for (const authority of others) records[authority.subjectPersonId]?.refetch();
+  };
+  return { me, people, namesLoading, namesError, refetchNames };
 }
 
 /** A participant's display name for a record ("You", a given name, or a neutral word). */

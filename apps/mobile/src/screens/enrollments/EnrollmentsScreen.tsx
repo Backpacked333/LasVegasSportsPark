@@ -84,6 +84,9 @@ function EnrollmentRows({
           placement: enrollment.placementRequestId
             ? (placements[enrollment.placementRequestId]?.data ?? null)
             : null,
+          placementUnknown:
+            enrollment.placementRequestId !== null &&
+            placements[enrollment.placementRequestId]?.data === undefined,
         });
         const dates = offering?.data
           ? formatDateRange(offering.data.startsOn, offering.data.endsOn)

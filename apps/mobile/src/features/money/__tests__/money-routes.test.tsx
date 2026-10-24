@@ -76,10 +76,16 @@ describe('SCR-C-32 to SCR-C-38 routes', () => {
     expect(await screen.findByLabelText('Left to pay: $40.00')).toBeOnTheScreen();
   });
 
-  it('§4.10: a balance id the API does not know reads "Not available", not "Link not available"', async () => {
-    renderAt('/payments/somewhere-unknown');
+  it('§4.10: a well-formed balance id the API does not know reads "Not available", not "Link not available"', async () => {
+    renderAt('/payments/0192f1a0-0000-7000-8000-00000000dead');
     expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Left to pay: $40.00')).toBeNull();
+  });
+
+  it('SCR-C-39: a malformed id is "Link not available" and sends no request', async () => {
+    const { app } = renderAt('/payments/somewhere-unknown');
+    expect(await screen.findByLabelText('Link not available')).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.route === '/obligations/{id}')).toHaveLength(0);
   });
 
   it('opens the makeup booking', async () => {

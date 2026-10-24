@@ -212,6 +212,41 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
     expect(transfers(app).some((r) => (r.body as { commit: boolean }).commit)).toBe(false);
   });
 
+  it('SPK-REG-010: "No money changes" that became a charge on the re-preview is never committed unseen', async () => {
+    let current = transferPreview({ financialConsequence: consequence({ kind: 'none', amountMinor: 0 }) });
+    const app = renderTransfer({
+      'POST /enrollments/{id}/transfer': transferHandler(() => current),
+    });
+    await chooseAndPreview();
+    current = transferPreview({
+      financialConsequence: consequence({
+        kind: 'charge',
+        amountMinor: 2500,
+        explanation: 'Price changed.',
+      }),
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Transfer' }));
+    });
+    expect(
+      await screen.findByLabelText(
+        'The money consequence changed since you reviewed it. Review it again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(transfers(app).some((r) => (r.body as { commit: boolean }).commit)).toBe(false);
+  });
+
+  it('lists no targets when the current activity cannot be read (never every offering)', async () => {
+    const app = renderTransfer({
+      'GET /offerings/{id}': () =>
+        fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' })),
+    });
+    expect(
+      await screen.findByText('Transfers for this activity are handled by the front desk.'),
+    ).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.route === '/offerings')).toHaveLength(0);
+  });
+
   it('permission restriction: a transfer that needs staff approval cannot be committed in the app', async () => {
     renderTransfer({
       'POST /enrollments/{id}/transfer': transferHandler(() =>

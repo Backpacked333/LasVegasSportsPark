@@ -42,6 +42,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
@@ -112,6 +113,8 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const [booking, setBooking] = useState<SessionBooking | null>(null);
+  /** The booking met a newer version of the makeup (another guardian booked at the same time). */
+  const [raced, setRaced] = useState(false);
   const redeem = useApiCommand('post', '/makeup-entitlements/{id}/redeem', {
     invalidate: [
       ['api', '/makeup-entitlements'],
@@ -146,10 +149,21 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
     expectedRevision: number;
   }) => {
     setFailure(null);
+    setRaced(false);
     try {
       setBooking((await redeem.submit({ path: { id: makeup.id }, body })) as SessionBooking);
     } catch (error) {
-      setFailure(error as ApiError);
+      const apiError = error as ApiError;
+      if (apiError.code === 'STALE_REVISION') {
+        // SPK-AT-020: every redemption bumps the makeup's revision, so the loser of a race gets
+        // STALE_REVISION. Read it again: exhausted reads "already redeemed"; otherwise the choice
+        // is kept and booking again is a new attempt with the fresh revision.
+        setRaced(true);
+        redeem.reset();
+        reload();
+        return;
+      }
+      setFailure(apiError);
     }
   };
   const book = () => {
@@ -171,11 +185,24 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
         <StatusBadge {...makeupStatus(makeup, now)} />
       </Section>
       {!makeupRedeemable(makeup, now) ? (
-        <StateView
-          variant="unavailable"
-          title="Nothing left to book"
-          description="This makeup can no longer be booked."
-        />
+        raced ? (
+          <Section title="Book">
+            <StatusBadge
+              tone="neutral"
+              label="Not available: already redeemed"
+              testID="redeem-refused"
+            />
+            <Caption>
+              Someone else on your account booked with this makeup at the same time.
+            </Caption>
+          </Section>
+        ) : (
+          <StateView
+            variant="unavailable"
+            title="Nothing left to book"
+            description="This makeup can no longer be booked."
+          />
+        )
       ) : (
         <>
           <Section title="Choose an activity">
@@ -250,6 +277,11 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                 accessibilityHint="Uses one makeup to book the chosen session"
               />
             </ButtonRow>
+            {raced && !failure ? (
+              <Caption>
+                This makeup changed since you opened it. Check your choice and book again.
+              </Caption>
+            ) : null}
             {refusal ? (
               <StatusBadge tone="neutral" label={refusal} testID="redeem-refused" />
             ) : ineligible ? (
@@ -306,7 +338,7 @@ export function MakeupRedeemRoute() {
   return (
     <>
       <Stack.Screen options={{ title: 'Book a makeup session' }} />
-      <MakeupRedeemScreen makeupId={id} />
+      {id ? <MakeupRedeemScreen makeupId={id} /> : <NotFoundScreen />}
     </>
   );
 }

@@ -28,7 +28,14 @@ export const ACCOUNT_SECTION_ROUTES = {
   'SCR-C-38': moneyRoutes.support(),
 } as const;
 
-/** First value of a route parameter (Expo Router gives a string or an array). */
-export function param(value: string | string[] | undefined): string {
-  return (Array.isArray(value) ? value[0] : value) ?? '';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The record id of a route (Expo Router gives a string or an array), or `null` unless it is a
+ * UUID: a malformed link is "Link not available" without any request (SCR-C-39); the API would
+ * answer VALIDATION_FAILED for it.
+ */
+export function param(value: string | string[] | undefined): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === 'string' && UUID.test(first) ? first : null;
 }

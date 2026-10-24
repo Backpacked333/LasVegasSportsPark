@@ -25,6 +25,7 @@ import { formatDateRange, formatInstant, formatMoney } from '../../features/mone
 import { useNameOf } from '../../features/money/people';
 import { useApiRecords } from '../../features/money/records';
 import { moneyRoutes, param } from '../../features/money/routes';
+import { SecondaryRead, type SecondaryQuery } from '../../features/money/SecondaryRead';
 import {
   consequenceSummary,
   enrollmentStatus,
@@ -39,6 +40,7 @@ import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { INTENT_LABELS, offeringLabel } from './EnrollmentsScreen';
 
@@ -89,23 +91,33 @@ function useEnrollmentContext(enrollment: Enrollment) {
 }
 
 function PaymentSummary({
-  order,
+  order: query,
   enrollment,
 }: {
-  order: Order | undefined;
+  order: SecondaryQuery<Order>;
   enrollment: Enrollment;
 }) {
-  const router = useRouter();
   if (!enrollment.orderRef) return null;
-  if (!order) {
-    return (
-      <Section title="Payment">
-        <Caption>
-          Payment details are not available to this account. The payer sees them under Payments.
-        </Caption>
-      </Section>
-    );
-  }
+  // "Not available to this account" only for a protected NOT_FOUND or a permission restriction;
+  // loading, offline and other failures have their own states (SPK-UX-008).
+  return (
+    <SecondaryRead
+      query={query}
+      label="the payment details"
+      title="Payment"
+      unavailable={{
+        title: 'Payment details not available',
+        description:
+          'Payment details are not available to this account. The payer sees them under Payments.',
+      }}
+    >
+      {(order) => <PaymentDetails order={order} />}
+    </SecondaryRead>
+  );
+}
+
+function PaymentDetails({ order }: { order: Order }) {
+  const router = useRouter();
   return (
     <Section title="Payment">
       <Field label="Order total" value={formatMoney(order.totalMinor, order.currency)} />
@@ -147,6 +159,7 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
       ? (ctx.linkedOfferings[target.offeringId]?.data?.name ?? null)
       : null,
     placement: ctx.placement.data ?? null,
+    placementUnknown: enrollment.placementRequestId !== null && ctx.placement.data === undefined,
     nextInstallmentDueAt: nextInstallment?.dueAt ?? null,
     recoveryRequired,
   });
@@ -195,7 +208,7 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
           </Caption>
         </Section>
       ) : (
-        <PaymentSummary order={ctx.order.data} enrollment={enrollment} />
+        <PaymentSummary order={ctx.order} enrollment={enrollment} />
       )}
 
       {enrollment.status === 'canceled' ? (
@@ -299,7 +312,7 @@ export function EnrollmentDetailRoute() {
   return (
     <>
       <Stack.Screen options={{ title: 'Enrollment' }} />
-      <EnrollmentDetailScreen enrollmentId={id} />
+      {id ? <EnrollmentDetailScreen enrollmentId={id} /> : <NotFoundScreen />}
     </>
   );
 }

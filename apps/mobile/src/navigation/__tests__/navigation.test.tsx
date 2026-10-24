@@ -74,4 +74,9 @@ describe('primary navigation (SPK-UX-002)', () => {
     renderApp('/no-such-screen/somewhere-unknown');
     expect(await screen.findByLabelText('Link not available')).toBeOnTheScreen();
   });
+
+  it('a known screen with a malformed id is "Link not available" too (SCR-C-39)', async () => {
+    renderApp('/payments/somewhere-unknown');
+    expect(await screen.findByLabelText('Link not available')).toBeOnTheScreen();
+  });
 });

@@ -8,6 +8,7 @@
 import { presentationForError } from '@sportspark/api-client';
 import { useState, type ReactNode } from 'react';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
+import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { useAccountPeople, type AccountPerson } from './people';
 import { Caption, PersonPicker, Section } from './ui';
@@ -20,7 +21,7 @@ export function PeopleGate({
   pickerLabel: string;
   children: (person: AccountPerson) => ReactNode;
 }) {
-  const { me, people, namesLoading } = useAccountPeople();
+  const { me, people, namesLoading, namesError, refetchNames } = useAccountPeople();
   const { reachable } = useConnectivity();
   const now = useNow();
   const [selected, setSelected] = useState<string | null>(null);
@@ -69,6 +70,11 @@ export function PeopleGate({
       {namesLoading ? (
         <Section title="Family members">
           <Caption>Loading the other people on your account…</Caption>
+        </Section>
+      ) : null}
+      {namesError ? (
+        <Section title="Family members">
+          <QueryErrorView error={namesError} onRetry={refetchNames} />
         </Section>
       ) : null}
       {children(person)}
