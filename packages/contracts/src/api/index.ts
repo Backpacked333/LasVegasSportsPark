@@ -12,4 +12,5 @@ export * from './identity';
 export * from './migration';
 export * from './operations';
 export * from './scheduling';
+export * from './support';
 export * from './workforce';
