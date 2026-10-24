@@ -167,11 +167,13 @@ operation `failed` with the reason (§4.9, §4.12).
 - `ELIGIBILITY_PORT` → `evaluatePlayer(organizationId, teamEntryId, personId, at, options)`:
   explainable reasons (code, severity blocking/warning/info/unknown, source record, responsible
   role, required action — SPK-READY-003). Unknown evidence is never a pass (SPK-READY-002).
-- `SUSPENSION_CHECK_PORT` (interface + `SUSPENSION_CHECK_IMPL` token): discipline (part 2)
-  registers the implementation; until then no suspensions exist. Resolved lazily through the
-  kernel's `lazyPort`.
-- `READINESS_CHECK_REGISTRY` → `registerCheck(name, fn)` / `checks()`: workforce, finance and
-  facilities register fixture readiness checks; `ReadinessService` runs them on every read. A
+- `SUSPENSION_CHECK_PORT` (interface + `SUSPENSION_CHECK_IMPL` token): answered by this module's
+  own `DisciplineService` (part 2); an implementation registered elsewhere under
+  `SUSPENSION_CHECK_IMPL` takes precedence (none is registered today). Resolved by the small
+  resolver in `competition.module.ts`, not through `lazyPort`, so the normal case logs no warning.
+- `READINESS_CHECK_REGISTRY` → `registerCheck(name, fn)` / `checks()`: other modules register
+  fixture readiness checks (today only workforce, with `workforce.required_officials`; finance and
+  facilities register none); `ReadinessService` runs them on every read. A
   check named `workforce.*` replaces the "officials unknown" verdict; a check that throws is
   reported as `unknown` evidence, never as a pass.
 - Part 2 consumer ports (`competition-matches.ports.ts`), resolved lazily with deterministic
@@ -322,9 +324,12 @@ identifiers only.
   fixture machine's outcomes are terminal); the result revision is authoritative. A `canceled` or
   `postponed` classification records the fact; cancelling or postponing the game itself remains a
   fixture command. Results are not refused before kickoff.
-- Officials, required forms, financial conditions and change-notice delivery come from ports whose
-  owners (workforce, catalog/enrollment, finance, communications) have not registered yet: results
-  are submitted by league administration only, and readiness reports those checks as `unknown`.
+- Required forms, financial conditions and change-notice delivery come from ports whose owners
+  (catalog/enrollment, finance, communications) have not registered an implementation
+  (`FORMS_CHECK_IMPL`, `FINANCIAL_CONDITIONS_IMPL`, `CHANGE_NOTICE_CHECK_IMPL`), so readiness
+  reports those checks as `unknown`. Officials are covered: workforce registers
+  `ASSIGNMENT_CHECK_IMPL` and the `workforce.required_officials` readiness check, so an accepted
+  official can submit results.
 - A rule-set suspension proposal is not withdrawn automatically when a correction removes the card;
   the league manager overturns it. Disputes are withdrawn by the reviewer only (no submitter
   withdrawal command); a decided consequence is not executed automatically.

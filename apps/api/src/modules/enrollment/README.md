@@ -210,7 +210,9 @@ are at most 120 days.
   (invariant 7 for packages) belongs to finance/entry.
 - Pickup organizer assignment (workforce) and attendance (entry) are other modules' records.
 - The money side of a non-`none` transfer or cancellation consequence is finance's (recorded here
-  as a fact); until finance registers `FINANCE_POLICY_IMPL` every consequence is `none`.
+  as a fact). Finance registers `FINANCE_POLICY_IMPL` (`FinancePolicyAdapter`), which computes the
+  consequence from the approved cancellation policy; nothing executes the refund, credit or charge
+  automatically yet (finance README, "Known gaps").
 - A session booking whose hold expired is expired by the timer even while a checkout is running
   (baskets keep their pending enrollments for finance instead); a late booking payment is
   compensated by finance.

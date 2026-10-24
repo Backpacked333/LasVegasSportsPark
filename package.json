@@ -19,6 +19,7 @@
     "format:check": "prettier --check .",
     "db:migrate": "pnpm --filter @sportspark/db migrate",
     "openapi": "pnpm --filter @sportspark/api openapi",
+    "permission-matrix": "pnpm --filter @sportspark/api permission-matrix",
     "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
