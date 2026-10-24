@@ -533,6 +533,31 @@ describe('catalog schema invariants (migrations 0200, 0201)', () => {
     ).rejects.toSatisfy(isCheckViolation);
   });
 
+  it('SPK-CAT-001 / SPK-CAT-004: a published offering keeps a description, a format and a location (0203)', async () => {
+    const offering = await createOfferingFixture(t, {
+      responsibleManagerPersonId: manager,
+      publicationState: 'published',
+    });
+    const set = (values: Record<string, unknown>) =>
+      db
+        .updateTable('offerings')
+        .set(values as never)
+        .where('id', '=', offering.offeringId)
+        .execute();
+    await expect(set({ description: null })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ description: '   ' })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ format: null })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ location: json({}) })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ location: json({ label: ' ', resourceIds: [] }) })).rejects.toSatisfy(
+      isCheckViolation,
+    );
+    await expect(set({ location: json({ resourceIds: [newId()] }) })).resolves.toBeDefined();
+    // a draft may still be incomplete
+    await expect(
+      set({ publication_state: 'draft', description: null, format: null, location: json({}) }),
+    ).resolves.toBeDefined();
+  });
+
   it("§4.3: an offering cannot reference another organization's program, policy or manager", async () => {
     const foreignProgram = await createProgramFixture(t, {
       organizationId: otherOrg.organizationId,

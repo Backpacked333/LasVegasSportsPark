@@ -163,6 +163,23 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
           .executeTakeFirstOrThrow()
       ).publication_state,
     ).toBe('draft');
+    // SPK-CAT-001: the description, the format (own or the program's) and the location are required
+    const formatless = await createProgramFixture(t, { format: null });
+    const undescribed = await t.http
+      .post('/v1/offerings')
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({ ...draftBody({ programId: formatless, location: {} }), description: undefined });
+    expect(undescribed.status).toBe(201);
+    const incomplete = await t.http
+      .post(`/v1/offerings/${undescribed.body.id as string}/publish`)
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({});
+    expect(incomplete.status).toBe(400);
+    expect(incomplete.body.details.problems.map((p: { code: string }) => p.code)).toEqual(
+      expect.arrayContaining(['description_missing', 'format_missing', 'location_missing']),
+    );
 
     // configure it, but with a draft eligibility policy and a form policy used as cancellation policy
     const draftEligibility = await createPolicyVersionFixture(t, {

@@ -4,8 +4,10 @@ import {
   encodeCursor,
   errors,
   newId,
+  PUBLIC_PUBLICATION_STATES,
   z,
   type CreateDiscountInput,
+  type DiscountEvaluationLine,
   type DiscountDefinition,
   type DiscountEvaluation,
   type EvaluateDiscountsInput,
@@ -352,11 +354,78 @@ export class DiscountsService {
       subjectPersonIds:
         principal.kind === 'customer' && principal.personId ? [principal.personId] : undefined,
     });
+    // SPK-PAY-001 "never accept a client-submitted price as authoritative": the preview prices each
+    // line from the offering and its price rule, as a quote would; the client's amount, kind and
+    // program are ignored. Only staff preview another instant (past or upcoming promotions).
+    const staff =
+      principal.kind === 'system' ||
+      (principal.kind === 'staff' &&
+        CatalogActions.evaluateDiscounts.staffRoles.some((r) => principal.staffRoles.includes(r)));
+    if (body.at && !staff) {
+      throw errors.accessDenied('Only staff may evaluate discounts at another instant.', {
+        field: 'at',
+      });
+    }
+    const at = body.at ? new Date(body.at) : this.clock.now();
     return this.evaluateForOrganization(organizationId, {
       currency: body.currency,
-      at: body.at ? new Date(body.at) : this.clock.now(),
-      lines: body.lines,
+      at,
+      lines: await this.serverPricedLines(organizationId, body, at, staff),
       codes: body.codes,
+    });
+  }
+
+  /** Lines priced by the server: offering kind and program, base price from the effective rule. */
+  private async serverPricedLines(
+    organizationId: string,
+    body: EvaluateDiscountsInput,
+    at: Date,
+    staff: boolean,
+  ): Promise<DiscountEvaluationLine[]> {
+    const db = executorFor(this.db);
+    const offeringIds = [...new Set(body.lines.map((l) => l.offeringId))];
+    const offerings = await db
+      .selectFrom('offerings')
+      .select(['id', 'kind', 'program_id', 'publication_state'])
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', offeringIds)
+      .execute();
+    const byId = new Map(offerings.map((o) => [o.id, o]));
+    const rules = await db
+      .selectFrom('price_rules')
+      .select(['offering_id', 'base_price_minor', 'currency'])
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', 'in', offeringIds)
+      .where('effective_from', '<=', at)
+      .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]))
+      .execute();
+    const ruleOf = new Map(rules.map((r) => [r.offering_id, r]));
+    return body.lines.map((line) => {
+      const offering = byId.get(line.offeringId);
+      // §4.10: customers see only discoverable offerings; anything else does not exist for them
+      if (
+        !offering ||
+        (!staff && !PUBLIC_PUBLICATION_STATES.includes(offering.publication_state))
+      ) {
+        throw errors.protectedNotFound('offering');
+      }
+      const rule = ruleOf.get(line.offeringId);
+      if (rule && rule.currency !== body.currency) {
+        throw errors.validation('The offering is priced in another currency.', {
+          lineId: line.lineId,
+          offeringId: line.offeringId,
+          currency: rule.currency,
+        });
+      }
+      return {
+        lineId: line.lineId,
+        offeringId: line.offeringId,
+        offeringKind: offering.kind,
+        programId: offering.program_id,
+        participantPersonId: line.participantPersonId,
+        // an offering without an effective price rule is unpriced, never free (SPK-PAY-001)
+        baseAmountMinor: rule?.base_price_minor ?? 0,
+      };
     });
   }
 
@@ -457,7 +526,7 @@ export class DiscountsService {
   ): Promise<RedemptionOutcome> {
     const definition = await trx
       .selectFrom('discount_definitions')
-      .select(['id', 'status', 'per_person_limit'])
+      .select(['id', 'status', 'per_person_limit', 'effective_from', 'effective_to'])
       .where('organization_id', '=', organizationId)
       .where('id', '=', input.discountDefinitionId)
       .executeTakeFirst();
@@ -479,6 +548,21 @@ export class DiscountsService {
       throw errors.resourceConflict('The discount is no longer active.', {
         code: 'DISCOUNT_NOT_ACTIVE',
         discountDefinitionId: definition.id,
+      });
+    }
+    // SPK-PAY-003 effective dates: the final gate redeems only a discount in effect now, the same
+    // window evaluation applies; a quote priced inside the window is re-quoted, never honoured
+    // after the window closed.
+    const now = this.clock.now();
+    const from = new Date(definition.effective_from);
+    const to = definition.effective_to ? new Date(definition.effective_to) : null;
+    if (from.getTime() > now.getTime() || (to !== null && to.getTime() <= now.getTime())) {
+      throw errors.resourceConflict('The discount is not in effect.', {
+        code: 'DISCOUNT_NOT_EFFECTIVE',
+        discountDefinitionId: definition.id,
+        effectiveFrom: from.toISOString(),
+        effectiveTo: to ? to.toISOString() : null,
+        at: now.toISOString(),
       });
     }
     if (definition.per_person_limit !== null && input.personId) {

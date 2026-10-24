@@ -991,6 +991,21 @@ export class OfferingsService implements OfferingLookupPort {
     const problems: PublicationProblem[] = [];
     const problem = (code: string, field: string, message: string) =>
       problems.push({ code, field, message });
+    // SPK-CAT-001: an offering specifies its name and description, format and location.
+    if (!row.description || row.description.trim().length === 0) {
+      problem('description_missing', 'description', 'A description is required.');
+    }
+    if (!row.format || row.format.trim().length === 0) {
+      problem('format_missing', 'format', 'A format is required (on the offering or its program).');
+    }
+    const location = (row.location ?? {}) as { label?: string | null; resourceIds?: string[] };
+    if (!location.label?.trim() && (location.resourceIds ?? []).length === 0) {
+      problem(
+        'location_missing',
+        'location',
+        'A location is required: a label or at least one space.',
+      );
+    }
     if (!row.registration_opens_at || !row.registration_closes_at) {
       problem(
         'registration_window_missing',
