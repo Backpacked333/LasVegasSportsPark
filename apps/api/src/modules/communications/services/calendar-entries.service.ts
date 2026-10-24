@@ -13,14 +13,27 @@ type EventChangedPayload = EventPayload<typeof EventChanged>;
  * only from `scheduling.event_changed`: the scheduling module remains the sole writer of its tables
  * (§4.2) and this read model is what private calendar feeds serve. `sequence` increases on every
  * change so subscribed calendars update or remove the right entry; replays are idempotent because
- * the last source event id is recorded.
+ * the last source event id is recorded, and reordering is tolerated: each change carries the full
+ * snapshot, so an event older than the one last applied (a late retry, another worker's order) is
+ * ignored instead of rolling the entry back with a higher SEQUENCE (§4.11, §4.12, SPK-COMMS-008).
  */
 @Injectable()
 export class CalendarEntriesService {
   async upsertFromEventChange(trx: Trx, event: DomainEvent<EventChangedPayload>): Promise<void> {
+    await this.applyEventChange(trx, event);
+  }
+
+  /**
+   * Applies one `scheduling.event_changed` to the projection: `applied`, `replayed` (this very event
+   * was the last one applied) or `stale` (a newer change of the event was already applied).
+   */
+  async applyEventChange(
+    trx: Trx,
+    event: DomainEvent<EventChangedPayload>,
+  ): Promise<'applied' | 'replayed' | 'stale'> {
     const payload = event.payload;
     const details = payload.after ?? payload.before;
-    if (!details) return;
+    if (!details) return 'applied';
     const status = payload.after ? payload.after.status : 'canceled';
     const existing = await trx
       .selectFrom('calendar_entries')
@@ -43,7 +56,10 @@ export class CalendarEntriesService {
     };
     let entryId: string;
     if (existing) {
-      if (existing.last_source_event_id === event.id) return; // replayed event: already applied
+      if (existing.last_source_event_id === event.id) return 'replayed'; // already applied
+      // Outbox event ids are UUID v7, ordered by creation time: an id lower than the one last
+      // applied is an older change delivered late; the entry already holds a newer full snapshot.
+      if (existing.last_source_event_id > event.id) return 'stale';
       entryId = existing.id;
       await trx
         .updateTable('calendar_entries')
@@ -90,6 +106,7 @@ export class CalendarEntriesService {
         )
         .execute();
     }
+    return 'applied';
   }
 
   /** Published and canceled entries any of the people or teams is committed to, within the window. */

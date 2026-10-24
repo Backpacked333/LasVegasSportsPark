@@ -26,7 +26,12 @@ import {
 } from '../communications.events';
 import { DeliveryAttemptMachine, type DeliveryEvent } from '../communications.machines';
 import { COMMUNICATIONS_POLICY, type CommunicationsPolicy } from '../communications.policy';
-import type { AttemptRow, NotificationRow, RecipientRow } from '../communications.shared';
+import {
+  audienceOf,
+  type AttemptRow,
+  type NotificationRow,
+  type RecipientRow,
+} from '../communications.shared';
 import {
   CHANNEL_PROVIDERS,
   type ChannelProviderPort,
@@ -55,18 +60,29 @@ interface ClaimedAttempt {
   channel: DeliveryChannel;
   provider: string;
   attempted_at: Date | string | null;
+  /** The lease this worker's claim set: the attempt is ours only while `locked_until` still equals it. */
+  lease_until: Date;
 }
 
 type RecordedResult =
   ChannelSendResult | { outcome: 'failed'; error: string; failureCode: DeliveryFailureCodeValue };
 
+/** What the hand-off claim transaction decided: a recorded outcome, or a committed claim to send. */
+type HandOff =
+  | { kind: Exclude<DeliveryOutcome, 'accepted'> }
+  | { kind: 'send'; recipient: RecipientRow; address: string; provider: ChannelProviderPort };
+
 /**
  * Hands queued external attempts to channel providers (SPK-COMMS-004, §4.11): claims a batch with a
- * lock lease (FOR UPDATE SKIP LOCKED), re-checks a protected recipient's authority immediately
- * before the hand-off (invariant 10, SPK-AT-017), resolves the address, records that the call is
- * about to happen, calls the provider OUTSIDE any transaction and records exactly the outcome the
- * provider gave. An interrupted hand-off is recorded as `unknown`, never retried blindly, so one
- * logical message is never sent twice because a worker died (§4.12).
+ * lock lease (FOR UPDATE SKIP LOCKED), resolves the address, then in ONE transaction locks the
+ * recipient and the attempt, re-checks a protected recipient's authority (invariant 10,
+ * SPK-AT-017) and records that the call is about to happen (`attempted_at`, fenced on this worker's
+ * lease); only after that claim commits does it call the provider, OUTSIDE any transaction, and
+ * record exactly the outcome the provider gave. A revocation that commits first fails the attempt
+ * and nothing is sent; one handled later sees the committed hand-off and leaves it alone, so the
+ * record always matches what the provider received. An attempt another poller re-claimed after this
+ * worker's lease expired is skipped, and an interrupted hand-off is recorded as `unknown`, never
+ * retried blindly, so one logical message is never sent twice (§4.12).
  *
  * The kernel's outbox dispatcher runs handlers inside a transaction, so this worker is a separate
  * poller: the dispatch handler releases attempts (`ready_at`) and this loop delivers them.
@@ -167,7 +183,7 @@ export class DeliveryWorker {
         where a.id = claimed.id
         returning a.id, a.organization_id, a.notification_id, a.recipient_id, a.channel, a.provider, a.attempted_at
       `.execute(trx);
-      return result.rows;
+      return result.rows.map((row) => ({ ...row, lease_until: leaseUntil }));
     });
   }
 
@@ -178,96 +194,37 @@ export class DeliveryWorker {
       organizationId,
       claimed.notification_id,
     );
-    const recipient = await this.db
+    const loaded = await this.db
       .selectFrom('notification_recipients')
-      .selectAll()
+      .select('person_id')
       .where('organization_id', '=', organizationId)
       .where('id', '=', claimed.recipient_id)
       .executeTakeFirst();
-    if (!notification || !recipient || claimed.channel === 'in_app') return 'skipped';
+    if (!notification || !loaded || claimed.channel === 'in_app') return 'skipped';
     const channel: ExternalChannel = claimed.channel;
 
-    // 1. Authority re-check immediately before the hand-off (SPK-COMMS-003, invariant 10).
-    if (recipient.status !== 'authorized') {
-      await this.record(claimed, notification, recipient, {
-        outcome: 'failed',
-        failureCode: 'RECIPIENT_REVOKED',
-        error: 'recipient is no longer authorized',
-      });
-      return 'revoked';
-    }
-    if (notification.protected) {
-      const ok = await this.resolver.isStillAuthorized(
-        organizationId,
-        {
-          personId: recipient.person_id,
-          basis: recipient.resolved_basis,
-          basisDetail: recipient.basis_detail,
-          subjectPersonIds: recipient.subject_person_ids,
-        },
-        notification.facility_id,
-      );
-      if (!ok) {
-        await this.uow.run(({ trx }) =>
-          this.notifications.revokeRecipient(
-            trx,
-            notification,
-            recipient,
-            'authority_revoked_before_handoff',
-            notification.correlation_id,
-          ),
-        );
-        return 'revoked';
-      }
-    }
-
-    // 2. A hand-off that started but never recorded its outcome is not repeated blindly.
-    if (claimed.attempted_at !== null) {
-      await this.record(claimed, notification, recipient, {
-        outcome: 'unknown',
-        error: 'a previous hand-off was interrupted before its outcome was recorded',
-      });
-      return 'unknown';
-    }
-
-    // 3. Address resolution (contact points stay in identity).
-    const address = await this.addresses.resolve(organizationId, recipient.person_id, channel);
-    if (!address) {
-      await this.record(claimed, notification, recipient, {
-        outcome: 'failed',
-        failureCode: 'NO_ADDRESS',
-        error: `no ${channel} contact point for the recipient`,
-      });
-      return 'failed';
-    }
+    // 1. Plain reads before any lock: the address (contact points stay in identity) and the adapter.
+    const address = await this.addresses.resolve(organizationId, loaded.person_id, channel);
     const provider = this.providers.find(
       (p) => p.name === claimed.provider && p.channel === channel,
     );
-    if (!provider) {
-      await this.record(claimed, notification, recipient, {
-        outcome: 'failed',
-        failureCode: 'PROVIDER_ERROR',
-        error: `no ${channel} provider named ${claimed.provider} is registered`,
-      });
-      return 'failed';
-    }
 
-    // 4. Durable "about to call" mark, then the provider call outside any transaction (§4.11).
-    await this.db
-      .updateTable('delivery_attempts')
-      .set({ attempted_at: this.clock.now() })
-      .where('id', '=', claimed.id)
-      .where('status', '=', 'queued')
-      .execute();
+    // 2. The hand-off claim, atomically: re-check and "about to call" mark in one transaction.
+    const handOff = await this.uow.run(({ trx }) =>
+      this.claimHandOff(trx, claimed, notification, channel, address, provider),
+    );
+    if (handOff.kind !== 'send') return handOff.kind;
+
+    // 3. The provider call, only after the claim committed and outside any transaction (§4.11).
     let result: ChannelSendResult;
     try {
-      result = await provider.send({
+      result = await handOff.provider.send({
         attemptId: claimed.id,
         organizationId,
         notificationId: notification.id,
         channel,
-        personId: recipient.person_id,
-        address,
+        personId: handOff.recipient.person_id,
+        address: handOff.address,
         title: notification.title,
         body: notification.body,
         category: notification.category,
@@ -280,13 +237,143 @@ export class DeliveryWorker {
       };
     }
 
-    // 5. Record exactly what the provider said.
-    await this.record(claimed, notification, recipient, result);
+    // 4. Record exactly what the provider said.
+    await this.record(claimed, notification, handOff.recipient, result);
     return result.outcome === 'accepted'
       ? 'accepted'
       : result.outcome === 'failed'
         ? 'failed'
         : 'unknown';
+  }
+
+  /**
+   * Inside one transaction: lock the recipient and then the attempt (the order `revokeRecipient`
+   * writes them, so the two never deadlock), re-check everything against the locked rows, and either
+   * record an outcome that needs no provider call or commit the hand-off mark. Outcomes are applied
+   * with `applyTransition` on this transaction; `record()` would open a second one and wait on the
+   * locks held here.
+   */
+  private async claimHandOff(
+    trx: Trx,
+    claimed: ClaimedAttempt,
+    notification: NotificationRow,
+    channel: ExternalChannel,
+    address: string | null,
+    provider: ChannelProviderPort | undefined,
+  ): Promise<HandOff> {
+    const organizationId = claimed.organization_id;
+    const recipient = await trx
+      .selectFrom('notification_recipients')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', claimed.recipient_id)
+      .forUpdate()
+      .executeTakeFirst();
+    const current = await trx
+      .selectFrom('delivery_attempts')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', claimed.id)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!recipient || !current) return { kind: 'skipped' };
+    // A receipt or a revocation that landed first is an independent fact; never overwrite it (§4.6).
+    if (current.status !== 'queued') {
+      return { kind: current.failure_code === 'RECIPIENT_REVOKED' ? 'revoked' : 'skipped' };
+    }
+    // §4.12: our lease expired and another poller re-claimed the attempt; it owns the hand-off now.
+    const lockedUntil = current.locked_until === null ? null : new Date(current.locked_until);
+    if (lockedUntil?.getTime() !== claimed.lease_until.getTime()) return { kind: 'skipped' };
+    // Another worker's hand-off is in flight (or finished) since our claim: never a second call.
+    if (current.attempted_at !== null && claimed.attempted_at === null) return { kind: 'skipped' };
+
+    const fail = (failureCode: DeliveryFailureCodeValue, error: string): Promise<void> =>
+      this.applyTransition(trx, current, 'fail', {
+        notification,
+        recipient,
+        providerMessageId: null,
+        failureCode,
+        error,
+        response: null,
+        at: this.clock.now(),
+        source: 'worker',
+      });
+
+    // Authority re-check immediately before the hand-off, on the locked rows (SPK-COMMS-003,
+    // invariant 10), in the audience's facility scope (the one resolution used).
+    if (recipient.status !== 'authorized') {
+      await fail('RECIPIENT_REVOKED', 'recipient is no longer authorized');
+      return { kind: 'revoked' };
+    }
+    if (notification.protected) {
+      const audience = audienceOf(notification);
+      const ok = await this.resolver.isStillAuthorized(
+        organizationId,
+        {
+          personId: recipient.person_id,
+          basis: recipient.resolved_basis,
+          basisDetail: recipient.basis_detail,
+          subjectPersonIds: recipient.subject_person_ids,
+          audience,
+        },
+        audience.facilityId,
+        trx,
+      );
+      if (!ok) {
+        await this.notifications.revokeRecipient(
+          trx,
+          notification,
+          recipient,
+          'authority_revoked_before_handoff',
+          notification.correlation_id,
+        );
+        return { kind: 'revoked' };
+      }
+    }
+
+    // A hand-off that started but never recorded its outcome is not repeated blindly (§4.12).
+    if (current.attempted_at !== null) {
+      await this.applyTransition(trx, current, 'lose_track', {
+        notification,
+        recipient,
+        providerMessageId: null,
+        failureCode: null,
+        error: 'a previous hand-off was interrupted before its outcome was recorded',
+        response: null,
+        at: this.clock.now(),
+        source: 'worker',
+      });
+      return { kind: 'unknown' };
+    }
+    if (!address) {
+      await fail('NO_ADDRESS', `no ${channel} contact point for the recipient`);
+      return { kind: 'failed' };
+    }
+    if (!provider) {
+      await fail(
+        'PROVIDER_ERROR',
+        `no ${channel} provider named ${claimed.provider} is registered`,
+      );
+      return { kind: 'failed' };
+    }
+
+    // Durable "about to call" mark, fenced on the locked row, renewing the lease so another poller
+    // does not take the attempt over while this single provider call is in flight.
+    const now = this.clock.now();
+    const marked = await trx
+      .updateTable('delivery_attempts')
+      .set({
+        attempted_at: now,
+        locked_until: new Date(now.getTime() + this.policy.deliveryLeaseSeconds * 1000),
+        revision: current.revision + 1,
+      })
+      .where('id', '=', current.id)
+      .where('revision', '=', current.revision)
+      .where('status', '=', 'queued')
+      .where('attempted_at', 'is', null)
+      .executeTakeFirst();
+    if (Number(marked.numUpdatedRows) !== 1) return { kind: 'skipped' };
+    return { kind: 'send', recipient, address, provider };
   }
 
   private async record(
