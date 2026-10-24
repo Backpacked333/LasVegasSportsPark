@@ -258,6 +258,14 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
       .send({ status: 'paused', expectedRevision: 9 });
     expect(stale.status).toBe(409);
     expect(stale.body.code).toBe('STALE_REVISION');
+    // §4.9: without expectedRevision the edit is refused, never applied over newer work
+    const blind = await t.http
+      .patch(`/v1/preventive-schedules/${schedule.id}`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ status: 'paused' });
+    expect(blind.status).toBe(400);
+    expect(blind.body.code).toBe('VALIDATION_FAILED');
     const paused = await t.http
       .patch(`/v1/preventive-schedules/${schedule.id}`)
       .set(auth)
@@ -267,12 +275,21 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
     const blocked = await post(`/v1/preventive-schedules/${schedule.id}/generate`, {});
     expect(blocked.status).toBe(409);
     expect(blocked.body.code).toBe('INVALID_TRANSITION');
-    const resumed = await schedules.update(scheduler, schedule.id, { status: 'active' });
+    const resumed = await schedules.update(scheduler, schedule.id, {
+      status: 'active',
+      expectedRevision: paused.body.revision,
+    });
     expect(resumed.status).toBe('active');
-    const ended = await schedules.update(scheduler, schedule.id, { status: 'ended' });
+    const ended = await schedules.update(scheduler, schedule.id, {
+      status: 'ended',
+      expectedRevision: resumed.revision,
+    });
     expect(ended.status).toBe('ended');
     await expect(
-      schedules.update(scheduler, schedule.id, { status: 'active' }),
+      schedules.update(scheduler, schedule.id, {
+        status: 'active',
+        expectedRevision: ended.revision,
+      }),
     ).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
     const list = await t.http
       .get('/v1/preventive-schedules')

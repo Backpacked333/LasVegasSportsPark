@@ -314,7 +314,10 @@
             },
             "maxItems": 20
           }
-        }
+        },
+        "required": [
+          "expectedRevision"
+        ]
       },
       "Availability": {
         "type": "object",
@@ -502,7 +505,10 @@
             },
             "maxItems": 20
           }
-        }
+        },
+        "required": [
+          "expectedRevision"
+        ]
       },
       "ConflictUnit": {
         "type": "object",
@@ -1852,7 +1858,8 @@
         },
         "required": [
           "scope",
-          "changes"
+          "changes",
+          "expectedRevision"
         ]
       },
       "SeriesEditChanges": {
@@ -2389,7 +2396,8 @@
           }
         },
         "required": [
-          "changes"
+          "changes",
+          "expectedRevision"
         ]
       },
       "ValidateScheduleDraftBody": {
@@ -2803,7 +2811,10 @@
             },
             "maxItems": 20
           }
-        }
+        },
+        "required": [
+          "expectedRevision"
+        ]
       },
       "RetireAssetBody": {
         "type": "object",
@@ -3292,7 +3303,10 @@
             },
             "maxItems": 20
           }
-        }
+        },
+        "required": [
+          "expectedRevision"
+        ]
       },
       "RecordInspectionBody": {
         "type": "object",
@@ -4071,7 +4085,10 @@
             },
             "maxItems": 20
           }
-        }
+        },
+        "required": [
+          "expectedRevision"
+        ]
       },
       "PreventiveGenerationResult": {
         "type": "object",

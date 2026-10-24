@@ -114,7 +114,10 @@ export const UpdateAssetBody = withCommandMeta({
   identifier: z.string().min(1).max(100).nullable().optional(),
   attributes: z.record(z.string(), z.unknown()).optional(),
   status: AssetStatus.optional(),
-}).openapi('UpdateAssetBody');
+})
+  // §4.9: a sensitive stale edit fails rather than overwrite newer work
+  .extend({ expectedRevision: Revision })
+  .openapi('UpdateAssetBody');
 export type UpdateAssetBody = z.infer<typeof UpdateAssetBody>;
 
 export const RetireAssetBody = withCommandMeta({}).openapi('RetireAssetBody');
@@ -220,7 +223,10 @@ export const UpdateMaintenanceTaskBody = withCommandMeta({
   requiresInspection: z.boolean().optional(),
   status: MaintenanceTaskStatus.extract(['in_progress', 'resolved', 'closed']).optional(),
   resolution: TaskResolutionSchema.pick({ summary: true, evidence: true }).optional(),
-}).openapi('UpdateMaintenanceTaskBody');
+})
+  // §4.9: a sensitive stale edit fails rather than overwrite newer work
+  .extend({ expectedRevision: Revision })
+  .openapi('UpdateMaintenanceTaskBody');
 export type UpdateMaintenanceTaskBody = z.infer<typeof UpdateMaintenanceTaskBody>;
 
 export const RecordInspectionBody = withCommandMeta({
@@ -437,7 +443,10 @@ export const UpdatePreventiveScheduleBody = withCommandMeta({
   restrictionKind: RestrictionKind.optional(),
   leadTimeDays: z.number().int().min(0).max(366).optional(),
   status: PreventiveScheduleStatus.optional(),
-}).openapi('UpdatePreventiveScheduleBody');
+})
+  // §4.9: a sensitive stale edit fails rather than overwrite newer work
+  .extend({ expectedRevision: Revision })
+  .openapi('UpdatePreventiveScheduleBody');
 export type UpdatePreventiveScheduleBody = z.infer<typeof UpdatePreventiveScheduleBody>;
 
 export const GeneratePreventiveOccurrencesBody = withCommandMeta({

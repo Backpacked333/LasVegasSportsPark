@@ -133,7 +133,11 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
       .send({});
     expect(blocked.status).toBe(409);
     expect(blocked.body.code).toBe('INVALID_TRANSITION');
-    await tasks.update(operator, open.id, { status: 'closed', resolution: { summary: 'n/a' } });
+    await tasks.update(operator, open.id, {
+      status: 'closed',
+      resolution: { summary: 'n/a' },
+      expectedRevision: (await tasks.get(operator, open.id)).revision,
+    });
     const retired = await t.http
       .delete(`/v1/assets/${created.body.id}`)
       .set(auth)
@@ -147,7 +151,14 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
       .set('Idempotency-Key', key())
       .send({});
     expect(again.body.status).toBe('retired');
-    const editRetired = await patch(`/v1/assets/${created.body.id}`, { name: 'x' });
+    // §4.9: an asset edit without expectedRevision is refused, never applied over newer work
+    const blindAsset = await patch(`/v1/assets/${created.body.id}`, { name: 'blind' });
+    expect(blindAsset.status).toBe(400);
+    expect(blindAsset.body.code).toBe('VALIDATION_FAILED');
+    const editRetired = await patch(`/v1/assets/${created.body.id}`, {
+      name: 'x',
+      expectedRevision: again.body.revision,
+    });
     expect(editRetired.body.code).toBe('INVALID_TRANSITION');
     const reuse = await post('/v1/assets', { ...body, name: 'Replacement goal' });
     expect(reuse.status).toBe(201);
@@ -215,10 +226,14 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
     // only the facilities operator / general manager manage the task
     const denied = await patch(
       `/v1/maintenance-tasks/${id}`,
-      { assignedOwnerPersonId: reporter.personId },
+      { assignedOwnerPersonId: reporter.personId, expectedRevision: 1 },
       await t.authHeader(reporter),
     );
     expect(denied.status).toBe(403);
+    // §4.9: a task edit without expectedRevision is refused, never applied over newer work
+    const blindTask = await patch(`/v1/maintenance-tasks/${id}`, { severity: 'low' });
+    expect(blindTask.status).toBe(400);
+    expect(blindTask.body.code).toBe('VALIDATION_FAILED');
     const assigned = await patch(`/v1/maintenance-tasks/${id}`, {
       assignedOwnerPersonId: operator.personId,
       dueAt: '2026-10-21T18:00:00Z',
@@ -233,18 +248,26 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
       revision: 2,
     });
     expect(assigned.body.evidence).toHaveLength(2);
-    const unassigned = await patch(`/v1/maintenance-tasks/${id}`, { assignedOwnerPersonId: null });
+    const unassigned = await patch(`/v1/maintenance-tasks/${id}`, {
+      assignedOwnerPersonId: null,
+      expectedRevision: assigned.body.revision,
+    });
     expect(unassigned.body.status).toBe('open');
     const started = await patch(`/v1/maintenance-tasks/${id}`, {
       assignedOwnerPersonId: operator.personId,
       status: 'in_progress',
+      expectedRevision: unassigned.body.revision,
     });
     expect(started.body.status).toBe('in_progress');
-    const noResolution = await patch(`/v1/maintenance-tasks/${id}`, { status: 'resolved' });
+    const noResolution = await patch(`/v1/maintenance-tasks/${id}`, {
+      status: 'resolved',
+      expectedRevision: started.body.revision,
+    });
     expect(noResolution.status).toBe(400);
     const resolved = await patch(`/v1/maintenance-tasks/${id}`, {
       status: 'resolved',
       resolution: { summary: 'Replaced driver on bank 2' },
+      expectedRevision: started.body.revision,
     });
     expect(resolved.body).toMatchObject({
       status: 'resolved',
@@ -273,6 +296,7 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
     const resolvedAgain = await patch(`/v1/maintenance-tasks/${id}`, {
       status: 'resolved',
       resolution: { summary: 'Replaced driver and lamp on bank 2' },
+      expectedRevision: afterFail.body.revision,
     });
     expect(resolvedAgain.status).toBe(200);
     const passed = await post(`/v1/maintenance-tasks/${id}/inspections`, {
@@ -285,13 +309,19 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
       'passed',
       'failed',
     ]);
-    const closed = await patch(`/v1/maintenance-tasks/${id}`, { status: 'closed' });
+    const closed = await patch(`/v1/maintenance-tasks/${id}`, {
+      status: 'closed',
+      expectedRevision: (await t.http.get(`/v1/maintenance-tasks/${id}`).set(auth)).body.revision,
+    });
     expect(closed.body).toMatchObject({
       status: 'closed',
       latestInspection: { outcome: 'passed' },
     });
     expect(closed.body.closedAt).not.toBeNull();
-    const reopenClosed = await patch(`/v1/maintenance-tasks/${id}`, { status: 'in_progress' });
+    const reopenClosed = await patch(`/v1/maintenance-tasks/${id}`, {
+      status: 'in_progress',
+      expectedRevision: closed.body.revision,
+    });
     expect(reopenClosed.body.code).toBe('INVALID_TRANSITION');
     // a failed inspection on a closed task is recorded and escalated, the task stays closed
     const lateFail = await post(`/v1/maintenance-tasks/${id}/inspections`, { outcome: 'failed' });
@@ -468,6 +498,7 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
     await tasks.update(operator, resolved.id, {
       status: 'resolved',
       resolution: { summary: 'fuse replaced' },
+      expectedRevision: resolved.revision,
     });
     t.clock.advance(5 * 3600_000);
     await dispatcher.runOnce(100);
