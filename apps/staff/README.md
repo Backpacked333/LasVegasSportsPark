@@ -52,6 +52,7 @@ pnpm --filter @sportspark/staff dev                                            #
 | Development sign-in only in development builds.                                                                                                                                            | **Verified** (jsdom, and the build check)                                                               | `scripts/check-release-bundle.mjs`                         |
 | Managed staff sign-in with multifactor authentication for privileged staff (§4.14).                                                                                                        | **Pending decision** DEC-018 (Technical lead/account owners); the sign-in page shows the pending state  |                                                            |
 | Hosting and the production origin (CORS or a same-origin proxy).                                                                                                                           | **Pending decision** DEC-021                                                                            |                                                            |
+| Schedule (SCR-S-03 to SCR-S-07) and Facilities (SCR-S-41, SCR-S-42) screens; SCR-S-51 and SCR-S-52 shown as pending decisions; details in `src/screens/schedule/README.md`.                | **Verified** in jsdom                                                                                   | `src/screens/*/__tests__`                                  |
 
 ## Conventions for screen builders
 
