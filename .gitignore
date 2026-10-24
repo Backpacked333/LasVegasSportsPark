@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+.pglite/
+.vitest-result.json
+
+# Claude Code workflow worktrees and local session state
+.claude/worktrees/
+.claude/merge.lock/

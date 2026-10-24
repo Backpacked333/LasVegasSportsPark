@@ -1,0 +1,314 @@
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  errors,
+  type ApproveCreditInput,
+  type Credit,
+  type IssueCreditInput,
+  type ListCreditsQuery,
+  type Page,
+  type Principal,
+  type RedeemCreditInput,
+} from '@sportspark/contracts';
+import { json, type Db } from '@sportspark/db';
+import {
+  AuditWriter,
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  Outbox,
+  UnitOfWork,
+  assertExpectedRevision,
+  snapshotActor,
+  type Clock,
+} from '../../../kernel';
+import { FinanceActions } from '../finance.actions';
+import {
+  isStaffLike,
+  organizationOf,
+  toCredit,
+  type CreditRow,
+  type Reader,
+} from '../finance.shared';
+import { LedgerService } from '../ledger/ledger.service';
+import { MoneyFacts } from './money-facts.service';
+
+/**
+ * Credits (SPK-PAY-009): explicit owner, currency, permitted uses, expiry when approved,
+ * remaining balance, source and redemption history. Issuance posts to `credits_payable`; an
+ * overpayment credit moves from `overpayment_liability` only when finance approves it (POL-015).
+ * Redemption is the conditional UPDATE in MoneyFacts (§4.7 invariant 7).
+ */
+@Injectable()
+export class CreditsService {
+  constructor(
+    @Inject(DATABASE) private readonly db: Db,
+    @Inject(CLOCK) private readonly clock: Clock,
+    private readonly uow: UnitOfWork,
+    private readonly authorization: AuthorizationService,
+    private readonly audit: AuditWriter,
+    private readonly outbox: Outbox,
+    private readonly ledger: LedgerService,
+    private readonly facts: MoneyFacts,
+  ) {}
+
+  async view(db: Reader, row: CreditRow): Promise<Credit> {
+    const redemptions = await db
+      .selectFrom('credit_redemptions')
+      .selectAll()
+      .where('organization_id', '=', row.organization_id)
+      .where('credit_id', '=', row.id)
+      .orderBy('redeemed_at')
+      .orderBy('id')
+      .execute();
+    return toCredit(row, redemptions, this.clock.now());
+  }
+
+  async get(principal: Principal, id: string): Promise<Credit> {
+    const organizationId = organizationOf(principal);
+    const row = await this.facts.loadCredit(this.db, organizationId, id);
+    if (!row) throw errors.protectedNotFound('credit');
+    await this.authorization.require(principal, FinanceActions.readCredit, {
+      type: 'credit',
+      id,
+      organizationId,
+      subjectPersonIds: [row.owner_person_id],
+      protected: true,
+    });
+    return this.view(this.db, row);
+  }
+
+  async list(principal: Principal, query: ListCreditsQuery): Promise<Page<Credit>> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, FinanceActions.readCredit, {
+      type: 'credit',
+      organizationId,
+      subjectPersonIds: [query.ownerPersonId],
+      protected: true,
+    });
+    const rows = await this.db
+      .selectFrom('credits')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('owner_person_id', '=', query.ownerPersonId)
+      .orderBy('created_at')
+      .orderBy('id')
+      .limit(query.limit)
+      .execute();
+    const items: Credit[] = [];
+    for (const row of rows) items.push(await this.view(this.db, row));
+    return { items, nextCursor: null };
+  }
+
+  /** POST /credits: a goodwill or adjustment credit (finance staff, reason required, audited). */
+  async issue(
+    principal: Principal,
+    input: IssueCreditInput,
+    correlationId: string | null,
+  ): Promise<Credit> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, FinanceActions.issueCredit, {
+      type: 'credit',
+      organizationId,
+    });
+    const now = this.clock.now();
+    if (input.expiresAt && new Date(input.expiresAt) <= now) {
+      throw errors.validation('A credit cannot expire in the past.');
+    }
+    return this.uow.run(async ({ trx }) => {
+      const owner = await trx
+        .selectFrom('persons')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', input.ownerPersonId)
+        .executeTakeFirst();
+      if (!owner) throw errors.notFound('person', input.ownerPersonId);
+      const id = await this.facts.insertCredit(trx, {
+        organizationId,
+        ownerPersonId: input.ownerPersonId,
+        currency: input.currency,
+        amountMinor: input.amountMinor,
+        permittedUses: input.permittedUses,
+        sourceKind: input.sourceKind,
+        sourceId: null,
+        status: 'active',
+        expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+        reason: input.reason,
+        actor: principal,
+      });
+      await this.ledger.post(trx, {
+        organizationId,
+        sourceType: 'credit',
+        sourceId: id,
+        purpose: 'credit_issued',
+        description: `Credit issued (${input.sourceKind})`,
+        currency: input.currency,
+        actor: principal,
+        correlationId,
+        lines: [
+          { account: 'refunds', debitMinor: input.amountMinor, personId: input.ownerPersonId },
+          {
+            account: 'credits_payable',
+            creditMinor: input.amountMinor,
+            personId: input.ownerPersonId,
+          },
+        ],
+      });
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: FinanceActions.issueCredit.id,
+        targetType: 'credit',
+        targetId: id,
+        afterRevision: 1,
+        reason: input.reason,
+        correlationId,
+        details: {
+          amountMinor: input.amountMinor,
+          currency: input.currency,
+          sourceKind: input.sourceKind,
+        },
+      });
+      const row = await this.facts.loadCredit(trx, organizationId, id);
+      return this.view(trx, row as CreditRow);
+    });
+  }
+
+  /** POST /credits/{id}/approve: an overpayment credit held pending approval becomes usable. */
+  async approve(
+    principal: Principal,
+    id: string,
+    input: ApproveCreditInput,
+    correlationId: string | null,
+  ): Promise<Credit> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const credit = await this.facts.loadCredit(trx, organizationId, id, true);
+      if (!credit) throw errors.protectedNotFound('credit');
+      await this.authorization.require(principal, FinanceActions.approveCredit, {
+        type: 'credit',
+        id,
+        organizationId,
+      });
+      assertExpectedRevision(input.expectedRevision, credit.revision);
+      if (credit.status !== 'pending_approval') {
+        throw errors.invalidTransition('Credit', credit.status, 'approve');
+      }
+      const now = this.clock.now();
+      await trx
+        .updateTable('credits')
+        .set({
+          status: 'active',
+          approved_at: now,
+          approved_by: json(snapshotActor(principal)),
+          revision: credit.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', id)
+        .where('revision', '=', credit.revision)
+        .execute();
+      await this.ledger.post(trx, {
+        organizationId,
+        sourceType: 'credit',
+        sourceId: id,
+        purpose: 'overpayment_credit_approved',
+        description: 'Overpayment held as credit approved',
+        currency: credit.currency,
+        actor: principal,
+        correlationId,
+        lines: [
+          {
+            account: 'overpayment_liability',
+            debitMinor: credit.original_minor,
+            personId: credit.owner_person_id,
+          },
+          {
+            account: 'credits_payable',
+            creditMinor: credit.original_minor,
+            personId: credit.owner_person_id,
+          },
+        ],
+      });
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: FinanceActions.approveCredit.id,
+        targetType: 'credit',
+        targetId: id,
+        beforeRevision: credit.revision,
+        afterRevision: credit.revision + 1,
+        reason: input.reason ?? null,
+        correlationId,
+        details: { policyReferences: input.policyReferences ?? [] },
+      });
+      const row = await this.facts.loadCredit(trx, organizationId, id);
+      return this.view(trx, row as CreditRow);
+    });
+  }
+
+  /** POST /credits/{id}/redeem: the owner (or someone with pay over them) or desk staff. */
+  async redeem(
+    principal: Principal,
+    id: string,
+    input: RedeemCreditInput,
+    correlationId: string | null,
+  ): Promise<Credit> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const credit = await this.facts.loadCredit(trx, organizationId, id);
+      if (!credit) throw errors.protectedNotFound('credit');
+      await this.authorization.require(principal, FinanceActions.redeemCredit, {
+        type: 'credit',
+        id,
+        organizationId,
+        subjectPersonIds: [credit.owner_person_id],
+        protected: true,
+      });
+      assertExpectedRevision(input.expectedRevision, credit.revision);
+      const obligation = await this.facts.loadObligation(trx, organizationId, input.obligationId);
+      if (!obligation) throw errors.protectedNotFound('obligation');
+      if (!isStaffLike(principal)) {
+        // The credit's owner must also be entitled to pay this obligation (no paying into
+        // another household's debt by guessing an id, §4.10).
+        await this.authorization.require(principal, FinanceActions.payObligation, {
+          type: 'obligation',
+          id: obligation.id,
+          organizationId,
+          subjectPersonIds: [
+            obligation.debtor_person_id ??
+              obligation.responsible_payer_person_id ??
+              credit.owner_person_id,
+          ],
+          teamEntryId:
+            obligation.mode === 'team_with_contributions' ? obligation.debtor_team_entry_id : null,
+          protected: true,
+        });
+      }
+      await this.facts.redeemCredit(trx, {
+        organizationId,
+        creditId: id,
+        amountMinor: input.amountMinor,
+        currency: credit.currency,
+        use: 'obligation',
+        ownerPersonId: credit.owner_person_id,
+        referenceType: 'obligation',
+        referenceId: input.obligationId,
+        obligationId: input.obligationId,
+        actor: principal,
+        correlationId,
+      });
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: FinanceActions.redeemCredit.id,
+        targetType: 'credit',
+        targetId: id,
+        beforeRevision: credit.revision,
+        afterRevision: credit.revision + 1,
+        correlationId,
+        details: { obligationId: input.obligationId, amountMinor: input.amountMinor },
+      });
+      const row = await this.facts.loadCredit(trx, organizationId, id);
+      return this.view(trx, row as CreditRow);
+    });
+  }
+}
