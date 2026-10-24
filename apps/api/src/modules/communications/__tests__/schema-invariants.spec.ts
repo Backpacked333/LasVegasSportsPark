@@ -238,6 +238,48 @@ describe('communications schema invariants (migration 1000)', () => {
     ).rejects.toSatisfy(isUniqueViolation);
   });
 
+  it('SPK-COMMS-005: a superseded attempt is recorded with failure code SUPERSEDED; unknown codes stay refused', async () => {
+    const notificationId = await insertNotification();
+    const recipientId = await insertRecipient(notificationId);
+    await insertAttempt(notificationId, recipientId, {
+      status: 'failed',
+      failed_at: now(),
+      failure_code: 'SUPERSEDED',
+      error: 'superseded before hand-off',
+    });
+    await expect(
+      insertAttempt(notificationId, recipientId, {
+        channel: 'push',
+        status: 'failed',
+        failed_at: now(),
+        failure_code: 'OBSOLETE',
+      }),
+    ).rejects.toSatisfy(isCheckViolation);
+  });
+
+  it('SPK-COMMS-008: a calendar entry source revision is positive or unknown', async () => {
+    await expect(
+      db
+        .insertInto('calendar_entries')
+        .values({
+          id: newId(),
+          organization_id: org,
+          event_id: newId(),
+          facility_id: t.facilityId,
+          title: 'x',
+          kind: 'game',
+          scheduled_start: now(),
+          scheduled_end: new Date(now().getTime() + 3_600_000),
+          timezone: 'America/Los_Angeles',
+          status: 'published',
+          last_change: 'created',
+          last_source_event_id: newId(),
+          source_revision: 0,
+        } as never)
+        .execute(),
+    ).rejects.toSatisfy(isCheckViolation);
+  });
+
   it('acknowledgments are append-only and recorded at most once per recipient', async () => {
     const notificationId = await insertNotification();
     const recipientId = await insertRecipient(notificationId);

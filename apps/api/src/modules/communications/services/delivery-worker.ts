@@ -345,6 +345,22 @@ export class DeliveryWorker {
       });
       return { kind: 'unknown' };
     }
+    // SPK-COMMS-005: a notice superseded by a newer change or cancellation is never handed over;
+    // the pointer is read inside this transaction, after the attempt lock (a supersede that
+    // committed first has usually failed the attempt already; this covers one that did not).
+    const superseded = await trx
+      .selectFrom('notifications')
+      .select('superseded_by_notification_id')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', notification.id)
+      .executeTakeFirst();
+    if (superseded?.superseded_by_notification_id) {
+      await fail(
+        'SUPERSEDED',
+        `superseded by notification ${superseded.superseded_by_notification_id} before hand-off`,
+      );
+      return { kind: 'skipped' };
+    }
     if (!address) {
       await fail('NO_ADDRESS', `no ${channel} contact point for the recipient`);
       return { kind: 'failed' };
@@ -557,8 +573,13 @@ export class DeliveryWorker {
           payload: { ...payload, failureCode, error: input.error ?? failureCode },
         });
         // SPK-UX-006 "failed urgent communications": an essential notice that did not reach a
-        // person is an operational exception for the front desk; revocations are not failures.
-        if (input.notification.category === 'operational' && failureCode !== 'RECIPIENT_REVOKED') {
+        // person is an operational exception for the front desk; revocations and superseded
+        // (obsolete) notices are not failures.
+        if (
+          input.notification.category === 'operational' &&
+          failureCode !== 'RECIPIENT_REVOKED' &&
+          failureCode !== 'SUPERSEDED'
+        ) {
           await this.exceptions.raise(trx, {
             organizationId,
             facilityId: input.notification.facility_id,

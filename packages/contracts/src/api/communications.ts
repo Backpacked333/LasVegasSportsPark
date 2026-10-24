@@ -64,7 +64,7 @@ export const DeliveryStatusSchema = z
   .openapi('DeliveryStatus');
 export type DeliveryStatusValue = z.infer<typeof DeliveryStatusSchema>;
 export const DeliveryFailureCodeSchema = z
-  .enum(['RECIPIENT_REVOKED', 'NO_ADDRESS', 'PROVIDER_REJECTED', 'PROVIDER_ERROR'])
+  .enum(['RECIPIENT_REVOKED', 'NO_ADDRESS', 'PROVIDER_REJECTED', 'PROVIDER_ERROR', 'SUPERSEDED'])
   .openapi('DeliveryFailureCode');
 export type DeliveryFailureCodeValue = z.infer<typeof DeliveryFailureCodeSchema>;
 export const AcknowledgmentViaSchema = DeliveryChannelSchema;

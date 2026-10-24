@@ -122,12 +122,13 @@ dispatch creates the attempts or suppresses the notice.
   still queued, unmarked and held under this worker's lease (renewing it for the call); after that
   commits it calls the provider OUTSIDE any transaction and records exactly its answer:
   `provider_accepted`, `failed` (`PROVIDER_REJECTED`, `NO_ADDRESS`, `PROVIDER_ERROR`,
-  `RECIPIENT_REVOKED`) or `unknown`. A revocation that commits first fails the attempt and nothing is
+  `RECIPIENT_REVOKED`, `SUPERSEDED`) or `unknown`. An attempt of a notice found superseded inside
+  that transaction fails `SUPERSEDED` and is never handed over. A revocation that commits first fails the attempt and nothing is
   sent; one processed later finds the hand-off committed and leaves it alone, so the record matches
   what the provider received. An attempt another poller re-claimed after the lease expired is
   skipped, so it reaches the provider once; an interrupted hand-off is recorded `unknown` and never
   retried blindly (§4.12). A failed essential notice raises a `front_desk` operational exception
-  (SPK-UX-006); a revocation is not a failure.
+  (SPK-UX-006); a revocation or a superseded (obsolete) notice is not a failure.
 - **Receipts** (`DeliveryWorker.applyReceipt`, inbox provider `fake-messaging`): resolve
   `queued/provider_accepted/unknown` into `provider_accepted/delivered/failed`; duplicates and
   out-of-order receipts are ignored rather than rewriting a later fact.
@@ -141,15 +142,20 @@ dispatch creates the attempts or suppresses the notice.
   for a published event composes `schedule_published`, `schedule_changed` (old and new practical
   details rendered in facility-local time) or `cancellation` addressed to the committed parties,
   keyed on the source event id so a replay never composes twice; a change older than the one the
-  calendar projection last applied (a late retry or another worker's order; outbox ids are UUID v7)
-  is ignored and composes nothing, so it can neither roll the feed back with a higher `SEQUENCE` nor
+  calendar projection last applied (a late retry or another worker's order) is ignored and
+  composes nothing — ordered by the event `revision` the payload carries (stored as
+  `calendar_entries.source_revision`, migration 1002), and by the UUID v7 outbox id only for
+  changes without a revision or of equal revision, so clock skew between instances cannot reorder
+  them — so it can neither roll the feed back with a higher `SEQUENCE` nor
   supersede the current notice; `scheduling.schedule_published`
   composes a staff summary for schedulers and league managers of the facility. Draft events
   produce nothing (SPK-SCHED-005).
 - **Obsolete reminders** (SPK-COMMS-005): queuing a `schedule_changed` or `cancellation` about a
   subject suppresses unsent `schedule_published/schedule_changed` notices about the same subject
-  (`obsolete`, `supersedes_notification_id`) and points delivered ones at the newer notice
-  (`superseded_by_notification_id`, shown in the inbox).
+  (`obsolete`, `supersedes_notification_id`) and points dispatched ones at the newer notice
+  (`superseded_by_notification_id`, shown in the inbox); their push/email/SMS attempts not yet
+  handed to a provider are failed with `SUPERSEDED` in the same transaction (migration 1001), so
+  a stale "moved" never arrives after the cancellation. Delivered in-app items stay.
 - **Preferences** (SPK-COMMS-007): operational and promotional choices are separate rows; defaults
   come from `COMMUNICATIONS_POLICY`; the operational in-app notice is locked on.
 - **Calendar feeds** (SPK-COMMS-008): 32 random bytes, hash stored; the ICS uses the scheduling

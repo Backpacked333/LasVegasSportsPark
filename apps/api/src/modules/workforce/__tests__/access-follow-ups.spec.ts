@@ -1,6 +1,6 @@
 import { systemPrincipal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { AuditWriter } from '../../../kernel';
+import { AuditWriter, EventHandlerRegistry, type EventHandler } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { at, createScheduledEvent, EventsService } from '../../scheduling';
 import {
@@ -150,6 +150,84 @@ describe('temporary access after follow-up changes (SPK-STAFF-004, §4.14, §4.7
     expect(after.body).toMatchObject({ status: 'withdrawn', access: { status: 'ended' } });
     expect((await me(coach)).kind).toBe('customer');
     expect((await entry()).status).toBe(404);
+  });
+
+  it('§4.12 / §4.6: a late retry of an older move never retimes an assignment back; assignments follow the event’s current time', async () => {
+    const events = t.app.get(EventsService);
+    const system = systemPrincipal(t.organizationId);
+    const practice = await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [world.pitch.southHalfId],
+      start: at('2027-02-21', '09:00'),
+      end: at('2027-02-21', '10:00'),
+      kind: 'practice',
+      title: 'U12 practice',
+    });
+    const pm = await staffMember(t, ['program_manager']);
+    const coach = await adultCustomer(t);
+    const created = await post(t, '/v1/assignments', pm, {
+      personId: coach.personId,
+      kind: 'coach',
+      targetType: 'event',
+      targetId: practice.id,
+      role: 'head_coach',
+      engagement: 'temporary',
+      offer: true,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const accepted = await post(
+      t,
+      `/v1/assignments/${created.body.assignment.id}/accept`,
+      coach,
+      {},
+    );
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    await drainOutbox(t);
+
+    // the workforce follow-up fails once on the first move (a transient error) and is retried later
+    const entry = t.app
+      .get(EventHandlerRegistry)
+      .handlersFor('scheduling.event_changed')
+      .find((h) => h.name === 'workforce.follow_event');
+    if (!entry) throw new Error('workforce.follow_event not registered');
+    const original: EventHandler = entry.handler;
+    let failed = false;
+    entry.handler = async (event, ctx) => {
+      const payload = event.payload as { eventId: string; change: string };
+      if (!failed && payload.eventId === practice.id && payload.change === 'moved') {
+        failed = true;
+        throw new Error('transient failure');
+      }
+      return original(event, ctx);
+    };
+    try {
+      const first = await events.moveEvent(system, practice.id, {
+        scheduledStart: at('2027-02-21', '11:00'),
+        scheduledEnd: at('2027-02-21', '12:00'),
+        expectedRevision: practice.revision,
+      });
+      await drainOutbox(t); // the first move's follow-up fails
+      await events.moveEvent(system, practice.id, {
+        scheduledStart: at('2027-02-21', '15:00'),
+        scheduledEnd: at('2027-02-21', '16:00'),
+        expectedRevision: first.revision,
+      });
+      await drainOutbox(t); // the newer move is applied first
+      t.clock.advance(60_000);
+      await drainOutbox(t); // the older move's retry arrives last
+    } finally {
+      entry.handler = original;
+    }
+    expect(failed).toBe(true);
+    const after = await t.http
+      .get(`/v1/assignments/${created.body.assignment.id}`)
+      .set(coach.header);
+    expect(after.body).toMatchObject({
+      status: 'accepted',
+      scheduledStart: at('2027-02-21', '15:00'),
+      scheduledEnd: at('2027-02-21', '16:00'),
+    });
   });
 
   it('SPK-STAFF-004: a retime moves the access window with the activity', async () => {

@@ -78,7 +78,9 @@ Test fixtures for downstream modules: `testing/scheduling-fixtures.ts` (`seedPit
 
 - `scheduling.event_changed` — one per changed event: `change` (created, published, moved, resized,
   resource_changed, updated, canceled), `before` and `after` practical details (title, kind,
-  instants, zone, facility, resources, status), owning record, parties, publication or closure id.
+  instants, zone, facility, resources, status), owning record, parties, publication or closure id,
+  and the event's `revision` after the change, so consumers order changes exactly (the outbox does
+  not order events per aggregate, §4.12).
 - `scheduling.schedule_published` — publication group with event ids, changes and remaining obligations.
 - `scheduling.closure_applied` / `scheduling.closure_lifted`.
 

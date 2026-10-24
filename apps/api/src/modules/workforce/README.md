@@ -36,7 +36,9 @@ pending or gap.
 - Outbox handlers (idempotent under replay, writes through `ctx.trx`):
   `workforce.follow_fixture` (`competition.fixture_changed`: rescheduled → assignments retimed;
   canceled/postponed/unscheduled → live assignments withdrawn), `workforce.follow_event`
-  (`scheduling.event_changed` for event targets: moved/resized → retimed, canceled → withdrawn),
+  (`scheduling.event_changed` for event targets: the event's current state, read in the
+  handler's transaction, decides — canceled → withdrawn, otherwise retimed to its current times —
+  so a late or reordered delivery never retimes back to an older time, §4.12, §4.6),
   `workforce.follow_session` (`catalog.session_canceled` → withdrawn). A retime that would
   overlap another accepted assignment of the person withdraws the moved assignment and escalates
   the slot as uncovered (`schedule_conflict`), never double-books.

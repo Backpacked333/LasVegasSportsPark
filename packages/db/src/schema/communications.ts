@@ -89,7 +89,7 @@ export type DeliveryChannel = 'in_app' | 'push' | 'email' | 'sms';
 export type DeliveryStatus =
   'queued' | 'provider_accepted' | 'delivered' | 'failed' | 'unknown' | 'read' | 'acknowledged';
 export type DeliveryFailureCode =
-  'RECIPIENT_REVOKED' | 'NO_ADDRESS' | 'PROVIDER_REJECTED' | 'PROVIDER_ERROR';
+  'RECIPIENT_REVOKED' | 'NO_ADDRESS' | 'PROVIDER_REJECTED' | 'PROVIDER_ERROR' | 'SUPERSEDED';
 
 export interface DeliveryAttemptsTable {
   id: string;
@@ -180,6 +180,8 @@ export interface CalendarEntriesTable {
   sequence: Generated<number>;
   last_change: string;
   last_source_event_id: string;
+  /** Revision of the scheduling event the entry was built from (migration 1002). */
+  source_revision: Generated<number | null>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
 }

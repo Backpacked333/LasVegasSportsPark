@@ -8400,6 +8400,7 @@
           "NO_ADDRESS",
           "PROVIDER_REJECTED",
           "PROVIDER_ERROR",
+          "SUPERSEDED",
           null
         ]
       },

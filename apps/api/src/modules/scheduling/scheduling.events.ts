@@ -33,6 +33,12 @@ export const EventChanged = defineEvent(
     publicationId: z.uuid().nullable(),
     closureId: z.uuid().nullable(),
     reason: z.string().nullable(),
+    /**
+     * The event's revision after this change. The outbox does not order events per aggregate (a
+     * retried delivery can arrive after a newer one), so projections compare it and never apply
+     * an older change (§4.12, §4.6). Optional only for events enqueued before it was carried.
+     */
+    revision: z.number().int().positive().optional(),
   }),
 );
 

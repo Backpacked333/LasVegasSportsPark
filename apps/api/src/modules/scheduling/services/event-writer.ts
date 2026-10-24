@@ -614,6 +614,8 @@ export class EventWriter {
         publicationId: notice.publicationId ?? null,
         closureId: notice.closureId ?? null,
         reason: notice.reason ?? null,
+        // every caller passes the post-change row
+        revision: notice.event.revision,
       },
     });
   }

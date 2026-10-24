@@ -822,22 +822,25 @@ export class AssignmentsService {
     const p = event.payload;
     const rows = await this.liveFor(ctx.trx, event.organizationId, 'event', p.eventId);
     if (rows.length === 0) return;
-    if (p.change === 'canceled') {
+    // §4.12, §4.6: deliveries arrive late and out of order (a retried move can follow a newer
+    // move), so assignments follow the event's CURRENT state read in this transaction, never the
+    // payload's `after`: every delivery, in any order, converges on the latest committed times.
+    const current = await this.targets.currentEvent(event.organizationId, p.eventId);
+    if (!current) return;
+    if (current.status === 'canceled') {
       for (const row of rows) {
         await this.systemWithdraw(ctx.trx, row, 'The event was canceled.', event, false);
       }
       return;
     }
-    if (p.after && (p.change === 'moved' || p.change === 'resized' || p.change === 'updated')) {
-      await this.retime(
-        ctx.trx,
-        rows,
-        new Date(p.after.scheduledStart),
-        new Date(p.after.scheduledEnd),
-        p.eventId,
-        event,
-      );
-    }
+    await this.retime(
+      ctx.trx,
+      rows,
+      new Date(current.scheduledStart),
+      new Date(current.scheduledEnd),
+      p.eventId,
+      event,
+    );
   }
 
   /** catalog.session_canceled: live assignments of the session are withdrawn. */
