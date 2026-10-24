@@ -433,6 +433,66 @@ describe('entry schema invariants (migration 0800)', () => {
     );
   });
 
+  it("SPK-ENTRY-007 / §4.7 (migration 0802): a departure records the person of the visit it closes — child X's visit can never be closed with child Y's release", async () => {
+    const x = await createPersonFixture(t, { kind: 'child' });
+    const y = await createPersonFixture(t, { kind: 'child' });
+    const xVisit = await createVisitFixture(t, { personId: x });
+    const yRelease = newId();
+    await t.db
+      .insertInto('release_records')
+      .values(releaseRow({ id: yRelease, child_person_id: y }))
+      .execute();
+    const departure = (overrides: Record<string, unknown>) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      facility_id: t.facilityId,
+      visit_id: xVisit,
+      person_id: x,
+      departed_at: t.clock.now(),
+      release_record_id: null,
+      source: 'desk' as const,
+      device_id: null,
+      client_observation_id: null,
+      sync_batch_id: null,
+      recorded_by: json(ACTOR),
+      recorded_by_person_id: null,
+      received_at: t.clock.now(),
+      ...overrides,
+    });
+    await expectPgError(
+      t.db
+        .insertInto('departures')
+        .values(departure({ person_id: y, release_record_id: yRelease, source: 'release' }))
+        .execute(),
+      CHECK,
+    );
+    // Nor without a release: the departure of X's visit never names someone else, or no one.
+    await expectPgError(
+      t.db
+        .insertInto('departures')
+        .values(departure({ person_id: y }))
+        .execute(),
+      CHECK,
+    );
+    await expectPgError(
+      t.db
+        .insertInto('departures')
+        .values(departure({ person_id: null }))
+        .execute(),
+      CHECK,
+    );
+    await t.db.insertInto('departures').values(departure({})).execute();
+    // A described visitor's visit (no person) departs with no person.
+    const described = await createVisitFixture(t, {
+      personId: null,
+      visitorCategory: 'spectator',
+    });
+    await t.db
+      .insertInto('departures')
+      .values(departure({ visit_id: described, person_id: null }))
+      .execute();
+  });
+
   it('SPK-ENTRY-004 / SPK-ENTRY-006: a check-in is never admitted with a blocking issue or without a participation basis; one live check-in per person and activity', async () => {
     const blocking = [
       {
@@ -684,6 +744,18 @@ describe('entry schema invariants (migration 0800)', () => {
         .execute(),
       CHECK,
     );
+    // §4.9 (migration 0801): the request fingerprint is a SHA-256 hex digest or absent.
+    await expectPgError(
+      t.db
+        .insertInto('offline_sync_batches')
+        .values(batch({ request_fingerprint: 'not-a-digest' }))
+        .execute(),
+      CHECK,
+    );
+    await t.db
+      .insertInto('offline_sync_batches')
+      .values(batch({ request_fingerprint: 'a'.repeat(64) }))
+      .execute();
     // An observation pointing at a batch that never commits is refused at commit (deferred key).
     await expectPgError(
       t.db.transaction().execute(async (trx) => {

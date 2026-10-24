@@ -511,4 +511,76 @@ describe('disputed access reviews (SPK-IAM-005)', () => {
       .send({ kind: 'restrict', grantIds: [stranger.guardianGrants.view] });
     expect(foreignGrant.status).toBe(400);
   });
+
+  it('SPK-AT-018 / SPK-ENTRY-007: hasPermissionAt answers from the grant, relationship and suspension history at a past instant', async () => {
+    const people = await createOrganizationPeople(t, { guardianPermissions: ['view', 'collect'] });
+    const org = t.organizationId;
+    const adult = people.adult.personId;
+    const child = people.child.personId;
+    const start = t.clock.now();
+    const plus = (minutes: number) => new Date(start.getTime() + minutes * 60_000);
+    const heldAt = (minutes: number) =>
+      authority.hasPermissionAt(org, adult, child, 'collect', plus(minutes));
+    // Before the grant's effective start it was not held, whatever holds now.
+    expect(await authority.hasPermission(org, adult, child, 'collect')).toBe(true);
+    expect(await heldAt(-30)).toBe(false);
+    expect(await heldAt(0)).toBe(true);
+
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const header = await authHeaderForPerson(t, support.personId);
+    const review = async () =>
+      (
+        await t.http
+          .post('/v1/access-reviews')
+          .set(header)
+          .set('Idempotency-Key', key())
+          .send({ subjectPersonId: child, reason: 'pickup dispute' })
+      ).body.id as string;
+    const decide = (id: string, body: object) =>
+      t.http
+        .post(`/v1/access-reviews/${id}/decisions`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send(body);
+
+    // A time-bounded restriction [60, 120): suspended inside the window only, even once it ended.
+    t.clock.set(plus(60).toISOString());
+    const bounded = await review();
+    expect(
+      (
+        await decide(bounded, {
+          kind: 'restrict',
+          actorPersonId: adult,
+          effectiveTo: plus(120).toISOString(),
+        })
+      ).status,
+    ).toBe(201);
+    t.clock.set(plus(130).toISOString());
+    expect(await authority.hasPermission(org, adult, child, 'collect')).toBe(true);
+    expect(await heldAt(30)).toBe(true);
+    expect(await heldAt(90)).toBe(false);
+    expect(await heldAt(125)).toBe(true);
+
+    // An open-ended restriction at 150, lifted at 200: not held in between.
+    t.clock.set(plus(150).toISOString());
+    const open = await review();
+    expect((await decide(open, { kind: 'restrict', actorPersonId: adult })).status).toBe(201);
+    t.clock.set(plus(200).toISOString());
+    expect(
+      (await decide(open, { kind: 'lift', grantIds: [people.guardianGrants.collect] })).status,
+    ).toBe(201);
+    expect(await heldAt(175)).toBe(false);
+    expect(await heldAt(205)).toBe(true);
+
+    // Revoked at 240: held before, not after.
+    t.clock.set(plus(240).toISOString());
+    const revoked = await t.http
+      .post(`/v1/access-grants/${people.guardianGrants.collect}/revoke`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ reason: 'withdrawn' });
+    expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+    expect(await heldAt(230)).toBe(true);
+    expect(await heldAt(245)).toBe(false);
+  });
 });

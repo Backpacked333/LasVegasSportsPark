@@ -38,6 +38,21 @@ export interface AuthorityLookupPort {
     permission: GrantPermissionValue,
     trx?: Trx,
   ): Promise<boolean>;
+  /**
+   * Whether the permission was effective at a past instant `asOf` (SPK-AT-018 "stale authority is
+   * not asserted", SPK-ENTRY-007): the grant and its relationship inside their effective dates,
+   * not yet revoked or ended, and under no suspension in force at that instant (from the
+   * append-only suspension history). It answers "was it held then", never "is it held now": a
+   * caller asserting authority at a recorded time also needs `hasPermission`.
+   */
+  hasPermissionAt(
+    organizationId: string,
+    actorPersonId: string,
+    subjectPersonId: string,
+    permission: GrantPermissionValue,
+    asOf: Date,
+    trx?: Trx,
+  ): Promise<boolean>;
   /** People who currently hold the permission over the subject (e.g. message recipients, SPK-COMMS-003). */
   actorsWithPermission(
     organizationId: string,

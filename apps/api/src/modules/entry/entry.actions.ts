@@ -67,10 +67,16 @@ export const EntryActions = defineActions({
   readCheckin: {
     id: 'entry.read_checkin',
     description: 'Read a session check-in (staff, or a holder of view over the person)',
-    staffRoles: [...READERS, ...FIELD],
+    staffRoles: READERS,
     subjectPermission: 'view',
     allowSelf: true,
-    requirements: ['SPK-ENTRY-004'],
+    requirements: ['SPK-ENTRY-004', '§4.14'],
+  },
+  readAssignedCheckin: {
+    id: 'entry.read_assigned_checkin',
+    description: 'Read a check-in of an activity the coach or official is assigned to',
+    staffRoles: FIELD,
+    requirements: ['SPK-ENTRY-004', 'SPK-UX-007', '§4.14'],
   },
   recordAttendance: {
     id: 'entry.record_attendance',

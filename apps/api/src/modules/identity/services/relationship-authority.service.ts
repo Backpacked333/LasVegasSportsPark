@@ -55,6 +55,79 @@ export class RelationshipAuthority implements RelationshipAuthorityPort, Authori
     return row !== undefined;
   }
 
+  /**
+   * AuthorityLookupPort.hasPermissionAt: the effectivity rule evaluated at `asOf` from history —
+   * revocation and relationship end times, both windows, and the append-only
+   * access_grant_suspensions (migration 0103), never the suspension projection columns, which
+   * describe only the present. A relationship's status change carries no time, so a caller
+   * pairs this with `hasPermission` (which requires the relationship to be active now).
+   */
+  async hasPermissionAt(
+    organizationId: string,
+    actorPersonId: string,
+    subjectPersonId: string,
+    permission: GrantPermissionValue,
+    asOf: Date,
+    trx?: Trx,
+  ): Promise<boolean> {
+    const db = trx ?? currentTransaction() ?? this.db;
+    if (actorPersonId === subjectPersonId) {
+      return this.hasPermission(organizationId, actorPersonId, subjectPersonId, permission, trx);
+    }
+    const row = await db
+      .selectFrom('access_grants')
+      .innerJoin('relationships', (join) =>
+        join
+          .onRef('relationships.organization_id', '=', 'access_grants.organization_id')
+          .onRef('relationships.id', '=', 'access_grants.relationship_id'),
+      )
+      .select('access_grants.id')
+      .where('access_grants.organization_id', '=', organizationId)
+      .where('access_grants.actor_person_id', '=', actorPersonId)
+      .where('access_grants.subject_person_id', '=', subjectPersonId)
+      .where('access_grants.permission', '=', permission)
+      .where((eb) =>
+        eb.or([
+          eb('access_grants.revoked_at', 'is', null),
+          eb('access_grants.revoked_at', '>', asOf),
+        ]),
+      )
+      .where('access_grants.effective_from', '<=', asOf)
+      .where((eb) =>
+        eb.or([
+          eb('access_grants.effective_to', 'is', null),
+          eb('access_grants.effective_to', '>', asOf),
+        ]),
+      )
+      .where('relationships.effective_from', '<=', asOf)
+      .where((eb) =>
+        eb.or([
+          eb('relationships.effective_to', 'is', null),
+          eb('relationships.effective_to', '>', asOf),
+        ]),
+      )
+      .where((eb) =>
+        eb.or([eb('relationships.ended_at', 'is', null), eb('relationships.ended_at', '>', asOf)]),
+      )
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('access_grant_suspensions as s')
+              .select('s.id')
+              .whereRef('s.organization_id', '=', 'access_grants.organization_id')
+              .whereRef('s.grant_id', '=', 'access_grants.id')
+              .where('s.suspended_at', '<=', asOf)
+              .where((eb) =>
+                eb.or([eb('s.suspended_until', 'is', null), eb('s.suspended_until', '>', asOf)]),
+              )
+              .where((eb) => eb.or([eb('s.ended_at', 'is', null), eb('s.ended_at', '>', asOf)])),
+          ),
+        ),
+      )
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
   async actorsWithPermission(
     organizationId: string,
     subjectPersonId: string,

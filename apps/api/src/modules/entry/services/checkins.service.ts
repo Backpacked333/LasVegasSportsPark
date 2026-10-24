@@ -25,7 +25,13 @@ import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity'
 import { EntryActions } from '../entry.actions';
 import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
-import { activityDetailOf, organizationOf, toCheckin, type CheckinRow } from '../entry.shared';
+import {
+  activityDetailOf,
+  audienceOf,
+  organizationOf,
+  toCheckin,
+  type CheckinRow,
+} from '../entry.shared';
 import { SessionCheckinMachine } from '../entry.state-machines';
 import { ActivityResolver, refOf, type ResolvedActivity } from './activity-resolver';
 import { ArrivalChecks, hasBlocking, type ParticipationBasis } from './arrival-checks';
@@ -283,12 +289,17 @@ export class CheckinsService {
     });
   }
 
-  /** Protected read: staff of the facility, the assigned coach, or a holder of `view` over the person. */
+  /**
+   * Protected read (§4.14 object- and field-level authorization, SPK-UX-007): desk and support
+   * staff of the facility, the coach or official assigned to the check-in's activity, or a holder
+   * of `view` over the person; otherwise NOT_FOUND. A customer reads the check-in without the
+   * staff actor's identifiers.
+   */
   async get(principal: Principal, id: string): Promise<SessionCheckin> {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.uow.reader(), organizationId, id);
     if (!row) throw errors.protectedNotFound('session_checkin');
-    await this.authorization.require(principal, EntryActions.readCheckin, {
+    const decision = await this.authorization.decide(principal, EntryActions.readCheckin, {
       type: 'session_checkin',
       id,
       organizationId,
@@ -296,7 +307,21 @@ export class CheckinsService {
       subjectPersonIds: [row.person_id],
       protected: true,
     });
-    return toCheckin(row);
+    if (decision.allowed) return toCheckin(row, audienceOf(decision.basis));
+    const field = await this.authorization.decide(principal, EntryActions.readAssignedCheckin, {
+      type: 'session_checkin',
+      id,
+      organizationId,
+      facilityId: row.facility_id,
+      protected: true,
+    });
+    if (field.allowed && principal.personId) {
+      const activity = await this.resolver.resolve(organizationId, refOf(activityDetailOf(row)));
+      if (await this.scope.isAssigned(organizationId, activity, principal.personId)) {
+        return toCheckin(row, 'staff');
+      }
+    }
+    throw errors.protectedNotFound('session_checkin');
   }
 
   private async afterChange(

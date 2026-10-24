@@ -160,6 +160,23 @@ export class ArrivalChecks {
     return { basis, issues };
   }
 
+  /**
+   * The person's participation basis for the activity (confirmed or pending), or null when they
+   * take no part in it. Used to scope what an assigned coach may act on (SPK-ENTRY-007, §4.14);
+   * reads the same facts as `evaluate`, without forms or finance.
+   */
+  async participationBasis(
+    trx: Trx,
+    organizationId: string,
+    personId: string,
+    activity: ResolvedActivity,
+  ): Promise<ParticipationBasis | null> {
+    const scratch: ArrivalIssue[] = [];
+    return activity.detail.type === 'session'
+      ? this.sessionBasis(trx, organizationId, personId, activity, scratch)
+      : this.eventBasis(trx, organizationId, personId, activity, scratch);
+  }
+
   private async sessionBasis(
     trx: Trx,
     organizationId: string,

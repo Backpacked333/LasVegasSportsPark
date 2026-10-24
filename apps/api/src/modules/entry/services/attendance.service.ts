@@ -39,9 +39,11 @@ import {
   organizationOf,
   toObservation,
   type ObservationRow,
+  type ReadAudience,
 } from '../entry.shared';
 import { ActivityResolver, refOf, type ResolvedActivity } from './activity-resolver';
 import { StaffScope } from './staff-scope';
+import { attendanceLockKey, lockEntrySubjects } from './subject-locks';
 
 export interface NewObservation {
   activity: ResolvedActivity;
@@ -210,6 +212,7 @@ export class AttendanceService implements AttendancePort {
     if (!ref) throw errors.validation('offeringId is required for a session activity.');
     const activity = await this.resolver.resolve(organizationId, ref);
     let personFilter = query.personId ?? null;
+    let audience: ReadAudience = 'staff';
     const target = {
       type: 'activity',
       id: activity.detail.id,
@@ -239,6 +242,8 @@ export class AttendanceService implements AttendancePort {
           protected: true,
         });
         personFilter = query.personId;
+        // §4.14 field-level: a customer reads the history without staff or device identifiers.
+        audience = 'customer';
       }
     }
     let q = this.uow
@@ -260,7 +265,7 @@ export class AttendanceService implements AttendancePort {
       byPerson.set(row.person_id, list);
     }
     const people: PersonAttendance[] = [...byPerson.entries()].map(([personId, list]) =>
-      summarize(personId, list),
+      summarize(personId, list, audience),
     );
     return { activity: activity.detail, people };
   }
@@ -335,6 +340,17 @@ export class AttendanceService implements AttendancePort {
       );
       if (existing) return { row: existing, duplicate: true, conflict: null };
     }
+    // §4.15 / SPK-AT-018: serialize writes about this person in this activity, so two devices (or
+    // two staff) recording contradicting states at once cannot both miss the other's head; the
+    // waiting writer's next read sees the committed contradiction and raises it for review.
+    await lockEntrySubjects(trx, [
+      attendanceLockKey(
+        organizationId,
+        input.activity.detail.type,
+        input.activity.detail.id,
+        input.personId,
+      ),
+    ]);
     const prior = await trx
       .selectFrom('attendance_observations')
       .selectAll()
@@ -485,7 +501,11 @@ export class AttendanceService implements AttendancePort {
 }
 
 /** One person's attendance in an activity: the current heads and the full, uncut history. */
-export function summarize(personId: string, rows: readonly ObservationRow[]): PersonAttendance {
+export function summarize(
+  personId: string,
+  rows: readonly ObservationRow[],
+  audience: ReadAudience = 'staff',
+): PersonAttendance {
   const likes = rows.map(observationLike);
   const heads = currentHeads(likes);
   const correctedBy = new Map<string, string>();
@@ -499,7 +519,7 @@ export function summarize(personId: string, rows: readonly ObservationRow[]): Pe
     status: conflict ? 'conflict' : 'recorded',
     currentObservationIds: heads.map((h) => h.id),
     history: rows.map((row) => ({
-      ...toObservation(row),
+      ...toObservation(row, audience),
       correctedByObservationId: correctedBy.get(row.id) ?? null,
     })),
   };
