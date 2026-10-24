@@ -33,6 +33,10 @@ const INBOX_FAILURE_OWNER = 'system_administrator';
  * Like the outbox, events are claimed with a lease (so concurrent workers never process one event
  * at the same time), failures are retried with backoff, and an event that keeps failing is
  * dead-lettered with a failure owner after `max_attempts`.
+ *
+ * Only authenticated events reach handlers (§4.11 "authenticate provider events"): an event
+ * recorded with `signatureVerified: false` (kept for forensics) is marked `ignored` and never
+ * applied as if it were authentic.
  */
 @Injectable()
 export class Inbox {
@@ -98,12 +102,34 @@ export class Inbox {
   /** Processes received/failed events whose retry time has come. Safe to call concurrently. */
   async runOnce(
     limit = this.config.OUTBOX_BATCH_SIZE,
-  ): Promise<{ processed: number; failed: number; dead: number }> {
+  ): Promise<{ processed: number; failed: number; dead: number; ignored: number }> {
     // A token per claim, so overlapping runs in one process are told apart as well.
     const lease = `${this.config.WORKER_ID}:${newId()}`;
     const rows = await this.claim(limit, lease);
-    const summary = { processed: 0, failed: 0, dead: 0 };
+    const summary = { processed: 0, failed: 0, dead: 0, ignored: 0 };
     for (const row of rows) {
+      if (!row.signature_verified) {
+        // §4.11: an unauthenticated provider event is never applied; it stays on record, ignored.
+        const ignored = await this.db
+          .updateTable('inbox_events')
+          .set({
+            status: 'ignored',
+            processed_at: this.clock.now(),
+            last_error: 'signature not verified; the event was not applied',
+            locked_by: null,
+            locked_until: null,
+          })
+          .where('id', '=', row.id)
+          .where('locked_by', '=', lease)
+          .executeTakeFirst();
+        if (Number(ignored.numUpdatedRows) > 0) {
+          this.logger.warn(
+            `inbox event ${row.id} (${row.provider}/${row.provider_event_id}) ignored: signature not verified`,
+          );
+          summary.ignored += 1;
+        }
+        continue;
+      }
       const event: InboundEvent = {
         id: row.id,
         provider: row.provider,

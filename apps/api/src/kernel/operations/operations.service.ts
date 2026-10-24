@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  type ActionId,
   type Operation,
   type OperationStatus,
   type Principal,
@@ -9,7 +10,7 @@ import {
 import { json, type Db, type OperationsTable } from '@sportspark/db';
 import type { Selectable } from 'kysely';
 import { snapshotActor } from '../audit/audit.writer';
-import { defineActions } from '../authorization/actions';
+import { defineActions, type ActionDefinition } from '../authorization/actions';
 import { AuthorizationService } from '../authorization/authorization.service';
 import type { Clock } from '../clock';
 import { currentCommitFence } from '../database/commit-fence';
@@ -17,10 +18,15 @@ import { ensureUpdated } from '../database/revision';
 import type { Trx } from '../database/unit-of-work';
 import { CLOCK, DATABASE } from '../tokens';
 
+/**
+ * The default read authority for an operation that names no read scope of its own. Coaches and
+ * officials are not operators of other people's commands: they read the outcomes they requested
+ * (§4.14 least privilege). An owning module narrows a sensitive outcome further with `readScope`.
+ */
 export const OperationActions = defineActions({
   read: {
     id: 'operations.read',
-    description: 'Read an asynchronous operation outcome (requester or staff)',
+    description: 'Read an asynchronous operation outcome (requester or operating staff)',
     staffRoles: [
       'front_desk',
       'league_manager',
@@ -31,12 +37,22 @@ export const OperationActions = defineActions({
       'general_manager',
       'system_administrator',
       'support_operator',
-      'coach',
-      'official',
     ],
-    requirements: ['§4.8'],
+    requirements: ['§4.8', '§4.14'],
   },
 });
+
+/**
+ * Who besides the requester may read an operation's outcome (§4.14 object-level authorization):
+ * the owning module's read action, evaluated against the facility and the subject persons the
+ * operation concerns. A customer-private outcome passes the subjects (a guardian with the
+ * action's permission reads it; another household does not).
+ */
+export interface OperationReadScope {
+  action: ActionDefinition;
+  facilityId?: string | null;
+  subjectPersonIds?: readonly string[];
+}
 
 export interface CreateOperationInput {
   organizationId: string;
@@ -51,6 +67,8 @@ export interface CreateOperationInput {
    * `primary: true` so the key names the coordinator's operation instead.
    */
   primary?: boolean;
+  /** Read authority besides the requester; default: `operations.read`, organization-wide. */
+  readScope?: OperationReadScope;
 }
 
 const TERMINAL: OperationStatus[] = ['succeeded', 'failed', 'compensated'];
@@ -82,6 +100,9 @@ export class OperationsService {
         created_at: now,
         updated_at: now,
         completed_at: null,
+        read_action: input.readScope?.action.id ?? null,
+        facility_id: input.readScope?.facilityId ?? null,
+        subject_person_ids: [...(input.readScope?.subjectPersonIds ?? [])],
       })
       .execute();
     // §4.9: the request's idempotency key names the operation it started, atomically with it.
@@ -135,15 +156,23 @@ export class OperationsService {
       .executeTakeFirst();
     if (!row || row.organization_id !== principal.organizationId)
       throw errors.protectedNotFound('operation');
-    const decision = await this.authorization.decide(principal, OperationActions.read, {
+    const requester = row.requested_by as { accountId?: string | null };
+    const isRequester = principal.accountId !== null && requester.accountId === principal.accountId;
+    if (isRequester) return toOperation(row);
+    // §4.14: the owning module's read action within the operation's facility and subjects. An
+    // action id that is no longer registered grants nothing (the decision denies unknown actions).
+    const action: ActionId | ActionDefinition = row.read_action
+      ? (row.read_action as ActionId)
+      : OperationActions.read;
+    const decision = await this.authorization.decide(principal, action, {
       type: 'operation',
       id,
       organizationId: row.organization_id,
+      facilityId: row.facility_id,
+      subjectPersonIds: row.subject_person_ids.length > 0 ? row.subject_person_ids : undefined,
       protected: true,
     });
-    const requester = row.requested_by as { accountId?: string | null };
-    const isRequester = principal.accountId !== null && requester.accountId === principal.accountId;
-    if (!decision.allowed && !isRequester) throw errors.protectedNotFound('operation');
+    if (!decision.allowed) throw errors.protectedNotFound('operation');
     return toOperation(row);
   }
 }
