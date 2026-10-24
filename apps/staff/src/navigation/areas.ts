@@ -11,6 +11,10 @@ export interface StaffArea {
   path: string;
   screenIds: string;
   purpose: string;
+  /** The area's screen group registers its own routes in App.tsx (no placeholder). */
+  ownRoutes?: boolean;
+  /** Built screens of an area that still shows its placeholder, linked from the area page. */
+  links?: readonly { path: string; title: string; screenIds: string }[];
 }
 
 export const STAFF_AREAS: readonly StaffArea[] = [
@@ -21,6 +25,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-01, SCR-S-02, SCR-S-50',
     purpose:
       'Operating home: current activities, field status, arrivals, readiness, coverage, exceptions (SPK-UX-006).',
+    ownRoutes: true,
   },
   {
     id: 'schedule',
@@ -42,6 +47,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/programs',
     screenIds: 'SCR-S-14, SCR-S-15',
     purpose: 'Programs, offerings, sessions and publication.',
+    ownRoutes: true,
   },
   {
     id: 'teams',
@@ -63,6 +69,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/registrations',
     screenIds: 'SCR-S-24 to SCR-S-27',
     purpose: 'Approvals, assisted registration, waitlists, cancellations and transfers.',
+    ownRoutes: true,
   },
   {
     id: 'arrival',
@@ -85,6 +92,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-35 to SCR-S-38, SCR-S-53 to SCR-S-55, SCR-S-57',
     purpose:
       'Obligations, payment attempts and unknown outcomes, refunds and credits, reconciliation.',
+    ownRoutes: true,
   },
   {
     id: 'communications',

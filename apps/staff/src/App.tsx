@@ -11,6 +11,7 @@ import { SignInScreen } from './screens/sign-in/SignInScreen';
 import { TodayScreen } from './screens/today/TodayScreen';
 import { WorkspaceScreen } from './screens/workspace/WorkspaceScreen';
 import { RequireSession } from './session/RequireSession';
+import { registrationFinanceRoutes } from './features/registration-finance/routes';
 
 export function AppRoutes() {
   return (
@@ -23,6 +24,8 @@ export function AppRoutes() {
           </RequireSession>
         }
       >
+        {/* Before the area placeholders: the first of equal routes wins. */}
+        {registrationFinanceRoutes()}
         <Route index element={<Navigate to="/today" replace />} />
         <Route path="/today" element={<TodayScreen />} />
         {STAFF_AREAS.filter((a) => a.id !== 'today').map((area) => (

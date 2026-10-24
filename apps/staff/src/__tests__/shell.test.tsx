@@ -56,7 +56,7 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
     finance.focus();
     await user.keyboard('{Enter}');
     expect(await screen.findByRole('heading', { level: 2, name: 'Finance' })).toBeInTheDocument();
-    expect(screen.getByText(/Not built yet \(SCR-S-35 to SCR-S-38/)).toBeInTheDocument();
+    expect(screen.getByText(/Not built yet \(SCR-S-53 to SCR-S-55, SCR-S-57/)).toBeInTheDocument();
   });
 
   it('offers a skip link and a menu button that exposes its state for narrow screens', async () => {
