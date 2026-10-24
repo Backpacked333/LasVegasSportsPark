@@ -1318,7 +1318,7 @@ query(
 command(
   'post',
   '/team-entries/{id}/invitations',
-  'Invite a prospective team member (§4.8)',
+  'Invite a prospective team member (§4.8); the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   CreateTeamInvitationBody,
   TeamInvitationIssuedSchema,
 );

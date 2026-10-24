@@ -43596,7 +43596,7 @@
         }
       },
       "post": {
-        "summary": "Create a private calendar feed; the token is returned once",
+        "summary": "Create a private calendar feed; the token is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD",
         "description": "Implements SPK-COMMS-008. Requires an Idempotency-Key header (§4.9).",
         "tags": [
           "Communications"
@@ -44313,7 +44313,7 @@
     },
     "/people/{id}/claims": {
       "post": {
-        "summary": "Issue a claim token so a verified customer can claim a staff-created participant",
+        "summary": "Issue a claim token so a verified customer can claim a staff-created participant; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD",
         "description": "Implements SPK-IAM-002. Requires an Idempotency-Key header (§4.9).",
         "tags": [
           "Identity"
@@ -45080,7 +45080,7 @@
     },
     "/invitations": {
       "post": {
-        "summary": "Invite a person to hold permissions over a scope",
+        "summary": "Invite a person to hold permissions over a scope; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD",
         "description": "Implements SPK-IAM-004. Requires an Idempotency-Key header (§4.9).",
         "tags": [
           "Identity"
@@ -48348,7 +48348,7 @@
     },
     "/team-entries/{id}/invitations": {
       "post": {
-        "summary": "Invite a prospective team member (§4.8)",
+        "summary": "Invite a prospective team member (§4.8); the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD",
         "tags": [
           "Competition"
         ],
@@ -64604,7 +64604,7 @@
     },
     "/reports/exports": {
       "post": {
-        "summary": "Create an expiring, single-use export of a stored run (independent export permission, audited)",
+        "summary": "Create an expiring, single-use export of a stored run (independent export permission, audited); the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD",
         "tags": [
           "Reporting"
         ],

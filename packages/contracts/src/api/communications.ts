@@ -569,7 +569,8 @@ register({
 register({
   method: 'post',
   path: '/me/calendar-feeds',
-  summary: 'Create a private calendar feed; the token is returned once',
+  summary:
+    'Create a private calendar feed; the token is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   requirements: 'SPK-COMMS-008',
   body: CreateCalendarFeedBody,
   response: CalendarFeedCreatedSchema,

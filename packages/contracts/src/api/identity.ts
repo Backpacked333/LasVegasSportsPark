@@ -682,7 +682,8 @@ register({
 register({
   method: 'post',
   path: '/people/{id}/claims',
-  summary: 'Issue a claim token so a verified customer can claim a staff-created participant',
+  summary:
+    'Issue a claim token so a verified customer can claim a staff-created participant; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   requirements: 'SPK-IAM-002',
   params: IdParams,
   body: IssueClaimBody,
@@ -769,7 +770,8 @@ register({
 register({
   method: 'post',
   path: '/invitations',
-  summary: 'Invite a person to hold permissions over a scope',
+  summary:
+    'Invite a person to hold permissions over a scope; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   requirements: 'SPK-IAM-004',
   body: CreateInvitationBody,
   response: InvitationIssuedResponse,

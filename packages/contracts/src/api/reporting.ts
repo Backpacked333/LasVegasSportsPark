@@ -672,7 +672,7 @@ command(
 
 command(
   '/reports/exports',
-  'Create an expiring, single-use export of a stored run (independent export permission, audited)',
+  'Create an expiring, single-use export of a stored run (independent export permission, audited); the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   CreateExportBody,
   ReportExportCreatedSchema,
 );
