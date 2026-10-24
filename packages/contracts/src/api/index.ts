@@ -11,4 +11,5 @@ export * from './finance';
 export * from './identity';
 export * from './operations';
 export * from './scheduling';
+export * from './support';
 export * from './workforce';
