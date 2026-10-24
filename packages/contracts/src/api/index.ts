@@ -6,6 +6,7 @@ export * from './competition-matches';
 export * from './competition';
 export * from './enrollment';
 export * from './facilities';
+export * from './finance';
 export * from './identity';
 export * from './operations';
 export * from './scheduling';
