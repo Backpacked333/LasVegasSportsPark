@@ -1,0 +1,67 @@
+# @sportspark/api-client
+
+Typed HTTP client for the Sportspark API, shared by the customer app (`apps/mobile`) and the staff
+dashboard (`apps/staff`). Spec §4.1 ("Shared API and event contracts"), §4.8 to §4.10, §4.13.
+
+Status legend (§6.7): **Verified** = implemented and asserted by a test in this package.
+**Proposed** = engineering proposal awaiting operator approval. **Pending decision** = needs an
+operator answer (owner from `docs/package-a/decision-register.md`).
+
+## What it does
+
+| Behaviour                                                                                                                                                                                                                                                                                                             | Status                                                                                                                                                                                            | Evidence                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Request and response types come from `docs/api/openapi.json` through `src/generated/paths.ts` (openapi-typescript). A path, method, path parameter, query or body the document does not define fails to compile.                                                                                                      | **Verified**                                                                                                                                                                                      | `src/__tests__/client.spec.ts` ("compile-time contract", checked by `tsc`)                                |
+| `paths.ts` is current: the test renders the document again and compares byte for byte. Regenerate with `pnpm --filter @sportspark/api-client generate` (or `pnpm api-client:generate`). CI also regenerates after `pnpm openapi` and fails on a diff.                                                                 | **Verified**                                                                                                                                                                                      | `src/__tests__/contract-drift.spec.ts`, `.github/workflows/ci.yml`                                        |
+| The bearer token is read from an injected `SessionStore` on every request (no copy kept in the client).                                                                                                                                                                                                               | **Verified**                                                                                                                                                                                      | `client.spec.ts`                                                                                          |
+| Every command (any non-GET) requires a `CommandIntent`; its key is sent as `Idempotency-Key` and reused when the same intent is retried. `CommandIntentTracker` keeps one intent per unchanged input until `complete()`.                                                                                              | **Verified**                                                                                                                                                                                      | `client.spec.ts`, `helpers.spec.ts`                                                                       |
+| The §4.10 error body becomes `ApiError` (`code`, `message`, `nextAction`, `correlationId`, `details`, `retryable`, `outcomeUnknown`, `isNotFound`, `isPermissionRestriction`, `isStale`). No connection, timeouts and non-contract bodies get client codes (`NETWORK_UNAVAILABLE`, `TIMEOUT`, `UNEXPECTED_RESPONSE`). | **Verified**                                                                                                                                                                                      | `client.spec.ts`; `contract-drift.spec.ts` keeps the code list equal to `packages/contracts` `ErrorCodes` |
+| Every request carries `X-Sportspark-Client: sportspark-<app>/<version> (<platform>)` (`CLIENT_INFO_HEADER`).                                                                                                                                                                                                          | **Verified** (client side). The API reads no such header today; the name is **Proposed** for the version gate                                                                                     | `client.spec.ts`                                                                                          |
+| `CLIENT_UPDATE_REQUIRED` or any HTTP 426 becomes `UpdateRequiredError` (with `minimumVersion` from `details`) and calls `onUpdateRequired`.                                                                                                                                                                           | **Verified** (client side). The API does not send it: the error code is DEC-092 and the minimum version and compatibility window are DEC-061, both **Pending decision** (Technical lead/operator) | `client.spec.ts`                                                                                          |
+| `AUTHENTICATION_REQUIRED` calls `onAuthenticationRequired` (the apps clear the stored session).                                                                                                                                                                                                                       | **Verified**                                                                                                                                                                                      | `client.spec.ts`                                                                                          |
+| `presentationForError` and `recoveryActionFor` give both apps the same SPK-UX-008 state and recovery wording for every `nextAction` in `ErrorCodes`.                                                                                                                                                                  | **Verified**                                                                                                                                                                                      | `helpers.spec.ts`                                                                                         |
+
+## Using it
+
+```ts
+import { createApiClient, MemorySessionStore } from '@sportspark/api-client';
+
+const api = createApiClient({
+  baseUrl: 'http://localhost:3000/v1', // API origin plus the version prefix
+  session: sessionStore, // SecureSessionStore (mobile), BrowserSessionStore (staff)
+  clientInfo: { app: 'mobile', platform: 'ios', version: '0.1.0' },
+  generateKey, // secure random keys; React Native passes expo-crypto's randomUUID
+  onUpdateRequired: (e) => showUpdateRequired(e),
+  onAuthenticationRequired: () => signOut(),
+});
+
+const page = await api.get('/me/inbox', { query: { limit: 50 } }); // typed InboxPage
+const intent = api.newIntent(); // one per user decision; reuse it on retry
+await api.post('/assignments/{id}/accept', {
+  path: { id },
+  body: { expectedRevision: assignment.revision },
+  intent,
+});
+```
+
+Screens do not call the client directly; they use the apps' `useApiQuery` and `useApiCommand`
+hooks (see the app READMEs). Tests use `@sportspark/api-client/testing`: `createFakeFetch` routes
+`"<METHOD> <template>"` to static or computed responses and answers anything else `NOT_FOUND`,
+`fakeResponse`, `apiErrorBody` and `sequentialKeys`.
+
+## Gaps found in the API contract
+
+- 30 commands require `Idempotency-Key` (their descriptions say so) but do not declare the header
+  parameter in the OpenAPI document (for example `POST /people`, `POST /me/inbox/{id}/read`). The
+  client therefore requires an intent on every non-GET call, not only where the header is declared.
+- The error response schema types `code` as a free string; the client keeps its own list and a test
+  ties it to `packages/contracts`.
+
+## Dependencies
+
+| Package                 | Version     | Published  | Why                                                                         |
+| ----------------------- | ----------- | ---------- | --------------------------------------------------------------------------- |
+| `openapi-typescript`    | 7.13.0      | 2026-02-11 | Generates `src/generated/paths.ts` from `docs/api/openapi.json` (dev only). |
+| `@sportspark/contracts` | workspace:* | n/a        | Drift test only: the error code list must equal `ErrorCodes` (dev only).    |
+
+The runtime has no dependencies: it uses the platform `fetch`, `AbortController` and `URLSearchParams`.

@@ -13,3 +13,12 @@ coverage/
 # Claude Code workflow worktrees and local session state
 .claude/worktrees/
 .claude/merge.lock/
+
+# Expo (apps/mobile): local state, export output (dist/ above), native projects from prebuild
+.expo/
+expo-env.d.ts
+apps/mobile/ios/
+apps/mobile/android/
+*.hbc
+# Vite (apps/staff): build output is dist/ above; local env files are .env.* above
+.vite/
