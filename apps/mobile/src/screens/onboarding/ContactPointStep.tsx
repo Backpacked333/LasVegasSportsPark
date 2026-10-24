@@ -6,9 +6,9 @@
  * to the managed identity provider, DEC-018 (Technical lead/account owners): shown as pending.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useApiCommand } from '../../api/useApiCommand';
+import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -21,6 +21,7 @@ import { ChoiceGroup, Paragraph, SectionHeader, TextField } from '../account/com
 
 type ContactPoint = Schema<'ContactPoint'>;
 type ContactKind = ContactPoint['kind'];
+type AddRequest = CommandRequest<'post', '/people/{id}/contact-points'>;
 
 export type ContactState = 'verified' | 'pending' | 'none';
 
@@ -109,26 +110,46 @@ function AddContactPoint({
 
   const formatError = contactFormatError(kind, value);
   const apiFieldError = add.error?.code === 'VALIDATION_FAILED' ? add.error.message : null;
+  // The exact request of the intent in flight (§4.9): "Try again" resends it unchanged, so a
+  // refetch of the person between attempts (which can flip `isPrimary`) never makes a new key and
+  // a second contact point. Cleared on success, on reset and when the input changes.
+  const sent = useRef<AddRequest | null>(null);
 
-  const submit = async () => {
-    setAttempted(true);
-    if (formatError) return;
+  const send = async (request: AddRequest) => {
+    sent.current = request;
     try {
-      await add.submit({
-        path: { id: personId },
-        body: {
-          kind,
-          value: value.trim(),
-          // Primary only when there is none of this kind yet: never demote an existing primary.
-          isPrimary: !existing.some((p) => p.kind === kind),
-          verified: false,
-        },
-      });
+      await add.submit(request);
+      sent.current = null;
       setValue('');
       setAttempted(false);
     } catch {
       // add.error is rendered below; the entered value is kept.
     }
+  };
+
+  const submit = async () => {
+    setAttempted(true);
+    if (formatError) return;
+    await send({
+      path: { id: personId },
+      body: {
+        kind,
+        value: value.trim(),
+        // Primary only when there is none of this kind yet: never demote an existing primary.
+        isPrimary: !existing.some((p) => p.kind === kind),
+        verified: false,
+      },
+    });
+  };
+
+  const retry = async () => {
+    if (sent.current) await send(sent.current);
+    else await submit();
+  };
+
+  const resetIntent = () => {
+    sent.current = null;
+    add.reset();
   };
 
   return (
@@ -138,7 +159,7 @@ function AddContactPoint({
         value={kind}
         onChange={(next) => {
           setKind(next);
-          add.reset();
+          resetIntent();
         }}
         options={[
           { value: 'email', label: 'Email' },
@@ -151,7 +172,7 @@ function AddContactPoint({
         value={value}
         onChangeText={(next) => {
           setValue(next);
-          if (add.error) add.reset();
+          resetIntent();
         }}
         keyboardType={kind === 'email' ? 'email-address' : 'phone-pad'}
         autoComplete={kind === 'email' ? 'email' : 'tel'}
@@ -168,7 +189,7 @@ function AddContactPoint({
           accessibilityHint={offline ? 'Needs a connection' : undefined}
         />
       </View>
-      {add.error && !apiFieldError ? <AddError error={add.error} onRetry={submit} /> : null}
+      {add.error && !apiFieldError ? <AddError error={add.error} onRetry={retry} /> : null}
     </View>
   );
 }

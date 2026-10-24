@@ -16,7 +16,7 @@ import {
   SELF,
   TOKEN,
 } from '../../account/__tests__/fixtures';
-import { OnboardingScreen } from '../OnboardingScreen';
+import { OnboardingRoute, OnboardingScreen } from '../OnboardingScreen';
 
 const SELF_PERSON = person(SELF, 'Alex', 'Morgan');
 
@@ -235,6 +235,48 @@ describe('SCR-C-01 OnboardingScreen', () => {
     });
   });
 
+  it('§4.9: Try again after no answer resends the same body and key, even after a refetch shows the new point', async () => {
+    let posts = 0;
+    let added = false;
+    const point = contactPoint(
+      '0192f1a0-0000-7000-8000-00000000c104',
+      SELF,
+      'email',
+      'alex@example.test',
+      false,
+    );
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({ person: SELF_PERSON })),
+        'GET /people/{id}': () =>
+          fakeResponse(
+            200,
+            personDetail(SELF_PERSON, added ? [{ ...point, isPrimary: true }] : []),
+          ),
+        'POST /people/{id}/contact-points': () => {
+          posts += 1;
+          added = true; // the first attempt reached the API; its answer is lost
+          if (posts === 1) throw new TypeError('Network request failed');
+          return fakeResponse(201, point);
+        },
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    fireEvent.changeText(await screen.findByLabelText('Email address'), 'alex@example.test');
+    fireEvent.press(screen.getByRole('button', { name: 'Add email' }));
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    // A reconnect or focus refetch now lists the new point, so a rebuilt body would say isPrimary false.
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/people/{id}'] });
+    });
+    fireEvent.press(retry);
+    await waitFor(() => expect(posts).toBe(2));
+    const sent = app.fake.requests.filter((r) => r.method === 'POST');
+    expect(sent[1]?.headers['idempotency-key']).toBe(sent[0]?.headers['idempotency-key']);
+    expect(sent[1]?.body).toEqual(sent[0]?.body);
+    expect(sent[0]?.body).toMatchObject({ isPrimary: true });
+  });
+
   it('shows the API VALIDATION_FAILED message at the field and keeps the input', async () => {
     const app = createTestApp({
       routes: {
@@ -252,6 +294,27 @@ describe('SCR-C-01 OnboardingScreen', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Add email' }));
     expect(await screen.findByText(/The email address is not valid\./)).toBeOnTheScreen();
     expect(screen.getByLabelText('Email address')).toHaveProp('value', 'alex@example.test');
+  });
+
+  it('a used or expired claim code from a link is forgotten, so the next visit does not prefill it', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({ person: null })),
+        'POST /claims/{token}/accept': () =>
+          apiError(409, 'INVALID_TRANSITION', {
+            nextAction: 'reload_current_state',
+            details: { machine: 'claim', from: 'expired', event: 'accept' },
+          }),
+      },
+    });
+    holdLinkSecret('claim', TOKEN);
+    const view = render(<OnboardingRoute />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Claim record' }));
+    expect(await screen.findByText(/This claim code has expired/)).toBeOnTheScreen();
+    expect(readLinkSecret('claim')).toBeNull();
+    view.unmount();
+    render(<OnboardingRoute />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Claim code')).toHaveProp('value', '');
   });
 
   it('offline: claiming is disabled, the code is kept and nothing is sent', async () => {

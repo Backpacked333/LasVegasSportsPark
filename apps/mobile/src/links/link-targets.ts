@@ -96,53 +96,87 @@ export function buildAppLink(target: LinkTarget): string {
   return `${APP_SCHEME}://link?${query.toString()}`;
 }
 
-/** Splits `scheme://rest` into its parts; `null` for a bare path. */
+/**
+ * Splits any URI `scheme:rest` into its parts (`sportspark://x`, `sportspark:/x`, `sportspark:x`
+ * alike); `null` when the input has no scheme.
+ */
 function splitScheme(url: string): { scheme: string; rest: string } | null {
-  const m = /^([a-z][a-z0-9+.-]*):\/\/(.*)$/i.exec(url);
+  const m = /^([a-z][a-z0-9+.-]*):(.*)$/is.exec(url);
   if (!m) return null;
   return { scheme: (m[1] as string).toLowerCase(), rest: m[2] as string };
 }
 
-function pathOf(rest: string, scheme: string): string {
+/** The in-app path a URL names, or `null` when it names none this app accepts. */
+function pathOf(
+  rest: string,
+  scheme: string,
+  options: { development: boolean; verifiedHosts: readonly string[] },
+): string | null {
   if (scheme === 'exp' || scheme === 'exps') {
     // Development server URLs: exp://host:port/--/path?query
     const marker = rest.indexOf('/--/');
     return marker === -1 ? '/' : rest.slice(marker + 3);
   }
   if (scheme === 'http' || scheme === 'https') {
-    const slash = rest.indexOf('/');
-    return slash === -1 ? '/' : rest.slice(slash);
+    if (!rest.startsWith('//')) return null;
+    const authority = rest.slice(2);
+    const end = authority.search(/[/?#]/);
+    const host = (end === -1 ? authority : authority.slice(0, end)).toLowerCase();
+    // Development builds open links from the development server; release builds only from the
+    // verified-link domains, which are none until DEC-061 is decided.
+    if (!options.development && !options.verifiedHosts.includes(host)) return null;
+    const after = end === -1 ? '' : authority.slice(end);
+    return after.startsWith('/') ? after : `/${after}`;
   }
-  // Custom scheme: sportspark://link?x is path "/link?x"; sportspark:///link?x as well.
+  // Custom scheme: sportspark://link?x, sportspark:///link?x, sportspark:/link?x and
+  // sportspark:link?x all name the path "/link?x".
   return `/${rest.replace(/^\/+/, '')}`;
 }
+
+export interface SafeSystemPathOptions {
+  development: boolean;
+  /**
+   * Hosts whose `https` links count as verified (universal links / app links). Pending DEC-061
+   * (Technical lead/operator): empty, so a release build opens no web link.
+   */
+  verifiedHosts?: readonly string[];
+}
+
+const UNSUPPORTED = `${LINK_LANDING_PATH}?problem=unsupported`;
 
 /**
  * `+native-intent` `redirectSystemPath` (§4.13 "Safe deep-link destinations"): every URL the
  * operating system hands the app is rewritten to Home or to the link landing, which validates it.
- * No other route opens from outside the app. Bare paths come only from in-app or test navigation
- * (the operating system always passes a full URL) and are left to the router, whose unknown-path
- * screen is "Link not available".
+ * No other route opens from outside the app, whatever the URL's form: any scheme (with or without
+ * `//`) goes through the same closed list. Only a bare path starting with `/` is left to the router
+ * (it comes from in-app or test navigation; the router's unknown-path screen is "Link not
+ * available"); any other input lands on "Link not available".
  *
  * Proposed default pending DEC-061: the safe external destinations are Home and the link landing.
- * Development server URLs (`exp://`) are accepted only in development builds.
+ * Development server URLs (`exp://`, `http://`) are accepted only in development builds, and
+ * `https://` links in release builds only from configured verified hosts (none yet).
  */
-export function safeSystemPath(path: string, options: { development: boolean }): string {
-  const parts = splitScheme(path.trim());
-  if (!parts) return path;
+export function safeSystemPath(path: string, options: SafeSystemPathOptions): string {
+  const input = path.trim();
+  const parts = splitScheme(input);
+  if (!parts) return input.startsWith('/') && !input.startsWith('//') ? input : UNSUPPORTED;
   const allowedSchemes = new Set([APP_SCHEME, 'https']);
   if (options.development) {
     allowedSchemes.add('exp');
     allowedSchemes.add('exps');
     allowedSchemes.add('http');
   }
-  if (!allowedSchemes.has(parts.scheme)) return `${LINK_LANDING_PATH}?problem=unsupported`;
-  const inApp = pathOf(parts.rest, parts.scheme);
-  const [route = '/', query] = inApp.split('?', 2);
-  const normalized = route.replace(/\/+$/, '') || '/';
+  if (!allowedSchemes.has(parts.scheme)) return UNSUPPORTED;
+  const inApp = pathOf(parts.rest, parts.scheme, {
+    development: options.development,
+    verifiedHosts: (options.verifiedHosts ?? []).map((h) => h.toLowerCase()),
+  });
+  if (inApp === null) return UNSUPPORTED;
+  const [rawRoute = '/', query] = (inApp.split('#', 1)[0] ?? '').split('?', 2);
+  const normalized = rawRoute.replace(/\/+$/, '') || '/';
   if (normalized === '/') return '/';
   if (normalized === LINK_LANDING_PATH) {
     return query ? `${LINK_LANDING_PATH}?${query}` : LINK_LANDING_PATH;
   }
-  return `${LINK_LANDING_PATH}?problem=unsupported`;
+  return UNSUPPORTED;
 }

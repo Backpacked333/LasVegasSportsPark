@@ -21,7 +21,7 @@
  * success (granted scope listed); partial completion: not permitted; recovery required: not
  * applicable, a failed accept shows "Try again" under the same idempotency key.
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
+import { ApiError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -73,6 +73,11 @@ export function invitationStateLabel(state: unknown): string {
 function noLongerOpen(error: ApiError): string | null {
   if (error.code !== 'INVALID_TRANSITION') return null;
   return invitationStateLabel((error.details as { from?: unknown } | undefined)?.from);
+}
+
+function isDeadInvitation(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  return noLongerOpen(error) !== null || error.isNotFound;
 }
 
 /** Route entry: `/invitations/{id}?type=family|team`; the token comes from memory, not the route. */
@@ -168,8 +173,10 @@ function FamilyInvitation({ invitationId, token }: { invitationId: string; token
     try {
       await accept.submit({ path: { id: invitationId }, body: { token } });
       forgetLinkSecret('invitation', invitationId);
-    } catch {
-      // accept.error is rendered below; the invitation is kept for "Try again".
+    } catch (error) {
+      // accept.error is rendered below; the invitation is kept for "Try again" unless the API says
+      // it is closed or unknown, in which case its token is dead and is not offered again.
+      if (isDeadInvitation(error)) forgetLinkSecret('invitation', invitationId);
     }
   };
 
@@ -231,43 +238,81 @@ function StaleInvitation({ label }: { label: string }) {
 function GrantedFor({
   personId,
   permissions,
+  notGranted,
 }: {
   personId: string;
   permissions: FamilyAccepted['grants'][number]['permission'][];
+  /** Requested for this person but not granted: the sender no longer holds them for this person. */
+  notGranted: FamilyAccepted['grants'][number]['permission'][];
 }) {
   const name = personNameText(usePersonName(personId));
+  const granted = permissions.length > 0 ? listPermissions(permissions) : 'no permissions';
+  const left =
+    notGranted.length > 0
+      ? `. Not granted for ${name}, because the sender no longer holds them: ${listPermissions(notGranted)}`
+      : '';
   return (
-    <View accessible accessibilityLabel={`${name}: ${listPermissions(permissions)}`}>
+    <View accessible accessibilityLabel={`${name}: ${granted}${left}`}>
       <Paragraph inset={false}>
-        {name}: {listPermissions(permissions)}
+        {name}: {granted}
       </Paragraph>
+      {notGranted.length > 0 ? (
+        <Paragraph muted inset={false}>
+          Not granted for {name}, because the sender no longer holds them:{' '}
+          {listPermissions(notGranted)}.
+        </Paragraph>
+      ) : null}
     </View>
   );
 }
 
+type Permission = FamilyAccepted['grants'][number]['permission'];
+
+/**
+ * What the acceptance granted, per subject (SPK-IAM-004: the granted scope listed explicitly). The
+ * API's `droppedPermissions` is the union over all subjects, so what was left out is worked out for
+ * each subject: the requested permissions minus that subject's effective grants.
+ */
+export function grantsBySubject(
+  result: FamilyAccepted,
+): { personId: string; granted: Permission[]; notGranted: Permission[] }[] {
+  const subjects: string[] = [];
+  const add = (id: string) => {
+    if (!subjects.includes(id)) subjects.push(id);
+  };
+  for (const relationship of result.relationships) add(relationship.subjectPersonId);
+  for (const grant of result.grants) add(grant.subjectPersonId);
+  return subjects.map((personId) => {
+    const granted = result.grants
+      .filter((g) => g.effective && g.subjectPersonId === personId)
+      .map((g) => g.permission);
+    const notGranted = result.invitation.requestedPermissions.filter((p) => !granted.includes(p));
+    return { personId, granted, notGranted };
+  });
+}
+
 function FamilyAcceptedView({ result }: { result: FamilyAccepted }) {
-  const bySubject = new Map<string, FamilyAccepted['grants'][number]['permission'][]>();
-  for (const grant of result.grants) {
-    if (!grant.effective) continue;
-    bySubject.set(grant.subjectPersonId, [
-      ...(bySubject.get(grant.subjectPersonId) ?? []),
-      grant.permission,
-    ]);
-  }
+  const bySubject = grantsBySubject(result);
+  const anyGranted = bySubject.some((s) => s.granted.length > 0);
   return (
     <View style={styles.result} testID="invitation-accepted">
       <StatusBadge tone="success" label="Accepted" />
       <Paragraph inset={false}>What you can do now:</Paragraph>
-      {bySubject.size === 0 ? (
+      {!anyGranted && bySubject.every((s) => s.notGranted.length === 0) ? (
         <Paragraph inset={false}>No permissions were granted.</Paragraph>
       ) : (
         <View accessibilityRole="list">
-          {[...bySubject.entries()].map(([personId, permissions]) => (
-            <GrantedFor key={personId} personId={personId} permissions={permissions} />
+          {bySubject.map((s) => (
+            <GrantedFor
+              key={s.personId}
+              personId={s.personId}
+              permissions={s.granted}
+              notGranted={s.notGranted}
+            />
           ))}
         </View>
       )}
-      {result.droppedPermissions.length > 0 ? (
+      {bySubject.length === 0 && result.droppedPermissions.length > 0 ? (
         <Paragraph inset={false}>
           Not granted, because the sender no longer holds them:{' '}
           {listPermissions(result.droppedPermissions)}.
@@ -364,8 +409,10 @@ function TeamInvitationForm({
         body: participant === self ? { token } : { token, personId: participant },
       });
       forgetLinkSecret('team-invitation', invitationId);
-    } catch {
-      // accept.error is rendered below; the choice is kept.
+    } catch (error) {
+      // accept.error is rendered below; the choice is kept. A closed or unknown invitation's token
+      // is dead and is not offered again.
+      if (isDeadInvitation(error)) forgetLinkSecret('team-invitation', invitationId);
     }
   };
 

@@ -31,6 +31,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     placementFields: process.env.SPORTSPARK_PLACEMENT_FIELDS
       ? process.env.SPORTSPARK_PLACEMENT_FIELDS.split(',').map((f: string) => f.trim())
       : null,
+    // Verified-link domains (SCR-C-39). Pending DEC-061: unset, so release builds open no https link.
+    verifiedLinkHosts: process.env.SPORTSPARK_VERIFIED_LINK_HOSTS
+      ? process.env.SPORTSPARK_VERIFIED_LINK_HOSTS.split(',').map((h: string) => h.trim())
+      : [],
+    // Whether supervised pickup is used. Pending DEC-075 (and DEC-005): unset, so pickup shows as pending.
+    supervisedPickup:
+      process.env.SPORTSPARK_SUPERVISED_PICKUP === 'true'
+        ? true
+        : process.env.SPORTSPARK_SUPERVISED_PICKUP === 'false'
+          ? false
+          : null,
     // How customers reach the facility for help (SCR-C-38): facility facts, unset until the
     // operator provides them (support coverage is DEC-015).
     supportContact: {

@@ -124,6 +124,31 @@ describe('SCR-C-39 LinkLanding', () => {
     expect(screen.getByText(/Do not repeat it/)).toBeOnTheScreen();
   });
 
+  it('a failed operation shows its error code, the reference and a recovery action (SPK-UX-008)', async () => {
+    const navigate = jest.fn();
+    const app = createTestApp({
+      routes: {
+        'GET /operations/{id}': {
+          status: 200,
+          body: operation('failed', {
+            error: { code: 'CAPACITY_UNAVAILABLE', message: 'The last place was taken.' },
+          }),
+        },
+      },
+    });
+    render(
+      <LinkLanding
+        resolution={{ kind: 'target', target: { to: 'operation', id: OPERATION } }}
+        navigate={navigate}
+      />,
+      { wrapper: app.wrapper },
+    );
+    expect(await screen.findByText('The last place was taken.')).toBeOnTheScreen();
+    expect(screen.getByText('Error code: CAPACITY_UNAVAILABLE. Reference: corr-1')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Contact support' }));
+    expect(navigate).toHaveBeenCalledWith('/support');
+  });
+
   it('shows a target in another household (NOT_FOUND) as not available, without the code (§4.10)', async () => {
     const app = createTestApp({ routes: {} });
     render(

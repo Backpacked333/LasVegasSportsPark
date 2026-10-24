@@ -35,8 +35,18 @@ export function CommandError({
   if (error.isNotFound) {
     return <StateView variant="unavailable" {...(notFound ?? {})} />;
   }
-  if (error.isPermissionRestriction && denied) {
-    return <StateView variant="unavailable" {...denied} />;
+  if (error.isPermissionRestriction) {
+    // SPK-UX-008: a denied permission is shown as not available, with the API's safe reason
+    // unless the screen gives its own words. Never "Something went wrong".
+    return (
+      <StateView
+        variant="unavailable"
+        title={denied?.title ?? 'Not available to you'}
+        description={denied?.description ?? error.message}
+        actionLabel={denied?.actionLabel}
+        onAction={denied?.onAction}
+      />
+    );
   }
   return (
     <StateView

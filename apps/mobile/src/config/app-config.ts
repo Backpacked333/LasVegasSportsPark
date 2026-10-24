@@ -31,6 +31,16 @@ export interface AppConfig {
    * unset until the operator configures them (support coverage is DEC-015).
    */
   supportContact?: SupportContact | null;
+  /**
+   * Hosts whose `https` links open the app as verified links (SCR-C-39). Pending DEC-061
+   * (Technical lead/operator): empty until decided, so a release build opens no web link.
+   */
+  verifiedLinkHosts?: readonly string[];
+  /**
+   * Whether supervised pickup is used (DEC-075, Product owner; procedure DEC-005, Operations).
+   * `null` while pending: screens show the pending state instead of presenting pickup as decided.
+   */
+  supervisedPickup?: boolean | null;
 }
 
 export interface SupportContact {
@@ -46,6 +56,8 @@ interface Extra {
   organizationSlug?: unknown;
   placementFields?: unknown;
   supportContact?: unknown;
+  verifiedLinkHosts?: unknown;
+  supervisedPickup?: unknown;
 }
 
 function text(value: unknown): string | null {
@@ -81,5 +93,9 @@ export function readAppConfig(): AppConfig {
       ? extra.placementFields.filter((f): f is string => typeof f === 'string')
       : null,
     supportContact: readSupportContact(extra.supportContact),
+    verifiedLinkHosts: Array.isArray(extra.verifiedLinkHosts)
+      ? extra.verifiedLinkHosts.filter((h): h is string => typeof h === 'string' && h.length > 0)
+      : [],
+    supervisedPickup: typeof extra.supervisedPickup === 'boolean' ? extra.supervisedPickup : null,
   };
 }

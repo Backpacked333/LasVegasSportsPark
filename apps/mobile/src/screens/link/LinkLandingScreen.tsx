@@ -191,7 +191,17 @@ function OperationState({
       />
       <Paragraph>This is the current state. It may have changed since the link was sent.</Paragraph>
       {operation.status === 'failed' && operation.error ? (
-        <Paragraph>{operation.error.message}</Paragraph>
+        <>
+          <Paragraph>{operation.error.message}</Paragraph>
+          <Paragraph muted>
+            {`Error code: ${operation.error.code}${operation.correlationId ? `. Reference: ${operation.correlationId}` : ''}`}
+          </Paragraph>
+          {/* An operation's error carries no next action, so the recovery is to contact support
+              with the reference (SPK-UX-008). */}
+          <View style={styles.actions}>
+            <Button label="Contact support" onPress={() => navigate('/support')} />
+          </View>
+        </>
       ) : null}
       {operation.status === 'recovery_required' ? (
         <Paragraph>The facility is resolving this. Do not repeat it.</Paragraph>

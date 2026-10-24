@@ -64,8 +64,12 @@ export function ClaimForm({
     if (formatError) return;
     try {
       await claim.submit({ path: { token: trimmed } });
-    } catch {
-      // Shown below from claim.error; the code stays in the field (SPK-UX-008).
+    } catch (error) {
+      // Shown below from claim.error; the code stays in the field (SPK-UX-008). A code the API
+      // says is used, expired, withdrawn or unknown is dead: forget the one from the link so no
+      // later screen offers it again.
+      const failure = error as ApiError;
+      if (claimNoLongerOpen(failure) !== null || failure.isNotFound) forgetLinkSecret('claim');
       return;
     }
     // Forget the used code before /me refreshes, so no later step offers it again.

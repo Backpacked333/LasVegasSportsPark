@@ -134,9 +134,10 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Accept invitation' }));
 
     expect(await screen.findByLabelText('Accepted')).toBeOnTheScreen();
-    expect(await screen.findByLabelText('Sam Morgan: View and Collect')).toBeOnTheScreen();
     expect(
-      screen.getByText(/Not granted, because the sender no longer holds them: Pay\./),
+      await screen.findByLabelText(
+        'Sam Morgan: View and Collect. Not granted for Sam Morgan, because the sender no longer holds them: Pay',
+      ),
     ).toBeOnTheScreen();
     expect(screen.getByText('Nothing else was granted.')).toBeOnTheScreen();
 
@@ -145,6 +146,33 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     expect(post?.body).toEqual({ token: TOKEN });
     expect(post?.headers['idempotency-key']).toBe('key-00000001');
     expect(readLinkSecret('invitation', INVITATION)).toBeNull(); // a used token is not kept
+  });
+
+  it('SPK-IAM-004: a household invitation says, per child, what was left out (only one child lost a permission)', async () => {
+    holdLinkSecret('invitation', TOKEN, INVITATION);
+    const household = familyAccepted();
+    household.invitation.scope = { type: 'household', householdId: '0192f1a0-0000-7000-8000-00000000f001' } as never;
+    household.invitation.requestedPermissions = ['view', 'pay'];
+    household.grants = [grant('view', CHILD), grant('pay', CHILD), grant('view', CHILD_TWO)];
+    household.droppedPermissions = ['pay'];
+    const app = createTestApp({
+      routes: {
+        'POST /invitations/{id}/accept': ok(household),
+        'GET /people/{id}': peopleRoute([SAM, RIO]),
+        'GET /me': ok(me({})),
+      },
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
+    expect(await screen.findByLabelText('Sam Morgan: View and Pay')).toBeOnTheScreen();
+    expect(
+      await screen.findByLabelText(
+        'Rio Morgan: View. Not granted for Rio Morgan, because the sender no longer holds them: Pay',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/^Not granted, because/)).toBeNull();
   });
 
   it('permission restriction: an invitation addressed to someone else (NOT_FOUND) is "not available", with no hint it exists', async () => {

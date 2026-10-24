@@ -51,6 +51,7 @@ function prefs(overrides: Partial<Record<string, Partial<Pref>>> = {}) {
   return { personId: SELF, preferences: rows };
 }
 
+const TEST_REVOKED_AT = '2026-10-24T11:00:00.000Z';
 const FEED = {
   id: '0192f1a0-0000-7000-8000-00000000f101',
   personId: SELF,
@@ -239,6 +240,36 @@ describe('SCR-C-36 calendar feeds (SPK-COMMS-008)', () => {
     const revoke = app.fake.requests.find((r) => r.route === '/me/calendar-feeds/{id}/revoke');
     expect(revoke?.body).toEqual({ expectedRevision: 3 });
     expect(revoke?.params.id).toBe(FEED.id);
+  });
+
+  it('stale version: a feed revoked on another device offers a Reload button that shows its current state', async () => {
+    let revokedElsewhere = false;
+    const app = prefsApp({
+      'GET /me/calendar-feeds': () =>
+        fakeResponse(200, {
+          feeds: [revokedElsewhere ? { ...FEED, revokedAt: TEST_REVOKED_AT, revision: 4 } : FEED],
+        }),
+      'POST /me/calendar-feeds/{id}/revoke': () => {
+        revokedElsewhere = true;
+        return fakeResponse(409, {
+          code: 'STALE_REVISION',
+          message: 'The record changed.',
+          correlationId: 'corr-feed',
+          nextAction: 'reload_and_retry',
+        });
+      },
+    });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Revoke Family' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Revoke now' }));
+    const reload = await screen.findByRole('button', { name: 'Reload' });
+    fireEvent.press(reload);
+    expect(
+      await screen.findByLabelText(
+        'Family, Your activities and 1 other person. Not used yet., Feed link revoked',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull();
   });
 
   it('creates a feed for the person and a child they may view, and shares the link shown once', async () => {

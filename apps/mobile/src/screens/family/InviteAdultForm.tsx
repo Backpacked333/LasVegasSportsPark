@@ -9,19 +9,23 @@
  * API's default applies and the screen shows the `expiresAt` the API returns.
  *
  * No messaging provider is selected (§5.2), so the API returns the one-time token to the sender;
- * the screen offers it as a link through native sharing (SPK-UX-001). The link carries opaque ids
+ * the screen offers it as a link through native sharing (SPK-UX-001). Whether supervised pickup is
+ * used is DEC-075 (configuration `supervisedPickup`): while pending, the delegate option makes no
+ * pickup claim and the pending state is shown; when decided "not used", pickup is not offered.
+ * The link carries opaque ids
  * and the token only, no names (§4.14). The sender can withdraw the invitation
  * (`POST /v1/invitations/{id}/revoke`, with a reason and the expected revision).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Share, StyleSheet, View } from 'react-native';
+import { Share, StyleSheet, Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { buildAppLink } from '../../links/link-targets';
-import { useConnectivity } from '../../providers/AppProviders';
+import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { spacing } from '../../ui/theme';
+import { colors, spacing, type } from '../../ui/theme';
 import {
   formatDateTime,
   GRANT_PERMISSIONS,
@@ -30,6 +34,7 @@ import {
 } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
 import { CheckboxRow, ChoiceGroup, Paragraph, TextField } from '../account/components/forms';
+import { invitationStateLabel } from '../invitations/InvitationScreen';
 import { contactFormatError } from '../onboarding/ContactPointStep';
 
 type RelationshipKind = 'guardian' | 'delegate';
@@ -53,6 +58,10 @@ export function InviteAdultForm({
 }) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
+  // DEC-075 (Product owner): whether supervised pickup is used at all. While pending (null) the
+  // pickup wording is not presented as decided; when decided "not used", pickup is not offered.
+  const pickup = useApp().services.config.supervisedPickup ?? null;
+  const permissions = GRANT_PERMISSIONS.filter((g) => pickup !== false || g.permission !== 'collect');
   const [kind, setKind] = useState<RelationshipKind>('guardian');
   const [contactKind, setContactKind] = useState<ContactKind>('email');
   const [contactValue, setContactValue] = useState('');
@@ -116,11 +125,17 @@ export function InviteAdultForm({
         disabled={invite.isProcessing}
         options={[
           { value: 'guardian', label: 'Guardian', detail: 'Another parent or guardian' },
-          {
-            value: 'delegate',
-            label: 'Pickup delegate',
-            detail: 'Someone who collects but is not a guardian',
-          },
+          ...(pickup === false
+            ? []
+            : [
+                {
+                  value: 'delegate' as const,
+                  label: pickup ? 'Pickup delegate' : 'Delegate',
+                  detail: pickup
+                    ? 'Someone who collects but is not a guardian'
+                    : 'Another adult who is not a guardian, with only the permissions you choose',
+                },
+              ]),
         ]}
       />
       <ChoiceGroup<ContactKind>
@@ -145,15 +160,15 @@ export function InviteAdultForm({
       />
       <View style={styles.permissions} accessibilityRole="list" accessibilityLabel="Permissions">
         <Paragraph inset={false}>Permissions to pass on. Each one is separate.</Paragraph>
-        {GRANT_PERMISSIONS.map((g) => {
+        {permissions.map((g) => {
           const held = heldPermissions.includes(g.permission);
+          const detail =
+            g.permission === 'collect' && pickup === null ? 'Collect a child in person' : g.detail;
           return (
             <CheckboxRow
               key={g.permission}
               label={g.label}
-              detail={
-                held ? g.detail : `${g.detail}. You do not hold this, so you cannot pass it on.`
-              }
+              detail={held ? detail : `${detail}. You do not hold this, so you cannot pass it on.`}
               checked={selected.includes(g.permission)}
               disabled={!held || invite.isProcessing}
               onChange={(on) => toggle(g.permission, on)}
@@ -162,14 +177,34 @@ export function InviteAdultForm({
           );
         })}
         {attempted && permissionsError ? (
-          <Paragraph inset={false}>
+          <Text
+            style={styles.error}
+            accessibilityRole="alert"
+            accessibilityLiveRegion="polite"
+            testID="invite-permissions-error"
+          >
             {'✕ '}
             {permissionsError}
-          </Paragraph>
+          </Text>
         ) : null}
       </View>
+      {pickup === null ? (
+        <StateView
+          variant="pending-decision"
+          subject="Supervised pickup"
+          decisions={['DEC-075', 'DEC-005']}
+          owner="Product owner (DEC-075); Operations (DEC-005)"
+        />
+      ) : null}
+      <StateView
+        variant="pending-decision"
+        subject="Choosing how long an invitation stays open"
+        decisions={['POL-044']}
+        owner="Operator/privacy owner (DEC-004)"
+      />
       <Paragraph muted>
-        The facility's invitation policy sets how long the invitation stays open.
+        The app does not set an expiry. After you create the invitation, it shows the date the
+        facility's system gives it.
       </Paragraph>
       <View style={styles.actions}>
         <Button
@@ -206,9 +241,19 @@ function IssuedInvitation({
   const [attempted, setAttempted] = useState(false);
   const revoke = useApiCommand('post', '/invitations/{id}/revoke');
   const link = buildAppLink({ to: 'invitation', id: invitation.id, token: invitation.token });
+  // STALE_REVISION or INVALID_TRANSITION on withdrawing: the invitation changed since it was
+  // created (most likely accepted, or withdrawn on another device). No read of an invitation exists,
+  // so the screen says it is no longer open instead of offering a Reload that cannot help.
+  const closed = revoke.error?.isStale
+    ? revoke.error.code === 'INVALID_TRANSITION'
+      ? invitationStateLabel((revoke.error.details as { from?: unknown } | undefined)?.from)
+      : 'No longer open'
+    : null;
   const status = revoke.data
     ? { tone: 'neutral' as const, label: 'Revoked' }
-    : { tone: 'info' as const, label: `Open until ${formatDateTime(invitation.expiresAt)}` };
+    : closed
+      ? { tone: 'neutral' as const, label: closed }
+      : { tone: 'info' as const, label: `Open until ${formatDateTime(invitation.expiresAt)}` };
   const reasonError = reason.trim().length === 0 ? 'Say why you are withdrawing it.' : null;
 
   const withdraw = async () => {
@@ -234,6 +279,16 @@ function IssuedInvitation({
       </Paragraph>
       {revoke.data ? (
         <Paragraph>The invitation was withdrawn and can no longer be accepted.</Paragraph>
+      ) : closed && revoke.error ? (
+        <>
+          <Paragraph>
+            This invitation changed since you created it: it may have been accepted, or withdrawn
+            on another device. It can no longer be withdrawn here.
+          </Paragraph>
+          <Paragraph muted>
+            {`Error code: ${revoke.error.code}${revoke.error.correlationId ? `. Reference: ${revoke.error.correlationId}` : ''}`}
+          </Paragraph>
+        </>
       ) : (
         <>
           <Paragraph>
@@ -280,4 +335,5 @@ const styles = StyleSheet.create({
   form: { gap: spacing.md, paddingTop: spacing.md },
   permissions: { paddingHorizontal: spacing.lg, gap: spacing.xs },
   actions: { paddingHorizontal: spacing.lg, gap: spacing.sm },
+  error: { ...type.caption, color: colors.danger },
 });

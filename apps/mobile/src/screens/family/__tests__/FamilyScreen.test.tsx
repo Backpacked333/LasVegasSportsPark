@@ -5,6 +5,7 @@
 import { fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Share } from 'react-native';
+import type { AppConfig } from '../../../config/app-config';
 import { createTestApp } from '../../../testing/test-app';
 import {
   apiError,
@@ -52,9 +53,14 @@ const FAMILY = me({
   ],
 });
 
-function familyApp(routes: Record<string, unknown> = {}, reachable = true) {
+function familyApp(
+  routes: Record<string, unknown> = {},
+  reachable = true,
+  config: Partial<AppConfig> = {},
+) {
   return createTestApp({
     reachable,
+    config,
     routes: {
       'GET /me': ok(FAMILY),
       'GET /people/{id}': peopleRoute([SAM]),
@@ -149,14 +155,17 @@ describe('SCR-C-31 FamilyScreen', () => {
     fireEvent.changeText(within(form).getByLabelText('Their email address'), 'jo-example');
     fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
     expect(within(form).getByText(/in the form name@example.com/)).toBeOnTheScreen();
-    expect(within(form).getByText(/Choose at least one permission to pass on/)).toBeOnTheScreen();
+    // SPK-UX-009: the refusal is announced, like a field error.
+    expect(within(form).getByRole('alert', { name: /Choose at least one permission to pass on/ })).toBeOnTheScreen();
     expect(within(form).getByLabelText('Their email address')).toHaveProp('value', 'jo-example');
     expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
   });
 
   it('SPK-IAM-004: invites a pickup delegate with only the chosen permission, shows the API expiry and shares the link', async () => {
     const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' });
-    const app = familyApp({ 'POST /invitations': { status: 201, body: issued() } });
+    const app = familyApp({ 'POST /invitations': { status: 201, body: issued() } }, true, {
+      supervisedPickup: true,
+    });
     render(<FamilyScreen />, { wrapper: app.wrapper });
     const form = await openInvite();
     fireEvent.press(within(form).getByRole('radio', { name: /^Pickup delegate/ }));
@@ -189,6 +198,30 @@ describe('SCR-C-31 FamilyScreen', () => {
     share.mockRestore();
   });
 
+  it('pending DEC-075 and POL-044: pickup and the invitation expiry are shown as waiting on a decision, not as decided', async () => {
+    const app = familyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const form = await openInvite();
+    expect(within(form).queryByRole('radio', { name: /^Pickup delegate/ })).toBeNull();
+    expect(within(form).getByRole('radio', { name: /^Delegate/ })).toBeOnTheScreen();
+    expect(within(form).queryByText(/supervised sessions \(pickup\)/)).toBeNull();
+    expect(
+      within(form).getByText(/Supervised pickup is not available yet: it depends on DEC-075, DEC-005/),
+    ).toBeOnTheScreen();
+    expect(
+      within(form).getByText(/Choosing how long an invitation stays open is not available yet: it depends on POL-044/),
+    ).toBeOnTheScreen();
+    expect(within(form).queryByText(/invitation policy sets how long/)).toBeNull();
+  });
+
+  it('pickup decided as not used (DEC-075): neither a pickup delegate nor Collect is offered', async () => {
+    const app = familyApp({}, true, { supervisedPickup: false });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const form = await openInvite();
+    expect(within(form).queryByRole('radio', { name: /Delegate/ })).toBeNull();
+    expect(within(form).queryByRole('checkbox', { name: 'Collect' })).toBeNull();
+  });
+
   it('withdraws an issued invitation with a reason and the expected revision', async () => {
     const app = familyApp({
       'POST /invitations': { status: 201, body: issued() },
@@ -214,7 +247,7 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(revoke?.headers['idempotency-key']).toBe('key-00000002');
   });
 
-  it('stale version: STALE_REVISION on withdrawing shows the code and "Reload"', async () => {
+  it('stale version: STALE_REVISION on withdrawing says the invitation is no longer open and offers no Withdraw', async () => {
     const app = familyApp({
       'POST /invitations': { status: 201, body: issued() },
       'POST /invitations/{id}/revoke': () =>
@@ -229,8 +262,31 @@ describe('SCR-C-31 FamilyScreen', () => {
     fireEvent.changeText(within(result).getByLabelText('Reason for withdrawing'), 'Mistake');
     fireEvent.press(within(result).getByRole('button', { name: 'Withdraw invitation' }));
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
-    expect(screen.getByText('Reload')).toBeOnTheScreen();
-    expect(within(result).getByLabelText('Reason for withdrawing')).toHaveProp('value', 'Mistake');
+    expect(within(result).getByLabelText('No longer open')).toBeOnTheScreen();
+    expect(within(result).queryByText(/Open until/)).toBeNull();
+    expect(within(result).getByText(/it may have been accepted/)).toBeOnTheScreen();
+    expect(within(result).queryByRole('button', { name: 'Withdraw invitation' })).toBeNull();
+  });
+
+  it('INVALID_TRANSITION on withdrawing names the state the invitation is in', async () => {
+    const app = familyApp({
+      'POST /invitations': { status: 201, body: issued() },
+      'POST /invitations/{id}/revoke': () =>
+        apiError(409, 'INVALID_TRANSITION', {
+          nextAction: 'reload_current_state',
+          details: { machine: 'invitation', from: 'accepted', event: 'revoke' },
+        }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const form = await openInvite();
+    fireEvent.changeText(within(form).getByLabelText('Their email address'), 'jo@example.test');
+    fireEvent.press(within(form).getByRole('checkbox', { name: 'View' }));
+    fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
+    const result = await screen.findByTestId('invitation-issued');
+    fireEvent.changeText(within(result).getByLabelText('Reason for withdrawing'), 'Mistake');
+    fireEvent.press(within(result).getByRole('button', { name: 'Withdraw invitation' }));
+    expect(await within(result).findByLabelText('Accepted')).toBeOnTheScreen();
+    expect(within(result).queryByRole('button', { name: 'Withdraw invitation' })).toBeNull();
   });
 
   it('shows PARTICIPANT_AUTHORITY_REQUIRED with the API reason and keeps every choice', async () => {
@@ -247,7 +303,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     fireEvent.press(within(form).getByRole('checkbox', { name: 'View' }));
     fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
     expect(await screen.findByText(/cannot delegate it/)).toBeOnTheScreen();
-    expect(screen.getByText(/Error code: PARTICIPANT_AUTHORITY_REQUIRED/)).toBeOnTheScreen();
+    // SPK-UX-008: a permission restriction is shown as not available, never as a failure.
+    expect(screen.getByLabelText('Not available to you')).toBeOnTheScreen();
+    expect(screen.queryByText('Something went wrong')).toBeNull();
     expect(within(form).getByRole('checkbox', { name: 'View' })).toBeChecked();
   });
 

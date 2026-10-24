@@ -11,10 +11,11 @@
  *
  * States: loading; empty (nothing in progress: signed out, how to recover); ready (restored access
  * listed); validation failure: not applicable here (no input; the identity provider owns it);
- * permission restriction (RATE_LIMITED shown with its code and next action); stale version: not
- * applicable (read only); offline (cached access with its age); processing: not applicable;
- * success (prior access listed, nothing new); partial completion: not permitted; recovery required
- * (INTEGRATION_UNAVAILABLE shown with its code and "Try again").
+ * stale version: not applicable (read only); offline (cached access with its age); processing: not
+ * applicable; success (prior access listed, nothing new); partial completion: not permitted. A failed
+ * `GET /v1/me` shows its code and "Try again". The rate-limited recovery request (RATE_LIMITED) and
+ * an unavailable identity provider (INTEGRATION_UNAVAILABLE) belong to the self-service recovery,
+ * which is pending DEC-018: there is no recovery command in the app to show them for.
  */
 import { useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';

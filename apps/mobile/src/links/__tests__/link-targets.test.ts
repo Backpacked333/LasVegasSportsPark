@@ -68,9 +68,37 @@ describe('safeSystemPath (+native-intent, §4.13)', () => {
   it('sends app-scheme links to the link landing with their query', () => {
     expect(safeSystemPath('sportspark://link?to=inbox', prod)).toBe('/link?to=inbox');
     expect(safeSystemPath('sportspark:///link?to=family', prod)).toBe('/link?to=family');
-    expect(safeSystemPath('https://app.example/link?to=preferences', prod)).toBe(
-      '/link?to=preferences',
+    expect(
+      safeSystemPath('https://app.example/link?to=preferences', {
+        ...prod,
+        verifiedHosts: ['app.example'],
+      }),
+    ).toBe('/link?to=preferences');
+  });
+
+  it('routes every scheme form through the closed list (no bypass without "//")', () => {
+    expect(safeSystemPath('sportspark:/sign-in', prod)).toBe('/link?problem=unsupported');
+    expect(safeSystemPath('sportspark:family', prod)).toBe('/link?problem=unsupported');
+    expect(safeSystemPath(`sportspark:invitations/${ID}?type=team`, prod)).toBe(
+      '/link?problem=unsupported',
     );
+    expect(safeSystemPath('SPORTSPARK:/link?to=inbox', prod)).toBe('/link?to=inbox');
+    expect(safeSystemPath('sportspark:link?to=inbox', prod)).toBe('/link?to=inbox');
+    expect(safeSystemPath('family', prod)).toBe('/link?problem=unsupported');
+    expect(safeSystemPath('//evil.example/link', prod)).toBe('/link?problem=unsupported');
+  });
+
+  it('opens no https link in a release build until verified-link domains are configured (DEC-061)', () => {
+    expect(safeSystemPath('https://evil.example/link?to=family', prod)).toBe(
+      '/link?problem=unsupported',
+    );
+    expect(
+      safeSystemPath('https://evil.example/link?to=family', {
+        ...prod,
+        verifiedHosts: ['app.example'],
+      }),
+    ).toBe('/link?problem=unsupported');
+    expect(safeSystemPath('https:link?to=family', prod)).toBe('/link?problem=unsupported');
   });
 
   it('opens Home for the bare scheme and refuses every other route from outside the app', () => {

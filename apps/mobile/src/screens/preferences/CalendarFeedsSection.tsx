@@ -10,6 +10,7 @@
  * re-checks `view` on every fetch).
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -82,6 +83,7 @@ export function CalendarFeedsSection() {
 }
 
 function FeedRow({ feed }: { feed: CalendarFeed }) {
+  const queryClient = useQueryClient();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const [confirming, setConfirming] = useState(false);
@@ -140,7 +142,15 @@ function FeedRow({ feed }: { feed: CalendarFeed }) {
             />
           )}
           {revoke.error ? (
-            <CommandError error={revoke.error} onRetry={() => void submit()} />
+            <CommandError
+              error={revoke.error}
+              onRetry={() => void submit()}
+              onReload={() => {
+                // A feed revoked or changed on another device: show its current state.
+                revoke.reset();
+                void queryClient.invalidateQueries({ queryKey: FEEDS_KEY });
+              }}
+            />
           ) : null}
         </View>
       )}

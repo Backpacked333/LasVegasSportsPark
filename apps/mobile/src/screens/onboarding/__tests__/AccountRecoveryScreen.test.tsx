@@ -71,7 +71,7 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
     ).toBeOnTheScreen();
   });
 
-  it('permission restriction: a rate-limited recovery shows RATE_LIMITED and its next action', async () => {
+  it('a failed GET /me (RATE_LIMITED) shows its code and Try again', async () => {
     const app = createTestApp({
       routes: {
         'GET /me': () =>
@@ -89,7 +89,7 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });
 
-  it('recovery required: the identity provider being unavailable shows INTEGRATION_UNAVAILABLE with "Try again"', async () => {
+  it('a failed GET /me (INTEGRATION_UNAVAILABLE) shows its code and Try again', async () => {
     const app = createTestApp({
       routes: {
         'GET /me': () =>

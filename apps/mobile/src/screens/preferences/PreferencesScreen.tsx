@@ -21,9 +21,9 @@
  * failed save keeps the choices and offers "Try again" under the same key.
  */
 import type { Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useApiCommand } from '../../api/useApiCommand';
+import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
@@ -105,23 +105,35 @@ function PreferencesForm({ data }: { data: Preferences }) {
     (p) => !p.locked && draft[keyOf(p)] !== undefined && draft[keyOf(p)] !== p.enabled,
   );
 
-  const submit = async () => {
+  // The submitted preferences of the intent in flight (§4.9): "Try again" resends exactly them, so
+  // a refetch that already shows the change applied never turns the retry into an empty save under
+  // a new key. Cleared on success and when the choices change.
+  const sent = useRef<CommandRequest<'patch', '/me/communication-preferences'> | null>(null);
+
+  const send = async (request: CommandRequest<'patch', '/me/communication-preferences'>) => {
+    sent.current = request;
     try {
-      await save.submit({
-        body: {
-          preferences: changes.map((p) => ({
-            channel: p.channel,
-            category: p.category,
-            enabled: draft[keyOf(p)] as boolean,
-          })),
-        },
-      });
+      await save.submit(request);
+      sent.current = null;
       setDraft({});
       setSaved(true);
     } catch {
       // save.error is rendered below; the choices are kept.
     }
   };
+
+  const submit = () =>
+    send({
+      body: {
+        preferences: changes.map((p) => ({
+          channel: p.channel,
+          category: p.category,
+          enabled: draft[keyOf(p)] as boolean,
+        })),
+      },
+    });
+
+  const retry = () => (sent.current ? send(sent.current) : submit());
 
   return (
     <View>
@@ -155,6 +167,8 @@ function PreferencesForm({ data }: { data: Preferences }) {
                   disabled={offline || save.isProcessing}
                   onChange={(enabled) => {
                     setSaved(false);
+                    sent.current = null;
+                    if (save.error) save.reset();
                     setDraft((current) => ({ ...current, [keyOf(p)]: enabled }));
                   }}
                   testID={`pref-${keyOf(p)}`}
@@ -182,7 +196,7 @@ function PreferencesForm({ data }: { data: Preferences }) {
           </Paragraph>
         ) : null}
       </View>
-      {save.error ? <CommandError error={save.error} onRetry={() => void submit()} /> : null}
+      {save.error ? <CommandError error={save.error} onRetry={() => void retry()} /> : null}
     </View>
   );
 }
