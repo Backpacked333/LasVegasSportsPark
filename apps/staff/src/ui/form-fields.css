@@ -1,0 +1,100 @@
+/* Form fields, fact lists and panels for staff commands (SPK-UX-009: visible labels and focus). */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.field input,
+.field select,
+.field textarea {
+  min-height: var(--touch);
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 2px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+.field [aria-invalid='true'] {
+  border-color: var(--tone-danger);
+  border-style: dashed;
+}
+.field-required {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+.fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-3);
+  margin: 0;
+}
+.fieldset legend {
+  font-weight: 600;
+  padding: 0 var(--space-1);
+}
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch);
+}
+.choice input {
+  width: 20px;
+  height: 20px;
+}
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+.fact dt {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+}
+.fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.panel {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-4);
+  margin: var(--space-3) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.panel > h3,
+.panel > h4 {
+  margin: 0;
+}
+.actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-3);
+}
+.subnav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+}
+.record-ref code,
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.success-text {
+  color: var(--tone-success);
+}
