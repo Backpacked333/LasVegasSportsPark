@@ -21076,6 +21076,2460 @@
           "status"
         ]
       },
+      "IssuedPass": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "$ref": "#/components/schemas/Pass"
+          },
+          "reference": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pass",
+          "reference"
+        ]
+      },
+      "Pass": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "holderKind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "household"
+            ]
+          },
+          "holderPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "holderHouseholdId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ]
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revokedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "holderKind",
+          "holderPersonId",
+          "holderHouseholdId",
+          "status",
+          "issuedAt",
+          "revokedAt",
+          "revokedReason",
+          "revision"
+        ]
+      },
+      "IssuePassRequest": {
+        "type": "object",
+        "properties": {
+          "holder": {
+            "$ref": "#/components/schemas/PassHolder"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "holder"
+        ]
+      },
+      "PassHolder": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "person"
+                ]
+              },
+              "personId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "personId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "household"
+                ]
+              },
+              "householdId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "householdId"
+            ]
+          }
+        ]
+      },
+      "RevokePassRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ]
+      },
+      "PassScan": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "holderKind": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "household"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "holderKind"
+            ]
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scannedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScanPerson"
+            }
+          },
+          "recorded": {
+            "type": "string",
+            "enum": [
+              "nothing"
+            ]
+          },
+          "nextAction": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pass",
+          "facilityId",
+          "scannedAt",
+          "window",
+          "people",
+          "recorded",
+          "nextAction"
+        ]
+      },
+      "ScanPerson": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "givenName": {
+            "type": "string"
+          },
+          "familyName": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adult",
+              "child"
+            ]
+          },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "holder",
+              "household_member",
+              "dependent"
+            ]
+          },
+          "onSite": {
+            "type": "boolean"
+          },
+          "visitId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "holderMayCollect": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "activities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScanActivity"
+            }
+          }
+        },
+        "required": [
+          "personId",
+          "givenName",
+          "familyName",
+          "kind",
+          "relation",
+          "onSite",
+          "visitId",
+          "holderMayCollect",
+          "activities"
+        ]
+      },
+      "ScanActivity": {
+        "type": "object",
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/ActivityDetail"
+          },
+          "title": {
+            "type": "string"
+          },
+          "scheduledStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduledEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "basis": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "enrollment",
+                  "session_booking"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "status"
+            ]
+          },
+          "checkin": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "held",
+                  "admitted"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "activity",
+          "title",
+          "scheduledStart",
+          "scheduledEnd",
+          "basis",
+          "checkin"
+        ]
+      },
+      "ActivityDetail": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "session",
+              "event"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "offeringId",
+          "sessionId",
+          "eventId"
+        ]
+      },
+      "ScanPassRequest": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 200
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "reference",
+          "facilityId"
+        ]
+      },
+      "RecordedVisits": {
+        "type": "object",
+        "properties": {
+          "visits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Visit"
+            }
+          }
+        },
+        "required": [
+          "visits"
+        ]
+      },
+      "Visit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "visitorDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partySize": {
+            "type": "integer"
+          },
+          "visitorCategory": {
+            "$ref": "#/components/schemas/VisitorCategory"
+          },
+          "arrivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "passId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "desk",
+              "offline_sync",
+              "access_control"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "on_site",
+              "departed",
+              "voided"
+            ]
+          },
+          "departedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "voidedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "voidReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recordedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "personId",
+          "visitorDescription",
+          "partySize",
+          "visitorCategory",
+          "arrivedAt",
+          "passId",
+          "source",
+          "status",
+          "departedAt",
+          "voidedAt",
+          "voidReason",
+          "recordedBy",
+          "revision"
+        ]
+      },
+      "VisitorCategory": {
+        "type": "string",
+        "enum": [
+          "participant",
+          "guardian",
+          "spectator",
+          "staff",
+          "contractor",
+          "unclassified"
+        ]
+      },
+      "RecordVisitsRequest": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "passId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "arrivals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArrivalInput"
+            },
+            "minItems": 1,
+            "maxItems": 20
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "arrivals"
+        ]
+      },
+      "ArrivalInput": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitorCategory": {
+            "type": "string",
+            "enum": [
+              "participant",
+              "guardian",
+              "spectator",
+              "staff",
+              "contractor"
+            ]
+          },
+          "visitorDescription": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "partySize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "visitorCategory"
+        ]
+      },
+      "VoidVisitRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ]
+      },
+      "SessionCheckin": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityDetail"
+          },
+          "activityStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activityEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "basis": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "enrollment",
+                  "session_booking",
+                  "event_commitment",
+                  "roster_membership"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "held",
+              "admitted",
+              "withdrawn"
+            ]
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArrivalIssue"
+            }
+          },
+          "checkedInAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evaluatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "admittedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "withdrawnAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "withdrawnReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recordedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "visitId",
+          "personId",
+          "activity",
+          "activityStart",
+          "activityEnd",
+          "basis",
+          "status",
+          "issues",
+          "checkedInAt",
+          "evaluatedAt",
+          "admittedAt",
+          "withdrawnAt",
+          "withdrawnReason",
+          "recordedBy",
+          "revision"
+        ]
+      },
+      "ArrivalIssue": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ArrivalIssueCode"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocking",
+              "warning",
+              "info"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "nextAction": {
+            "type": "string"
+          },
+          "reference": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "message",
+          "nextAction",
+          "reference"
+        ]
+      },
+      "ArrivalIssueCode": {
+        "type": "string",
+        "enum": [
+          "no_participation",
+          "enrollment_not_confirmed",
+          "missing_acknowledgment",
+          "outstanding_balance",
+          "balance_unknown",
+          "activity_canceled",
+          "activity_ended",
+          "not_on_site"
+        ]
+      },
+      "CreateSessionCheckinRequest": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityRef"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "personId",
+          "activity"
+        ]
+      },
+      "ActivityRef": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "session"
+                ]
+              },
+              "offeringId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "sessionId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "type",
+              "offeringId",
+              "sessionId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "event"
+                ]
+              },
+              "eventId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "type",
+              "eventId"
+            ]
+          }
+        ]
+      },
+      "RecheckSessionCheckinRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ]
+      },
+      "WithdrawSessionCheckinRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ]
+      },
+      "RecordedObservation": {
+        "type": "object",
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/AttendanceObservation"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "conflict": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "exceptionId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "conflictingObservationIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "required": [
+              "exceptionId",
+              "conflictingObservationIds"
+            ]
+          }
+        },
+        "required": [
+          "observation",
+          "duplicate",
+          "conflict"
+        ]
+      },
+      "AttendanceObservation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityDetail"
+          },
+          "observedState": {
+            "$ref": "#/components/schemas/ObservedState"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline_sync"
+            ]
+          },
+          "deviceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clientObservationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "syncBatchId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "snapshotReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snapshotTakenAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "stale_snapshot",
+                "conflict"
+              ]
+            }
+          },
+          "correctsObservationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "correctionReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recordedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "personId",
+          "activity",
+          "observedState",
+          "observedAt",
+          "receivedAt",
+          "source",
+          "deviceId",
+          "clientObservationId",
+          "syncBatchId",
+          "snapshotReference",
+          "snapshotTakenAt",
+          "flags",
+          "correctsObservationId",
+          "correctionReason",
+          "recordedBy"
+        ]
+      },
+      "ObservedState": {
+        "type": "string",
+        "enum": [
+          "present",
+          "absent",
+          "late",
+          "left_early"
+        ]
+      },
+      "RecordAttendanceObservationRequest": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityRef"
+          },
+          "observedState": {
+            "$ref": "#/components/schemas/ObservedState"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "clientObservationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "personId",
+          "activity",
+          "observedState"
+        ]
+      },
+      "CorrectAttendanceObservationRequest": {
+        "type": "object",
+        "properties": {
+          "observedState": {
+            "$ref": "#/components/schemas/ObservedState"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "observedState",
+          "reason"
+        ]
+      },
+      "ActivityAttendance": {
+        "type": "object",
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/ActivityDetail"
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonAttendance"
+            }
+          }
+        },
+        "required": [
+          "activity",
+          "people"
+        ]
+      },
+      "PersonAttendance": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "effectiveState": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ObservedState"
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "conflict"
+            ]
+          },
+          "currentObservationIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceHistoryItem"
+            }
+          }
+        },
+        "required": [
+          "personId",
+          "effectiveState",
+          "status",
+          "currentObservationIds",
+          "history"
+        ]
+      },
+      "AttendanceHistoryItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AttendanceObservation"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "correctedByObservationId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "correctedByObservationId"
+            ]
+          }
+        ]
+      },
+      "Departure": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "departedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "releaseRecordId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "desk",
+              "offline_sync",
+              "release"
+            ]
+          },
+          "recordedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "visitId",
+          "personId",
+          "departedAt",
+          "releaseRecordId",
+          "source",
+          "recordedBy",
+          "receivedAt"
+        ]
+      },
+      "RecordDepartureRequest": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "RecordedRelease": {
+        "type": "object",
+        "properties": {
+          "release": {
+            "$ref": "#/components/schemas/ReleaseRecord"
+          },
+          "departure": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Departure"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "release",
+          "departure"
+        ]
+      },
+      "ReleaseRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "childPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "collectorPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "collectorDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "activity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ActivityDetail"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            ]
+          },
+          "visitId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "verificationMethod": {
+            "type": "string",
+            "enum": [
+              "online_relationship_check",
+              "manual_outage_procedure"
+            ]
+          },
+          "verificationOutcome": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "denied",
+              "escalated",
+              "manual_outage_procedure"
+            ]
+          },
+          "authorityBasis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "relationship_permission:collect"
+            ]
+          },
+          "authorityCheckedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "collectorPermissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "denialReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restrictionNotes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "escalationNotes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "escalationExceptionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "manualProcedureReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postSyncAuthority": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "held",
+              "not_held",
+              null
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "released",
+              "not_released"
+            ]
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "releasedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "staffActor": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline_sync"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "childPersonId",
+          "collectorPersonId",
+          "collectorDescription",
+          "activity",
+          "visitId",
+          "verificationMethod",
+          "verificationOutcome",
+          "authorityBasis",
+          "authorityCheckedAt",
+          "collectorPermissions",
+          "denialReason",
+          "restrictionNotes",
+          "escalationNotes",
+          "escalationExceptionId",
+          "manualProcedureReference",
+          "postSyncAuthority",
+          "outcome",
+          "decidedAt",
+          "releasedAt",
+          "staffActor",
+          "source",
+          "receivedAt"
+        ]
+      },
+      "RecordReleaseRequest": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "childPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "collector": {
+            "$ref": "#/components/schemas/Collector"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityRef"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "release",
+              "withhold"
+            ],
+            "default": "release"
+          },
+          "escalate": {
+            "type": "boolean",
+            "default": false
+          },
+          "restrictionNotes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "escalationNotes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "recordDeparture": {
+            "type": "boolean",
+            "default": true
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "facilityId",
+          "childPersonId",
+          "collector"
+        ]
+      },
+      "Collector": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "personId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "personId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "OfflineSyncBatch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "clientBatchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string"
+              },
+              "takenAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "reference",
+              "takenAt"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snapshotAgeSeconds": {
+            "type": "integer"
+          },
+          "maxRosterAgeMinutes": {
+            "type": "integer"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "integer"
+              },
+              "accepted": {
+                "type": "integer"
+              },
+              "acceptedWithConflict": {
+                "type": "integer"
+              },
+              "duplicate": {
+                "type": "integer"
+              },
+              "rejected": {
+                "type": "integer"
+              },
+              "stale": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "items",
+              "accepted",
+              "acceptedWithConflict",
+              "duplicate",
+              "rejected",
+              "stale"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OfflineItemResult"
+            }
+          },
+          "exceptionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "operationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "deviceId",
+          "clientBatchId",
+          "snapshot",
+          "receivedAt",
+          "snapshotAgeSeconds",
+          "maxRosterAgeMinutes",
+          "stale",
+          "counts",
+          "items",
+          "exceptionIds",
+          "operationId",
+          "replayed"
+        ]
+      },
+      "OfflineItemResult": {
+        "type": "object",
+        "properties": {
+          "clientObservationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "attendance",
+              "arrival",
+              "departure",
+              "release"
+            ]
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/OfflineItemOutcome"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recordId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "clientObservationId",
+          "kind",
+          "outcome",
+          "reason",
+          "recordId",
+          "flags"
+        ]
+      },
+      "OfflineItemOutcome": {
+        "type": "string",
+        "enum": [
+          "accepted",
+          "accepted_with_conflict",
+          "duplicate",
+          "rejected"
+        ]
+      },
+      "OfflineSyncRequest": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "clientBatchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "takenAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "reference",
+              "takenAt"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OfflineItem"
+            },
+            "minItems": 1,
+            "maxItems": 500
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "deviceId",
+          "clientBatchId",
+          "facilityId",
+          "snapshot",
+          "items"
+        ]
+      },
+      "OfflineItem": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "attendance"
+                ]
+              },
+              "clientObservationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "observedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "personId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "activity": {
+                "$ref": "#/components/schemas/ActivityRef"
+              },
+              "observedState": {
+                "$ref": "#/components/schemas/ObservedState"
+              }
+            },
+            "required": [
+              "kind",
+              "clientObservationId",
+              "observedAt",
+              "personId",
+              "activity",
+              "observedState"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "arrival"
+                ]
+              },
+              "clientObservationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "observedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "personId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "visitorCategory": {
+                "type": "string",
+                "enum": [
+                  "participant",
+                  "guardian",
+                  "spectator",
+                  "staff",
+                  "contractor"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "clientObservationId",
+              "observedAt",
+              "personId",
+              "visitorCategory"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "departure"
+                ]
+              },
+              "clientObservationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "observedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "personId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "kind",
+              "clientObservationId",
+              "observedAt",
+              "personId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "release"
+                ]
+              },
+              "clientObservationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "observedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "childPersonId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "collector": {
+                "$ref": "#/components/schemas/Collector"
+              },
+              "activity": {
+                "$ref": "#/components/schemas/ActivityRef"
+              },
+              "manualProcedureReference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "kind",
+              "clientObservationId",
+              "observedAt",
+              "childPersonId",
+              "collector"
+            ]
+          }
+        ]
+      },
+      "Occupancy": {
+        "type": "object",
+        "properties": {
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "evaluatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "arrivals": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "integer"
+              },
+              "visits": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "people",
+              "visits"
+            ]
+          },
+          "departures": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "integer"
+              },
+              "visits": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "people",
+              "visits"
+            ]
+          },
+          "recordedOnSite": {
+            "type": "integer"
+          },
+          "openFromEarlierDays": {
+            "type": "integer"
+          },
+          "occupancy": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "unverified",
+                  "verified"
+                ]
+              },
+              "verifiedOccupancy": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "reconciledAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "statement": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "verifiedOccupancy",
+              "reconciledAt",
+              "statement"
+            ]
+          },
+          "lastSnapshot": {
+            "$ref": "#/components/schemas/OccupancySnapshot"
+          }
+        },
+        "required": [
+          "facilityId",
+          "window",
+          "evaluatedAt",
+          "arrivals",
+          "departures",
+          "recordedOnSite",
+          "openFromEarlierDays",
+          "occupancy",
+          "lastSnapshot"
+        ]
+      },
+      "OccupancySnapshot": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "takenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "arrivals": {
+            "type": "integer"
+          },
+          "departures": {
+            "type": "integer"
+          },
+          "recordedOnSite": {
+            "type": "integer"
+          },
+          "openFromEarlierDays": {
+            "type": "integer"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "countedOnSite": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verifiedOccupancy": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "discrepancy": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reconciliationNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "takenBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "takenAt",
+          "window",
+          "arrivals",
+          "departures",
+          "recordedOnSite",
+          "openFromEarlierDays",
+          "reconciled",
+          "countedOnSite",
+          "verifiedOccupancy",
+          "discrepancy",
+          "reconciliationNote",
+          "takenBy"
+        ]
+      },
+      "TakeOccupancySnapshotRequest": {
+        "type": "object",
+        "properties": {
+          "countedOnSite": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "AccessControlEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "access.granted",
+              "access.denied",
+              "access.unknown"
+            ]
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "organizationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "facilityId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "deviceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "passReference": {
+                "type": "string",
+                "minLength": 16,
+                "maxLength": 200
+              },
+              "personId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "visitorCategory": {
+                "$ref": "#/components/schemas/VisitorCategory"
+              }
+            },
+            "required": [
+              "organizationId",
+              "facilityId",
+              "deviceId",
+              "occurredAt"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "data"
+        ]
+      },
       "Quote": {
         "type": "object",
         "properties": {
@@ -47804,6 +50258,1607 @@
           },
           "404": {
             "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/passes": {
+      "post": {
+        "summary": "Issue an opaque pass to a person or household (SPK-ENTRY-002)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssuePassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedPass"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/passes/{id}/revoke": {
+      "post": {
+        "summary": "Revoke a pass",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokePassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pass"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/passes/scan": {
+      "post": {
+        "summary": "Scan a pass: resolve the people and today's sessions for selection; records nobody as present (SPK-ENTRY-003)",
+        "tags": [
+          "Entry"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanPassRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassScan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/visits": {
+      "post": {
+        "summary": "Record facility arrivals for the selected people (SPK-ENTRY-001, SPK-ENTRY-006)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordVisitsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedVisits"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List visits of a facility day",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "on_site",
+                "departed",
+                "voided"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "name": "date",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Visit"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/visits/{id}/void": {
+      "post": {
+        "summary": "Void a mistaken arrival (reason kept)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoidVisitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Visit"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session-checkins": {
+      "post": {
+        "summary": "Check a person into a session or event with actionable arrival issues (SPK-ENTRY-004)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionCheckinRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCheckin"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session-checkins/{id}/recheck": {
+      "post": {
+        "summary": "Re-evaluate a held check-in",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecheckSessionCheckinRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCheckin"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session-checkins/{id}/withdraw": {
+      "post": {
+        "summary": "Withdraw a check-in (reason kept)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawSessionCheckinRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCheckin"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session-checkins/{id}": {
+      "get": {
+        "summary": "Read a session check-in",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCheckin"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attendance-observations": {
+      "post": {
+        "summary": "Record an activity-specific attendance observation (§4.8)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordAttendanceObservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attendance-observations/{id}/corrections": {
+      "post": {
+        "summary": "Correct an observation with a new row that keeps actor, time and reason (SPK-ENTRY-005)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectAttendanceObservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attendance": {
+      "get": {
+        "summary": "Attendance of an activity: current state and full history",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "session",
+                "event"
+              ]
+            },
+            "required": true,
+            "name": "activityType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "activityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "offeringId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "personId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityAttendance"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/departures": {
+      "post": {
+        "summary": "Record a departure (SPK-ENTRY-001)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordDepartureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Departure"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/releases": {
+      "post": {
+        "summary": "Record a supervised release after an online check of current pickup authority (§4.8, SPK-ENTRY-007)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordReleaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedRelease"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/releases/{id}": {
+      "get": {
+        "summary": "Read a release record",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseRecord"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offline-sync": {
+      "post": {
+        "summary": "Synchronize queued offline observations once; conflicts preserved for review (§4.15)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineSyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineSyncBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/facilities/{id}/occupancy": {
+      "get": {
+        "summary": "Arrivals and departures; verified only when reconciled (SPK-ENTRY-008)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "name": "date",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Occupancy"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/facilities/{id}/occupancy-snapshots": {
+      "post": {
+        "summary": "Record an occupancy snapshot; a physical count reconciles it (SPK-ENTRY-008)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeOccupancySnapshotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OccupancySnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/access-control/{provider}": {
+      "post": {
+        "summary": "Access hardware event (signed); recorded as a visit only, never attendance or pickup (SPK-COND-004)",
+        "tags": [
+          "Entry"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessControlEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Recorded in the inbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "inboxEventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "inboxEventId",
+                    "duplicate"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Signature invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown provider",
             "content": {
               "application/json": {
                 "schema": {
