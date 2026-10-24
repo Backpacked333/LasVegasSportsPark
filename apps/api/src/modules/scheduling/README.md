@@ -15,19 +15,19 @@ SPK-AT-008/009/021, SPK-COMMS-005 (old and new practical details on every schedu
 
 ## Tables (migration `0300_scheduling_core.sql`)
 
-| Table                                    | Purpose                                                                                                                                                                                           |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resources`                              | Pitches, subdivisions (always with a parent), rooms, other spaces: dimensions, formats, default buffers, equipment, staffing, status `active/restricted/closed`                                   |
-| `resource_configurations` (+ `_members`) | A physical arrangement: the set of resources that may operate simultaneously ("full pitch", "two halves")                                                                                         |
-| `conflict_units`                         | Atomic physical areas; `resource_conflict_units` maps a whole pitch to all of its subdivisions' units and a subdivision to its own                                                                |
-| `operating_hours`                        | Local windows per weekday for a resource or (resource null) the whole facility                                                                                                                    |
-| `closures`                               | Facility- or resource-level `tstzrange` closures with impact preview, resolution and lifecycle `pending → active → lifted` (`withdrawn` from pending)                                             |
-| `event_series`                           | Recurrence rule in facility-local wall-clock time + IANA zone, DST policies, exceptions                                                                                                           |
-| `events`                                 | Scheduled instants in UTC with the facility zone, buffers, `dst_resolution`, lifecycle `draft → published → canceled`, `published_revision`, owning record                                        |
-| `reservations` / `reservation_units`     | Holds per resource / per conflict unit for the occupied interval (scheduled ± buffers). `EXCLUDE USING gist (organization_id, conflict_unit_id, occupied) WHERE status = 'active'` is invariant 4 |
-| `event_commitments`                      | Teams, people (officials, coaches, participants) and equipment committed to an event; exclusion on `(organization_id, party_type, party_id, occupied)`                                            |
-| `schedule_drafts` / `draft_changes`      | Autosaved drafts with base revisions, author, validation results, publication status; changes `create/move/cancel/resize/resource_change`                                                         |
-| `publications`                           | Append-only publication groups: actor, committed events, enqueued notices, remaining fixture obligations                                                                                          |
+| Table                                    | Purpose                                                                                                                                                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resources`                              | Pitches, subdivisions (always with a parent), rooms, other spaces: dimensions, formats, default buffers, equipment, staffing, status `active/restricted/closed`                                                                               |
+| `resource_configurations` (+ `_members`) | A physical arrangement: the set of resources that may operate simultaneously ("full pitch", "two halves")                                                                                                                                     |
+| `conflict_units`                         | Atomic physical areas; `resource_conflict_units` maps a whole pitch to all of its subdivisions' units and a subdivision to its own                                                                                                            |
+| `operating_hours`                        | Local windows per weekday for a resource or (resource null) the whole facility                                                                                                                                                                |
+| `closures`                               | Facility- or resource-level `tstzrange` closures with impact preview, resolution and lifecycle `pending → active → lifted` (`withdrawn` from pending)                                                                                         |
+| `event_series`                           | Recurrence rule in facility-local wall-clock time + IANA zone, DST policies, exceptions                                                                                                                                                       |
+| `events`                                 | Scheduled instants in UTC with the facility zone, buffers, `dst_resolution`, lifecycle `draft → published → canceled`, `published_revision`, owning record                                                                                    |
+| `reservations` / `reservation_units`     | Holds per resource / per conflict unit for the occupied interval (scheduled ± buffers). `EXCLUDE USING gist (organization_id, conflict_unit_id, occupied) WHERE status = 'active'` is invariant 4                                             |
+| `event_commitments`                      | Teams, people (officials, coaches, participants) and equipment committed to an event; exclusion on `(organization_id, party_type, party_id, occupied)`                                                                                        |
+| `schedule_drafts` / `draft_changes`      | Autosaved drafts with base revisions (autosave keeps the base a target already holds, so a draft never re-bases silently, SPK-SCHED-005), author, validation results, publication status; changes `create/move/cancel/resize/resource_change` |
+| `publications`                           | Append-only publication groups: actor, committed events, enqueued notices, remaining fixture obligations                                                                                                                                      |
 
 Every table carries `organization_id`; references use composite `(organization_id, id)` keys.
 
@@ -62,6 +62,9 @@ Every POST/PATCH/DELETE is `@Idempotent()` and validated with zod; every write r
   (SPK-FIX-005).
 - `AVAILABILITY_PORT` → `findAvailableSlots(resource, interval, duration, buffers)`.
 - `CLOSURE_PORT` → `previewImpact`, `createClosure`, `applyClosure`, `liftClosure` (facilities, SPK-FAC-003/004/005).
+- `ClosureLiftGuards`: a module that backs closures with its own authority registers a guard that
+  `liftClosure` runs inside its transaction before the lift; facilities refuses lifting a closure
+  that backs an unreleased restriction outside its release (SPK-FAC-004).
 - `RESERVATION_QUERY_PORT` → `listReservations` by facility or resource and interval (reporting, facilities).
 - `FIXTURE_OBLIGATION_PORT` (step 4 of publication). Competition registers its implementation under
   `FIXTURE_OBLIGATION_IMPL`; without one, no obligations exist. Blocking obligations fail the group,

@@ -157,7 +157,11 @@ export class ScheduleDraftsService {
     });
   }
 
-  /** Autosave replaces the change list; the draft revision guards against concurrent editors. */
+  /**
+   * Autosave replaces the change list; the draft revision guards against concurrent editors. Base
+   * revisions already held for a target are kept, so a draft autosaved after someone else changed
+   * that event still fails publication with STALE_REVISION (SPK-SCHED-005, SPK-SCHED-006 step 2).
+   */
   async autosave(
     principal: Principal,
     draftId: string,
@@ -190,6 +194,7 @@ export class ScheduleDraftsService {
         draft.facility_id,
         draftId,
         body.changes,
+        draft.base_revision.eventRevisions,
       );
       const now = this.clock.now();
       await trx
@@ -959,13 +964,19 @@ export class ScheduleDraftsService {
     };
   }
 
-  /** Inserts the change list, capturing each target event's current revision as the draft's base. */
+  /**
+   * Inserts the change list. A target the draft already holds keeps the base revision captured
+   * when it entered the draft (`preserved`); only a target new to the draft captures the event's
+   * current revision (SPK-SCHED-005). Re-basing a target means dropping it in one autosave and
+   * adding it again in a later one, or a new draft; an explicit rebase is a pending design choice.
+   */
   private async replaceChanges(
     trx: Trx,
     organizationId: string,
     facilityId: string,
     draftId: string,
     inputs: DraftChangeInput[],
+    preserved: Readonly<Record<string, number>> = {},
   ): Promise<Record<string, number>> {
     const eventRevisions: Record<string, number> = {};
     let sequence = 0;
@@ -980,8 +991,8 @@ export class ScheduleDraftsService {
             targetEventId: input.targetEventId,
           });
         }
-        baseRevision = event.revision;
-        eventRevisions[event.id] = event.revision;
+        baseRevision = preserved[event.id] ?? event.revision;
+        eventRevisions[event.id] = baseRevision;
       }
       await trx
         .insertInto('draft_changes')

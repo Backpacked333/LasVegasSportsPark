@@ -723,9 +723,59 @@ export class RestrictionsService implements OperatingStatusPort {
   }
 
   /**
+   * Scheduling closure lift guard (SPK-FAC-004, SPK-AT-021): a closure that backs an approved or
+   * active restriction may be lifted only by that restriction's facilities release, which checks
+   * `facilities.release_to_service` and a passed inspection before it marks its
+   * `facilities.release_restriction` operation running. Any other lift (a scheduler, a system
+   * administrator, or a facilities operator skipping the inspection through `POST
+   * /v1/closures/{id}/lift`) is refused. Which roles may reopen a maintained space is pending with
+   * Operations (DEC-001, acceptance fixtures §9 item 15); refusing is the conservative default.
+   * Closures that no restriction backs stay liftable in scheduling.
+   */
+  async assertClosureLiftAllowed(
+    trx: Trx,
+    organizationId: string,
+    closureId: string,
+  ): Promise<void> {
+    const restriction = await this.reader
+      .restrictionQuery(trx)
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_closure_id', '=', closureId)
+      .where('status', 'in', ['approved', 'active'])
+      .executeTakeFirst();
+    if (!restriction) return;
+    if (await this.releaseInProgress(trx, organizationId, restriction.operation_id)) return;
+    throw errors.eligibility(
+      'This closure backs a maintenance restriction; the space returns to service only through the facilities release (inspection and release authority).',
+      { code: 'restriction_release_required', restrictionId: restriction.id, closureId },
+    );
+  }
+
+  /** Whether the restriction's operation is its own facilities release, still in progress. */
+  private async releaseInProgress(
+    trx: Trx,
+    organizationId: string,
+    operationId: string | null,
+  ): Promise<boolean> {
+    if (!operationId) return false;
+    const operation = await trx
+      .selectFrom('operations')
+      .select(['kind', 'status'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', operationId)
+      .executeTakeFirst();
+    return (
+      operation?.kind === 'facilities.release_restriction' &&
+      (operation.status === 'pending' || operation.status === 'running')
+    );
+  }
+
+  /**
    * Outbox handler target for `scheduling.closure_lifted`: a closure backing an active restriction
    * that was lifted outside a facilities release is surfaced to the facilities operator (the
-   * restriction keeps its authority state; nothing reopens silently, SPK-FAC-004).
+   * restriction keeps its authority state; nothing reopens silently, SPK-FAC-004). The lift guard
+   * above refuses such lifts; this stays as defense in depth (for example a lift written before
+   * the guard was registered).
    */
   async reconcileLiftedClosure(trx: Trx, organizationId: string, closureId: string): Promise<void> {
     const restriction = await this.reader
@@ -735,19 +785,8 @@ export class RestrictionsService implements OperatingStatusPort {
       .where('status', 'in', ['approved', 'active'])
       .executeTakeFirst();
     if (!restriction) return;
-    if (restriction.operation_id) {
-      const operation = await trx
-        .selectFrom('operations')
-        .select(['kind', 'status'])
-        .where('id', '=', restriction.operation_id)
-        .executeTakeFirst();
-      if (
-        operation?.kind === 'facilities.release_restriction' &&
-        (operation.status === 'pending' || operation.status === 'running')
-      ) {
-        return; // our own release is in progress
-      }
-    }
+    // our own release is in progress
+    if (await this.releaseInProgress(trx, organizationId, restriction.operation_id)) return;
     await this.exceptions.raise(trx, {
       organizationId,
       facilityId: restriction.facility_id,

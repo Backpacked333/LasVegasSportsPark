@@ -33,6 +33,7 @@ import type {
 import { SchedulingActions } from '../scheduling.actions';
 import { ClosureApplied, ClosureLifted } from '../scheduling.events';
 import { ClosureMachine } from '../scheduling.state-machines';
+import { ClosureLiftGuards } from './closure-lift-guards';
 import { EventWriter } from './event-writer';
 import { organizationOf } from './events.service';
 
@@ -58,6 +59,7 @@ export class ClosuresService implements ClosurePort {
     private readonly outbox: Outbox,
     private readonly exceptions: OperationalExceptions,
     private readonly writer: EventWriter,
+    private readonly liftGuards: ClosureLiftGuards,
   ) {}
 
   async previewImpact(principal: Principal, input: PreviewClosureInput): Promise<ClosureImpact> {
@@ -275,6 +277,9 @@ export class ClosuresService implements ClosurePort {
       });
       assertExpectedRevision(input.expectedRevision, closure.revision);
       const next = ClosureMachine.next(closure.status, 'lift');
+      // SPK-FAC-004: a closure another module backs with its own authority (a facilities
+      // restriction) is lifted only through that module's release (ClosureLiftGuards).
+      await this.liftGuards.check(trx, organizationId, closureId);
       await trx
         .updateTable('closures')
         .set({ status: next, lifted_at: this.clock.now(), revision: closure.revision + 1 })

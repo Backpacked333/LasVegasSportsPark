@@ -91,9 +91,13 @@ multi-step commands recorded as operations (`facilities.approve_restriction`,
   any change of the requirement is audited (`details.requiresInspection { from, to }`). The
   closure is lifted through the port, then the release is recorded. A failed
   inspection sends a resolved task back to `in_progress`; on a closed task it raises an
-  operational exception. A closure lifted directly in scheduling raises
-  `facilities.closure_lifted_outside_release` (outbox handler on `scheduling.closure_lifted`),
-  the restriction keeps its state.
+  operational exception. A closure backing an approved or active restriction cannot be lifted
+  directly in scheduling: facilities registers a `ClosureLiftGuards` guard that refuses the lift
+  (422 `ELIGIBILITY_FAILED`, `details.code = restriction_release_required`) unless the
+  restriction's own release operation is running (conservative default; who may reopen a
+  maintained space is pending with Operations, DEC-001). As defense in depth, a closure found
+  lifted anyway raises `facilities.closure_lifted_outside_release` (outbox handler on
+  `scheduling.closure_lifted`) and the restriction keeps its state.
 - **SPK-FAC-005.** `generate` materializes occurrences starting before `now + leadTimeDays` (or
   `through`) and not yet ended: a task from the template (due at the occurrence end) plus a
   restriction approved under the schedule's own authority (`system` principal
