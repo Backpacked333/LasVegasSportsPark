@@ -8,10 +8,13 @@ import {
   type BasketLine,
   type CompleteBasketInput,
   type CreateBasketInput,
+  type EligibilityOverride,
   type EligibilityResult,
   type HoldBasketInput,
   type OfferingSession,
+  type PriceSnapshot,
   type Principal,
+  type RegistrationEligibilityReason,
   type RegistrationIntent,
   type ReleaseBasketInput,
   type RemoveBasketLineInput,
@@ -41,9 +44,12 @@ import { EnrollmentEvents } from '../enrollment.events';
 import type { BasketPort } from '../enrollment.ports';
 import {
   actorSnapshot,
+  awaitsApproval,
   isStaffLike,
   minutesFrom,
   organizationOf,
+  owesNothing,
+  resolveCustomerPayer,
   toBasket,
   toBasketLine,
   toHold,
@@ -186,7 +192,10 @@ export class BasketsService implements BasketPort {
         organizationId,
         subjectPersonIds: [owner.id],
       });
-      const payerPersonId = input.payerPersonId ?? owner.id;
+      // §4.7 (1), SPK-REG-009: a customer names only themselves or the owner as payer.
+      const payerPersonId =
+        resolveCustomerPayer(principal, input.payerPersonId, [principal.personId, owner.id]) ??
+        owner.id;
       if (payerPersonId !== owner.id)
         await this.evaluator.participant(trx, organizationId, payerPersonId);
       const id = newId();
@@ -302,6 +311,7 @@ export class BasketsService implements BasketPort {
         organizationId,
         snapshot.offering.id,
         person.id,
+        [principal.personId, basket.owner_person_id, basket.payer_person_id],
       );
       if (
         application &&
@@ -320,6 +330,8 @@ export class BasketsService implements BasketPort {
           },
         );
       }
+      // SPK-REG-002/007: never link a line to an application (or its override) of another intent.
+      application = this.applications.forIntent(application, input.intent);
       if (!application) {
         application = await this.applications.createInTrx(trx, organizationId, {
           snapshot,
@@ -501,6 +513,8 @@ export class BasketsService implements BasketPort {
       const holdIds: string[] = [];
       const enrollmentIds: string[] = [];
       const failures: Array<{ lineId: string; error: DomainError }> = [];
+      // SPK-PAY-001: every line is re-priced at the hold instant; a basket holds one currency.
+      let currency = basket.currency;
       for (const line of lines) {
         const run = () =>
           this.holdLine(
@@ -511,6 +525,7 @@ export class BasketsService implements BasketPort {
             principal,
             expiresAt,
             sessions,
+            currency,
             correlationId,
           );
         if (basket.fulfillment_mode === 'partial') {
@@ -518,6 +533,7 @@ export class BasketsService implements BasketPort {
             const outcome = await withSavepoint(trx, `line_${line.sequence}`, run);
             holdIds.push(...outcome.holdIds);
             enrollmentIds.push(outcome.enrollmentId);
+            currency = currency ?? outcome.currency;
           } catch (error) {
             if (!DomainError.is(error)) throw error;
             failures.push({ lineId: line.id, error });
@@ -537,6 +553,7 @@ export class BasketsService implements BasketPort {
           const outcome = await run();
           holdIds.push(...outcome.holdIds);
           enrollmentIds.push(outcome.enrollmentId);
+          currency = currency ?? outcome.currency;
         }
       }
       if (enrollmentIds.length === 0) {
@@ -549,6 +566,7 @@ export class BasketsService implements BasketPort {
         .set({
           status: 'held',
           hold_expires_at: expiresAt,
+          currency,
           last_operation_id: operationId,
           revision: basket.revision + 1,
         })
@@ -606,6 +624,54 @@ export class BasketsService implements BasketPort {
     });
   }
 
+  /**
+   * §4.7 (1), §4.14, SPK-IAM-003/006: the actor still holds manage_basket (`register`) over the
+   * basket owner and the line's participant now. Authority is read live, so a grant revoked or
+   * suspended after the line was added stops the hold and the completion of that line.
+   */
+  private async assertLineAuthority(
+    principal: Principal,
+    organizationId: string,
+    basket: BasketRow,
+    line: { id: string; participant_person_id: string },
+  ): Promise<void> {
+    await this.authorization.require(principal, EnrollmentActions.manageBasket, {
+      type: 'basket_line',
+      id: line.id,
+      organizationId,
+      subjectPersonIds: [...new Set([basket.owner_person_id, line.participant_person_id])],
+    });
+  }
+
+  /**
+   * SPK-REG-002: an override covers the blocking (or unknown) reasons it recorded, for the intent
+   * its application was made for, and nothing else. A reason that appears later (registration
+   * closed or paused, the participant inactive, another intent) still blocks.
+   */
+  private scopedOverride(
+    application: { status: string; intent: string; override: unknown } | undefined,
+    line: BasketLineRow,
+    result: EligibilityResult,
+  ): { overridden: boolean; uncovered: RegistrationEligibilityReason[]; covered: string[] } {
+    const failing = (r: RegistrationEligibilityReason) =>
+      r.severity === 'blocking' || r.severity === 'unknown';
+    const override = (application?.override ?? null) as EligibilityOverride | null;
+    const honoured =
+      !!override &&
+      Array.isArray(override.originalReasons) &&
+      (application?.status === 'accepted' || application?.status === 'awaiting_review') &&
+      application?.intent === line.intent;
+    const covered = new Set(
+      honoured ? override.originalReasons.filter(failing).map((r) => r.code) : [],
+    );
+    const uncovered = result.reasons.filter((r) => failing(r) && !covered.has(r.code));
+    return {
+      overridden: !result.eligible && honoured && uncovered.length === 0,
+      uncovered: honoured ? uncovered : result.reasons,
+      covered: [...covered],
+    };
+  }
+
   /** Holds one line: fresh eligibility and acknowledgments, every required pool, one pending enrollment. */
   private async holdLine(
     trx: Trx,
@@ -615,8 +681,10 @@ export class BasketsService implements BasketPort {
     principal: Principal,
     expiresAt: Date,
     sessions: ReadonlyMap<string, OfferingSession>,
+    currency: string | null,
     correlationId: string | null,
-  ): Promise<{ holdIds: string[]; enrollmentId: string }> {
+  ): Promise<{ holdIds: string[]; enrollmentId: string; currency: string | null }> {
+    await this.assertLineAuthority(principal, organizationId, basket, line);
     const snapshot = await this.evaluator.snapshot(trx, organizationId, line.offering_id);
     const person = await this.evaluator.participant(
       trx,
@@ -642,13 +710,15 @@ export class BasketsService implements BasketPort {
       teamEntryId: line.team_entry_id,
       session,
     });
-    const overridden = Boolean(application?.override) && application?.status !== 'submitted';
+    const scope = this.scopedOverride(application, line, evaluation.result);
+    const overridden = scope.overridden;
     if (!evaluation.result.eligible && !overridden) {
       throw errors.eligibility('The participant is not eligible for this offering.', {
         lineId: line.id,
         participantPersonId: person.id,
-        reasons: evaluation.result.reasons,
+        reasons: scope.uncovered,
         alternatives: evaluation.result.alternatives,
+        overriddenReasonCodes: scope.covered,
       });
     }
     const missing = missingAcknowledgments(evaluation.result);
@@ -663,10 +733,23 @@ export class BasketsService implements BasketPort {
         },
       );
     }
-    const pools = this.capacity.poolsForIntent(
-      await this.capacity.ensurePoolsForOffering(trx, organizationId, snapshot, principal),
-      line.intent,
-    );
+    // SPK-REG-005, §4.7 invariant 3: a join_team line also takes a place in the roster-place pools
+    // staff configured for the team entry it names, the constraint placement respects as well.
+    const pools = [
+      ...this.capacity.poolsForIntent(
+        await this.capacity.ensurePoolsForOffering(trx, organizationId, snapshot, principal),
+        line.intent,
+      ),
+      ...(line.intent === 'join_team' && line.team_entry_id
+        ? await this.capacity.teamEntryPools(trx, organizationId, line.team_entry_id)
+        : []),
+    ];
+    // SPK-PAY-001/002, SPK-REG-004: the line is priced from the rule effective at the hold instant
+    // (an open basket never expires, so the add-time snapshot may be stale).
+    const price = await this.evaluator.priceSnapshot(trx, organizationId, snapshot.offering.id);
+    if (price && currency && price.currency !== currency) {
+      throw errors.validation(`A basket holds one currency (${currency}).`, { lineId: line.id });
+    }
     if (
       this.evaluator.configuration.waitlistFirst &&
       (await this.capacity.othersWaiting(
@@ -694,8 +777,19 @@ export class BasketsService implements BasketPort {
       expiresAt,
       correlationId,
     });
+    const covered = new Set(scope.covered);
     const result: EligibilityResult = overridden
-      ? { ...evaluation.result, eligible: true, overridden: true }
+      ? {
+          ...evaluation.result,
+          eligible: true,
+          overridden: true,
+          // The reasons the override covers no longer block (as the override command records them).
+          reasons: evaluation.result.reasons.map((r) =>
+            covered.has(r.code) && (r.severity === 'blocking' || r.severity === 'unknown')
+              ? { ...r, severity: 'info' as const }
+              : r,
+          ),
+        }
       : evaluation.result;
     const enrollment = await this.enrollments.createPending(trx, organizationId, {
       offeringId: snapshot.offering.id,
@@ -709,7 +803,7 @@ export class BasketsService implements BasketPort {
       basketId: basket.id,
       basketLineId: line.id,
       trialParticipationId: line.trial_participation_id,
-      priceSnapshot: (line.price_snapshot as unknown as Basket['lines'][number]['price']) ?? null,
+      priceSnapshot: price,
       policyReferences: this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy),
       eligibilityResult: result,
       correlationId,
@@ -720,13 +814,18 @@ export class BasketsService implements BasketPort {
         outcome: 'held',
         enrollment_id: enrollment.id,
         eligibility_result: json(result),
+        price_snapshot: price ? json(price) : null,
         requires_approval: evaluation.requiresApproval,
         revision: eb('revision', '+', 1),
       }))
       .where('organization_id', '=', organizationId)
       .where('id', '=', line.id)
       .execute();
-    return { holdIds: holds.map((h) => h.id), enrollmentId: enrollment.id };
+    return {
+      holdIds: holds.map((h) => h.id),
+      enrollmentId: enrollment.id,
+      currency: price?.currency ?? null,
+    };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -751,7 +850,17 @@ export class BasketsService implements BasketPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, basket.revision);
-      if (!['open', 'held', 'checking_out'].includes(basket.status)) {
+      if (basket.status === 'checking_out') {
+        // §4.11, SPK-PAY-007, SPK-AT-006: while a checkout runs, finance owns the basket. Money may
+        // be moving, so only finance ends it (BasketPort.finishCheckout('abandoned') after the
+        // checkout is aborted or expires with no attempt that can still capture, or on
+        // compensation); the customer cancels the checkout of `orderRef` instead.
+        throw errors.resourceConflict(
+          'A checkout is in progress for this basket; cancel the checkout instead.',
+          { code: 'CHECKOUT_IN_PROGRESS', orderRef: basket.order_ref },
+        );
+      }
+      if (!['open', 'held'].includes(basket.status)) {
         throw errors.invalidTransition('Basket', basket.status, 'release');
       }
       await this.releaseInTrx(
@@ -903,13 +1012,36 @@ export class BasketsService implements BasketPort {
         throw errors.invalidTransition('Basket', basket.status, 'complete');
       const current = await this.view(trx, organizationId, basket);
       this.assertPayable(current);
-      if (current.subtotalMinor > 0) {
+      const held = current.lines.filter((l) => l.outcome === 'held');
+      // §4.7 (1), SPK-IAM-003/006: authority over each participant is re-read before confirming.
+      for (const line of held) {
+        await this.assertLineAuthority(principal, organizationId, basket, {
+          id: line.id,
+          participant_person_id: line.participantPersonId,
+        });
+      }
+      // SPK-PAY-001/002, §4.11: only a basket that owes nothing, counting approved fees and taxes,
+      // at the hold and at the rule effective now, completes without the finance checkout.
+      const now = this.clock.now();
+      const owing: string[] = [];
+      for (const line of held) {
+        const priced: PriceSnapshot | null = await this.evaluator.priceSnapshot(
+          trx,
+          organizationId,
+          line.offeringId,
+          now,
+        );
+        if (!owesNothing(line.price, line.quantity) || !owesNothing(priced, line.quantity))
+          owing.push(line.id);
+      }
+      if (owing.length > 0) {
         throw errors.resourceConflict(
           'This basket owes a payment; complete it through the checkout.',
           {
             code: 'PAYMENT_REQUIRED',
             subtotalMinor: current.subtotalMinor,
             currency: current.currency,
+            lineIds: owing,
           },
         );
       }
@@ -987,15 +1119,32 @@ export class BasketsService implements BasketPort {
     });
   }
 
-  /** SPK-REG-007: no payment is captured while a line awaits human approval. */
+  /**
+   * SPK-REG-007: no payment is captured while a line awaits human approval. SPK-REG-004 / DEC-026:
+   * an all-or-nothing basket is paid only while every line is still held (a line released or
+   * failed after the hold, e.g. its application declined or its enrollment canceled, ends it), and
+   * no basket is paid or completed with nothing left to fulfil.
+   */
   private assertPayable(basket: Basket): void {
-    if (basket.approvalPending) {
+    const awaiting = basket.lines.filter(awaitsApproval);
+    if (awaiting.length > 0) {
       throw errors.resourceConflict('A line of this basket awaits human approval before payment.', {
         code: 'APPROVAL_PENDING',
-        lineIds: basket.lines
-          .filter((l) => l.requiresApproval && l.applicationStatus !== 'accepted')
-          .map((l) => l.id),
+        lineIds: awaiting.map((l) => l.id),
       });
+    }
+    const live = (l: BasketLine) => l.outcome === 'held' || l.outcome === 'confirmed';
+    if (!basket.lines.some(live)) {
+      throw errors.resourceConflict('No line of this basket is held any more; release it.', {
+        code: 'NOTHING_HELD',
+      });
+    }
+    const lost = basket.lines.filter((l) => !live(l));
+    if (basket.fulfillmentMode === 'all_or_nothing' && lost.length > 0) {
+      throw errors.resourceConflict(
+        'A line of this all-or-nothing basket can no longer be fulfilled; release the basket.',
+        { code: 'BASKET_INCOMPLETE', lineIds: lost.map((l) => l.id) },
+      );
     }
     if (
       basket.holdExpiresAt &&

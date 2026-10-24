@@ -13,7 +13,12 @@ import { PlacementController } from './controllers/placement.controller';
 import { SessionBookingsController } from './controllers/session-bookings.controller';
 import { WaitlistController } from './controllers/waitlist.controller';
 import { YouthController } from './controllers/youth.controller';
-import { CapacityReleased, HoldExpiryDue, MakeupExpiryDue } from './enrollment.events';
+import {
+  CapacityReleased,
+  EnrollmentEvents,
+  HoldExpiryDue,
+  MakeupExpiryDue,
+} from './enrollment.events';
 import { DEFAULT_ENROLLMENT_POLICY, ENROLLMENT_POLICY } from './enrollment.policy';
 import {
   BASKET_PORT,
@@ -195,6 +200,56 @@ export class EnrollmentModule implements OnModuleInit {
         }),
       { failureOwner: 'program_manager' },
     );
+    // SPK-REG-008: once a participant holds a confirmed place (registered directly, transferred,
+    // or booked the session), their live waitlist entries for it leave the queue and any open
+    // offer is declined, so freed places go to the next real waiter.
+    const retire = 'enrollment.retire_redundant_waitlist_entries';
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
+      EnrollmentEvents.enrollmentConfirmed.type,
+      retire,
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.waitlist.retireRedundantEntries(
+            ctx.trx,
+            event.organizationId,
+            { enrollmentId: event.payload.enrollmentId },
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentTransferred>>(
+      EnrollmentEvents.enrollmentTransferred.type,
+      retire,
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.waitlist.retireRedundantEntries(
+            ctx.trx,
+            event.organizationId,
+            { enrollmentId: event.payload.toEnrollmentId },
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    for (const booked of [EnrollmentEvents.sessionBooked, EnrollmentEvents.sessionBookingChanged]) {
+      this.registry.on<{ bookingId: string; status: string }>(
+        booked.type,
+        retire,
+        async (event, ctx) => {
+          if (event.payload.status !== 'confirmed') return;
+          await runWithTransaction(ctx.trx, () =>
+            this.waitlist.retireRedundantEntries(
+              ctx.trx,
+              event.organizationId,
+              { sessionBookingId: event.payload.bookingId },
+              event.correlationId,
+            ),
+          );
+        },
+        { failureOwner: 'program_manager' },
+      );
+    }
     // SPK-YOUTH-004: an unused makeup lapses at its expiry.
     this.registry.on<EventPayload<typeof MakeupExpiryDue>>(
       MakeupExpiryDue.type,

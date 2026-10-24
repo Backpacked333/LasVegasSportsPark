@@ -40,6 +40,7 @@ import {
   isStaffLike,
   organizationOf,
   redactApplication,
+  resolveCustomerPayer,
   toApplication,
   type Reader,
 } from '../enrollment.shared';
@@ -99,42 +100,84 @@ export class ApplicationsService {
   }
 
   /**
-   * The current application of a participant for an offering: one under review, or an accepted
-   * one whose participation has not ended (an accepted application whose enrollment was canceled,
-   * transferred or completed no longer blocks a new application).
+   * The current application of a participant for an offering (SPK-AT-004, SPK-REG-002/003):
+   * - one under review (`submitted`, `awaiting_review`), whoever made it (one per participant and
+   *   offering, also enforced by `applications_open_idx`);
+   * - an accepted one whose participation is live (a pending or confirmed enrollment came from it),
+   *   whoever made it;
+   * - an accepted one of the caller's own `household` (submitted by, or paid by, one of those
+   *   adults) whose participation has not ended, so an approval or override is reused by the
+   *   household's next basket line.
+   * Another household's accepted application that never produced a live enrollment (its line was
+   * released, removed or abandoned) no longer blocks: the one equivalent entitlement is guaranteed
+   * by `enrollments_equivalent_active_idx`, where the first hold wins (§4.7 invariant 2).
    */
   async findCurrent(
     db: Reader,
     organizationId: string,
     offeringId: string,
     participantPersonId: string,
+    household: ReadonlyArray<string | null | undefined>,
   ): Promise<ApplicationRow | undefined> {
+    const own = [...new Set(household.filter((id): id is string => typeof id === 'string'))];
     return db
       .selectFrom('applications')
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('offering_id', '=', offeringId)
       .where('participant_person_id', '=', participantPersonId)
-      .where((eb) =>
-        eb.or([
+      .where((eb) => {
+        const sourced = (
+          statuses: Array<'pending' | 'confirmed' | 'canceled' | 'transferred' | 'completed'>,
+        ) =>
+          eb.exists(
+            eb
+              .selectFrom('enrollments')
+              .select('enrollments.id')
+              .whereRef('enrollments.organization_id', '=', 'applications.organization_id')
+              .whereRef('enrollments.source_application_id', '=', 'applications.id')
+              .where('enrollments.status', 'in', statuses),
+          );
+        const branches = [
           eb('status', 'in', ['submitted', 'awaiting_review']),
-          eb.and([
-            eb('status', '=', 'accepted'),
-            eb.not(
-              eb.exists(
-                eb
-                  .selectFrom('enrollments')
-                  .select('enrollments.id')
-                  .whereRef('enrollments.organization_id', '=', 'applications.organization_id')
-                  .whereRef('enrollments.source_application_id', '=', 'applications.id')
-                  .where('enrollments.status', 'in', ['canceled', 'transferred', 'completed']),
-              ),
-            ),
-          ]),
-        ]),
-      )
+          eb.and([eb('status', '=', 'accepted'), sourced(['pending', 'confirmed'])]),
+        ];
+        if (own.length > 0) {
+          branches.push(
+            eb.and([
+              eb('status', '=', 'accepted'),
+              eb.not(sourced(['canceled', 'transferred', 'completed'])),
+              eb.or([eb('submitted_by_person_id', 'in', own), eb('payer_person_id', 'in', own)]),
+            ]),
+          );
+        }
+        return eb.or(branches);
+      })
       .orderBy('created_at', 'desc')
       .executeTakeFirst();
+  }
+
+  /**
+   * SPK-REG-002/007: an application (its approval and any override on it) covers the intent it was
+   * made for. An accepted application for another intent is terminal and is not reused (the caller
+   * creates one for this intent); one still under review for another intent must be withdrawn
+   * first, since a participant has one application under review per offering.
+   */
+  forIntent(
+    application: ApplicationRow | undefined,
+    intent: RegistrationIntent,
+  ): ApplicationRow | undefined {
+    if (!application || application.intent === intent) return application;
+    if (application.status === 'accepted') return undefined;
+    throw errors.resourceConflict(
+      'An application for another intent is under review for this participant and offering; withdraw it first.',
+      {
+        code: 'APPLICATION_INTENT_MISMATCH',
+        applicationId: application.id,
+        applicationIntent: application.intent,
+        intent,
+      },
+    );
   }
 
   /** The catalog session named on a session-scoped intent (read before the transaction). */
@@ -178,9 +221,20 @@ export class ApplicationsService {
         teamEntryId: input.teamEntryId ?? null,
         session,
       });
-      const existing = await this.findCurrent(trx, organizationId, snapshot.offering.id, person.id);
+      // §4.7 (1), SPK-REG-009: a customer pays for their own application; staff may name a payer.
+      const payerPersonId =
+        resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+        (isStaffLike(principal) ? null : principal.personId);
+      const existing = await this.findCurrent(
+        trx,
+        organizationId,
+        snapshot.offering.id,
+        person.id,
+        [principal.personId, payerPersonId],
+      );
       if (existing) {
-        // SPK-AT-004: one application per participant and offering, whichever guardian asks; the
+        // SPK-AT-004: one live application per participant and offering, whichever guardian asks
+        // (one under review, or one whose registration is live, or this household's own); the
         // other household member's identity and payer are never revealed.
         throw errors.duplicateEntitlement(
           'An application for this participant and offering already exists.',
@@ -207,7 +261,7 @@ export class ApplicationsService {
         person,
         intent: input.intent,
         evaluation,
-        payerPersonId: input.payerPersonId ?? (isStaffLike(principal) ? null : principal.personId),
+        payerPersonId,
         teamEntryId: input.teamEntryId ?? null,
         sessionId: session?.id ?? null,
         notes: input.notes ?? null,

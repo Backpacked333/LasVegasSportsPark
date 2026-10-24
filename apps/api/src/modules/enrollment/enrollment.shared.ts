@@ -86,6 +86,41 @@ export function enrollmentSystem(organizationId: string, label = 'enrollment'): 
   return systemPrincipal(organizationId, label);
 }
 
+/**
+ * §4.7 (1), §4.14, SPK-REG-009: the payer a command may name. Staff may name another payer (an
+ * assisted registration); a customer may name only an adult in `allowed` (themselves, or the
+ * basket owner they already hold authority over). Finance lets only the payer quote and pay, so
+ * a customer naming an unrelated adult would also leave the registration unpayable.
+ */
+export function resolveCustomerPayer(
+  principal: Principal,
+  requested: string | null | undefined,
+  allowed: ReadonlyArray<string | null | undefined>,
+): string | null {
+  if (requested === undefined || requested === null) return null;
+  if (isStaffLike(principal)) return requested;
+  if (!allowed.includes(requested)) {
+    throw errors.participantAuthorityRequired(
+      'A customer may name only themselves as payer; staff may name another payer (SPK-REG-009).',
+    );
+  }
+  return requested;
+}
+
+/**
+ * SPK-PAY-001/002: whether a price basis owes nothing, counting the approved non-inclusive fees
+ * and taxes finance adds on top of the base price (an amount fee is per unit; a percentage of a
+ * zero net is zero). Only then may a registration skip the finance checkout; finance's quote
+ * total is zero in exactly these cases before discounts and credits, which finance applies.
+ */
+export function owesNothing(price: PriceSnapshot | null | undefined, quantity: number): boolean {
+  if (!price) return true;
+  if (price.basePriceMinor * quantity !== 0) return false;
+  return price.chargeLines.every(
+    (charge) => charge.inclusive === true || (charge.amountMinor ?? 0) === 0,
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Payer privacy (SPK-AT-004, §4.14): a guardian who may see a child's participation does not
 // learn which other adult registered or pays for it. Staff, the payer and the registrant see all.
@@ -130,6 +165,7 @@ export function redactEnrollment(principal: Principal, enrollment: Enrollment): 
     basketLineId: null,
     orderRef: null,
     cancellationConsequence: null,
+    transferConsequence: null,
   };
 }
 
@@ -313,6 +349,7 @@ export function toEnrollment(row: Selectable<EnrollmentsTable>): Enrollment {
     transferredAt: isoOrNull(row.transferred_at),
     transferredToEnrollmentId: row.transferred_to_enrollment_id,
     transferredFromEnrollmentId: row.transferred_from_enrollment_id,
+    transferConsequence: emptyToNull<FinancialConsequence>(row.transfer_consequence),
     completedAt: isoOrNull(row.completed_at),
     revision: row.revision,
     createdAt: iso(row.created_at),
@@ -353,6 +390,19 @@ export function toBasketLine(row: BasketLineRow): BasketLine {
   };
 }
 
+/**
+ * SPK-REG-004/007: a line still awaiting human approval before payment. Only a line that can still
+ * be fulfilled (pending or held) counts; a failed or released line (its application declined or
+ * withdrawn, or it failed in a partial hold) no longer blocks the held lines of its basket.
+ */
+export function awaitsApproval(line: BasketLine): boolean {
+  return (
+    line.requiresApproval &&
+    (line.outcome === 'pending' || line.outcome === 'held') &&
+    line.applicationStatus !== 'accepted'
+  );
+}
+
 export function toBasket(
   row: Selectable<BasketsTable>,
   lines: BasketLine[],
@@ -374,12 +424,7 @@ export function toBasket(
     holdExpiresAt: isoOrNull(row.hold_expires_at),
     currency: row.currency,
     subtotalMinor,
-    approvalPending: lines.some(
-      (line) =>
-        line.requiresApproval &&
-        line.applicationStatus !== 'accepted' &&
-        line.outcome !== 'confirmed',
-    ),
+    approvalPending: lines.some(awaitsApproval),
     orderRef: row.order_ref,
     lastOperationId: row.last_operation_id,
     lines,
@@ -547,6 +592,7 @@ export function toTrialParticipation(
     status: row.status,
     scheduledFor: isoOrNull(row.scheduled_for),
     attendedAt: isoOrNull(row.attended_at),
+    noShowAt: isoOrNull(row.no_show_at),
     canceledAt: isoOrNull(row.canceled_at),
     followUpConsent: row.follow_up_consent,
     followUp: row.follow_up,

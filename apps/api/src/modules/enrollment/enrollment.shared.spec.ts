@@ -21,6 +21,7 @@ const enrollment = {
   basketLineId: '01a16c09-0000-7000-8000-000000000015',
   orderRef: 'order-1',
   cancellationConsequence: null,
+  transferConsequence: null,
 } as unknown as Enrollment;
 
 describe('SPK-AT-004 payer privacy', () => {

@@ -156,7 +156,10 @@ export const EligibilityOverrideSchema = z
   .openapi('EligibilityOverride');
 export type EligibilityOverride = z.infer<typeof EligibilityOverrideSchema>;
 
-/** Price basis copied from the catalog price rule when the line was added (SPK-PAY-001/002). */
+/**
+ * Price basis copied from the catalog price rule effective when the line was added, refreshed from
+ * the rule effective when it is held (SPK-PAY-001/002).
+ */
 export const PriceSnapshotSchema = z
   .object({
     priceRuleId: z.uuid(),
@@ -494,6 +497,12 @@ export const EnrollmentSchema = z
     transferredAt: Instant.nullable(),
     transferredToEnrollmentId: z.uuid().nullable(),
     transferredFromEnrollmentId: z.uuid().nullable(),
+    /**
+     * SPK-REG-010: the refund, credit or charge accepted with the transfer, on the transferred-from
+     * enrollment (null otherwise, and for a viewer who may not see payer facts). Its execution is
+     * pending DEC-009; a finance follow-up records it until then.
+     */
+    transferConsequence: FinancialConsequenceSchema.nullable(),
     completedAt: Instant.nullable(),
     revision: Revision,
     createdAt: Instant,
@@ -970,6 +979,8 @@ export const TrialParticipationSchema = z
     status: TrialParticipationStatusSchema,
     scheduledFor: Instant.nullable(),
     attendedAt: Instant.nullable(),
+    /** SPK-AT-019: the no-show outcome, kept after conversion (as `attendedAt` is). */
+    noShowAt: Instant.nullable(),
     canceledAt: Instant.nullable(),
     followUpConsent: z.boolean(),
     followUp: z.record(z.string(), z.unknown()),

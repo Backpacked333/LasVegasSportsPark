@@ -34,6 +34,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  OperationalExceptions,
   OperationsService,
   Outbox,
   UnitOfWork,
@@ -105,6 +106,7 @@ export class EnrollmentsService implements EnrollmentPort {
     private readonly capacity: CapacityService,
     private readonly evaluator: RegistrationEvaluator,
     @Inject(FINANCE_POLICY_PORT) private readonly finance: FinancePolicyPort,
+    private readonly exceptions: OperationalExceptions,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -284,6 +286,7 @@ export class EnrollmentsService implements EnrollmentPort {
           transferred_at: null,
           transferred_to_enrollment_id: null,
           transferred_from_enrollment_id: null,
+          transfer_consequence: null,
           completed_at: null,
         })
         .execute();
@@ -810,6 +813,23 @@ export class EnrollmentsService implements EnrollmentPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
+      if (row.status === 'pending' && row.basket_id) {
+        const basket = await trx
+          .selectFrom('baskets')
+          .select(['status', 'order_ref'])
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', row.basket_id)
+          .forUpdate()
+          .executeTakeFirst();
+        if (basket?.status === 'checking_out') {
+          // §4.11, SPK-PAY-007: finance's checkout owns this pending enrollment while money may be
+          // moving; it confirms or fails it. The customer cancels the checkout instead.
+          throw errors.resourceConflict(
+            'A checkout is in progress for this registration; cancel the checkout instead.',
+            { code: 'CHECKOUT_IN_PROGRESS', orderRef: basket.order_ref },
+          );
+        }
+      }
       const consequence = await this.finance.cancellationConsequence(
         organizationId,
         {
@@ -1192,6 +1212,8 @@ export class EnrollmentsService implements EnrollmentPort {
           status: transferredStatus,
           transferred_at: now,
           transferred_to_enrollment_id: created.id,
+          // SPK-REG-010, §4.7 invariant 12: the accepted refund, credit or charge is a recorded fact.
+          transfer_consequence: json(consequence),
           last_operation_id: operationId,
           revision: row.revision + 1,
         })
@@ -1238,7 +1260,8 @@ export class EnrollmentsService implements EnrollmentPort {
         details: {
           toEnrollmentId: created.id,
           toOfferingId: target.offering.id,
-          consequence: consequence.kind,
+          consequence,
+          consequenceAccepted: consequence.kind !== 'none',
         },
       });
       await this.audit.record(trx, {
@@ -1265,9 +1288,36 @@ export class EnrollmentsService implements EnrollmentPort {
           fromOfferingId: row.offering_id,
           toOfferingId: target.offering.id,
           participantPersonId: row.participant_person_id,
-          financialConsequence: consequence.kind,
+          financialConsequence: consequence,
         },
       });
+      if (consequence.kind !== 'none') {
+        // §4.7 invariant 12, §4.12: the money side of the transfer has an owner. How finance settles
+        // it (an obligation, a credit or a refund, or keeping the new place pending until paid) is
+        // DEC-009 (pending); until then finance resolves it from this follow-up.
+        await this.exceptions.raise(trx, {
+          organizationId,
+          category: 'enrollment.transfer_consequence_pending',
+          severity: 'warning',
+          title: `Transfer accepted with a ${consequence.kind}${
+            consequence.amountMinor !== null
+              ? ` of ${consequence.amountMinor} ${consequence.currency ?? ''}`.trimEnd()
+              : ''
+          } to settle`,
+          affectedType: 'enrollment',
+          affectedId: id,
+          ownerQueue: 'finance_operator',
+          dedupeKey: `transfer_consequence:${id}`,
+          details: {
+            consequence,
+            fromEnrollmentId: id,
+            toEnrollmentId: created.id,
+            orderRef: row.order_ref,
+            payerPersonId: row.payer_person_id,
+            operationId,
+          },
+        });
+      }
       await this.capacity.enqueueCapacityReleased(
         trx,
         organizationId,
@@ -1276,7 +1326,11 @@ export class EnrollmentsService implements EnrollmentPort {
         correlationId,
       );
       await this.operations.transition(trx, operationId, 'succeeded', {
-        result: { fromEnrollmentId: id, toEnrollmentId: created.id },
+        result: {
+          fromEnrollmentId: id,
+          toEnrollmentId: created.id,
+          financialConsequence: consequence,
+        },
       });
       const previous = await this.load(trx, organizationId, id);
       const next = await this.load(trx, organizationId, created.id);
