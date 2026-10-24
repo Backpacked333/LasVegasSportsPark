@@ -232,7 +232,14 @@ describe('case actions (SPK-SUPPORT-003)', () => {
       .where('id', '=', action.supportOperationId)
       .executeTakeFirstOrThrow();
     expect(op.status).toBe('recovery_required');
-    // The 500 released the idempotency key; the retry is refused instead of refunding again.
+    // §4.9: the command committed (the unknown outcome above) before the 500, so a retry with the
+    // same key replays the stored 500 instead of running the command again.
+    const replay = await post(t, `/v1/cases/${caseId}/request-refund`, manager, body, idem);
+    expect(replay.status).toBe(500);
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    // Once the stored response has expired (simulated by removing it), the same key reaches the
+    // command again, which refuses instead of refunding again.
+    await t.db.deleteFrom('idempotency_keys').where('idempotency_key', '=', idem).execute();
     const retry = await post(t, `/v1/cases/${caseId}/request-refund`, manager, body, idem);
     expect(retry.status).toBe(409);
     expect(retry.body.code).toBe('REFUND_PENDING');

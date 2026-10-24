@@ -4,9 +4,14 @@ import type { Db } from '@sportspark/db';
 import { sql } from 'kysely';
 import type { Clock } from '../clock';
 import type { AppConfig } from '../config';
+import { runWithTransaction } from '../database/transaction-context';
 import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
 import { APP_CONFIG, CLOCK, DATABASE } from '../tokens';
-import { EventHandlerRegistry, type RegisteredHandler } from './event-handler.registry';
+import {
+  EventHandlerRegistry,
+  runAfterCommitHooks,
+  type RegisteredHandler,
+} from './event-handler.registry';
 
 export interface DispatchSummary {
   claimed: number;
@@ -214,6 +219,7 @@ export class OutboxDispatcher {
       .execute();
     let outcome: 'succeeded' | 'failed' | 'skipped' = 'succeeded';
     let errorText: string | null = null;
+    const hooks: Array<() => void | Promise<void>> = [];
     try {
       const ran = await this.db.transaction().execute(async (trx) => {
         const consumed = await trx
@@ -223,10 +229,17 @@ export class OutboxDispatcher {
           .returning('event_id')
           .executeTakeFirst();
         if (!consumed) return false;
-        await handler.handler(event, { trx, attempt });
+        // The handler runs in the transaction context, so ports read through its transaction.
+        await runWithTransaction(trx, () =>
+          handler.handler(event, { trx, attempt, afterCommit: (hook) => hooks.push(hook) }),
+        );
         return true;
       });
       if (!ran) outcome = 'skipped';
+      else
+        await runAfterCommitHooks(hooks, (error) =>
+          this.logger.warn(`after-commit hook of ${handler.name} failed: ${String(error)}`),
+        );
     } catch (error) {
       outcome = 'failed';
       errorText = error instanceof Error ? `${error.name}: ${error.message}` : String(error);

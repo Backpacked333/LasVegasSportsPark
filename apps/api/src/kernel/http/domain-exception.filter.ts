@@ -32,6 +32,59 @@ function mapHttpStatus(status: number): ErrorCode {
 }
 
 /**
+ * The status and body the stable error contract (§4.10) gives `exception`. Unexpected errors carry
+ * no internal details. Shared by the filter and by the idempotency interceptor, which stores the
+ * same body for replay.
+ */
+export function toErrorResponse(
+  exception: unknown,
+  correlationId: string,
+): { status: number; body: ErrorResponseBody } {
+  if (DomainError.is(exception)) {
+    return { status: exception.httpStatus, body: exception.toResponseBody(correlationId) };
+  }
+  if (exception instanceof ZodError) {
+    return {
+      status: 400,
+      body: {
+        code: 'VALIDATION_FAILED',
+        message: 'Request validation failed.',
+        correlationId,
+        nextAction: 'correct_input',
+        details: exception.issues.map((i) => ({
+          path: i.path.join('.'),
+          message: i.message,
+          code: i.code,
+        })),
+      },
+    };
+  }
+  if (exception instanceof HttpException) {
+    const status = exception.getStatus();
+    const raw = exception.getResponse();
+    const message =
+      typeof raw === 'string'
+        ? raw
+        : typeof raw === 'object' && raw !== null && 'message' in raw
+          ? String((raw as { message: unknown }).message)
+          : exception.message;
+    return {
+      status,
+      body: { code: mapHttpStatus(status), message, correlationId, nextAction: 'see_code' },
+    };
+  }
+  return {
+    status: 500,
+    body: {
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred.',
+      correlationId,
+      nextAction: 'retry_or_contact_support',
+    },
+  };
+}
+
+/**
  * Maps every error to the stable error contract (§4.10). Unexpected errors are logged with the
  * correlation id and returned without internal details.
  */
@@ -45,53 +98,19 @@ export class DomainExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<RequestWithContext>();
     const correlationId = request.correlationId ?? newId();
 
-    let status: number;
-    let body: ErrorResponseBody;
-
+    const { status, body } = toErrorResponse(exception, correlationId);
     if (DomainError.is(exception)) {
-      status = exception.httpStatus;
-      body = exception.toResponseBody(correlationId);
       if (status >= 500) {
         this.logger.error(
           `[${correlationId}] ${exception.code}: ${exception.message}`,
           exception.stack,
         );
       }
-    } else if (exception instanceof ZodError) {
-      status = 400;
-      body = {
-        code: 'VALIDATION_FAILED',
-        message: 'Request validation failed.',
-        correlationId,
-        nextAction: 'correct_input',
-        details: exception.issues.map((i) => ({
-          path: i.path.join('.'),
-          message: i.message,
-          code: i.code,
-        })),
-      };
     } else if (exception instanceof HttpException) {
-      status = exception.getStatus();
-      const code = mapHttpStatus(status);
-      const raw = exception.getResponse();
-      const message =
-        typeof raw === 'string'
-          ? raw
-          : typeof raw === 'object' && raw !== null && 'message' in raw
-            ? String((raw as { message: unknown }).message)
-            : exception.message;
-      body = { code, message, correlationId, nextAction: 'see_code' };
-      if (status >= 500) this.logger.error(`[${correlationId}] ${message}`, exception.stack);
-    } else {
-      status = 500;
+      if (status >= 500) this.logger.error(`[${correlationId}] ${body.message}`, exception.stack);
+    } else if (!(exception instanceof ZodError)) {
       const err = exception instanceof Error ? exception : new Error(String(exception));
       this.logger.error(`[${correlationId}] unhandled: ${err.message}`, err.stack);
-      body = {
-        code: 'INTERNAL_ERROR',
-        message: 'An unexpected error occurred.',
-        correlationId,
-        nextAction: 'retry_or_contact_support',
-      };
     }
 
     response.status(status).json(body);

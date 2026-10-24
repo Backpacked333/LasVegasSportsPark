@@ -19,6 +19,7 @@ export const ErrorCodes = {
   QUOTE_EXPIRED: { httpStatus: 409, nextAction: 'request_new_quote' },
   IDEMPOTENCY_CONFLICT: { httpStatus: 409, nextAction: 'use_new_idempotency_key' },
   IDEMPOTENCY_IN_PROGRESS: { httpStatus: 409, nextAction: 'retry_later_with_same_key' },
+  IDEMPOTENCY_OUTCOME_UNAVAILABLE: { httpStatus: 409, nextAction: 'reload_current_state' },
   PAYMENT_OUTCOME_UNKNOWN: { httpStatus: 409, nextAction: 'await_reconciliation' },
   REFUND_PENDING: { httpStatus: 409, nextAction: 'await_refund_resolution' },
   INTEGRATION_UNAVAILABLE: { httpStatus: 503, nextAction: 'retry_later' },
@@ -122,6 +123,16 @@ export const errors = {
     new DomainError(
       'IDEMPOTENCY_IN_PROGRESS',
       'A request with this idempotency key is still in progress.',
+    ),
+  /**
+   * The request that holds this key committed changes but its response was never recorded (the
+   * process stopped first). Re-running it could repeat its effect, so the client reloads state (§4.9).
+   */
+  idempotencyOutcomeUnavailable: (details?: unknown) =>
+    new DomainError(
+      'IDEMPOTENCY_OUTCOME_UNAVAILABLE',
+      'The request with this idempotency key changed data but its response was not recorded; reload the current state instead of retrying it.',
+      { details },
     ),
   paymentOutcomeUnknown: (details?: unknown) =>
     new DomainError('PAYMENT_OUTCOME_UNKNOWN', 'The payment outcome is not yet known.', {
