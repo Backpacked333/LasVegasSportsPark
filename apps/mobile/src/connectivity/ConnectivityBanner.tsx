@@ -9,7 +9,7 @@
  * refetch their operation on foreground through the same query layer.
  */
 import { formatAge } from '@sportspark/api-client';
-import { useQueryClient } from '@tanstack/react-query';
+import { notifyManager, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { receivedAtOf } from '../api/useApiQuery';
@@ -24,7 +24,9 @@ export const OFFLINE_UNAVAILABLE_ACTIONS = ['registration', 'payment', 'RSVP', '
 function useOldestShownData(): number | null {
   const cache = useQueryClient().getQueryCache();
   return useSyncExternalStore(
-    (onChange) => cache.subscribe(onChange),
+    // Batched like TanStack's own hooks: a query created while another component renders must not
+    // update the banner during that render.
+    (onChange) => cache.subscribe(notifyManager.batchCalls(onChange)),
     () => {
       let oldest: number | null = null;
       for (const q of cache.findAll({ type: 'active' })) {
