@@ -4,15 +4,19 @@
  * returns for the viewer (assigned activities, permitted participant information); offers awaiting
  * a response first. "Accept" appears only when the API lists `accept` in `availableActions` (the
  * client never decides authorization) and sends `expectedRevision` (§4.9). Decline, withdrawal,
- * attendance, match reports, messages and fees (SCR-W-02 to SCR-W-09) belong to the workspace group.
+ * attendance, match reports, messages and fees (SCR-W-02 to SCR-W-09) open from each card
+ * (AssignmentWorkspaceScreen). The offline queue status (SCR-W-10) shows above the list.
  *
  * Times: the workspace payload carries no facility timezone, so times are shown in the device's
  * time zone with the zone named, not presented as facility-local time (SPK-SCHED-008).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import { AreaTabs, WORKSPACE_TABS } from '../../features/operations/AreaTabs';
+import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
@@ -69,9 +73,13 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
   return (
     <li aria-labelledby={`assignment-${item.assignment.id}`}>
       <div className="row-text">
-        <span className="row-title" id={`assignment-${item.assignment.id}`}>
+        <Link
+          className="row-title"
+          id={`assignment-${item.assignment.id}`}
+          to={`/workspace/assignments/${item.assignment.id}`}
+        >
           {item.activity.title}
-        </span>
+        </Link>
         <span className="caption">
           {formatActivityTime(item.activity.scheduledStart, item.activity.scheduledEnd)} ·{' '}
           {item.assignment.role}
@@ -110,6 +118,8 @@ export function WorkspaceScreen() {
   return (
     <section aria-labelledby="workspace-title">
       <h2 id="workspace-title">My assignments</h2>
+      <AreaTabs label="Workspace screens" tabs={WORKSPACE_TABS} />
+      <OfflineQueueStatus reviewPath="/workspace/offline" />
       <QueryBoundary
         query={assignments}
         label="your assignments"

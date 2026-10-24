@@ -11,6 +11,8 @@ export interface StaffArea {
   path: string;
   screenIds: string;
   purpose: string;
+  /** The area's screen group registers its own routes in App.tsx (no placeholder). */
+  ownRoutes?: boolean;
 }
 
 export const STAFF_AREAS: readonly StaffArea[] = [
@@ -70,6 +72,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/arrival',
     screenIds: 'SCR-S-28 to SCR-S-31',
     purpose: 'Arrival scanning, attendance, supervised release, offline queue review.',
+    ownRoutes: true,
   },
   {
     id: 'staff',
@@ -77,6 +80,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/staff',
     screenIds: 'SCR-S-32 to SCR-S-34',
     purpose: 'Availability and qualifications, assignments and replacement, fee approvals.',
+    ownRoutes: true,
   },
   {
     id: 'finance',
@@ -92,6 +96,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/communications',
     screenIds: 'SCR-S-39, SCR-S-40',
     purpose: 'Message composer with audience preview, delivery status.',
+    ownRoutes: true,
   },
   {
     id: 'facilities',
