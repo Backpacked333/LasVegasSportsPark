@@ -33,6 +33,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/schedule',
     screenIds: 'SCR-S-03 to SCR-S-07, SCR-S-51, SCR-S-52',
     purpose: 'Calendar and resources, schedule drafts, publication review, closures.',
+    ownRoutes: true,
   },
   {
     id: 'leagues',
@@ -105,6 +106,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/facilities',
     screenIds: 'SCR-S-41, SCR-S-42',
     purpose: 'Assets and maintenance tasks, operating restrictions and release to service.',
+    ownRoutes: true,
   },
   {
     id: 'reports',

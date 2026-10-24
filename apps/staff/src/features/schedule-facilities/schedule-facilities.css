@@ -1,0 +1,155 @@
+/*
+ * Schedule and facilities screens (SCR-S-03 to SCR-S-07, SCR-S-41, SCR-S-42). Uses the dashboard
+ * tokens from ui/styles.css. The calendar bars are a visual aid (aria-hidden); bar kinds differ by
+ * fill pattern as well as colour, and every bar's information is in the text list beside it
+ * (SPK-UX-009: status never by colour alone).
+ */
+.sub-nav ul {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.sub-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  text-decoration: none;
+}
+.sub-nav a[aria-current='page'] {
+  font-weight: 600;
+  border: 2px solid var(--color-primary);
+  border-bottom-width: 4px;
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin: var(--space-3) 0;
+}
+.toolbar select,
+.toolbar input[type='date'],
+.form select,
+.form textarea,
+.datetime-field input {
+  min-height: var(--touch);
+  font: inherit;
+}
+.form textarea {
+  padding: var(--space-2);
+  border: 2px solid var(--color-border);
+  border-radius: 6px;
+}
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.datetime-field,
+.resource-checklist,
+.form fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.resource-checklist label,
+.form fieldset label {
+  min-height: var(--touch);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.range-label {
+  font-size: 1.125rem;
+}
+.resource-row {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-3) 0;
+}
+.resource-row h4 {
+  margin: 0 0 var(--space-1);
+}
+.track {
+  position: relative;
+  height: 28px;
+  margin: var(--space-2) 0;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.track-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.track-event {
+  top: 6px;
+  bottom: 6px;
+  background: var(--tone-info);
+}
+.track-buffer {
+  background: repeating-linear-gradient(45deg, var(--color-border) 0 4px, transparent 4px 8px);
+}
+.track-shared {
+  background: repeating-linear-gradient(90deg, var(--tone-neutral) 0 2px, transparent 2px 6px);
+}
+.track-closure {
+  background: repeating-linear-gradient(-45deg, var(--tone-danger) 0 3px, transparent 3px 7px);
+}
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-3) 0;
+}
+.facts dt {
+  font-weight: 600;
+}
+.facts dd {
+  margin: 0;
+}
+.facts-table {
+  border-collapse: collapse;
+  margin: var(--space-3) 0;
+}
+.facts-table caption {
+  text-align: start;
+  font-weight: 600;
+}
+.facts-table th,
+.facts-table td {
+  text-align: start;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.issue-list,
+.field-issues {
+  margin: var(--space-1) 0;
+  padding-inline-start: var(--space-4);
+}
+.draft-editor input#draft-name {
+  min-height: var(--touch);
+  font: inherit;
+  max-width: 32rem;
+}
+a.button {
+  text-decoration: none;
+  margin: var(--space-3) 0;
+}
+@media (max-width: 768px) {
+  .facts {
+    grid-template-columns: 1fr;
+  }
+}

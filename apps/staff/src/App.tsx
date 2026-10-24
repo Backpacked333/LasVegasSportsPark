@@ -6,6 +6,7 @@ import { Navigate, Route, Routes } from 'react-router';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS, WORKSPACE_PATH } from './navigation/areas';
 import { AreaScreen } from './screens/area/AreaScreen';
+import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
 import { NotFoundScreen } from './screens/not-found/NotFoundScreen';
 import { AccessReviewScreen } from './screens/people/AccessReviewScreen';
 import { AccessReviewsScreen } from './screens/people/AccessReviewsScreen';
@@ -14,6 +15,7 @@ import { OpenAccessReviewScreen } from './screens/people/OpenAccessReviewScreen'
 import { PeopleScreen } from './screens/people/PeopleScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
 import { RelationshipsScreen } from './screens/people/RelationshipsScreen';
+import { ScheduleArea } from './screens/schedule/ScheduleArea';
 import { SignInScreen } from './screens/sign-in/SignInScreen';
 import { OpenCaseScreen } from './screens/support/OpenCaseScreen';
 import { SupportCaseScreen } from './screens/support/SupportCaseScreen';
@@ -47,6 +49,8 @@ export function AppRoutes() {
         <Route path="/admin/cases" element={<SupportCasesScreen />} />
         <Route path="/admin/cases/new" element={<OpenCaseScreen />} />
         <Route path="/admin/cases/:caseId" element={<SupportCaseScreen />} />
+        <Route path="/schedule/*" element={<ScheduleArea />} />
+        <Route path="/facilities/*" element={<FacilitiesArea />} />
         {STAFF_AREAS.filter((a) => !a.ownRoutes).map((area) => (
           <Route key={area.id} path={area.path} element={<AreaScreen area={area} />} />
         ))}
