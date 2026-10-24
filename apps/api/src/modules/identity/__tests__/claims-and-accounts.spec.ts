@@ -1,5 +1,6 @@
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { idempotencyStoreContains } from '../../../testing/idempotency-store';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import { RelationshipAuthority } from '../services/relationship-authority.service';
@@ -90,6 +91,30 @@ describe('claims and accounts (SPK-IAM-002, SPK-AT-025)', () => {
       .set('Idempotency-Key', key())
       .send();
     expect(reuse.status).toBe(409);
+  });
+
+  it('§4.14 / SPK-IAM-002: the claim token never rests in the idempotency store; a replay withholds it', async () => {
+    const people = await createOrganizationPeople(t);
+    const staff = await authHeaderForPerson(t, people.staff.personId);
+    const participant = await createPersonFixture(t, { kind: 'adult' });
+    const idempotencyKey = key();
+    const issued = await t.http
+      .post(`/v1/people/${participant}/claims`)
+      .set(staff)
+      .set('Idempotency-Key', idempotencyKey)
+      .send({ kind: 'self' });
+    expect(issued.status).toBe(201);
+    expect(await idempotencyStoreContains(t.db, issued.body.token as string)).toBe(false);
+    const replay = await t.http
+      .post(`/v1/people/${participant}/claims`)
+      .set(staff)
+      .set('Idempotency-Key', idempotencyKey)
+      .send({ kind: 'self' });
+    expect(replay.status).toBe(409);
+    expect(replay.body).toMatchObject({
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      details: { resourceId: issued.body.id },
+    });
   });
 
   it('SPK-IAM-002: a guardian claim grants only the permissions staff wrote on it', async () => {

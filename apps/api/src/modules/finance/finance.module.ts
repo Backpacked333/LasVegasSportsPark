@@ -1,14 +1,8 @@
-import {
-  Inject,
-  Module,
-  type OnApplicationBootstrap,
-  type OnModuleDestroy,
-  type OnModuleInit,
-  type Provider,
-} from '@nestjs/common';
+import { Module, type OnModuleDestroy, type OnModuleInit, type Provider } from '@nestjs/common';
 import type { EventPayload } from '@sportspark/contracts';
 import {
   APP_CONFIG,
+  BackgroundWorkers,
   EventHandlerRegistry,
   Inbox,
   runWithTransaction,
@@ -139,9 +133,9 @@ const providers: Provider[] = [
     FinanceWorker,
   ],
 })
-export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
+export class FinanceModule implements OnModuleInit, OnModuleDestroy {
   constructor(
-    @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly backgroundWorkers: BackgroundWorkers,
     private readonly registry: EventHandlerRegistry,
     private readonly inbox: Inbox,
     private readonly finalizer: CheckoutFinalizer,
@@ -151,6 +145,14 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
   ) {}
 
   onModuleInit(): void {
+    // §4.1, §4.12: the provider-facing poll loop belongs to the worker process (worker.ts starts
+    // every registered background worker); request-serving API processes never run it. Tests
+    // drive `runOnce()` directly.
+    this.backgroundWorkers.register({
+      name: 'finance.provider_worker',
+      start: () => this.worker.start(),
+      stop: () => this.worker.stop(),
+    });
     // Handlers run in the dispatcher's transaction; binding it as the active transaction makes
     // every port read (enrollment, catalog, identity) go through it, never a second connection.
 
@@ -217,11 +219,6 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
         await this.webhooks.apply(ctx.trx, event);
       }),
     );
-  }
-
-  /** The provider-facing worker runs in every non-test process; tests drive `FinanceWorker.runOnce()`. */
-  onApplicationBootstrap(): void {
-    if (this.config.NODE_ENV !== 'test') this.worker.start();
   }
 
   onModuleDestroy(): void {

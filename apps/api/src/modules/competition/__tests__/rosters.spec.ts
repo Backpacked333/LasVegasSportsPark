@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { TestApp } from '../../../testing';
+import { idempotencyStoreContains, type TestApp } from '../../../testing';
 import {
   createContactPointFixture,
   createPersonFixture,
@@ -420,11 +420,28 @@ describe('rosters, eligibility, invitations and join requests (SPK-COMP-005, SPK
       recipientPersonId: x.personId,
     });
     expect(onB.status).toBe(404);
-    const invited = await post(`/team-entries/${a.teamEntryId}/invitations`, a.captain, {
-      recipientPersonId: x.personId,
-      message: 'Join us',
-    });
+    const inviteKey = key();
+    const invited = await post(
+      `/team-entries/${a.teamEntryId}/invitations`,
+      a.captain,
+      { recipientPersonId: x.personId, message: 'Join us' },
+      inviteKey,
+    );
     expect(invited.status).toBe(201);
+    // §4.14: the token is stored only as a hash, never with the idempotency key; a replay names
+    // the invitation and withholds the token.
+    expect(await idempotencyStoreContains(t.db, invited.body.token as string)).toBe(false);
+    const replayed = await post(
+      `/team-entries/${a.teamEntryId}/invitations`,
+      a.captain,
+      { recipientPersonId: x.personId, message: 'Join us' },
+      inviteKey,
+    );
+    expect(replayed.status).toBe(409);
+    expect(replayed.body).toMatchObject({
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      details: { resourceId: invited.body.id },
+    });
     expect(invited.body).toMatchObject({
       teamEntryId: a.teamEntryId,
       invitedByPersonId: a.captain.personId,

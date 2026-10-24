@@ -498,6 +498,8 @@ export class CheckoutService {
       correlationId,
       input: { quoteId: quote.id, basketId: basket.id },
       status: 'running',
+      // §4.9, §4.11 step 4: the checkout key names this operation, not the basket hold's.
+      primary: true,
     });
     const policyReferences = quote.policy_references;
     await trx

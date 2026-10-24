@@ -1,13 +1,6 @@
-import {
-  Inject,
-  Module,
-  type OnApplicationBootstrap,
-  type OnModuleDestroy,
-  type OnModuleInit,
-  type Provider,
-} from '@nestjs/common';
+import { Module, type OnModuleDestroy, type OnModuleInit, type Provider } from '@nestjs/common';
 import { DeliveryReceiptSchema, type EventPayload } from '@sportspark/contracts';
-import { APP_CONFIG, EventHandlerRegistry, Inbox, type AppConfig } from '../../kernel';
+import { BackgroundWorkers, EventHandlerRegistry, Inbox } from '../../kernel';
 import { CompetitionModule } from '../competition';
 import { IdentityEvents, IdentityModule } from '../identity';
 import { EventChanged, SchedulePublished, SchedulingModule } from '../scheduling';
@@ -94,9 +87,9 @@ const providers: Provider[] = [
     FakeSmsProvider,
   ],
 })
-export class CommunicationsModule implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
+export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
   constructor(
-    @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly backgroundWorkers: BackgroundWorkers,
     private readonly registry: EventHandlerRegistry,
     private readonly inbox: Inbox,
     private readonly notifications: NotificationsService,
@@ -105,6 +98,14 @@ export class CommunicationsModule implements OnModuleInit, OnApplicationBootstra
   ) {}
 
   onModuleInit(): void {
+    // §4.1, §4.12: the provider-facing poll loop belongs to the worker process (worker.ts starts
+    // every registered background worker); request-serving API processes never run it. Tests
+    // drive `runOnce()` directly.
+    this.backgroundWorkers.register({
+      name: 'communications.delivery_worker',
+      start: () => this.worker.start(),
+      stop: () => this.worker.stop(),
+    });
     // Dispatch (SPK-COMMS-003): the transactional half of `communications.delivery_requested`
     // re-checks every recipient against current authority and creates the delivery attempts; the
     // provider hand-off happens in DeliveryWorker OUTSIDE any transaction (§4.11), nudged after
@@ -173,14 +174,6 @@ export class CommunicationsModule implements OnModuleInit, OnApplicationBootstra
         await this.worker.applyReceipt(ctx.trx, receipt, event.id);
       },
     );
-  }
-
-  /**
-   * The delivery poller runs in every non-test process (API and worker alike; claims use
-   * SKIP LOCKED leases so several pollers cooperate). Tests drive `DeliveryWorker.runOnce()`.
-   */
-  onApplicationBootstrap(): void {
-    if (this.config.NODE_ENV !== 'test') this.worker.start();
   }
 
   onModuleDestroy(): void {

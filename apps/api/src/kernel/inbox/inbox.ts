@@ -128,10 +128,14 @@ export class Inbox {
               .returning('event_id')
               .executeTakeFirst();
             if (!consumed) return false;
-            // The handler runs in the transaction context, so ports read through its transaction.
-            await runWithTransaction(trx, () =>
-              handler(event, { trx, attempt, afterCommit: (hook) => hooks.push(hook) }),
-            );
+            // The handler runs in the transaction context, so ports read through its transaction
+            // and a command it calls joins it (UnitOfWork.run), deferring its hooks to this commit.
+            const afterCommit = (hook: () => void | Promise<void>) => {
+              hooks.push(hook);
+            };
+            await runWithTransaction(trx, () => handler(event, { trx, attempt, afterCommit }), {
+              afterCommit,
+            });
             return true;
           });
           if (ran) {

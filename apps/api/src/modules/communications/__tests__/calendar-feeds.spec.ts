@@ -1,6 +1,6 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestApp, type TestApp } from '../../../testing';
+import { createTestApp, idempotencyStoreContains, type TestApp } from '../../../testing';
 import {
   authHeaderForPerson,
   createAccountFixture,
@@ -215,5 +215,27 @@ describe('private calendar feeds (SPK-COMMS-008 stable identities and revocable 
       .where('aggregate_id', '=', created.body.id)
       .execute();
     expect(revokedEvent).toHaveLength(1);
+  });
+
+  it('§4.14 / SPK-COMMS-008: the feed token never rests in the idempotency store; a replay withholds it', async () => {
+    const idempotencyKey = key();
+    const send = () =>
+      t.http
+        .post('/v1/me/calendar-feeds')
+        .set(parent)
+        .set('Idempotency-Key', idempotencyKey)
+        .send({ label: 'Replay check' });
+    const created = await send();
+    expect(created.status).toBe(201);
+    expect(await idempotencyStoreContains(t.db, created.body.token as string)).toBe(false);
+    const replay = await send();
+    expect(replay.status).toBe(409);
+    expect(replay.body).toMatchObject({
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      details: { resourceId: created.body.id },
+    });
+    expect(JSON.stringify(replay.body)).not.toContain(created.body.token as string);
+    // the stored token cannot be redeemed from the store: only the original response had it
+    expect((await fetchFeed(created.body.path as string)).status).toBe(200);
   });
 });

@@ -20,6 +20,7 @@ import { UnitOfWork } from './database/unit-of-work';
 import { OperationalExceptions } from './exceptions/operational-exceptions.service';
 import { HealthController } from './health/health.controller';
 import { DomainExceptionFilter } from './http/domain-exception.filter';
+import { IdempotencySweeper } from './http/idempotency-sweeper';
 import { IdempotencyInterceptor } from './http/idempotency.interceptor';
 import { Inbox } from './inbox/inbox';
 import { lazyPort } from './lazy-port';
@@ -28,6 +29,7 @@ import { OperationsService } from './operations/operations.service';
 import { EventHandlerRegistry } from './outbox/event-handler.registry';
 import { Outbox } from './outbox/outbox';
 import { OutboxDispatcher } from './outbox/outbox-dispatcher';
+import { BackgroundWorkers } from './workers/background-workers';
 import {
   APP_CONFIG,
   CLOCK,
@@ -116,6 +118,8 @@ export class KernelModule {
       OutboxDispatcher,
       Inbox,
       OperationsService,
+      IdempotencySweeper,
+      BackgroundWorkers,
       { provide: APP_GUARD, useClass: AuthGuard },
       { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
       { provide: APP_FILTER, useClass: DomainExceptionFilter },
@@ -141,6 +145,8 @@ export class KernelModule {
         OutboxDispatcher,
         Inbox,
         OperationsService,
+        IdempotencySweeper,
+        BackgroundWorkers,
       ],
     };
   }

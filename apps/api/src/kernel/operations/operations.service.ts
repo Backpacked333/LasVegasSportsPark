@@ -12,6 +12,7 @@ import { snapshotActor } from '../audit/audit.writer';
 import { defineActions } from '../authorization/actions';
 import { AuthorizationService } from '../authorization/authorization.service';
 import type { Clock } from '../clock';
+import { currentCommitFence } from '../database/commit-fence';
 import { ensureUpdated } from '../database/revision';
 import type { Trx } from '../database/unit-of-work';
 import { CLOCK, DATABASE } from '../tokens';
@@ -44,6 +45,12 @@ export interface CreateOperationInput {
   correlationId?: string | null;
   input?: unknown;
   status?: Extract<OperationStatus, 'pending' | 'running'>;
+  /**
+   * Inside an idempotent request the key is linked to the first operation the request creates
+   * (§4.9). A coordinator that creates its own operation after a nested step created one passes
+   * `primary: true` so the key names the coordinator's operation instead.
+   */
+  primary?: boolean;
 }
 
 const TERMINAL: OperationStatus[] = ['succeeded', 'failed', 'compensated'];
@@ -77,6 +84,9 @@ export class OperationsService {
         completed_at: null,
       })
       .execute();
+    // §4.9: the request's idempotency key names the operation it started, atomically with it.
+    // Operations created by outbox or inbox handlers run outside any request and are not linked.
+    await currentCommitFence()?.linkOperation(trx, id, { primary: input.primary });
     return id;
   }
 

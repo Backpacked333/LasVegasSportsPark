@@ -1,14 +1,17 @@
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { Controller, HttpCode, Post } from '@nestjs/common';
-import { errors, newId, z } from '@sportspark/contracts';
+import { errors, newId, z, type Principal } from '@sportspark/contracts';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { customerPrincipal } from '../../testing/principals';
 import { createTestApp, type TestApp } from '../../testing/test-app';
 import { UnitOfWork, type Trx } from '../database/unit-of-work';
+import { IdempotencySweeper } from '../http/idempotency-sweeper';
 import { Idempotent } from '../http/idempotency.interceptor';
 import { ZodBody } from '../http/zod-validation.pipe';
+import { CurrentPrincipal } from '../auth/principal.decorator';
+import { OperationsService } from '../operations/operations.service';
 
 const Body = z.object({
   amount: z.number().int(),
@@ -441,5 +444,252 @@ describe('idempotency follows the business transaction (§4.9, §4.7 invariant 5
     expect(replay.status).toBe(201);
     expect(replay.headers['idempotent-replayed']).toBe('true');
     expect(await effects(body.tag)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The key names the operation its command started (§4.9: a replay returns the same operation).
+// ---------------------------------------------------------------------------------------------
+
+const OperationBody = z.object({
+  tag: z.string(),
+  mode: z.enum([
+    'ok',
+    'commit_then_crash',
+    'commit_then_stall',
+    'rolled_back',
+    'nested_then_primary',
+  ]),
+});
+
+@Controller('test-operation-commands')
+class TestOperationController {
+  static organizationId = '';
+  static created = new Map<string, string[]>();
+
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly operations: OperationsService,
+  ) {}
+
+  @Post()
+  @HttpCode(202)
+  @Idempotent()
+  async run(
+    @ZodBody(OperationBody) body: z.infer<typeof OperationBody>,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<{ operationId: string }> {
+    const create = (trx: Trx, kind: string, primary?: boolean) =>
+      this.operations
+        .create(trx, {
+          organizationId: TestOperationController.organizationId,
+          kind,
+          requestedBy: principal,
+          status: 'running',
+          primary,
+        })
+        .then((id) => {
+          TestOperationController.created.set(body.tag, [
+            ...(TestOperationController.created.get(body.tag) ?? []),
+            id,
+          ]);
+          return id;
+        });
+    if (body.mode === 'rolled_back') {
+      await this.uow.run(async ({ trx }) => {
+        await create(trx, 'test.rolled_back');
+        throw new Error('failed before commit');
+      });
+    }
+    const operationId = await this.uow.run(async ({ trx }) => {
+      if (body.mode === 'nested_then_primary') {
+        // e.g. a nested hold that opens its own operation before the coordinator's
+        await this.uow.run(({ trx: inner }) => create(inner, 'test.nested_step'));
+        return create(trx, 'test.coordinator', true);
+      }
+      return create(trx, 'test.multi_step');
+    });
+    if (body.mode === 'commit_then_crash') throw new Error('step 2 failed after the commit');
+    if (body.mode === 'commit_then_stall') {
+      const stall = stallFor(body.tag);
+      stall.reached.resolve();
+      await stall.release.promise;
+    }
+    return { operationId };
+  }
+}
+
+describe('§4.9: an idempotency key names the operation its command started', () => {
+  let t: TestApp;
+  let auth: { Authorization: string };
+  const path = '/v1/test-operation-commands';
+
+  beforeAll(async () => {
+    t = await createTestApp({ controllers: [TestOperationController] });
+    TestOperationController.organizationId = t.organizationId;
+    auth = await t.authHeader(customerPrincipal(t.organizationId));
+    const server = t.app.getHttpServer() as Server;
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  });
+  afterAll(async () => {
+    for (const stall of stalls.values()) stall.release.resolve();
+    await t?.close();
+  });
+
+  const send = (key: string, body: z.input<typeof OperationBody>) =>
+    t.http.post(path).set(auth).set('Idempotency-Key', key).send(body);
+  const keyRow = (key: string) =>
+    t.db
+      .selectFrom('idempotency_keys')
+      .selectAll()
+      .where('idempotency_key', '=', key)
+      .executeTakeFirst();
+
+  it('§4.9: a 5xx after the operation committed names it in the response and in every replay', async () => {
+    const body = { tag: 'op-crash', mode: 'commit_then_crash' } as const;
+    const first = await send('operation-0001', body);
+    const [operationId] = TestOperationController.created.get(body.tag) ?? [];
+    expect(operationId).toBeDefined();
+    expect(first.status).toBe(500);
+    expect(first.body).toMatchObject({ code: 'INTERNAL_ERROR', details: { operationId } });
+    const replay = await send('operation-0001', body);
+    expect(replay.status).toBe(500);
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    expect(replay.body.details).toEqual({ operationId });
+    expect(await keyRow('operation-0001')).toMatchObject({ operation_id: operationId });
+    // the requester polls the operation for the real outcome (§4.8)
+    const polled = await t.http.get(`/v1/operations/${operationId}`).set(auth);
+    expect(polled.status).toBe(200);
+    expect(polled.body).toMatchObject({ id: operationId, status: 'running' });
+  });
+
+  it('§4.9: IDEMPOTENCY_OUTCOME_UNAVAILABLE after a lapsed lease names the operation', async () => {
+    const body = { tag: 'op-stall', mode: 'commit_then_stall' } as const;
+    const stall = stallFor(body.tag);
+    const first = send('operation-0002', body).then((res) => res);
+    await stall.reached.promise;
+    const [operationId] = TestOperationController.created.get(body.tag) ?? [];
+    t.clock.advance(t.config.IDEMPOTENCY_LEASE_SECONDS * 1000 + 1000);
+    const retry = await send('operation-0002', body);
+    expect(retry.status).toBe(409);
+    expect(retry.body).toMatchObject({
+      code: 'IDEMPOTENCY_OUTCOME_UNAVAILABLE',
+      details: { operationId },
+    });
+    stall.release.resolve();
+    expect((await first).body).toEqual({ operationId });
+  });
+
+  it('§4.9: an operation whose transaction rolled back is not linked and the key is released', async () => {
+    const body = { tag: 'op-rolled-back', mode: 'rolled_back' } as const;
+    expect((await send('operation-0003', body)).status).toBe(500);
+    expect(await keyRow('operation-0003')).toBeUndefined();
+  });
+
+  it('§4.9: the first operation is linked, unless a coordinator marks its own as primary', async () => {
+    const ok = await send('operation-0004', { tag: 'op-ok', mode: 'ok' });
+    expect(ok.status).toBe(202);
+    expect(await keyRow('operation-0004')).toMatchObject({ operation_id: ok.body.operationId });
+
+    const body = { tag: 'op-primary', mode: 'nested_then_primary' } as const;
+    const res = await send('operation-0005', body);
+    const [nested, coordinator] = TestOperationController.created.get(body.tag) ?? [];
+    expect(res.body).toEqual({ operationId: coordinator });
+    expect(nested).not.toBe(coordinator);
+    expect(await keyRow('operation-0005')).toMatchObject({ operation_id: coordinator });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// One-time secrets are never stored with the key; expired keys are swept (§4.9, §4.14).
+// ---------------------------------------------------------------------------------------------
+
+const SecretBody = z.object({ label: z.string(), fail: z.boolean().default(false) });
+
+@Controller('test-secret-commands')
+class TestSecretController {
+  static executions = 0;
+
+  @Post()
+  @Idempotent({ withhold: ['token', 'path'] })
+  issue(@ZodBody(SecretBody) body: z.infer<typeof SecretBody>): {
+    id: string;
+    label: string;
+    token: string;
+    path: string;
+  } {
+    TestSecretController.executions += 1;
+    if (body.fail) throw errors.validation('Label refused.');
+    const token = `secret-${newId()}`;
+    return { id: newId(), label: body.label, token, path: `/v1/feeds/${token}.ics` };
+  }
+}
+
+describe('§4.14: one-time secrets never rest in the idempotency store', () => {
+  let t: TestApp;
+  let auth: { Authorization: string };
+  const path = '/v1/test-secret-commands';
+
+  beforeAll(async () => {
+    t = await createTestApp({ controllers: [TestSecretController] });
+    auth = await t.authHeader(customerPrincipal(t.organizationId));
+  });
+  afterAll(async () => {
+    await t?.close();
+  });
+
+  const send = (key: string, body: z.input<typeof SecretBody>) =>
+    t.http.post(path).set(auth).set('Idempotency-Key', key).send(body);
+  const stored = async (key: string) =>
+    (
+      await sql<{ body: string | null }>`
+        select response_body::text as body from idempotency_keys where idempotency_key = ${key}
+      `.execute(t.db)
+    ).rows[0]?.body ?? null;
+
+  it('§4.14: the original response carries the secret but the stored body never does', async () => {
+    const res = await send('secret-0001', { label: 'feed' });
+    expect(res.status).toBe(201);
+    expect(res.body.token).toMatch(/^secret-/);
+    const body = await stored('secret-0001');
+    expect(body).not.toBeNull();
+    expect(body).not.toContain(res.body.token as string);
+    expect(JSON.parse(body as string)).toEqual({ id: res.body.id, label: 'feed' });
+  });
+
+  it('§4.9: a replay names the created record and withholds the secret instead of re-executing', async () => {
+    const first = await send('secret-0002', { label: 'feed' });
+    const before = TestSecretController.executions;
+    const replay = await send('secret-0002', { label: 'feed' });
+    expect(replay.status).toBe(409);
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    expect(replay.body).toMatchObject({
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      nextAction: 'revoke_and_reissue',
+      details: { resourceId: first.body.id },
+    });
+    expect(JSON.stringify(replay.body)).not.toContain(first.body.token as string);
+    expect(TestSecretController.executions).toBe(before);
+  });
+
+  it('§4.9: a stored domain failure still replays as itself', async () => {
+    const first = await send('secret-0003', { label: 'x', fail: true });
+    expect(first.status).toBe(400);
+    const replay = await send('secret-0003', { label: 'x', fail: true });
+    expect(replay.status).toBe(400);
+    expect(replay.body.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('§4.9, §4.14: the sweep deletes records past their expiry and keeps live ones', async () => {
+    const sweeper = t.app.get(IdempotencySweeper);
+    await send('secret-0004', { label: 'old' });
+    t.clock.advance((t.config.IDEMPOTENCY_TTL_HOURS + 1) * 3600_000);
+    await send('secret-0005', { label: 'live' });
+    const deleted = await sweeper.sweep(2);
+    expect(deleted).toBeGreaterThanOrEqual(4);
+    const keys = (
+      await t.db.selectFrom('idempotency_keys').select('idempotency_key').execute()
+    ).map((r) => r.idempotency_key);
+    expect(keys).toEqual(['secret-0005']);
   });
 });
