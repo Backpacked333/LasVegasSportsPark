@@ -163,8 +163,9 @@ export interface SuspensionScope {
 }
 
 /**
- * Suspension status (SPK-CAP-004, SPK-AT-013). Part 2 (discipline) registers its implementation
- * under SUSPENSION_CHECK_IMPL; until then no suspensions exist.
+ * Suspension status (SPK-CAP-004, SPK-AT-013). The module's discipline records (part 2,
+ * `DisciplineService`) answer by default; an implementation registered under
+ * SUSPENSION_CHECK_IMPL elsewhere takes precedence. `noSuspensions` is a test convenience.
  */
 export interface SuspensionCheckPort {
   activeSuspensions(
