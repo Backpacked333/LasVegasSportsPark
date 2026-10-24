@@ -4,6 +4,7 @@ export * from './catalog';
 export * from './communications';
 export * from './competition-matches';
 export * from './competition';
+export * from './enrollment';
 export * from './facilities';
 export * from './identity';
 export * from './operations';
