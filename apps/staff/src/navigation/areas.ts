@@ -11,6 +11,10 @@ export interface StaffArea {
   path: string;
   screenIds: string;
   purpose: string;
+  /** The area's screen group registers its own routes in App.tsx (no placeholder). */
+  ownRoutes?: boolean;
+  /** Built screens of an area that still shows its placeholder, linked from the area page. */
+  links?: readonly { path: string; title: string; screenIds: string }[];
 }
 
 export const STAFF_AREAS: readonly StaffArea[] = [
@@ -21,6 +25,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     screenIds: 'SCR-S-01, SCR-S-02, SCR-S-50',
     purpose:
       'Operating home: current activities, field status, arrivals, readiness, coverage, exceptions (SPK-UX-006).',
+    ownRoutes: true,
   },
   {
     id: 'schedule',
@@ -35,6 +40,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/leagues',
     screenIds: 'SCR-S-08 to SCR-S-13',
     purpose: 'Competitions, seasons, divisions, fixtures, readiness, results, disputes, standings.',
+    ownRoutes: true,
   },
   {
     id: 'programs',
@@ -49,6 +55,7 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/teams',
     screenIds: 'SCR-S-16 to SCR-S-19',
     purpose: 'Team entries, rosters, placement board, youth groups.',
+    ownRoutes: true,
   },
   {
     id: 'people',

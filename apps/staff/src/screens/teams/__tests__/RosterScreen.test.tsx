@@ -1,0 +1,284 @@
+/**
+ * SCR-S-17 Roster management (SPK-COMP-005 effective dates and history, SPK-CAP-004 guests and
+ * substitutes never bypass eligibility, SPK-AT-013 a suspended player added as a substitute is
+ * refused with reasons, POL-032, DEC-066 pending).
+ */
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it } from 'vitest';
+import { createTestApp } from '../../../testing/test-app';
+import {
+  ID,
+  eligibilityReason,
+  fail,
+  ok,
+  ruleSet,
+  season,
+  teamEntry,
+} from '../../../features/competition/__tests__/fixtures';
+
+function member(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ID.member,
+    teamEntryId: ID.entryRed,
+    personId: ID.person,
+    displayName: 'Alex Keeper',
+    personKind: 'adult',
+    status: 'active',
+    statusBeforeRemoval: null,
+    effectiveFrom: '2026-10-01T00:00:00.000Z',
+    effectiveTo: null,
+    jerseyNumber: 1,
+    source: 'captain',
+    removedAt: null,
+    removalReason: null,
+    eligibility: { status: 'eligible', blocking: 0, warnings: 0, codes: [] },
+    ...overrides,
+  };
+}
+
+const workspace = {
+  entry: teamEntry({ status: 'approved' }),
+  team: {
+    id: ID.teamRed,
+    name: 'Red',
+    colors: {},
+    createdByPersonId: null,
+    status: 'active',
+    revision: 1,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  },
+  season: {
+    id: ID.season,
+    name: season().name,
+    status: 'open',
+    startsOn: '2026-11-01',
+    endsOn: '2026-12-20',
+  },
+  division: { id: ID.division, name: 'Division A' },
+  ruleSet: { id: ID.ruleSet, name: 'Indoor 6v6', version: 1 },
+  roles: [],
+  roster: [],
+  readiness: {
+    approval: 'approved',
+    financialStatusRef: null,
+    rosterCount: 1,
+    rosterMin: 8,
+    rosterMax: 14,
+    rosterComplete: false,
+    eligiblePlayers: 1,
+    pendingInvitations: 0,
+    pendingJoinRequests: 0,
+    issues: [],
+  },
+  pendingInvitations: [],
+  pendingJoinRequests: [],
+  upcomingFixtures: [],
+};
+
+const roster = (members: unknown[]) => ({
+  teamEntryId: ID.entryRed,
+  at: '2026-10-24T12:00:00.000Z',
+  members,
+});
+
+const routes = {
+  'GET /team-entries/{id}': ok(workspace),
+  'GET /rule-sets/{id}': ok(ruleSet()),
+  'GET /team-entries/{id}/roster': ok(
+    roster([
+      member(),
+      member({
+        id: '0192f1a0-0000-7000-8000-00000000d802',
+        personId: ID.child,
+        displayName: 'Jo Unknown',
+        status: 'guest',
+        jerseyNumber: null,
+        eligibility: null,
+      }),
+    ]),
+  ),
+};
+
+describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
+  it('lists effective memberships with status, dates and an eligibility that is never assumed', async () => {
+    const app = createTestApp({ routes });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    expect(await screen.findByRole('heading', { name: 'Roster: Red' })).toBeInTheDocument();
+    const list = await screen.findByRole('list', { name: 'Roster' });
+    const items = within(list).getAllByRole('listitem');
+    expect(within(items[0] as HTMLElement).getByText('Alex Keeper (#1)')).toBeInTheDocument();
+    expect(within(items[0] as HTMLElement).getByText('Roster active')).toBeInTheDocument();
+    expect(within(items[0] as HTMLElement).getByText('Eligible')).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText('Roster guest')).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText('Eligibility unknown')).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).queryByText('Eligible')).toBeNull();
+    expect(await screen.findByTestId('roster-policy')).toHaveTextContent(
+      'guests allowed (at most 2 at once); substitutes allowed',
+    );
+    expect(screen.getByText(/depends on DEC-066/)).toBeInTheDocument();
+  });
+
+  it('reads the roster as of a past instant, with history, so a removed player stays on record', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await screen.findByRole('list', { name: 'Roster' });
+    await user.type(screen.getByLabelText('Roster as of'), '2026-10-17T19:00');
+    await user.click(screen.getByLabelText('Include pending and removed rows'));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some(
+          (r) =>
+            r.route === '/team-entries/{id}/roster' &&
+            r.method === 'GET' &&
+            r.query.includeHistory === 'true' &&
+            typeof r.query.at === 'string' &&
+            r.query.at.startsWith('2026-10-1'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('refuses an ineligible substitute and lists every reason with who resolves it (SPK-AT-013)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'POST /team-entries/{id}/roster': fail(
+          422,
+          'ELIGIBILITY_FAILED',
+          'review_eligibility_reasons',
+          {
+            message: 'The player is not eligible for this roster.',
+            details: {
+              personId: ID.child,
+              reasons: [
+                eligibilityReason({
+                  code: 'discipline.suspended',
+                  message: 'An active suspension applies to this competition.',
+                  responsibleRole: 'league_manager',
+                  requiredAction: 'Wait until the suspension is served.',
+                }),
+              ],
+            },
+          },
+        ),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(await screen.findByRole('button', { name: 'Add a player' }));
+    const form = screen.getByRole('form', { name: 'Add a player' });
+    await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
+    expect(
+      within(form).getByText('Enter the person reference from their record.'),
+    ).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(/^Person reference/), ID.child);
+    await user.selectOptions(within(form).getByLabelText(/^Playing status/), 'substitute');
+    await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
+    expect(await within(form).findByText('Not eligible')).toBeInTheDocument();
+    const reasons = within(form).getByRole('list', { name: 'Eligibility reasons' });
+    expect(
+      within(reasons).getByText('An active suspension applies to this competition.'),
+    ).toBeInTheDocument();
+    expect(within(reasons).getByText(/Resolved by: League manager/)).toBeInTheDocument();
+    expect(within(form).getByText(/Error code: ELIGIBILITY_FAILED/)).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+      changes: [{ action: 'add', personId: ID.child, status: 'substitute' }],
+    });
+    // The input is kept for the user to correct.
+    expect(within(form).getByLabelText(/^Person reference/)).toHaveValue(ID.child);
+  });
+
+  it('adds a player and states the effective date', async () => {
+    const user = userEvent.setup();
+    const added = member({
+      personId: ID.child,
+      displayName: 'New Player',
+      effectiveFrom: '2026-10-24T12:00:00.000Z',
+    });
+    const app = createTestApp({
+      routes: { ...routes, 'POST /team-entries/{id}/roster': ok(roster([member(), added])) },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(await screen.findByRole('button', { name: 'Add a player' }));
+    const form = screen.getByRole('form', { name: 'Add a player' });
+    await user.type(within(form).getByLabelText(/^Person reference/), ID.child);
+    await user.selectOptions(within(form).getByLabelText(/^Playing status/), 'active');
+    await user.type(within(form).getByLabelText('Jersey number'), '9');
+    await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
+    expect(await within(form).findByText(/New Player active, effective from/)).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.method === 'POST')?.headers['idempotency-key']).toMatch(
+      /^key-/,
+    );
+  });
+
+  it('removes a player only with a reason and reloads after STALE_REVISION', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'POST /team-entries/{id}/roster': fail(409, 'STALE_REVISION', 'reload_and_retry'),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(
+      await screen.findByRole('button', { name: 'Remove Alex Keeper from the roster' }),
+    );
+    const form = screen.getByRole('form', { name: 'Remove Alex Keeper' });
+    await user.click(within(form).getByRole('button', { name: 'Remove from the roster' }));
+    expect(within(form).getByText('Give the reason for the removal.')).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(/^Reason/), 'Moved away.');
+    await user.click(within(form).getByRole('button', { name: 'Remove from the roster' }));
+    expect(await within(form).findByText('This record changed')).toBeInTheDocument();
+    await user.click(within(form).getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter(
+          (r) => r.route === '/team-entries/{id}/roster' && r.method === 'GET',
+        ),
+      ).toHaveLength(2),
+    );
+  });
+
+  it('explains a player’s eligibility on request', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /team-entries/{id}/eligibility': ok({
+          teamEntryId: ID.entryRed,
+          personId: ID.person,
+          at: '2026-10-24T12:00:00.000Z',
+          membershipStatus: 'active',
+          eligible: false,
+          reasons: [
+            eligibilityReason({ code: 'age.too_young', message: 'Below the division age band.' }),
+          ],
+          evaluatedAt: '2026-10-24T12:00:00.000Z',
+        }),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(
+      await screen.findByRole('button', { name: 'Explain eligibility of Alex Keeper' }),
+    );
+    expect(await screen.findByText('Below the division age band.')).toBeInTheDocument();
+    expect(
+      app.fake.requests.find((r) => r.route === '/team-entries/{id}/eligibility')?.query,
+    ).toEqual({ personId: ID.person, status: 'active' });
+  });
+
+  it('shows a roster the viewer may not see as not available', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /team-entries/{id}': fail(404, 'NOT_FOUND', 'verify_reference'),
+        'GET /team-entries/{id}/roster': fail(404, 'NOT_FOUND', 'verify_reference'),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add a player' })).toBeDisabled();
+  });
+});
