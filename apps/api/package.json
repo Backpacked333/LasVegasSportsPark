@@ -10,7 +10,8 @@
     "start:worker": "node dist/worker.js",
     "dev": "tsc -b && node dist/main.js",
     "test": "vitest run",
-    "openapi": "tsx scripts/emit-openapi.ts"
+    "openapi": "tsx scripts/emit-openapi.ts",
+    "permission-matrix": "tsx scripts/emit-permission-matrix.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.2.0",
