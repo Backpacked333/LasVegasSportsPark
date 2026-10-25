@@ -2,6 +2,7 @@ import {
   ApplicationStatusSchema,
   defineEvent,
   EnrollmentStatusSchema,
+  FinancialConsequenceSchema,
   RegistrationIntentSchema,
   z,
 } from '@sportspark/contracts';
@@ -160,7 +161,8 @@ export const EnrollmentEvents = {
       fromOfferingId: z.uuid(),
       toOfferingId: z.uuid(),
       participantPersonId: z.uuid(),
-      financialConsequence: z.string(),
+      /** SPK-REG-010: the full refund, credit or charge accepted with the transfer (DEC-009). */
+      financialConsequence: FinancialConsequenceSchema,
     }),
   ),
   waitlistJoined: defineEvent(

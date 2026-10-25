@@ -35,6 +35,7 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
+import type { OfferingSnapshot } from '../../catalog';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import { SESSION_INTENT_COMMANDS } from '../enrollment.policy';
@@ -47,6 +48,7 @@ import {
   minutesFrom,
   organizationOf,
   redactWaitlistEntry,
+  resolveCustomerPayer,
   toSessionBooking,
   toWaitlistEntry,
   toWaitlistOffer,
@@ -301,8 +303,10 @@ export class WaitlistService implements WaitlistPort {
             preferences: json(input.preferences),
             requested_by: json(actorSnapshot(principal)),
             requested_by_person_id: principal.personId,
+            // §4.7 (1), SPK-REG-009: a customer waits as their own payer; staff may name one.
             payer_person_id:
-              input.payerPersonId ?? (isStaffLike(principal) ? null : principal.personId),
+              resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+              (isStaffLike(principal) ? null : principal.personId),
             status: 'waiting',
             accepted_enrollment_id: null,
             withdrawn_at: null,
@@ -584,7 +588,19 @@ export class WaitlistService implements WaitlistPort {
     const made: WaitlistOffer[] = [];
     const policy = this.evaluator.configuration;
     const system = enrollmentSystem(organizationId, 'enrollment.offer_waitlist');
+    let snapshot: OfferingSnapshot | undefined;
+    const snapshotOf = async () =>
+      (snapshot ??= await this.evaluator.snapshot(trx, organizationId, pool.offering_id as string));
     for (const entry of entries) {
+      // SPK-REG-008: a participant who already holds what this queue waits for (registered
+      // directly, or in an equivalent offering) leaves it instead of being offered a place they
+      // cannot accept; one whose own registration is still pending is passed over for now.
+      const existing = await this.entitlementOf(trx, organizationId, entry, snapshotOf);
+      if (existing === 'confirmed') {
+        await this.retireEntry(trx, organizationId, entry, system, correlationId, false);
+        continue;
+      }
+      if (existing === 'pending') continue;
       const required = await this.requiredPools(trx, organizationId, entry);
       if (required.length === 0) continue;
       if (required.some((p) => p.capacity - p.committed - p.held < 1)) break;
@@ -675,6 +691,193 @@ export class WaitlistService implements WaitlistPort {
       }
     }
     return made;
+  }
+
+  /**
+   * What the entry's participant already holds of what the queue waits for: a live booking of the
+   * session (session queues), or an enrollment in the offering or with the same equivalence key
+   * (offering queues). `confirmed` wins over `pending`; null when there is none.
+   */
+  private async entitlementOf(
+    trx: Trx,
+    organizationId: string,
+    entry: WaitlistEntryRow,
+    snapshotOf: () => Promise<OfferingSnapshot>,
+  ): Promise<'confirmed' | 'pending' | null> {
+    let statuses: string[];
+    if (entry.session_id) {
+      statuses = (
+        await trx
+          .selectFrom('session_bookings')
+          .select('status')
+          .where('organization_id', '=', organizationId)
+          .where('session_id', '=', entry.session_id)
+          .where('participant_person_id', '=', entry.participant_person_id)
+          .where('status', 'in', ['pending', 'confirmed'])
+          .execute()
+      ).map((r) => r.status);
+    } else {
+      const key = this.evaluator.equivalence(await snapshotOf(), entry.participant_person_id);
+      statuses = (
+        await trx
+          .selectFrom('enrollments')
+          .select('status')
+          .where('organization_id', '=', organizationId)
+          .where('participant_person_id', '=', entry.participant_person_id)
+          .where('status', 'in', ['pending', 'confirmed'])
+          .where((eb) =>
+            key
+              ? eb.or([eb('offering_id', '=', entry.offering_id), eb('equivalence_key', '=', key)])
+              : eb('offering_id', '=', entry.offering_id),
+          )
+          .execute()
+      ).map((r) => r.status);
+    }
+    if (statuses.includes('confirmed')) return 'confirmed';
+    return statuses.length > 0 ? 'pending' : null;
+  }
+
+  /**
+   * SPK-REG-008: an entry whose participant now holds an equivalent confirmed entitlement leaves
+   * the queue (`removed`, reason `equivalent_entitlement`): an open offer is declined, which gives
+   * its places back and offers them to the next waiter, and a waiting entry stops counting against
+   * newcomers under waitlist-first (DEC-006). `nudge` re-runs offer generation for the entry's pool
+   * when it has a free place (the follow-up path; the generator itself continues its own loop).
+   */
+  private async retireEntry(
+    trx: Trx,
+    organizationId: string,
+    entry: WaitlistEntryRow,
+    actor: Principal,
+    correlationId: string | null,
+    nudge: boolean,
+  ): Promise<void> {
+    const reason = 'equivalent_entitlement';
+    if (entry.status === 'offered') {
+      const open = await trx
+        .selectFrom('waitlist_offers')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('waitlist_entry_id', '=', entry.id)
+        .where('status', '=', 'offered')
+        .forUpdate()
+        .executeTakeFirst();
+      if (open)
+        await this.closeOffer(trx, organizationId, open, 'declined', reason, actor, correlationId);
+    }
+    const retired = await trx
+      .updateTable('waitlist_entries')
+      .set({
+        status: 'removed',
+        removed_at: this.clock.now(),
+        removal_reason: reason,
+        revision: entry.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', entry.id)
+      .where('status', 'in', ['waiting', 'offered'])
+      .where('revision', '=', entry.revision)
+      .executeTakeFirst();
+    if (Number(retired.numUpdatedRows) === 0) return;
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: 'enrollment.remove_waitlist_entry',
+      targetType: 'waitlist_entry',
+      targetId: entry.id,
+      beforeRevision: entry.revision,
+      afterRevision: entry.revision + 1,
+      reason,
+      correlationId,
+      details: { previousStatus: entry.status },
+    });
+    await this.outbox.enqueue(trx, EnrollmentEvents.waitlistLeft, {
+      organizationId,
+      aggregateType: 'waitlist_entry',
+      aggregateId: entry.id,
+      correlationId,
+      payload: {
+        organizationId,
+        waitlistEntryId: entry.id,
+        poolId: entry.pool_id,
+        status: 'removed',
+      },
+    });
+    if (nudge && entry.status === 'waiting') {
+      const pool = await this.capacity.loadPool(trx, organizationId, entry.pool_id);
+      const free = pool ? pool.capacity - pool.committed - pool.held : 0;
+      if (pool && pool.status === 'active' && free > 0) {
+        await this.capacity.enqueueCapacityReleased(
+          trx,
+          organizationId,
+          [{ poolId: pool.id, quantity: free }],
+          'waitlist_entry_retired',
+          correlationId,
+        );
+      }
+    }
+  }
+
+  /**
+   * Follow-up of a confirmed enrollment or session booking (outbox handler
+   * `enrollment.retire_redundant_waitlist_entries`, SPK-REG-008): the participant's live entries
+   * for what they now hold leave their queues. Replay-safe: only live entries move.
+   */
+  async retireRedundantEntries(
+    trx: Trx,
+    organizationId: string,
+    trigger: { enrollmentId: string } | { sessionBookingId: string },
+    correlationId: string | null,
+  ): Promise<void> {
+    const system = enrollmentSystem(organizationId, 'enrollment.retire_waitlist_entry');
+    let participantPersonId: string;
+    let matches: (entry: WaitlistEntryRow) => Promise<boolean>;
+    let candidates = trx
+      .selectFrom('waitlist_entries')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('status', 'in', ['waiting', 'offered']);
+    if ('enrollmentId' in trigger) {
+      const enrollment = await this.enrollments.load(trx, organizationId, trigger.enrollmentId);
+      if (!enrollment || enrollment.status !== 'confirmed') return;
+      participantPersonId = enrollment.participant_person_id;
+      candidates = candidates.where('session_id', 'is', null);
+      const snapshots = new Map<string, OfferingSnapshot>();
+      matches = async (entry) => {
+        if (entry.offering_id === enrollment.offering_id) return true;
+        if (!enrollment.equivalence_key) return false;
+        let snapshot = snapshots.get(entry.offering_id);
+        if (!snapshot) {
+          snapshot = await this.evaluator.snapshot(trx, organizationId, entry.offering_id);
+          snapshots.set(entry.offering_id, snapshot);
+        }
+        return (
+          this.evaluator.equivalence(snapshot, participantPersonId) === enrollment.equivalence_key
+        );
+      };
+    } else {
+      const booking = await this.bookings.load(trx, organizationId, trigger.sessionBookingId);
+      if (!booking || booking.status !== 'confirmed') return;
+      participantPersonId = booking.participant_person_id;
+      candidates = candidates.where('session_id', '=', booking.session_id);
+      matches = async () => true;
+    }
+    candidates = candidates.where('participant_person_id', '=', participantPersonId);
+    const preview = await candidates.execute();
+    if (preview.length === 0) return;
+    // Pools first, in id order (as holds and offer generation lock them), then the entries.
+    await trx
+      .selectFrom('capacity_pools')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', 'in', [...new Set(preview.map((e) => e.offering_id))])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    for (const entry of await candidates.orderBy('id').forUpdate().execute()) {
+      if (await matches(entry))
+        await this.retireEntry(trx, organizationId, entry, system, correlationId, true);
+    }
   }
 
   /** Every pool an entry needs: the session pools of its session, else the offering pools of its intent. */
@@ -793,14 +996,17 @@ export class WaitlistService implements WaitlistPort {
       if (Number(consumed.numUpdatedRows) === 0)
         throw errors.invalidTransition('WaitlistOffer', offer.status, 'accept');
 
-      const payerPersonId =
-        input.payerPersonId ??
-        entry.payer_person_id ??
-        (isStaffLike(principal) ? null : principal.personId);
+      const staffLike = isStaffLike(principal);
       let basketId: string | null = null;
       let enrollmentId: string | null = null;
       let bookingId: string | null = null;
       if (session) {
+        // §4.7 (1), SPK-REG-009: a customer accepting pays for the booking themselves (finance
+        // lets only the payer pay); staff may name a payer or keep the one the entry recorded.
+        const payerPersonId = staffLike
+          ? (input.payerPersonId ?? entry.payer_person_id ?? null)
+          : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+            principal.personId);
         const booking = await this.bookings.createInTrx(trx, organizationId, {
           kind:
             entry.intent === 'trial' ? 'trial' : entry.intent === 'makeup' ? 'makeup' : 'pickup',
@@ -815,22 +1021,44 @@ export class WaitlistService implements WaitlistPort {
         });
         bookingId = booking.id;
       } else {
+        // SPK-REG-009: the basket belongs to the family, never to the staff member who assists: an
+        // unnamed owner is the customer accepting, or for staff the entry's payer or the customer
+        // who joined the queue.
+        const requestedBy = entry.requested_by as { kind?: unknown } | null;
         const ownerPersonId =
           input.ownerPersonId ??
-          (isStaffLike(principal)
-            ? (payerPersonId ?? entry.requested_by_person_id)
+          (staffLike
+            ? (entry.payer_person_id ??
+              (requestedBy?.kind === 'customer' ? entry.requested_by_person_id : null))
             : principal.personId);
         if (!ownerPersonId)
-          throw errors.validation('ownerPersonId is required when staff accept an offer.');
+          throw errors.validation('ownerPersonId is required when staff accept an offer.', {
+            path: 'ownerPersonId',
+          });
         const owner = await this.evaluator.participant(trx, organizationId, ownerPersonId);
         if (owner.kind !== 'adult')
           throw errors.validation('A basket belongs to an adult household member.');
+        // §4.7 (1), §4.14: the same authority POST /baskets and its lines require, over the owner's
+        // household and the participant; the offer stays `offered` when it is refused (rollback).
+        await this.authorization.require(principal, EnrollmentActions.manageBasket, {
+          type: 'basket',
+          organizationId,
+          subjectPersonIds: [...new Set([owner.id, person.id])],
+        });
+        // The payer follows the basket owner (finance lets only the payer quote and pay): a
+        // customer names only themselves or the owner; staff may name another payer.
+        const payerPersonId = staffLike
+          ? (input.payerPersonId ?? entry.payer_person_id ?? owner.id)
+          : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId, owner.id]) ??
+            owner.id);
         let application = await this.applications.findCurrent(
           trx,
           organizationId,
           snapshot.offering.id,
           person.id,
+          [principal.personId, owner.id, payerPersonId],
         );
+        application = this.applications.forIntent(application, entry.intent);
         if (!application) {
           application = await this.applications.createInTrx(trx, organizationId, {
             snapshot,

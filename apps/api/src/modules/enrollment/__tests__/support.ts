@@ -1,4 +1,10 @@
-import { newId, type CapacityUnit, type OfferingKind, type StaffRole } from '@sportspark/contracts';
+import {
+  newId,
+  type CapacityUnit,
+  type ChargeLine,
+  type OfferingKind,
+  type StaffRole,
+} from '@sportspark/contracts';
 import { pgErrorCode } from '@sportspark/db';
 import { OutboxDispatcher } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
@@ -91,10 +97,13 @@ export async function offering(
     kind?: OfferingKind;
     capacityUnits?: CapacityUnit[];
     basePriceMinor?: number | null;
+    chargeLines?: ChargeLine[];
     ageBand?: { minAgeYears?: number; maxAgeYears?: number };
     programId?: string;
     startsOn?: string;
     endsOn?: string;
+    registrationClosesAt?: Date;
+    entitlementDefinitionId?: string;
     managerPersonId?: string;
   } = {},
 ): Promise<OfferingSetup> {
@@ -112,8 +121,11 @@ export async function offering(
     kind: input.kind ?? 'term',
     capacityUnits: input.capacityUnits ?? [{ unit: 'seats', limit: 20 }],
     basePriceMinor: input.basePriceMinor === undefined ? 15_000 : input.basePriceMinor,
+    chargeLines: input.chargeLines,
     startsOn: input.startsOn,
     endsOn: input.endsOn,
+    registrationClosesAt: input.registrationClosesAt,
+    entitlementDefinitionId: input.entitlementDefinitionId,
   });
   return { ...created, managerPersonId };
 }

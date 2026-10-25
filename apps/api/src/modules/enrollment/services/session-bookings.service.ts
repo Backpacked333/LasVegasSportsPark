@@ -42,7 +42,9 @@ import {
   isStaffLike,
   minutesFrom,
   organizationOf,
+  owesNothing as owesNothingFor,
   redactSessionBooking,
+  resolveCustomerPayer,
   toSessionBooking,
   type Reader,
 } from '../enrollment.shared';
@@ -150,7 +152,10 @@ export class SessionBookingsService {
         session,
         person,
         evaluation,
-        payerPersonId: input.payerPersonId ?? (isStaffLike(principal) ? null : principal.personId),
+        // §4.7 (1), SPK-REG-009: a customer books as their own payer; staff may name one.
+        payerPersonId:
+          resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+          (isStaffLike(principal) ? null : principal.personId),
         actor: principal,
         correlationId,
       });
@@ -192,7 +197,9 @@ export class SessionBookingsService {
     const price: PriceSnapshot | null = input.free
       ? null
       : await this.evaluator.priceSnapshot(trx, organizationId, input.snapshot.offering.id, now);
-    const owesNothing = !price || price.basePriceMinor === 0;
+    // SPK-PAY-001/002: approved non-inclusive fees and taxes are owed too; a fee-only booking stays
+    // pending (its hold expires unless finance confirms it), never auto-confirmed.
+    const owesNothing = input.free === true || owesNothingFor(price, 1);
 
     let holds: HoldRow[] = [];
     if (input.existingHoldIds && input.existingHoldIds.length > 0) {
@@ -432,14 +439,19 @@ export class SessionBookingsService {
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       SessionBookingMachine.next(row.status, 'confirm');
-      const price = row.price_snapshot as { basePriceMinor?: number; currency?: string } | null;
-      if (price && (price.basePriceMinor ?? 0) > 0) {
+      // SPK-PAY-001/002: the booking's price basis (base plus approved fees and taxes) and the rule
+      // effective now must both owe nothing; a makeup redemption is free by its entitlement.
+      const price = row.price_snapshot as unknown as PriceSnapshot | null;
+      const current = row.makeup_entitlement_id
+        ? null
+        : await this.evaluator.priceSnapshot(trx, organizationId, row.offering_id);
+      if (!owesNothingFor(price, 1) || !owesNothingFor(current, 1)) {
         throw errors.resourceConflict(
           'This booking owes a payment; confirm it through the checkout.',
           {
             code: 'PAYMENT_REQUIRED',
-            amountMinor: price.basePriceMinor,
-            currency: price.currency ?? null,
+            amountMinor: (current ?? price)?.basePriceMinor ?? null,
+            currency: (current ?? price)?.currency ?? null,
           },
         );
       }

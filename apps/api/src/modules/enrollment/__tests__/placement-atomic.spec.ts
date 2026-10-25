@@ -124,6 +124,46 @@ describe('placement steps commit together (§4.7-3, §4.7-12, SPK-AT-023)', () =
     expect(await onRoster(second.personId)).toBe(false);
   });
 
+  it('SPK-PLACE-003 / §4.7-12: two concurrent assignments of one request to different teams leave one roster membership', async () => {
+    const teams: string[] = [];
+    for (const teamName of ['Otters', 'Herons']) {
+      const teamEntryId = (
+        await createTeamEntryFixture(t, {
+          seasonId,
+          captainPersonId: (await adult(t)).personId,
+          teamName,
+        })
+      ).teamEntryId;
+      await addRosterMemberFixture(t, { teamEntryId, personId: (await adult(t)).personId });
+      teams.push(teamEntryId);
+    }
+    const player = await adult(t, { dateOfBirth: '1996-03-03' });
+    const req = await request(player);
+    // Two league managers decide at the same moment from the same revision (on PostgreSQL the
+    // transactions overlap; the request row lock and the revision make one of them lose).
+    const results = await Promise.all(
+      teams.map((teamEntryId) =>
+        post(t, `/v1/placement-requests/${req.id}/assign`, lm.header, {
+          teamEntryId,
+          expectedRevision: req.revision,
+        }),
+      ),
+    );
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses, JSON.stringify(results.map((r) => r.body))).toEqual([200, 409]);
+    const loser = results.find((r) => r.status === 409)!;
+    expect(['STALE_REVISION', 'INVALID_TRANSITION']).toContain(loser.body.code);
+    const memberships = [];
+    for (const teamEntryId of teams) {
+      const members = await roster.effectiveRoster(t.organizationId, teamEntryId, t.clock.now());
+      if (members.some((m) => m.personId === player.personId)) memberships.push(teamEntryId);
+    }
+    const winner = results.find((r) => r.status === 200)!;
+    expect(memberships).toEqual([winner.body.assignedTeamEntryId]);
+    expect(await placement(req.id)).toMatchObject({ status: 'assigned' });
+    expect(await running('enrollment.assign_placement')).toBe(0);
+  });
+
   it('§4.7-12: a failure after the roster removal rolls the whole release back', async () => {
     const player = await adult(t, { dateOfBirth: '1997-03-03' });
     // free the single place first

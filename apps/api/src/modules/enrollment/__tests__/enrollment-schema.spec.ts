@@ -512,6 +512,7 @@ describe('enrollment schema invariants (§4.7 invariants 2, 3, 7; §4.6 machines
           application_id: null,
           scheduled_for: null,
           attended_at: null,
+          no_show_at: null,
           canceled_at: null,
           cancel_reason: null,
           converted_enrollment_id: null,
@@ -524,6 +525,76 @@ describe('enrollment schema invariants (§4.7 invariants 2, 3, 7; §4.6 machines
         .execute();
     await trial();
     expect(await rejectsWith(trial())).toBe(UNIQUE);
+  });
+
+  it('SPK-REG-010 / SPK-AT-019: the database keeps a transfer consequence on the transferred row and a trial outcome as its own fact', async () => {
+    const constraintOf = async (promise: Promise<unknown>): Promise<string | undefined> => {
+      try {
+        await promise;
+      } catch (error) {
+        return pgConstraintName(error);
+      }
+      throw new Error('expected the database to reject the statement');
+    };
+    // Migration 0501: only a transferred enrollment carries the consequence of its transfer.
+    const enrollmentId = await createEnrollmentFixture(t, {
+      offeringId: setup.offeringId,
+      participantPersonId: await createPersonFixture(t, { kind: 'child' }),
+      status: 'confirmed',
+    });
+    expect(
+      await constraintOf(
+        t.db
+          .updateTable('enrollments')
+          .set({ transfer_consequence: json({ kind: 'charge', amountMinor: 5000 }) })
+          .where('id', '=', enrollmentId)
+          .execute(),
+      ),
+    ).toBe('enrollments_transfer_consequence_fact');
+    // Migration 0502: a no-show is recorded with its time, and a trial has one attendance outcome.
+    const participant = await createPersonFixture(t, { kind: 'child' });
+    const trialId = newId();
+    await t.db
+      .insertInto('trial_participations')
+      .values({
+        id: trialId,
+        organization_id: t.organizationId,
+        offering_id: setup.offeringId,
+        session_id: null,
+        session_booking_id: null,
+        participant_person_id: participant,
+        application_id: null,
+        scheduled_for: null,
+        attended_at: null,
+        no_show_at: null,
+        canceled_at: null,
+        cancel_reason: null,
+        converted_enrollment_id: null,
+        converted_basket_id: null,
+        converted_at: null,
+        registered_by: ACTOR,
+        registered_by_person_id: null,
+        assisted_by_person_id: null,
+      })
+      .execute();
+    expect(
+      await constraintOf(
+        t.db
+          .updateTable('trial_participations')
+          .set({ status: 'no_show' })
+          .where('id', '=', trialId)
+          .execute(),
+      ),
+    ).toBe('trial_participations_no_show_fact');
+    expect(
+      await constraintOf(
+        t.db
+          .updateTable('trial_participations')
+          .set({ status: 'attended', attended_at: t.clock.now(), no_show_at: t.clock.now() })
+          .where('id', '=', trialId)
+          .execute(),
+      ),
+    ).toBe('trial_participations_one_attendance_outcome');
   });
 
   it('§4.6: the database refuses session booking, application and placement transitions their machines do not allow', async () => {

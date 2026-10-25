@@ -36,6 +36,7 @@ import {
   actorSnapshot,
   isStaffLike,
   organizationOf,
+  resolveCustomerPayer,
   toTrialParticipation,
   type Reader,
 } from '../enrollment.shared';
@@ -131,8 +132,10 @@ export class TrialsService {
       });
       this.bookings.assertBookable(evaluation.result, person.id);
       const id = newId();
+      // §4.7 (1), SPK-REG-009: a customer books the trial as its own payer; staff may name one.
       const payerPersonId =
-        input.payerPersonId ?? (isStaffLike(principal) ? null : principal.personId);
+        resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+        (isStaffLike(principal) ? null : principal.personId);
       try {
         await trx
           .insertInto('trial_participations')
@@ -147,6 +150,7 @@ export class TrialsService {
             status: 'scheduled',
             scheduled_for: session ? session.scheduledStart : null,
             attended_at: null,
+            no_show_at: null,
             canceled_at: null,
             cancel_reason: null,
             follow_up_consent: input.followUpConsent,
@@ -286,6 +290,8 @@ export class TrialsService {
         .set({
           status: input.outcome,
           attended_at: input.outcome === 'attended' ? now : null,
+          // SPK-AT-019: the no-show is its own fact, so conversion (status `converted`) keeps it.
+          no_show_at: input.outcome === 'no_show' ? now : null,
           canceled_at: input.outcome === 'canceled' ? now : null,
           cancel_reason: input.outcome === 'canceled' ? (input.reason ?? 'canceled') : null,
           revision: row.revision + 1,
@@ -386,9 +392,11 @@ export class TrialsService {
           )?.payer_person_id ?? null)
         : null;
       const familyRegistrant = row.assisted_by_person_id ? null : row.registered_by_person_id;
-      const payerPersonId =
-        input.payerPersonId ??
-        (isStaffLike(principal) ? (trialPayer ?? familyRegistrant) : principal.personId);
+      // §4.7 (1), SPK-REG-009: a customer converts as their own payer; staff may name one.
+      const payerPersonId = isStaffLike(principal)
+        ? (input.payerPersonId ?? trialPayer ?? familyRegistrant)
+        : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+          principal.personId);
       const ownerPersonId = isStaffLike(principal) ? payerPersonId : principal.personId;
       if (!ownerPersonId)
         throw errors.validation('payerPersonId is required when staff open a follow-up.', {
@@ -409,11 +417,13 @@ export class TrialsService {
           },
         );
       }
-      let application = await this.applications.findCurrent(
-        trx,
-        organizationId,
-        snapshot.offering.id,
-        person.id,
+      let application = this.applications.forIntent(
+        await this.applications.findCurrent(trx, organizationId, snapshot.offering.id, person.id, [
+          principal.personId,
+          owner.id,
+          payerPersonId,
+        ]),
+        input.intent,
       );
       if (!application) {
         application = await this.applications.createInTrx(trx, organizationId, {

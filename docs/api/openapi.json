@@ -19421,6 +19421,9 @@
             ],
             "format": "uuid"
           },
+          "transferConsequence": {
+            "$ref": "#/components/schemas/FinancialConsequence"
+          },
           "completedAt": {
             "type": [
               "string",
@@ -19469,6 +19472,7 @@
           "transferredAt",
           "transferredToEnrollmentId",
           "transferredFromEnrollmentId",
+          "transferConsequence",
           "completedAt",
           "revision",
           "createdAt",
@@ -21556,6 +21560,13 @@
             ],
             "format": "date-time"
           },
+          "noShowAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "canceledAt": {
             "type": [
               "string",
@@ -21620,6 +21631,7 @@
           "status",
           "scheduledFor",
           "attendedAt",
+          "noShowAt",
           "canceledAt",
           "followUpConsent",
           "followUp",

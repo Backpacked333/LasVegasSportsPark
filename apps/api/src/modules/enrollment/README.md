@@ -79,7 +79,7 @@ redemption_limit)` is the final guarantee.
 | POST     | `/applications/{id}/override-eligibility`                                                                 | program/league manager, GM, sysadmin (`enrollment.override_eligibility`) with reason; audited                      |
 | POST     | `/applications/{id}/accept`, `/decline`, `/withdraw`                                                      | review: program administration (`enrollment.review_application`); withdraw: participant authority or staff         |
 | POST/GET | `/baskets`, `/baskets/{id}`, `/baskets/{id}/lines`, `/lines/{lineId}/remove`                              | the household adult (self) or desk staff (`enrollment.manage_basket`)                                              |
-| POST     | `/baskets/{id}/hold`, `/release`, `/complete`                                                             | same; `hold` creates an operation; `complete` only for baskets that owe nothing                                    |
+| POST     | `/baskets/{id}/hold`, `/release`, `/complete`                                                             | same, re-checked per line; `release` refuses 409 `CHECKOUT_IN_PROGRESS` in a checkout; `complete` if nothing owed  |
 | GET      | `/enrollments`, `/enrollments/{id}`, `/enrollments/{id}/cancellation-preview`                             | `view` holders (payer and registrant redacted for other adults, SPK-AT-004), staff readers                         |
 | POST     | `/enrollments/{id}/cancel`, `/transfer` (`commit=false` preview), `/complete`                             | participant authority or desk staff; complete: program administration                                              |
 | POST/GET | `/waitlist-entries`, `/waitlist-entries/{id}`, `/withdraw`, `/remove`                                     | participant authority (`enrollment.join_waitlist`); listing and `remove` (reason required): program administration |
@@ -112,8 +112,11 @@ holdIds)` (locks in id order; CAPACITY_UNAVAILABLE and nothing written when any 
   for session seats).
 - `CAPACITY_PORT` (`CapacityPort`): `poolsForOffering`, `getPool`, `acquireHolds`, `releaseHold`.
 - `BASKET_PORT` (`BasketPort`, the finance checkout coordinator, §4.11): `getBasket` (lines with
-  price snapshots and policy references), `assertPaymentPermitted` (SPK-REG-007:
-  RESOURCE_CONFLICT `APPROVAL_PENDING`), `startCheckout`, `finishCheckout`.
+  price snapshots and policy references), `assertPaymentPermitted` (RESOURCE_CONFLICT
+  `APPROVAL_PENDING` while a pending or held line awaits review, SPK-REG-007; `BASKET_INCOMPLETE`
+  when a line of an all-or-nothing basket failed or was released after the hold, SPK-REG-004 /
+  DEC-026; `NOTHING_HELD` when no line is left), `startCheckout`, `finishCheckout` (the only way a
+  `checking_out` basket ends).
 - `WAITLIST_PORT` (`WaitlistPort`): `getOffer`, `entriesForPool`, `offerFromPool`.
 - `FINANCE_POLICY_PORT` (`FinancePolicyPort` interface): finance registers `FINANCE_POLICY_IMPL`
   (`transferConsequence`, `cancellationConsequence`); until then the consequence is `none`
@@ -130,6 +133,13 @@ expiresAt`): expires an active hold once due, gives the place back, emits
   pending enrollments for finance), the waitlist offer or the pending session booking.
 - `enrollment.offer_waitlist` on `enrollment.capacity_released`: offers free places by priority,
   each offer holding every pool its participant needs until it expires.
+- `enrollment.retire_redundant_waitlist_entries` on `enrollment.enrollment_confirmed`,
+  `enrollment.enrollment_transferred` (the new enrollment), and `enrollment.session_booked` /
+  `enrollment.session_booking_changed` when confirmed: the participant's live entries for what
+  they now hold (the same offering, an equivalent entitlement, or the booked session) are
+  `removed` with reason `equivalent_entitlement`, an open offer is declined (its places go to the
+  next waiter), and offer generation runs again for a free place (SPK-REG-008). Offer generation
+  itself also retires such an entry and passes over one whose own registration is still pending.
 - `enrollment.expire_makeup` on `enrollment.makeup_expiry_due`.
 - `enrollment.sync_capacity` on `catalog.offering_updated`: commercial pools follow catalog limits;
   staffing pools keep their staff count (SPK-YOUTH-002); a limit below commitments raises an
@@ -155,17 +165,46 @@ Payloads carry identifiers only (§4.14).
   catalog's versioned eligibility policy at the offering's configured reference date, from the
   identity date of birth (never a stored age); unknown evidence is never a pass; outstanding forms
   are warnings at application and block the hold (MISSING_ACKNOWLEDGMENT). Overrides keep the
-  original reasons, the actor and the reason, and are audited.
+  original reasons, the actor and the reason, and are audited. At the hold an override covers only
+  the blocking or unknown reasons it recorded, and only for its application's intent: a reason that
+  appears later (registration closed or paused, another intent) still fails with
+  `ELIGIBILITY_FAILED` (`details.overriddenReasonCodes`); a line never reuses an application made
+  for another intent (an accepted one gets a new application; one under review answers 409
+  `APPLICATION_INTENT_MISMATCH`). **Verified**, `__tests__/registration-integrity.spec.ts`.
 - **Baskets (SPK-REG-004):** all-or-nothing by default; `partial` needs explicit acceptance and
   isolates each line in a savepoint. Each line keeps its own participant, entitlement, eligibility,
-  price snapshot, policy references and outcome.
+  price snapshot, policy references and outcome. The price snapshot is refreshed from the rule
+  effective at the hold (an open basket never expires), and `complete` (no checkout) is allowed
+  only when every held line owes nothing at the hold and at the rule effective now, counting the
+  approved non-inclusive fees and taxes (`PAYMENT_REQUIRED` otherwise; SPK-PAY-001/002).
+  `subtotalMinor` stays the sum of base prices. **Verified**,
+  `__tests__/registration-integrity.spec.ts`.
+- **Current authority (§4.7 (1), SPK-IAM-003/006):** `hold` and `complete` re-check
+  `enrollment.manage_basket` over the owner and each line's participant, so a revoked or suspended
+  `register` grant stops the hold (a partial basket fails only that line) and the completion.
+  Accepting a waitlist offer requires the same authority over the basket owner it names. A
+  customer names only themselves (or the basket owner) as payer on baskets, applications,
+  waitlist entries, offer acceptance, session bookings, trials and trial conversion; staff may
+  name another payer (SPK-REG-009). Unnamed, the payer of an accepted offer is its basket owner,
+  and staff must name the owner of a staff-joined entry. **Verified**,
+  `__tests__/registration-authority.spec.ts`.
 - **Approval (SPK-REG-007):** the eligibility policy, then the organization's `approval` policy
   family (`registration`), then the default intents decide. Holding is allowed; payment capture
   (`assertPaymentPermitted`, `startCheckout`), completion and confirmation wait for the decision.
+  Only a line that can still be fulfilled (pending or held) waits; a failed or released line no
+  longer blocks the held lines of a partial basket.
 - **Assisted registration (SPK-REG-009):** staff use the same commands; the staff actor is stored
   apart from participant, payer and signer; acknowledgments come from catalog with the real signer.
 - **Payer privacy (SPK-AT-004):** a second guardian gets DUPLICATE_ENTITLEMENT without learning who
-  else registered; their reads show `payerPersonId`, registrant, basket and order as redacted.
+  else registered; their reads show `payerPersonId`, registrant, basket and order as redacted. The
+  other household's application blocks while it is under review or has a pending or confirmed
+  enrollment; an accepted one whose line was released, removed or abandoned does not (the one
+  entitlement is guaranteed by `enrollments_equivalent_active_idx`: the first hold wins). A
+  household reuses its own accepted application (its approval or override). **Verified**,
+  `__tests__/registration-integrity.spec.ts`.
+- **Checkout ownership (§4.11, SPK-PAY-007):** while a basket is `checking_out`, `release` and
+  the cancel of its pending enrollments answer 409 `CHECKOUT_IN_PROGRESS` (with the `orderRef`);
+  finance ends it through `finishCheckout('abandoned')` once no attempt can still capture.
 - **Late payment (SPK-AT-006):** a hold past its server-owned expiry never commits, even before the
   expiry timer has run (it is expired then and there). A checkout whose hold expired is confirmed
   only by re-acquiring a free place while nobody else waits for the offering (waitlist-first,
@@ -175,20 +214,31 @@ Payloads carry identifiers only (§4.14).
   capacity released and required, the waitlist ahead, the finance consequence and approval; commit
   marks the old enrollment `transferred` (its row, confirmation instant and released allocation
   stay as history) and links both ways; it never skips people waiting for the target (DEC-006).
+  The accepted refund, credit or charge is recorded on the old enrollment (`transfer_consequence`,
+  migration 0501; `transferConsequence`, redacted like the payer), in the audit, the operation
+  result and the `enrollment_transferred` payload, and a non-`none` consequence opens an
+  operational exception for `finance_operator` (`enrollment.transfer_consequence_pending`) until
+  DEC-009 decides how finance settles it. **Verified**, `__tests__/transfer-consequence.spec.ts`.
   Cancellation has the same preview (`cancellation-preview`).
 - **Placement (SPK-PLACE-002/003):** candidates and proposals reserve nothing; assignment
-  re-evaluates eligibility, holds a team-entry roster place when one is configured, adds the roster
+  re-evaluates eligibility, holds a place in every team-entry roster pool configured for the team
+  (the same pools a `join_team` registration naming the team holds, SPK-REG-005; **Verified**,
+  `__tests__/waitlist-capacity-integrity.spec.ts`), adds the roster
   row through competition's command (which evaluates again), then commits, all under one operation
   and in ONE transaction (competition's command joins it; `UnitOfWork.run` is reentrant), so an
   interruption leaves neither a roster row the pool does not count nor an operation `running`
   (§4.7 invariants 3 and 12; **Verified**, `__tests__/placement-atomic.spec.ts`). Release is one
   transaction in the same way.
 - **Pickup (SPK-PLACE-004):** session pools, entry requirements (eligibility and forms), payment
-  (pending until finance confirms; free bookings confirm at once), waitlist and cancellation; no
-  roster or enrollment is ever created.
+  (pending until finance confirms; free bookings confirm at once, and a booking with an approved
+  fee or tax is not free), waitlist and cancellation; no roster or enrollment is ever created.
+- **Waitlists (SPK-REG-008):** an entry whose participant now holds what the queue waits for
+  leaves it (see `enrollment.retire_redundant_waitlist_entries`), so places are offered only to
+  people who can accept them. **Verified**, `__tests__/waitlist-capacity-integrity.spec.ts`.
 - **Trials (SPK-AT-019):** a trial is its own record with a trial booking; conversion opens a
   follow-up basket (nothing held, charged or enrolled) that reuses permitted information; the paid
-  enrollment links back and marks the trial `converted`, keeping its attendance.
+  enrollment links back and marks the trial `converted`, keeping its attendance outcome
+  (`attendedAt`, or `noShowAt`, migration 0502). **Verified**, `__tests__/youth.spec.ts`.
 
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
@@ -206,17 +256,25 @@ are at most 120 days.
   (DEC-003).
 - `approvalReservesCapacity` (DEC-029) is configuration only; an approval never takes a hold.
   Deposit-before-approval workflows (DEC-030) are not supported.
-- `join_team` and `create_team_entry` enrollments hold roster-place / team-entry capacity but do
-  not create roster rows or team entries; competition's join requests, invitations and
-  `POST /team-entries` do (placement is the one flow that adds a roster row).
+- `join_team` and `create_team_entry` enrollments hold roster-place / team-entry capacity (a
+  `join_team` line the offering's `roster_places` pools and the named team entry's `roster_places`
+  pools) but do not create roster rows or team entries; competition's join requests, invitations
+  and `POST /team-entries` do (placement is the one flow that adds a roster row). Offerings carry
+  no season, so a `join_team` line is not checked against the team entry's season.
 - Makeups are issued by staff (with the originating session); automatic issue on
   `catalog.session_canceled` awaits the makeup rules (DEC-003). Package-credit redemption
   (invariant 7 for packages) belongs to finance/entry.
 - Pickup organizer assignment (workforce) and attendance (entry) are other modules' records.
-- The money side of a non-`none` transfer or cancellation consequence is finance's (recorded here
-  as a fact). Finance registers `FINANCE_POLICY_IMPL` (`FinancePolicyAdapter`), which computes the
-  consequence from the approved cancellation policy; nothing executes the refund, credit or charge
-  automatically yet (finance README, "Known gaps").
+- The money side of a non-`none` transfer or cancellation consequence is finance's. Both are
+  recorded here as facts (`cancellation_consequence`, `transfer_consequence`), and a transfer's
+  also opens a `finance_operator` exception. Finance registers `FINANCE_POLICY_IMPL`
+  (`FinancePolicyAdapter`), which computes the consequence from the approved policy; nothing
+  executes the refund, credit or charge automatically yet, and whether a charge keeps the new
+  place pending until paid is pending DEC-009 (finance README, "Known gaps"). The consequence is
+  computed from the enrollment's base price snapshot, not from what the order actually charged
+  (discounts, fees): **pending DEC-009**.
+- A `register` grant revoked while a basket is already held (the hold window) is not re-checked
+  when finance starts the checkout; finance's own `pay` check over each participant applies there.
 - A session booking whose hold expired is expired by the timer even while a checkout is running
   (baskets keep their pending enrollments for finance instead); a late booking payment is
   compensated by finance.

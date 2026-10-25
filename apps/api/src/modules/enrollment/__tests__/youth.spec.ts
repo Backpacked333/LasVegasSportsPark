@@ -199,6 +199,46 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       });
       expect(wrong.status).toBe(400);
     });
+
+    it('SPK-PLACE-004 / SPK-PAY-002: a booking whose only charge is an approved fee stays pending and confirm refuses', async () => {
+      const feeOnly = await offering(t, {
+        kind: 'pickup',
+        programId: program,
+        basePriceMinor: 0,
+        chargeLines: [
+          { code: 'court', label: 'Court fee', kind: 'fee', amountMinor: 500, inclusive: false },
+        ],
+        capacityUnits: [{ unit: 'seats', limit: 5 }],
+      });
+      const feeSession = await session(feeOnly, '2026-11-15T02:00:00Z');
+      const actor = await adult(t);
+      await acknowledge(t, feeOnly, actor.personId, actor.personId);
+      const booked = await post(t, '/v1/session-bookings', actor.header, {
+        offeringId: feeOnly.offeringId,
+        sessionId: feeSession,
+        participantPersonId: actor.personId,
+      });
+      expect(booked.status).toBe(201);
+      expect(booked.body).toMatchObject({
+        status: 'pending',
+        price: { basePriceMinor: 0, chargeLines: [expect.objectContaining({ amountMinor: 500 })] },
+      });
+      expect(booked.body.expiresAt).not.toBeNull();
+      const confirm = await post(
+        t,
+        `/v1/session-bookings/${booked.body.id as string}/confirm`,
+        actor.header,
+        { expectedRevision: booked.body.revision },
+      );
+      expect(confirm.status).toBe(409);
+      expect(confirm.body.details.code).toBe('PAYMENT_REQUIRED');
+      const seats = await t.db
+        .selectFrom('capacity_pools')
+        .select(['held', 'committed'])
+        .where('scope_id', '=', feeSession)
+        .executeTakeFirstOrThrow();
+      expect(seats).toEqual({ held: 1, committed: 0 });
+    });
   });
 
   describe('SPK-YOUTH-004 / SPK-AT-020: makeup entitlements', () => {
@@ -451,6 +491,62 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       .get(`/v1/session-bookings/${created.body.sessionBookingId as string}`)
       .set(parent.header);
     expect(trialBooking.body).toMatchObject({ kind: 'trial', status: 'confirmed' });
+  });
+
+  it('SPK-AT-019 / SPK-YOUTH-003: a no-show trial keeps its outcome after it converts to paid participation', async () => {
+    const trialProgram = await createProgramFixture(t, {
+      ageBand: { minAgeYears: 5, maxAgeYears: 12 },
+    });
+    const trial = await offering(t, { kind: 'trial', programId: trialProgram, basePriceMinor: 0 });
+    const trialSession = await session(trial, '2026-11-16T17:00:00Z');
+    const term = await offering(t, { programId: trialProgram, basePriceMinor: 18_000 });
+    const kid = await child(t, [parent]);
+    await acknowledge(t, trial, kid, parent.personId);
+    const created = await post(t, '/v1/trial-participations', parent.header, {
+      offeringId: trial.offeringId,
+      participantPersonId: kid,
+      sessionId: trialSession,
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+    const noShow = await post(t, `/v1/trial-participations/${id}/outcome`, frontDesk.header, {
+      outcome: 'no_show',
+      expectedRevision: 1,
+    });
+    expect(noShow.status).toBe(200);
+    expect(noShow.body).toMatchObject({ status: 'no_show', attendedAt: null });
+    const noShowAt = noShow.body.noShowAt as string;
+    expect(noShowAt).toEqual(expect.any(String));
+    const converted = await post(t, `/v1/trial-participations/${id}/convert`, parent.header, {
+      targetOfferingId: term.offeringId,
+      expectedRevision: 2,
+    });
+    expect(converted.status).toBe(201);
+    await acknowledge(t, term, kid, parent.personId);
+    const held = await post(
+      t,
+      `/v1/baskets/${converted.body.basket.id as string}/hold`,
+      parent.header,
+      {},
+    );
+    expect(held.status).toBe(200);
+    const enrollmentId = held.body.lines[0].enrollmentId as string;
+    await uow.run(({ trx }) =>
+      t.app
+        .get<EnrollmentPort>(ENROLLMENT_PORT)
+        .confirmEnrollment(trx, t.organizationId, enrollmentId, {
+          actor: systemPrincipal(t.organizationId, 'finance.checkout'),
+          orderRef: 'order-term-2',
+        }),
+    );
+    // The paid entitlement is linked; the trial's own history (a no-show) is still there.
+    const after = await t.http.get(`/v1/trial-participations/${id}`).set(parent.header);
+    expect(after.body).toMatchObject({
+      status: 'converted',
+      convertedEnrollmentId: enrollmentId,
+      noShowAt,
+      attendedAt: null,
+    });
   });
 
   it('SPK-YOUTH-007: one calendar for all authorized children, overlaps highlighted but not prevented', async () => {
