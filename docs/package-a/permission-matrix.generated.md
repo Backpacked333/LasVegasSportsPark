@@ -3,7 +3,7 @@
 > Generated from code by `apps/api/scripts/emit-permission-matrix.ts`; do not edit by hand.
 > Regenerate with `pnpm build && pnpm permission-matrix` from the repository root.
 
-Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 229 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
+Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 230 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
 
 Columns: **Staff roles** may perform the action within their organization or facility scope; **Self** means a customer may act on themselves as the subject person; **Subject permission** is the grant a customer must hold over every subject person; **Team role** is the role a customer must hold on the target team entry; **Requirements** are the specification ids the action declares.
 
@@ -28,8 +28,8 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `reporting`      | 10      |
 | `scheduling`     | 8       |
 | `support`        | 7       |
-| `workforce`      | 19      |
-| **Total**        | **229** |
+| `workforce`      | 20      |
+| **Total**        | **230** |
 
 ## Actions
 
@@ -255,6 +255,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `workforce.manage_own_availability`          | Maintain own availability windows                                                                                                                                          | —                                                                                                                                                                                             | yes  | —                  | —         | SPK-STAFF-001                                                 |
 | `workforce.manage_qualification`             | Record, verify, reject or revoke qualification evidence                                                                                                                    | `league_manager`, `program_manager`, `general_manager`, `system_administrator`                                                                                                                | no   | —                  | —         | SPK-STAFF-001                                                 |
 | `workforce.manage_requirements`              | Declare required roles, counts and qualifications for a target                                                                                                             | `league_manager`, `program_manager`, `scheduler`, `general_manager`                                                                                                                           | no   | —                  | —         | SPK-STAFF-001, SPK-STAFF-002                                  |
+| `workforce.override_turnaround`              | Set a turnaround below the facility policy for one assignment (reason required, audited)                                                                                   | `league_manager`, `program_manager`, `general_manager`                                                                                                                                        | no   | —                  | —         | SPK-STAFF-003, §4.9                                           |
 | `workforce.propose_assignment`               | Propose or offer an assignment, checking qualification, availability, overlapping commitments and turnaround                                                               | `league_manager`, `program_manager`, `scheduler`, `general_manager`                                                                                                                           | no   | —                  | —         | SPK-STAFF-001, SPK-STAFF-002, SPK-STAFF-003                   |
 | `workforce.read_availability`                | Read availability windows (own, or staff planning coverage)                                                                                                                | `front_desk`, `league_manager`, `program_manager`, `scheduler`, `general_manager`, `support_operator`                                                                                         | yes  | —                  | —         | SPK-STAFF-001                                                 |
 | `workforce.read_fees`                        | Read fee submissions (finance, or the assignee)                                                                                                                            | `finance_operator`, `general_manager`                                                                                                                                                         | yes  | —                  | —         | SPK-STAFF-006                                                 |

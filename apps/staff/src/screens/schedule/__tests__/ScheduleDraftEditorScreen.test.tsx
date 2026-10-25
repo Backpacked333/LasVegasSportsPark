@@ -62,9 +62,21 @@ function echoSave(request: FakeRequest) {
   );
 }
 
+/** The series behind the recurring test events; its revision is what series edits are based on (§4.9). */
+const SERIES_REVISION = 7;
+const SERIES = {
+  id: 'series-1',
+  revision: SERIES_REVISION,
+  status: 'active',
+  title: 'Thursday futsal',
+  kind: 'session',
+  eventIds: ['e-s1', 'e-s2', 'e-s3', 'e-s4'],
+};
+
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     ...oneFacilityRoutes(),
+    'GET /event-series/{id}': { status: 200, body: SERIES },
     'GET /schedule-drafts/{id}': { status: 200, body: DRAFT },
     'GET /resources': { status: 200, body: INVENTORY },
     'GET /events/{id}': { status: 200, body: GAME },
@@ -393,6 +405,7 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
       occurrenceIndex: 2,
       preview: true,
       changes: { cancel: true },
+      expectedRevision: SERIES_REVISION,
     });
     expect(patches(app)).toHaveLength(0);
     await user.click(within(preview).getByRole('button', { name: 'Add 2 changes to the draft' }));

@@ -5659,6 +5659,96 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/claims/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a pending claim (a leaked or misdelivered token can no longer be accepted)
+         * @description Implements SPK-IAM-002, SPK-IAM-006. Requires an Idempotency-Key header (§4.9).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RevokeClaimRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Claim"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (stale revision, invalid transition, idempotency) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claims/{token}/accept": {
         parameters: {
             query?: never;
@@ -5669,8 +5759,9 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Claim a staff-created participant with a verified account (no duplicate person)
-         * @description Implements SPK-IAM-002, SPK-AT-025. Requires an Idempotency-Key header (§4.9).
+         * Deprecated: use POST /claims/accept, which keeps the token out of the URL path (§4.14). Kept until clients move.
+         * @deprecated
+         * @description Implements SPK-IAM-002. Requires an Idempotency-Key header (§4.9).
          */
         post: {
             parameters: {
@@ -5684,7 +5775,95 @@ export type paths = {
             requestBody?: never;
             responses: {
                 /** @description Success */
-                201: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ClaimAccepted"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (stale revision, invalid transition, idempotency) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claims/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim a staff-created participant with a verified account (no duplicate person); the token is sent in the body
+         * @description Implements SPK-IAM-002, §4.14. Requires an Idempotency-Key header (§4.9).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["AcceptClaimRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -13578,7 +13757,7 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Invite a person to hold permissions over a scope
+         * Invite a person to hold permissions over a scope; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD
          * @description Implements SPK-IAM-004. Requires an Idempotency-Key header (§4.9).
          */
         post: {
@@ -15266,7 +15445,7 @@ export type paths = {
         };
         put?: never;
         /**
-         * Create a private calendar feed; the token is returned once
+         * Create a private calendar feed; the token is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD
          * @description Implements SPK-COMMS-008. Requires an Idempotency-Key header (§4.9).
          */
         post: {
@@ -17816,7 +17995,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** List the sessions of an offering */
+        /** List the sessions of an offering; readers who are not catalog staff get the child-safe view (no cancel reason, scheduling event id or capacity staffing internals, §4.14) */
         get: {
             parameters: {
                 query?: never;
@@ -19030,7 +19209,7 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Issue a claim token so a verified customer can claim a staff-created participant
+         * Issue a claim token so a verified customer can claim a staff-created participant; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD
          * @description Implements SPK-IAM-002. Requires an Idempotency-Key header (§4.9).
          */
         post: {
@@ -23333,7 +23512,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Create an expiring, single-use export of a stored run (independent export permission, audited) */
+        /** Create an expiring, single-use export of a stored run (independent export permission, audited); the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD */
         post: {
             parameters: {
                 query?: never;
@@ -28436,7 +28615,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Invite a prospective team member (§4.8) */
+        /** Invite a prospective team member (§4.8); the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD */
         post: {
             parameters: {
                 query?: never;
@@ -30635,6 +30814,9 @@ export type components = {
             policyReferences?: string[];
             reason: string;
         };
+        AcceptClaimRequest: {
+            token: string;
+        };
         AcceptInvitationRequest: {
             token: string;
         };
@@ -31461,7 +31643,7 @@ export type components = {
         };
         AutosaveScheduleDraftBody: {
             changes: components["schemas"]["DraftChangeInput"][];
-            expectedRevision?: number;
+            expectedRevision: number;
             name?: string;
             policyReferences?: string[];
             reason?: string;
@@ -31979,6 +32161,10 @@ export type components = {
             /** Format: uuid */
             id: string;
             kind: components["schemas"]["ClaimKind"];
+            recipientContact: {
+                kind: components["schemas"]["ContactPointKind"];
+                value: string;
+            } | null;
             requestedPermissions: components["schemas"]["GrantPermission"][];
             revision: number;
             /** Format: date-time */
@@ -32192,6 +32378,11 @@ export type components = {
             conflictingEventIds: string[];
             /** Format: uuid */
             conflictUnitId?: string;
+            externalCommitments?: {
+                /** Format: uuid */
+                id: string;
+                source: string;
+            }[];
             message: string;
             party?: {
                 /** Format: uuid */
@@ -33504,7 +33695,7 @@ export type components = {
         /** @enum {string} */
         DeliveryChannel: "in_app" | "push" | "email" | "sms";
         /** @enum {string|null} */
-        DeliveryFailureCode: "RECIPIENT_REVOKED" | "NO_ADDRESS" | "PROVIDER_REJECTED" | "PROVIDER_ERROR" | null;
+        DeliveryFailureCode: "RECIPIENT_REVOKED" | "NO_ADDRESS" | "PROVIDER_REJECTED" | "PROVIDER_ERROR" | "SUPERSEDED" | null;
         DeliveryReceipt: {
             /** Format: uuid */
             attemptId: string;
@@ -33650,23 +33841,6 @@ export type components = {
             totalNetMinor: number;
             unknownCodes: string[];
         };
-        DiscountEvaluationLine: {
-            baseAmountMinor: number;
-            lineId: string;
-            /** Format: uuid */
-            offeringId: string;
-            offeringKind: components["schemas"]["OfferingKind"];
-            /**
-             * Format: uuid
-             * @default null
-             */
-            participantPersonId: string | null;
-            /**
-             * Format: uuid
-             * @default null
-             */
-            programId: string | null;
-        };
         /** @enum {string} */
         DiscountKind: "promo_code" | "automatic";
         DiscountLine: {
@@ -33681,6 +33855,20 @@ export type components = {
             discountDefinitionId: string;
             explanation: string[];
             name: string;
+        };
+        DiscountPreviewLine: {
+            baseAmountMinor?: number;
+            lineId: string;
+            /** Format: uuid */
+            offeringId: string;
+            offeringKind?: components["schemas"]["OfferingKind"];
+            /**
+             * Format: uuid
+             * @default null
+             */
+            participantPersonId: string | null;
+            /** Format: uuid */
+            programId?: string | null;
         };
         /** @enum {string} */
         DiscountStatus: "draft" | "active" | "retired";
@@ -33796,7 +33984,7 @@ export type components = {
         EconomicsAllocationMethod: "direct" | "pro_rata";
         EditEventSeriesBody: {
             changes: components["schemas"]["SeriesEditChanges"];
-            expectedRevision?: number;
+            expectedRevision: number;
             occurrenceIndex?: number;
             policyReferences?: string[];
             /** @default false */
@@ -33933,6 +34121,7 @@ export type components = {
             /** Format: uuid */
             sourceApplicationId: string | null;
             status: components["schemas"]["EnrollmentStatus"];
+            transferConsequence: components["schemas"]["FinancialConsequence"];
             /** Format: date-time */
             transferredAt: string | null;
             /** Format: uuid */
@@ -33984,7 +34173,7 @@ export type components = {
             /** @default [] */
             codes: string[];
             currency: string;
-            lines: components["schemas"]["DiscountEvaluationLine"][];
+            lines: components["schemas"]["DiscountPreviewLine"][];
         };
         Event: {
             /** Format: date-time */
@@ -35030,7 +35219,9 @@ export type components = {
             preventiveScheduleId: string | null;
             /** Format: date-time */
             reportedAt: string;
-            reporter: components["schemas"]["ActorSnapshot"];
+            reporter: components["schemas"]["ActorSnapshot"] & {
+                note?: string;
+            };
             requiresInspection: boolean;
             resolution: components["schemas"]["TaskResolution"];
             /** Format: date-time */
@@ -37553,6 +37744,11 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
         };
+        RevokeClaimRequest: {
+            expectedRevision?: number;
+            policyReferences?: string[];
+            reason: string;
+        };
         RevokeInvitationRequest: {
             expectedRevision?: number;
             policyReferences?: string[];
@@ -38594,6 +38790,8 @@ export type components = {
             followUpConsent: boolean;
             /** Format: uuid */
             id: string;
+            /** Format: date-time */
+            noShowAt: string | null;
             /** Format: uuid */
             offeringId: string;
             /** Format: uuid */
@@ -38634,7 +38832,7 @@ export type components = {
             attributes?: {
                 [key: string]: unknown;
             };
-            expectedRevision?: number;
+            expectedRevision: number;
             identifier?: string | null;
             /** @enum {string} */
             kind?: "turf" | "goal" | "net" | "boards" | "divider" | "lighting" | "scoreboard" | "equipment" | "other";
@@ -38766,7 +38964,7 @@ export type components = {
             /** Format: date-time */
             dueAt?: string | null;
             evidence?: components["schemas"]["EvidenceReference"][];
-            expectedRevision?: number;
+            expectedRevision: number;
             issue?: string;
             policyReferences?: string[];
             reason?: string;
@@ -38822,7 +39020,7 @@ export type components = {
             status?: "active" | "inactive";
         };
         UpdatePreventiveScheduleBody: {
-            expectedRevision?: number;
+            expectedRevision: number;
             leadTimeDays?: number;
             name?: string;
             policyReferences?: string[];
@@ -38852,7 +39050,7 @@ export type components = {
             dimensions?: {
                 [key: string]: unknown;
             };
-            expectedRevision?: number;
+            expectedRevision: number;
             name?: string;
             policyReferences?: string[];
             reason?: string;
@@ -38866,7 +39064,7 @@ export type components = {
         UpdateResourceConfigurationBody: {
             active?: boolean;
             description?: string | null;
-            expectedRevision?: number;
+            expectedRevision: number;
             memberResourceIds?: string[];
             name?: string;
             policyReferences?: string[];
