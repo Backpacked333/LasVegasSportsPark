@@ -2278,6 +2278,25 @@
             "items": {
               "type": "integer"
             }
+          },
+          "externalCommitments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "source",
+                "id"
+              ]
+            }
           }
         },
         "required": [

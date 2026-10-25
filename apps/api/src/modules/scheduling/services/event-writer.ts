@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   errors,
   newId,
@@ -23,9 +23,11 @@ import { Outbox, type Clock, type Trx } from '../../../kernel';
 import { CLOCK } from '../../../kernel/tokens';
 import {
   ConflictDetector,
+  externalPartyConflicts,
   type DetectedConflict,
   type ProposedEvent,
 } from '../conflicts/conflict-detector';
+import { PartyCommitmentSources, partyLockKey } from '../conflicts/party-commitment-sources';
 import { EventChanged, type EventChangeKind } from '../scheduling.events';
 import { policyForFacility, SCHEDULING_POLICY, type SchedulingPolicy } from '../scheduling.policy';
 
@@ -95,6 +97,7 @@ export class EventWriter {
     @Inject(SCHEDULING_POLICY) private readonly basePolicy: SchedulingPolicy,
     private readonly outbox: Outbox,
     private readonly detector: ConflictDetector,
+    @Optional() private readonly sources?: PartyCommitmentSources,
   ) {}
 
   async loadFacility(db: Db, organizationId: string, facilityId: string): Promise<FacilityRow> {
@@ -421,7 +424,11 @@ export class EventWriter {
       .execute();
   }
 
-  /** Transaction-scoped advisory lock per committed party that needs rest (SPK-SCHED-004). */
+  /**
+   * Transaction-scoped advisory lock per committed party that needs rest (SPK-SCHED-004) or whose
+   * commitments another module also holds (`PartyCommitmentSources`, SPK-STAFF-003): that module
+   * takes the same lock (`lockParty`) before it writes, so the later of the two sees the earlier.
+   */
   private async lockParties(
     trx: Trx,
     organizationId: string,
@@ -432,8 +439,8 @@ export class EventWriter {
     const keys = [
       ...new Set(
         commitments
-          .filter((c) => (rest[c.partyType] ?? 0) > 0)
-          .map((c) => `scheduling.party:${organizationId}:${c.partyType}:${c.partyId}`),
+          .filter((c) => (rest[c.partyType] ?? 0) > 0 || this.sources?.covers(c.partyType))
+          .map((c) => partyLockKey(organizationId, c.partyType, c.partyId)),
       ),
     ].sort();
     for (const key of keys) {
@@ -441,7 +448,12 @@ export class EventWriter {
     }
   }
 
-  /** Active commitments of the same parties closer than the required rest (not overlapping: the exclusion constraint covers those). */
+  /**
+   * Active commitments of the same parties closer than the required rest (not overlapping: the
+   * exclusion constraint covers those), and commitments other modules hold for the parties
+   * (overlapping or too close; no constraint spans those tables, so this re-check after the party
+   * lock is the guarantee, SPK-STAFF-003).
+   */
   private async restViolations(
     trx: Trx,
     event: EventRow,
@@ -456,8 +468,22 @@ export class EventWriter {
     for (const c of commitments) {
       const minutes = rest[c.partyType] ?? 0;
       const party = `${c.partyType}:${c.partyId}`;
-      if (minutes <= 0 || seen.has(party)) continue;
+      if (seen.has(party)) continue;
       seen.add(party);
+      if (this.sources?.covers(c.partyType)) {
+        details.push(
+          ...(await externalPartyConflicts(
+            this.sources,
+            trx,
+            event.organization_id,
+            c,
+            { start: new Date(start), end: new Date(end) },
+            minutes,
+            [event.id],
+          )),
+        );
+      }
+      if (minutes <= 0) continue;
       const rows = await trx
         .selectFrom('event_commitments')
         .select([

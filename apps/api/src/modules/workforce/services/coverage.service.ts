@@ -5,6 +5,7 @@ import {
   type AssignmentTargetType,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   CLOCK,
   OperationalExceptions,
@@ -34,6 +35,7 @@ import {
   type AssignmentRow,
   type RequirementRow,
 } from '../workforce.shared';
+import { QualificationsService } from './qualifications.service';
 
 export interface UncoveredNotice {
   exceptionId: string;
@@ -69,6 +71,7 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     private readonly uow: UnitOfWork,
     private readonly exceptions: OperationalExceptions,
     private readonly outbox: Outbox,
+    private readonly qualifications: QualificationsService,
   ) {}
 
   async requirements(
@@ -187,6 +190,13 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
    * Readiness check `workforce.required_officials` (SPK-READY-001/003, SPK-STAFF-002). Each
    * requirement short of accepted people is a blocking issue (a warning when the requirement does
    * not demand acceptance); proposed and offered assignments are named but never counted.
+   *
+   * SPK-READY-002/004, SPK-STAFF-001: an accepted assignee must still hold the requirement's
+   * qualifications, verified and valid at the activity's (current) start, evaluated now from the
+   * qualification records: a revocation after acceptance, a requirement edited to add a
+   * qualification, or a reschedule past the qualification's validity each make the check blocked
+   * (`required_official_unqualified`). The coverage counts stay the assignment fact. The message
+   * names no person and no qualification status, because readiness reaches team members.
    */
   async readinessIssues(context: ReadinessCheckContext): Promise<ReadinessIssue[]> {
     const coverage = await this.coverage(
@@ -236,6 +246,55 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
         deadline,
       });
     }
+    issues.push(...(await this.unqualifiedIssues(context, deadline)));
+    return issues;
+  }
+
+  /** Accepted assignees of required slots who no longer hold the required qualifications. */
+  private async unqualifiedIssues(
+    context: ReadinessCheckContext,
+    deadline: string | null,
+  ): Promise<ReadinessIssue[]> {
+    const db = context.trx ?? this.uow.reader();
+    const requirements = (
+      await this.requirements(db, context.organizationId, 'fixture', context.fixtureId)
+    ).filter((req) => req.required_qualifications.length > 0);
+    const issues: ReadinessIssue[] = [];
+    for (const req of requirements) {
+      const accepted = await db
+        .selectFrom('assignments')
+        .select(['person_id', 'scheduled_start'])
+        .where('organization_id', '=', context.organizationId)
+        .where('target_type', '=', 'fixture')
+        .where('target_id', '=', context.fixtureId)
+        .where('role', '=', req.role)
+        .where('slot', '<=', req.required_count)
+        .where('status', '=', 'accepted')
+        .execute();
+      let unqualified = 0;
+      for (const row of accepted) {
+        const checks = await this.qualifications.check(
+          db,
+          context.organizationId,
+          row.person_id,
+          req.required_qualifications,
+          new Date(row.scheduled_start),
+        );
+        if (checks.some((c) => c.status !== 'held')) unqualified += 1;
+      }
+      if (unqualified === 0) continue;
+      issues.push({
+        code:
+          req.kind === 'official' ? 'required_official_unqualified' : 'required_staff_unqualified',
+        severity: req.must_be_accepted ? 'blocking' : 'warning',
+        message: `${unqualified} accepted ${req.role} assignment(s) lack a required qualification (${req.required_qualifications.join(', ')}) valid at the start.`,
+        source: { type: 'assignment_requirement', id: req.id },
+        responsibleRole: 'league_manager',
+        requiredAction:
+          'Verify current qualification evidence or replace the assignee (see the replacement candidates of the assignment).',
+        deadline,
+      });
+    }
     return issues;
   }
 
@@ -261,6 +320,9 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     );
     if (!requirement || !requirement.must_be_accepted) return null;
     if (row.slot > requirement.required_count) return null;
+    // SPK-UX-006: serialized with an acceptance of the same slot (resolveIfCovered takes the same
+    // lock), so a decline and a concurrent acceptance never leave an open exception on a covered slot.
+    await this.lockSlot(trx, row);
     const covering = await trx
       .selectFrom('assignments')
       .select('id')
@@ -332,6 +394,7 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     row: AssignmentRow,
     correlationId: string | null,
   ): Promise<string | null> {
+    await this.lockSlot(trx, row);
     const open = await trx
       .selectFrom('operational_exceptions')
       .select('id')
@@ -356,5 +419,70 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       },
     );
     return open.id;
+  }
+
+  /** Whether the target has an open (or acknowledged) uncovered-slot exception. */
+  async hasOpenUncovered(
+    trx: Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+  ): Promise<boolean> {
+    const row = await this.openUncovered(
+      trx,
+      organizationId,
+      targetType,
+      targetId,
+    ).executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * Closes the target's open uncovered-slot exceptions when the activity itself is canceled,
+   * postponed or unscheduled (SPK-UX-006: the queue reflects reality; SPK-AT-012). They stay as
+   * history. Idempotent under replay: only open or acknowledged exceptions match.
+   */
+  async closeUncovered(
+    trx: Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<string[]> {
+    const open = await this.openUncovered(trx, organizationId, targetType, targetId).execute();
+    for (const exception of open) {
+      await this.exceptions.transition(
+        trx,
+        systemPrincipal(organizationId, 'workforce.coverage'),
+        exception.id,
+        'closed',
+        { reason, correlationId: correlationId ?? undefined },
+      );
+    }
+    return open.map((e) => e.id);
+  }
+
+  private openUncovered(
+    trx: Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+  ) {
+    return trx
+      .selectFrom('operational_exceptions')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('category', '=', UNCOVERED_ASSIGNMENT)
+      .where('affected_type', '=', targetType)
+      .where('affected_id', '=', targetId)
+      .where('status', 'in', ['open', 'acknowledged'])
+      .orderBy('id');
+  }
+
+  /** Transaction-scoped lock of one required slot (escalation and resolution are serialized). */
+  private async lockSlot(trx: Trx, row: AssignmentRow): Promise<void> {
+    const key = `workforce.slot:${uncoveredDedupeKey(row.target_type, row.target_id, row.role, row.slot)}:${row.organization_id}`;
+    await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(trx);
   }
 }

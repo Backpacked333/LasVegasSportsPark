@@ -37,7 +37,11 @@ const accessActor = (organizationId: string): Principal =>
  * membership change commit together and a stop between them cannot leave access `pending` or a
  * membership the assignment does not reference (§4.7 invariants 3 and 12). Identity refusing the
  * change is recorded as a fact in the same transaction: the access is `failed`, the operation is
- * `recovery_required` and a `workforce.temporary_access_failed` exception names it.
+ * `recovery_required` and a `workforce.temporary_access_failed` exception names it. Each identity
+ * call runs in a unit of its own (a savepoint of the caller's transaction), so a call that fails
+ * after identity wrote anything leaves nothing behind: no membership the assignment does not
+ * reference, and no outcome recorded as `failed` while the membership exists (§4.7 invariant 12,
+ * §4.11, CLAUDE.md "unknown kept explicit").
  */
 @Injectable()
 export class TemporaryAccessService {
@@ -81,17 +85,19 @@ export class TemporaryAccessService {
     const until = addHours(new Date(row.scheduled_end), this.policy.temporaryAccess.trailHours);
     let membershipId: string;
     try {
-      const membership = await this.memberships.create(
-        accessActor(organizationId),
-        {
-          personId: row.person_id,
-          roles: this.policy.temporaryAccess.roles[row.kind],
-          facilityIds: [row.facility_id],
-          effectiveFrom: from.toISOString(),
-          effectiveTo: until.toISOString(),
-          reason: `Time-bounded access for ${row.engagement} assignment ${row.id} (SPK-STAFF-004)`,
-        },
-        correlationId,
+      const membership = await this.uow.run(() =>
+        this.memberships.create(
+          accessActor(organizationId),
+          {
+            personId: row.person_id,
+            roles: this.policy.temporaryAccess.roles[row.kind],
+            facilityIds: [row.facility_id],
+            effectiveFrom: from.toISOString(),
+            effectiveTo: until.toISOString(),
+            reason: `Time-bounded access for ${row.engagement} assignment ${row.id} (SPK-STAFF-004)`,
+          },
+          correlationId,
+        ),
       );
       membershipId = membership.id;
     } catch (error) {
@@ -179,11 +185,8 @@ export class TemporaryAccessService {
     }
     const membershipId = row.access_membership_id;
     try {
-      await this.memberships.end(
-        accessActor(organizationId),
-        membershipId,
-        { reason },
-        correlationId,
+      await this.uow.run(() =>
+        this.memberships.end(accessActor(organizationId), membershipId, { reason }, correlationId),
       );
     } catch (error) {
       // A membership that already ended (or expired and was ended) is the outcome we want.
@@ -274,18 +277,22 @@ export class TemporaryAccessService {
       );
     }
     try {
-      const membership = await this.memberships.find(row.organization_id, membershipId);
-      if (!membership || membership.status !== 'active') return;
-      await this.memberships.update(
-        accessActor(row.organization_id),
-        membershipId,
-        {
-          effectiveTo: until.toISOString(),
-          expectedRevision: membership.revision,
-          reason: `Activity rescheduled (assignment ${row.id})`,
-        },
-        correlationId,
-      );
+      const moved = await this.uow.run(async () => {
+        const membership = await this.memberships.find(row.organization_id, membershipId);
+        if (!membership || membership.status !== 'active') return false;
+        await this.memberships.update(
+          accessActor(row.organization_id),
+          membershipId,
+          {
+            effectiveTo: until.toISOString(),
+            expectedRevision: membership.revision,
+            reason: `Activity rescheduled (assignment ${row.id})`,
+          },
+          correlationId,
+        );
+        return true;
+      });
+      if (!moved) return;
     } catch (error) {
       // An ended membership needs no move; anything else is an owned failure (never thrown, so
       // the retime itself still commits).

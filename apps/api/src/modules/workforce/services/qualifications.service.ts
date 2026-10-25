@@ -3,6 +3,7 @@ import {
   errors,
   hasStaffRole,
   newId,
+  type AssignmentTargetType,
   type CreateQualificationBody,
   type ListQualificationsQuery,
   type Principal,
@@ -11,12 +12,14 @@ import {
   type QualificationReasonBody,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   assertExpectedRevision,
   AuditWriter,
   AuthorizationService,
   CLOCK,
   DATABASE,
+  OperationalExceptions,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -26,6 +29,7 @@ import {
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { WorkforceActions } from '../workforce.actions';
 import { WorkforceEvents } from '../workforce.events';
+import { UNQUALIFIED_ASSIGNMENT } from '../workforce.policy';
 import { QualificationMachine, type QualificationEvent } from '../workforce.state-machines';
 import {
   organizationOf,
@@ -57,6 +61,7 @@ export class QualificationsService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly exceptions: OperationalExceptions,
   ) {}
 
   async create(
@@ -298,8 +303,102 @@ export class QualificationsService {
       });
       const row = (await this.load(trx, organizationId, id)) as QualificationRow;
       await this.notify(trx, row, correlationId);
+      if (next === 'revoked') {
+        await this.flagUnqualifiedAssignments(trx, organizationId, {
+          personId: row.person_id,
+          kind: row.kind,
+        });
+      }
       return toQualification(row);
     });
+  }
+
+  /**
+   * SPK-STAFF-001, SPK-READY-004: accepted, not yet finished assignments whose requirement names a
+   * qualification the assignee no longer holds (verified and valid at the start) raise
+   * `workforce.unqualified_assignment` for the assigners' queue, once per assignment. Nothing is
+   * withdrawn automatically: whether the person may still work is an operator decision (POL-033
+   * pending). Readiness reports the same lapse at read time.
+   */
+  async flagUnqualifiedAssignments(
+    trx: Trx,
+    organizationId: string,
+    scope:
+      | { personId: string; kind: string }
+      | { targetType: AssignmentTargetType; targetId: string; role: string },
+  ): Promise<string[]> {
+    let q = trx
+      .selectFrom('assignments as a')
+      .innerJoin('assignment_requirements as r', (join) =>
+        join
+          .onRef('r.organization_id', '=', 'a.organization_id')
+          .onRef('r.target_type', '=', 'a.target_type')
+          .onRef('r.target_id', '=', 'a.target_id')
+          .onRef('r.role', '=', 'a.role'),
+      )
+      .select([
+        'a.id',
+        'a.person_id',
+        'a.facility_id',
+        'a.target_type',
+        'a.target_id',
+        'a.target_title',
+        'a.role',
+        'a.slot',
+        'a.scheduled_start',
+        'r.required_qualifications',
+      ])
+      .where('a.organization_id', '=', organizationId)
+      .where('a.status', '=', 'accepted')
+      .where('a.scheduled_end', '>', this.clock.now())
+      .whereRef('a.slot', '<=', 'r.required_count')
+      .orderBy('a.id');
+    if ('personId' in scope) {
+      q = q
+        .where('a.person_id', '=', scope.personId)
+        .where(sql<boolean>`${scope.kind} = any(r.required_qualifications)`);
+    } else {
+      q = q
+        .where('a.target_type', '=', scope.targetType)
+        .where('a.target_id', '=', scope.targetId)
+        .where('a.role', '=', scope.role);
+    }
+    const raised: string[] = [];
+    for (const row of await q.execute()) {
+      if (row.required_qualifications.length === 0) continue;
+      const checks = await this.check(
+        trx,
+        organizationId,
+        row.person_id,
+        row.required_qualifications,
+        new Date(row.scheduled_start),
+      );
+      const lapsed = checks.filter((c) => c.status !== 'held');
+      if (lapsed.length === 0) continue;
+      const exception = await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: row.facility_id,
+        category: UNQUALIFIED_ASSIGNMENT,
+        severity: 'high',
+        title: `Accepted ${row.role.replaceAll('_', ' ')} (slot ${row.slot}) lacks a required qualification for ${row.target_title}`,
+        affectedType: 'assignment',
+        affectedId: row.id,
+        ownerQueue: row.target_type === 'fixture' ? 'league_manager' : 'scheduler',
+        deadlineAt: new Date(row.scheduled_start),
+        dedupeKey: `${UNQUALIFIED_ASSIGNMENT}:${row.id}`,
+        details: {
+          assignmentId: row.id,
+          targetType: row.target_type,
+          targetId: row.target_id,
+          role: row.role,
+          slot: row.slot,
+          qualifications: lapsed.map((c) => ({ kind: c.kind, status: c.status })),
+          replacementsHref: `/v1/assignments/${row.id}/replacements`,
+        },
+      });
+      raised.push(exception.id);
+    }
+    return raised;
   }
 
   private async load(
