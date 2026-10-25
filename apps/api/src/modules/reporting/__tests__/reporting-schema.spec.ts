@@ -3,6 +3,8 @@ import { json, seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
+import { createAccountFixture, createPersonFixture } from '../../identity';
+import { seedResource } from '../../scheduling';
 import { MetricDefinitionsService } from '../services/metric-definitions.service';
 import {
   createCostInputFixture,
@@ -165,7 +167,9 @@ describe('reporting schema invariants (migration 1300)', () => {
 
   it('§4.14: an export is never downloaded at or after its expiry; its lifecycle and authorization are final', async () => {
     const runId = await createReportRunFixture(t);
-    const accountId = newId();
+    const accountId = (
+      await createAccountFixture(t, { personId: await createPersonFixture(t, { kind: 'adult' }) })
+    ).id;
     const { exportId } = await createExportFixture(t, {
       reportRunId: runId,
       requestedByAccountId: accountId,
@@ -345,6 +349,84 @@ describe('reporting schema invariants (migration 1300)', () => {
         effectiveFrom: '2027-01-01',
         facilityId: otherFacilityId,
       }),
+      FOREIGN_KEY,
+    );
+  });
+
+  it('§4.3 / §4.14 (migration 1301): requesters and approvers are accounts and persons of the row’s own organization; a cost input’s space is of its own facility', async () => {
+    const personId = await createPersonFixture(t, { kind: 'adult' });
+    const account = await createAccountFixture(t, { personId });
+    const outsiderId = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: otherOrganizationId,
+    });
+    const outsider = await createAccountFixture(t, {
+      personId: outsiderId,
+      organizationId: otherOrganizationId,
+    });
+    const runId = await createReportRunFixture(t, {
+      requestedByAccountId: account.id,
+      requestedByPersonId: personId,
+    });
+    for (const actor of [
+      { requestedByAccountId: newId() },
+      { requestedByAccountId: outsider.id },
+      { requestedByPersonId: outsiderId },
+    ]) {
+      await expectPgError(createReportRunFixture(t, actor), FOREIGN_KEY);
+    }
+    // The single-requester binding of an export names an account of its own organization.
+    await createExportFixture(t, {
+      reportRunId: runId,
+      requestedByAccountId: account.id,
+      requestedByPersonId: personId,
+    });
+    for (const actor of [
+      { requestedByAccountId: newId() },
+      { requestedByAccountId: outsider.id },
+      { requestedByAccountId: account.id, requestedByPersonId: outsiderId },
+    ]) {
+      await expectPgError(createExportFixture(t, { reportRunId: runId, ...actor }), FOREIGN_KEY);
+    }
+    // A cost input is approved by a person of its organization, for a space of its facility.
+    const here = await seedResource(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Keyed pitch',
+    });
+    const secondFacilityId = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: secondFacilityId,
+        organization_id: t.organizationId,
+        slug: 'second-site',
+        name: 'Second site',
+        timezone: 'America/Los_Angeles',
+        address: null,
+      })
+      .execute();
+    const there = await seedResource(t.db, {
+      organizationId: t.organizationId,
+      facilityId: secondFacilityId,
+      name: 'Second site pitch',
+    });
+    const input = { amountMinor: 500, currency: 'GBP', effectiveFrom: '2031-01-01' };
+    await createCostInputFixture(t, {
+      ...input,
+      resourceId: here.resourceId,
+      approvedByPersonId: personId,
+    });
+    await expectPgError(
+      createCostInputFixture(t, {
+        ...input,
+        effectiveFrom: '2032-01-01',
+        approvedByPersonId: outsiderId,
+      }),
+      FOREIGN_KEY,
+    );
+    await expectPgError(
+      createCostInputFixture(t, { ...input, resourceId: there.resourceId }),
       FOREIGN_KEY,
     );
   });

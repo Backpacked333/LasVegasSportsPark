@@ -182,12 +182,14 @@ export class FinanceReports {
         .where('submitted_at', '>=', start)
         .where('submitted_at', '<', end)
         .execute();
+      // MET-045: an attempt never submitted has no submission instant to place it in the period,
+      // so these are counted over all time at the request instant, by state, and labelled so.
       const notSubmitted = await ctx.db
         .selectFrom('reporting_payment_attempts_v')
-        .select((eb) => eb.fn.countAll<number>().as('n'))
+        .select(['status', 'currency', 'amount_minor'])
         .where('organization_id', '=', org)
         .where('submitted_at', 'is', null)
-        .executeTakeFirst();
+        .execute();
       const unknown = await ctx.db
         .selectFrom('reporting_payment_attempts_v')
         .select(['currency', 'amount_minor', 'unknown_since'])
@@ -265,6 +267,12 @@ export class FinanceReports {
         (p) => p.amount_minor,
       );
       grouped(
+        'payment_attempts_never_submitted',
+        notSubmitted,
+        (p) => [p.status, p.currency, 'all time, at the request instant'],
+        (p) => p.amount_minor,
+      );
+      grouped(
         'refund_attempts',
         refunds,
         (r) => [r.status, r.currency, r.purpose],
@@ -309,9 +317,10 @@ export class FinanceReports {
       values.push(
         metricValue(
           'MET-045',
-          'Attempts never submitted to a provider',
+          'Attempts never submitted to a provider (all time, at the request instant)',
           'count',
-          Number(notSubmitted?.n ?? 0),
+          notSubmitted.length,
+          { dimensions: { window: 'all_time' } },
         ),
       );
       values.push(metricValue('MET-046', 'Unknown payment outcomes', 'count', unknown.length));
@@ -424,6 +433,7 @@ export class FinanceReports {
         disclosures: [
           'Receipts and sales are shown side by side and never combined; receipts are not revenue (SPK-PAY-011, rule G6).',
           'An unknown outcome is never resolved by age (SPK-PAY-007).',
+          'Payment attempts by state are those submitted to a provider in the period. Attempts never submitted have no submission instant: they are counted over all time at the request instant (section payment_attempts_never_submitted), not as part of the period (MET-045).',
           'Settlement differences are listed per reconciliation and never netted against unrelated discrepancies (§5.5).',
         ],
       };

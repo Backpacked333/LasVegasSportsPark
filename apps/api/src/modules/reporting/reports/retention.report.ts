@@ -61,7 +61,7 @@ export class RetentionReport {
     scope: 'organization',
     pointInTime: 'partial',
     pointInTimeNote:
-      'Approvals, confirmations, cancellations, transfers and fulfilments after the as-of instant are ignored (their instants are recorded); roster membership status is taken as it stands now.',
+      'Approvals, confirmations, cancellations, transfers, fulfilments and refunds after the as-of instant are ignored (their instants are recorded); roster membership status is taken as it stands now.',
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
@@ -318,17 +318,38 @@ export class RetentionReport {
           .onRef('o.organization_id', '=', 'l.organization_id')
           .onRef('o.offering_id', '=', 'l.offering_id'),
       )
-      .select(['l.payer_person_id', 'l.fulfilled_at'])
+      .select(['l.payer_person_id', 'l.fulfilled_at', 'l.order_id', 'l.order_total_minor'])
       .where('l.organization_id', '=', ctx.organizationId)
       .where('l.fulfillment_status', '=', 'fulfilled')
       .where('o.offering_kind', '<>', 'trial')
       .where('o.starts_on', '>=', period.from)
       .where('o.starts_on', '<=', period.to)
       .execute();
+    const fulfilled = lines.filter(
+      (l) => l.fulfilled_at !== null && new Date(l.fulfilled_at) <= ctx.asOf,
+    );
+    // MET-082 excludes orders fully refunded: succeeded refunds resolved by the as-of instant reach
+    // the order's total (a refund never changes an order's payment or fulfilment status).
+    const orderIds = [...new Set(fulfilled.map((l) => l.order_id))];
+    const refunded = new Map<string, number>();
+    if (orderIds.length > 0) {
+      const refunds = await ctx.db
+        .selectFrom('reporting_refund_attempts_v')
+        .select(['order_id', 'amount_minor'])
+        .where('organization_id', '=', ctx.organizationId)
+        .where('order_id', 'in', orderIds)
+        .where('status', '=', 'succeeded')
+        .where('resolved_at', '<=', ctx.asOf)
+        .execute();
+      for (const r of refunds) {
+        const orderId = r.order_id as string;
+        refunded.set(orderId, (refunded.get(orderId) ?? 0) + Number(r.amount_minor));
+      }
+    }
     const payers = [
       ...new Set(
-        lines
-          .filter((l) => l.fulfilled_at !== null && new Date(l.fulfilled_at) <= ctx.asOf)
+        fulfilled
+          .filter((l) => (refunded.get(l.order_id) ?? 0) < Number(l.order_total_minor))
           .map((l) => l.payer_person_id),
       ),
     ];

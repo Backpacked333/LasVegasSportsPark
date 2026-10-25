@@ -12,7 +12,11 @@ metrics and exports").
 **Specification:** §3.20 SPK-REPORT-001..007, §4.4 Reporting, §4.14 "Expiring exports", §1.2
 success measures; metric keys and wording from `docs/package-a/metric-dictionary.md` (MET-###).
 
-**Migration:** `packages/db/migrations/1300_reporting_core.sql` (range 1300–1399).
+**Migrations:** `packages/db/migrations/1300_reporting_core.sql` (range 1300–1399);
+`1301_reporting_actor_keys.sql` (the requester of a run and of an export and the approver of a
+cost input are composite keys to accounts and persons of the row's organization; a cost input's
+space belongs to its facility); `1302_reporting_space_status_and_order_totals.sql` (space status
+history view, order total on the order-line view).
 
 The module never writes another module's records. It reads them through the read-only
 `reporting_*_v` views of migration 1300 (each refuses writes with an INSTEAD OF trigger and exposes
@@ -37,6 +41,9 @@ pools, holds, waitlist entries and offers, seasons, team entries, roster members
 assignment requirements, attendance observations, session check-ins, visits, obligations,
 installments, credits, payment and refund attempts, receipts, settlements, order lines,
 restrictions, maintenance tasks, notifications, delivery attempts, notification recipients.
+Migration 1302 adds the space status changes (`reporting_resource_status_changes_v`: the scheduling
+module's clock-stamped, append-only audit records of `scheduling.resource_updated` that set a
+status) and the order total on each order line.
 
 ## Report envelope (every response)
 
@@ -90,18 +97,25 @@ found. Facility-scoped staff see only their facilities and cannot read organizat
   available, observed (overlay, never a denominator) and closure hours are separate; maintenance
   and block events count as unavailability; reserved time outside hours and during closures is
   reported separately. Resource-equivalent utilization weighs whole spaces only (default: one
-  conflict unit weighs one, U3) and lists its weights in the disclosures.
+  conflict unit weighs one, U3) and lists its weights in the disclosures. A unit counts as closure
+  hours, not available hours, while every space holding it has status `closed` (MET-064; a closed
+  whole pitch with open halves still books the halves), from the status changes recorded by the
+  as-of instant (test "a closed space counts as closure hours, not available hours").
 - **SPK-REPORT-004** — no per-field-hour figure without a named allocation method (`direct` or
   `pro_rata`, largest-remainder splits, no default, DEC-085); coverage and unallocated sales are
-  shown; margin is refused unless agreed cost inputs cover every space and event day.
+  shown; margin is refused unless agreed cost inputs cover every space and event day, and uses the
+  inputs in force at the as-of instant. A refund of an order is split over the order's lines by
+  their totals and only the share of the lines reported counts (E2, G2).
 - **SPK-REPORT-005** — one cohort per request; households (purchases) and participants are
   separate metrics; persons resolve merges to the survivor; not-offered members are counted
-  separately and leave the denominator only when asked (K4).
+  separately and leave the denominator only when asked (K4). An order refunded in full by the
+  as-of instant is not a household purchase (MET-082).
 - **SPK-REPORT-006** — observed signals and any forecast are separate columns; the only forecast
   method offered (`trailing_mean`) is an engineering baseline named in the response.
 - **SPK-REPORT-007** — a stored run is the reproducible record (append-only, digest); reports whose
   inputs are append-only and clock-stamped (attendance observations and corrections, releases,
-  closure applications and lifts, approvals, confirmations, fulfilments) honour the as-of instant,
+  closure applications and lifts, space status changes, approvals, confirmations, fulfilments,
+  refunds, cost inputs recorded and withdrawn) honour the as-of instant,
   so a rerun at the same instant after a correction reproduces the figures (test "reports are
   reproducible after a correction"). Live-only reports refuse a past as-of instant. Exports need
   their own action, are requester-bound, single use, audited at creation, download, revocation and
@@ -140,6 +154,12 @@ minutes (DEC-015); at most 366 days per request; hourly start-time bands.
 - Reservation creation is not clock-stamped by the scheduling module, so utilization as of an
   earlier instant still includes reservations created later (disclosed in every response);
   roster membership status and session schedules are read as they stand now.
+- Space status history comes from the scheduling module's audit records of status changes
+  (spaces are created active; every status change is audited in its transaction). A status
+  written outside the scheduling module would have no history and is not counted as closed.
+- Payment reconciliation counts attempts never submitted to a provider over all time at the
+  request instant (labelled so, by state): payment attempts carry no clock-stamped creation
+  instant to place them in the period (MET-045).
 - Report reads do not run in one snapshot transaction (the readiness service reads through its own
   connection); the stored run is the consistent record.
 - Retention does not detect children who aged out (age bands are DEC-003) and does not compute

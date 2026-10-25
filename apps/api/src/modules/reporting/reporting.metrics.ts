@@ -571,7 +571,9 @@ export const METRICS: readonly MetricSpec[] = [
       'Count and amount of payment attempts submitted in the period, by state and currency',
     denominator: 'Attempts submitted in the period (share)',
     timeBasis: PERIOD_INSTANT,
-    exclusions: ['attempts never submitted to a provider (counted separately)'],
+    exclusions: [
+      'attempts never submitted to a provider (counted separately, by state, over all time at the request instant: they have no submission instant to place them in the period)',
+    ],
     dimensions: ['state', 'provider', 'currency'],
     currency: 'minor_units',
     freshness: 'F1',
@@ -807,7 +809,10 @@ export const METRICS: readonly MetricSpec[] = [
       "Hours inside the operating windows in effect for the unit (the most specific space's windows, else the facility's, U6) minus closure hours inside them",
     denominator: 'none (hours)',
     timeBasis: PERIOD_LOCAL,
-    exclusions: ['units with no operating window on the day (reported as no hours)'],
+    exclusions: [
+      'units with no operating window on the day (reported as no hours)',
+      'units every space holding which has status closed, while it is closed by the status changes recorded at the as-of instant (reported as closure hours)',
+    ],
     dimensions: ['space', 'conflict unit'],
     currency: 'none',
     freshness: 'F1',
@@ -878,7 +883,7 @@ export const METRICS: readonly MetricSpec[] = [
     businessQuestion: 'How much space-time was unavailable because of closures?',
     grain: 'conflict unit x day',
     numerator:
-      'Hours of applied closures covering the unit (before any lift known at the as-of instant) plus maintenance and block events, inside operating windows',
+      'Hours of applied closures covering the unit (before any lift known at the as-of instant), plus maintenance and block events, plus the time every space holding the unit has status closed, inside operating windows',
     denominator: 'Operating unit-hours before closures (share)',
     timeBasis: PERIOD_LOCAL,
     exclusions: ['closure time outside operating hours (reported separately)'],
@@ -996,7 +1001,7 @@ export const METRICS: readonly MetricSpec[] = [
     timeBasis: `${PERIOD_LOCAL}; events by scheduled start`,
     exclusions: [
       'unallocated sales (MET-075)',
-      'refunds are shown as adjustments, never netted',
+      'refunds are shown as adjustments, never netted; a refund counts only for the share of its order that falls on the reported lines (split by line totals, largest remainder)',
       'receipts are not sales (G6)',
     ],
     dimensions: ['allocation method', 'space', 'currency'],
@@ -1049,7 +1054,7 @@ export const METRICS: readonly MetricSpec[] = [
     businessQuestion: 'What is left per field hour after agreed direct costs?',
     grain: 'space x period',
     numerator:
-      'Allocated sales minus agreed cost per activity hour (recorded cost inputs, effective on each event day) times activity hours',
+      'Allocated sales minus agreed cost per activity hour (cost inputs in force at the as-of instant, effective on each event day) times activity hours',
     denominator: 'Activity unit-hours (MET-067)',
     timeBasis: PERIOD_LOCAL,
     exclusions: [
@@ -1133,7 +1138,11 @@ export const METRICS: readonly MetricSpec[] = [
       'Households with a member who paid a fulfilled order for an offering starting in the anchor period that have one for an offering starting in the comparison period',
     denominator: 'Households with such an order in the anchor period',
     timeBasis: 'Offering start dates in the anchor and comparison periods (K2)',
-    exclusions: ['orders not fulfilled', 'orders for trials only'],
+    exclusions: [
+      'orders not fulfilled',
+      'orders for trials only',
+      'orders fully refunded by the as-of instant (succeeded refunds reach the order total)',
+    ],
     dimensions: [],
     currency: 'none',
     freshness: 'F1',

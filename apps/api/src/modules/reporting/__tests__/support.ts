@@ -125,7 +125,7 @@ export async function createFulfilledOrder(
       amountMinor: number;
     }>;
   },
-): Promise<{ orderId: string; lineIds: string[] }> {
+): Promise<{ orderId: string; quoteId: string; basketId: string; lineIds: string[] }> {
   const currency = input.currency ?? 'USD';
   const org = t.organizationId;
   const total = input.lines.reduce((sum, l) => sum + l.amountMinor, 0);
@@ -275,5 +275,138 @@ export async function createFulfilledOrder(
         .execute();
     }
   });
-  return { orderId, lineIds };
+  return { orderId, quoteId, basketId, lineIds };
+}
+
+/**
+ * The provider payment of an order's completed checkout and succeeded refunds of it, written as
+ * finance would leave them. Test helper only: the reporting module never writes these tables.
+ */
+export async function createRefundedOrderPayment(
+  t: TestApp,
+  input: {
+    order: { orderId: string; quoteId: string; basketId: string };
+    payerPersonId: string;
+    paidMinor: number;
+    paidAt: Date;
+    refunds: Array<{ amountMinor: number; resolvedAt: Date }>;
+    currency?: string;
+  },
+): Promise<{ paymentAttemptId: string; refundAttemptIds: string[] }> {
+  const currency = input.currency ?? 'USD';
+  const org = t.organizationId;
+  const operationId = newId();
+  const checkoutId = newId();
+  const paymentAttemptId = newId();
+  const refundAttemptIds: string[] = [];
+  await t.db.transaction().execute(async (trx) => {
+    await trx
+      .insertInto('operations')
+      .values({
+        id: operationId,
+        organization_id: org,
+        kind: 'finance.checkout',
+        status: 'succeeded',
+        requested_by: json(FIXTURE_ACTOR),
+        correlation_id: null,
+        input: null,
+        result: null,
+        error: null,
+        completed_at: input.paidAt,
+      })
+      .execute();
+    await trx
+      .insertInto('checkouts')
+      .values({
+        id: checkoutId,
+        organization_id: org,
+        quote_id: input.order.quoteId,
+        order_id: input.order.orderId,
+        basket_id: input.order.basketId,
+        payer_person_id: input.payerPersonId,
+        requested_by: json(FIXTURE_ACTOR),
+        requested_by_person_id: null,
+        status: 'completed',
+        payment_kind: 'provider',
+        payment_attempt_id: null,
+        cash_tender_id: null,
+        operation_id: operationId,
+        failure_code: null,
+        failure_details: null,
+        recovery: null,
+        completed_at: input.paidAt,
+        aborted_at: null,
+        compensated_at: null,
+        recovery_required_at: null,
+      })
+      .execute();
+    await trx
+      .insertInto('payment_attempts')
+      .values({
+        id: paymentAttemptId,
+        organization_id: org,
+        purpose: 'checkout',
+        checkout_id: checkoutId,
+        order_id: input.order.orderId,
+        obligation_id: null,
+        contribution_request_id: null,
+        installment_id: null,
+        payer_person_id: input.payerPersonId,
+        amount_minor: input.paidMinor,
+        currency,
+        provider: 'fake-payments',
+        payment_method_ref: 'pm_fake_visa',
+        provider_reference: `fp_${paymentAttemptId}`,
+        status: 'succeeded',
+        action_required_payload: null,
+        failure_reason: null,
+        processor_fee_minor: 0,
+        evidence_source: 'sync_response',
+        evidence_inbox_event_id: null,
+        evidence_sequence: null,
+        requested_by: json(FIXTURE_ACTOR),
+        requested_by_person_id: null,
+        submitted_at: input.paidAt,
+        unknown_since: null,
+        resolved_at: input.paidAt,
+      })
+      .execute();
+    await trx
+      .updateTable('checkouts')
+      .set({ payment_attempt_id: paymentAttemptId })
+      .where('id', '=', checkoutId)
+      .execute();
+    for (const refund of input.refunds) {
+      const id = newId();
+      refundAttemptIds.push(id);
+      await trx
+        .insertInto('refund_attempts')
+        .values({
+          id,
+          organization_id: org,
+          payment_attempt_id: paymentAttemptId,
+          amount_minor: refund.amountMinor,
+          currency,
+          purpose: 'customer_refund',
+          checkout_id: null,
+          status: 'succeeded',
+          reservation_status: 'settled',
+          reason: 'Test refund',
+          provider: 'fake-payments',
+          provider_reference: `fr_${id}`,
+          failure_reason: null,
+          evidence_source: 'sync_response',
+          evidence_inbox_event_id: null,
+          evidence_sequence: null,
+          requested_by: json(FIXTURE_ACTOR),
+          requested_by_person_id: null,
+          operation_id: null,
+          submitted_at: refund.resolvedAt,
+          unknown_since: null,
+          resolved_at: refund.resolvedAt,
+        })
+        .execute();
+    }
+  });
+  return { paymentAttemptId, refundAttemptIds };
 }
