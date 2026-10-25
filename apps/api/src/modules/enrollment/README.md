@@ -178,7 +178,11 @@ Payloads carry identifiers only (§4.14).
   Cancellation has the same preview (`cancellation-preview`).
 - **Placement (SPK-PLACE-002/003):** candidates and proposals reserve nothing; assignment
   re-evaluates eligibility, holds a team-entry roster place when one is configured, adds the roster
-  row through competition's command (which evaluates again), then commits, all under one operation.
+  row through competition's command (which evaluates again), then commits, all under one operation
+  and in ONE transaction (competition's command joins it; `UnitOfWork.run` is reentrant), so an
+  interruption leaves neither a roster row the pool does not count nor an operation `running`
+  (§4.7 invariants 3 and 12; **Verified**, `__tests__/placement-atomic.spec.ts`). Release is one
+  transaction in the same way.
 - **Pickup (SPK-PLACE-004):** session pools, entry requirements (eligibility and forms), payment
   (pending until finance confirms; free bookings confirm at once), waitlist and cancellation; no
   roster or enrollment is ever created.
@@ -217,9 +221,6 @@ are at most 120 days.
   (baskets keep their pending enrollments for finance instead); a late booking payment is
   compensated by finance.
 - List endpoints return one page (`nextCursor: null`); cursor pagination is pending.
-- If a process stops between placement's roster addition and its final transaction, the
-  operation stays `running` until a retried assignment adopts the membership; there is no
-  background reconciler yet.
 
 ## Kernel limitations worked around here
 
@@ -228,5 +229,5 @@ are at most 120 days.
 - Catalog's `SessionsService.list` reads through the root database, which waits forever for the
   single PGlite connection inside a transaction; sessions are read before or after transactions
   (`services/catalog-sessions.ts` refuses to run inside one).
-- Competition's `RosterService.changeRoster` opens its own unit of work, so placement runs it
-  between two enrollment transactions recorded as one operation (§4.11 pattern).
+- Competition's `RosterService.changeRoster` is called inside placement's transaction; its unit
+  of work joins it (the kernel's `UnitOfWork.run` is reentrant).

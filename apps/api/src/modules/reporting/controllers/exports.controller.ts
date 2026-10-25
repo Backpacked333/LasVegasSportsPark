@@ -22,7 +22,8 @@ export class ExportsController {
   constructor(private readonly exports: ExportsService) {}
 
   @Post()
-  @Idempotent()
+  // §4.14: the download token is stored only as its SHA-256; never keep it with the key.
+  @Idempotent({ withhold: ['downloadToken'] })
   create(
     @CurrentPrincipal() principal: Principal,
     @ZodBody(CreateExportBody) body: z.infer<typeof CreateExportBody>,

@@ -81,6 +81,40 @@ export function minutesSinceMidnight(timezone: string, instant: Date): number {
   return l.hour * 60 + l.minute;
 }
 
+export interface LocalMinuteSpan {
+  /** Local weekday of the start (0 = Sunday). */
+  weekday: number;
+  /** Minutes since local midnight of the start date. */
+  startMinute: number;
+  /**
+   * Wall-clock minutes of the end, counted from local midnight of the start date: 1440 more per
+   * local day the end falls after the start date (an end at the next local midnight is 1440).
+   */
+  endMinute: number;
+}
+
+/**
+ * The facility-local wall-clock span of an interval (SPK-SCHED-008, SPK-SCHED-001 operating
+ * hours). The end is read from the wall clock at the end instant, never as the start plus the
+ * elapsed minutes, so a daylight-saving change inside the interval does not move it: on fall-back
+ * night 00:30 PDT to 01:30 PST spans 00:30-01:30, on spring-forward night 01:30 PST to 03:30 PDT
+ * spans 01:30-03:30. An interval that runs past local midnight ends beyond minute 1440 and so never
+ * fits a single day's opening window (windows never span midnight: `opens_at < closes_at`).
+ */
+export function localMinuteSpan(timezone: string, start: Date, end: Date): LocalMinuteSpan {
+  const s = toLocal(timezone, start);
+  const e = toLocal(timezone, end);
+  const days = Math.round(
+    (Date.UTC(e.year, e.month - 1, e.day) - Date.UTC(s.year, s.month - 1, s.day)) / DAY_MS,
+  );
+  return {
+    weekday: s.weekday,
+    startMinute: s.hour * 60 + s.minute,
+    // a partial minute past the window still counts as past it
+    endMinute: days * 1440 + e.hour * 60 + e.minute + (e.second > 0 ? 1 : 0),
+  };
+}
+
 export interface ZonedResolution {
   instant: Date;
   resolution: DstResolution;

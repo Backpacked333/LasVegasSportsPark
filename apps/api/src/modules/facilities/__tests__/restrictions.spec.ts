@@ -1,7 +1,7 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { json, seedOrganization } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { OutboxDispatcher } from '../../../kernel';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { OutboxDispatcher, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
 import {
@@ -9,6 +9,7 @@ import {
   ClosuresService,
   createScheduledEvent,
   EventsService,
+  ResourcesService,
   seedPitchWithHalves,
   type PitchFixture,
 } from '../../scheduling';
@@ -461,22 +462,178 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
     expect(approveAgain.body.code).toBe('INVALID_TRANSITION');
   });
 
-  it('a closure lifted in scheduling without a facilities release is surfaced, never reopened silently (SPK-FAC-004)', async () => {
+  it('§4.7-12 / SPK-AT-021: approval, closure and activation commit together; a failure in between leaves nothing applied', async () => {
+    const proposed = await post('/v1/maintenance-restrictions', {
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      kind: 'closed',
+      interval: { start: at('2026-11-26', '08:00'), end: at('2026-11-26', '12:00') },
+      reason: 'Irrigation repair',
+      approve: false,
+    });
+    expect(proposed.status).toBe(201);
+    const closuresBefore = await t.db
+      .selectFrom('closures')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    // the process fails after scheduling created and applied the closure, before activation
+    const resources = t.app.get(ResourcesService);
+    const spy = vi
+      .spyOn(resources, 'getResource')
+      .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+    const crashed = await post(`/v1/maintenance-restrictions/${proposed.body.id}/approve`, {});
+    spy.mockRestore();
+    expect(crashed.status).toBe(500);
+    const row = await t.db
+      .selectFrom('restrictions')
+      .select(['status', 'revision', 'scheduling_closure_id', 'approved_at'])
+      .where('id', '=', proposed.body.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({
+      status: 'proposed',
+      revision: proposed.body.revision,
+      scheduling_closure_id: null,
+      approved_at: null,
+    });
+    const closuresAfter = await t.db
+      .selectFrom('closures')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirstOrThrow();
+    expect(Number(closuresAfter.n)).toBe(Number(closuresBefore.n));
+    const running = await t.db
+      .selectFrom('operations')
+      .select('id')
+      .where('kind', '=', 'facilities.approve_restriction')
+      .where('status', '=', 'running')
+      .execute();
+    expect(running).toEqual([]);
+    // the half is still bookable, and a retried approval activates it
+    const bookable = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.southHalfId],
+      start: at('2026-11-26', '13:00'),
+      end: at('2026-11-26', '14:00'),
+    });
+    expect(bookable.status).toBe('published');
+    const approved = await post(`/v1/maintenance-restrictions/${proposed.body.id}/approve`, {});
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body.status).toBe('active');
+    await restrictions.release(operator, approved.body.id, { reason: 'repaired' });
+  });
+
+  it('SPK-FAC-004 / SPK-AT-021: a closure backing an unreleased restriction cannot be lifted in scheduling; only the facilities release reopens the area', async () => {
+    const reported = await post('/v1/maintenance-tasks', {
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      issue: 'Goal net torn',
+      severity: 'high',
+    });
+    expect(reported.status, JSON.stringify(reported.body)).toBe(201);
+    const assigned = await patch(`/v1/maintenance-tasks/${reported.body.id}`, {
+      assignedOwnerPersonId: operator.personId,
+      requiresInspection: true,
+      expectedRevision: 1,
+    });
+    expect(assigned.status, JSON.stringify(assigned.body)).toBe(200);
+    const restricted = await post('/v1/maintenance-restrictions', {
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      taskId: reported.body.id,
+      kind: 'closed',
+      interval: { start: at('2026-11-28', '08:00'), end: at('2026-11-28', '12:00') },
+      reason: 'Net replacement',
+    });
+    expect(restricted.status, JSON.stringify(restricted.body)).toBe(201);
+    const closureId = restricted.body.schedulingClosureId as string;
+    const book = (resourceIds: string[]) =>
+      createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: facility,
+        resourceIds,
+        start: at('2026-11-28', '09:00'),
+        end: at('2026-11-28', '10:00'),
+      });
+    await expect(book([pitch.southHalfId])).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+
+    const lift = async (principal: Principal) => {
+      const closure = await closures.getClosure(manager, closureId);
+      return t.http
+        .post(`/v1/closures/${closureId}/lift`)
+        .set(await t.authHeader(principal))
+        .set('Idempotency-Key', key())
+        .send({ expectedRevision: closure.revision, reason: 'lifted directly' });
+    };
+    // no release authority (scheduler, system administrator), or release authority skipping the
+    // pending inspection (facilities operator): every direct lift is refused
+    for (const principal of [
+      staffPrincipal(org, ['scheduler']),
+      staffPrincipal(org, ['system_administrator']),
+      operator,
+    ]) {
+      const refused = await lift(principal);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+      expect(refused.body).toMatchObject({
+        code: 'ELIGIBILITY_FAILED',
+        details: { code: 'restriction_release_required', restrictionId: restricted.body.id },
+      });
+    }
+    await expect(
+      closures.liftClosure(staffPrincipal(org, ['scheduler']), closureId, { reason: 'service' }),
+    ).rejects.toMatchObject({ code: 'ELIGIBILITY_FAILED' });
+    expect((await closures.getClosure(manager, closureId)).status).toBe('active');
+    expect((await restrictions.get(operator, restricted.body.id)).status).toBe('active');
+    await expect(book([pitch.southHalfId])).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    await expect(book([pitch.pitchId])).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+
+    // the facilities release still requires the passed inspection
+    const blocked = await post(`/v1/maintenance-restrictions/${restricted.body.id}/release`, {
+      reason: 'repaired',
+    });
+    expect(blocked.status).toBe(422);
+    expect(blocked.body.details.code).toBe('inspection_required');
+    const inspected = await post(`/v1/maintenance-tasks/${reported.body.id}/inspections`, {
+      outcome: 'passed',
+    });
+    expect(inspected.status, JSON.stringify(inspected.body)).toBe(201);
+    const released = await post(`/v1/maintenance-restrictions/${restricted.body.id}/release`, {
+      reason: 'repaired and inspected',
+    });
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect(released.body.status).toBe('released');
+    expect((await closures.getClosure(manager, closureId)).status).toBe('lifted');
+    expect((await book([pitch.southHalfId])).status).toBe('published');
+    const dispatcher = t.app.get(OutboxDispatcher);
+    await dispatcher.runOnce(100);
+    // the release lifted the closure through its own operation: nothing is surfaced
+    expect(
+      await t.db
+        .selectFrom('operational_exceptions')
+        .select('id')
+        .where('affected_id', '=', restricted.body.id)
+        .execute(),
+    ).toHaveLength(0);
+  });
+
+  it('defense in depth: a restriction closure found lifted outside a facilities release is surfaced, never reopened silently (SPK-FAC-004)', async () => {
     const restriction = await restrictions.create(operator, {
       facilityId: facility,
       resourceId: pitch.southHalfId,
       kind: 'closed',
-      interval: { start: at('2026-11-28', '08:00'), end: at('2026-11-28', '12:00') },
+      interval: { start: at('2026-11-29', '08:00'), end: at('2026-11-29', '12:00') },
       reason: 'Net replacement',
       approve: true,
     });
-    const dispatcher = t.app.get(OutboxDispatcher);
-    await dispatcher.runOnce(100);
-    const scheduler = staffPrincipal(org, ['scheduler']);
-    await closures.liftClosure(scheduler, restriction.schedulingClosureId as string, {
-      reason: 'lifted directly',
-    });
-    await dispatcher.runOnce(100);
+    const closureId = restriction.schedulingClosureId as string;
+    // a lift written without the guard (for example before it was registered)
+    await t.db
+      .updateTable('closures')
+      .set({ status: 'lifted', lifted_at: t.clock.now() })
+      .where('id', '=', closureId)
+      .execute();
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) => restrictions.reconcileLiftedClosure(trx, org, closureId));
     const exception = await t.db
       .selectFrom('operational_exceptions')
       .selectAll()
@@ -488,18 +645,11 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
       status: 'open',
     });
     expect((await restrictions.get(operator, restriction.id)).status).toBe('active');
-    // the facilities release still completes (the closure is already lifted) and raises nothing
+    // the facilities release still completes (the closure is already lifted)
     const released = await restrictions.release(operator, restriction.id, {
       reason: 'confirmed after the fact',
     });
     expect(released.status).toBe('released');
-    await dispatcher.runOnce(100);
-    const exceptions = await t.db
-      .selectFrom('operational_exceptions')
-      .select('id')
-      .where('affected_id', '=', restriction.id)
-      .execute();
-    expect(exceptions).toHaveLength(1);
   });
 
   it('authorization, idempotency and uniqueness: front desk cannot restrict, replays return the same restriction, one open restriction per task', async () => {

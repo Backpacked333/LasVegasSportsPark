@@ -63,7 +63,8 @@ export class RosterController {
   }
 
   @Post('team-entries/:id/invitations')
-  @Idempotent()
+  // §4.14: the invitation token is stored only as a hash; never keep it with the key.
+  @Idempotent({ withhold: ['token'] })
   invite(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,

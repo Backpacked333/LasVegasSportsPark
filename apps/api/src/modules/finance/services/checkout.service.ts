@@ -498,6 +498,10 @@ export class CheckoutService {
       correlationId,
       input: { quoteId: quote.id, basketId: basket.id },
       status: 'running',
+      // §4.9, §4.11 step 4: the checkout key names this operation, not the basket hold's.
+      primary: true,
+      // §4.14: the checkout outcome is read as the checkout is (its payer or finance readers).
+      readScope: { action: FinanceActions.readCheckout, subjectPersonIds: [quote.payer_person_id] },
     });
     const policyReferences = quote.policy_references;
     await trx

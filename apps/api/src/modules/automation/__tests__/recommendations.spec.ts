@@ -362,6 +362,7 @@ describe('recommendations (SPK-AUTO-003, SPK-AUTO-004)', () => {
             tool: 'communications.send',
             arguments: {
               kind: 'staff_broadcast',
+              category: 'operational',
               audience: { personIds: [coachPerson.personId] },
               title: 'Field change on Saturday',
               body: 'Games move to Pitch R north.',
@@ -403,6 +404,7 @@ describe('recommendations (SPK-AUTO-003, SPK-AUTO-004)', () => {
             tool: 'communications.send',
             arguments: {
               kind: 'staff_broadcast',
+              category: 'operational',
               audience: { staffRoles: ['front_desk'] },
               title: 'Desk notice',
               body: 'Please check the lost and found.',

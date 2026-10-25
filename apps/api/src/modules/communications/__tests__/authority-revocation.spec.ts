@@ -578,6 +578,7 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
       .set('Idempotency-Key', key())
       .send({
         kind: 'staff_broadcast',
+        category: 'operational',
         audience: { personIds: [named] },
         title: 'Field change',
         body: 'Saturday games move to the north pitch.',
@@ -675,6 +676,7 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
       const scheduler = await schedulerAt(f2);
       const id = await composeAndSendViaApi({
         kind: 'staff_broadcast',
+        category: 'operational',
         protected: true,
         audience: { staffRoles: ['scheduler'], facilityId: f2 },
       });
@@ -694,6 +696,7 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
       const scheduler = await schedulerAt(f2);
       const id = await composeAndSendViaApi({
         kind: 'staff_broadcast',
+        category: 'operational',
         protected: true,
         audience: { staffRoles: ['scheduler'], facilityId: f2 },
       });
@@ -713,6 +716,7 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
       const scheduler = await schedulerAt(f2);
       const id = await composeAndSendViaApi({
         kind: 'staff_broadcast',
+        category: 'operational',
         protected: true,
         facilityId: t.facilityId,
         audience: { staffRoles: ['scheduler'] },

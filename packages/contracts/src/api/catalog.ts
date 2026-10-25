@@ -391,6 +391,11 @@ export const RecordAcknowledgmentBody = withCommandMeta({
   policyVersionId: z.uuid(),
   /** Required when a staff actor records the acknowledgment; defaults to the acting customer. */
   signedByPersonId: z.uuid().optional(),
+  /**
+   * Staff only (SPK-REG-009): when a paper form signed earlier is entered later. Never in the
+   * future, never before the policy version, and only with `evidence`; a customer's signature is
+   * timestamped by the server.
+   */
   signedAt: Instant.optional(),
   evidence: z.record(z.string(), z.unknown()).default({}),
 }).openapi('RecordAcknowledgmentRequest');
@@ -777,7 +782,7 @@ export const ListDiscountsQuery = PageRequestSchema.extend({
 });
 export type ListDiscountsQuery = z.infer<typeof ListDiscountsQuery>;
 
-/** One basket line submitted for discount evaluation (prices come from price rules, never the client, SPK-PAY-001). */
+/** One server-priced basket line the discount evaluator works on (SPK-PAY-001: kind, program and base amount come from the offering and its price rule, never the client). */
 export const DiscountEvaluationLineSchema = z
   .object({
     lineId: z.string().trim().min(1).max(100),
@@ -790,12 +795,28 @@ export const DiscountEvaluationLineSchema = z
   .openapi('DiscountEvaluationLine');
 export type DiscountEvaluationLine = z.infer<typeof DiscountEvaluationLineSchema>;
 
+/**
+ * One basket line submitted for a discount preview. The server resolves the offering's kind and
+ * program and prices the line from its effective price rule (SPK-PAY-001); `offeringKind`,
+ * `programId` and `baseAmountMinor` are accepted for compatibility and ignored.
+ */
+export const DiscountPreviewLineSchema = z
+  .object({
+    lineId: z.string().trim().min(1).max(100),
+    offeringId: z.uuid(),
+    participantPersonId: z.uuid().nullable().default(null),
+    offeringKind: OfferingKindSchema.optional(),
+    programId: z.uuid().nullable().optional(),
+    baseAmountMinor: z.number().int().min(0).safe().optional(),
+  })
+  .openapi('DiscountPreviewLine');
+
 export const EvaluateDiscountsBody = z
   .object({
     currency: CurrencyCode,
-    /** Evaluation instant; defaults to the clock. */
+    /** Evaluation instant; defaults to the clock. Staff only (customers preview the current instant). */
     at: Instant.optional(),
-    lines: z.array(DiscountEvaluationLineSchema).min(1).max(100),
+    lines: z.array(DiscountPreviewLineSchema).min(1).max(100),
     codes: z.array(DiscountCode).max(10).default([]),
   })
   .refine((v) => new Set(v.lines.map((l) => l.lineId)).size === v.lines.length, {
@@ -1113,7 +1134,7 @@ command(
 );
 query(
   '/offerings/{id}/sessions',
-  'List the sessions of an offering',
+  'List the sessions of an offering; readers who are not catalog staff get the child-safe view (no cancel reason, scheduling event id or capacity staffing internals, §4.14)',
   null,
   z.array(OfferingSessionSchema),
   {

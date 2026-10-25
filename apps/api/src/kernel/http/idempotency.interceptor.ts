@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  applyDecorators,
   Inject,
   Injectable,
   Logger,
@@ -16,6 +17,7 @@ import {
   IdempotencyKey,
   errors,
   newId,
+  type ErrorResponseBody,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import type { Response } from 'express';
@@ -30,9 +32,26 @@ import { toErrorResponse } from './domain-exception.filter';
 import type { RequestWithContext } from './request-context';
 
 export const IDEMPOTENT_KEY = 'sportspark:idempotent';
+export const IDEMPOTENT_WITHHOLD_KEY = 'sportspark:idempotent-withhold';
+
+export interface IdempotentOptions {
+  /**
+   * Top-level response fields that carry a one-time secret, which the owning module stores only as
+   * a hash (an invitation, claim, export download or calendar feed token, or a path embedding one).
+   * The original response carries them, but they are never stored with the key, so the idempotency
+   * store holds no usable credential at rest (§4.14 protected secret storage). A replay answers
+   * IDEMPOTENCY_SECRET_WITHHELD naming the created record instead of returning a success body that
+   * lacks its secret; the client revokes and reissues to obtain a new one.
+   */
+  withhold?: readonly string[];
+}
 
 /** Marks a command handler as requiring an `Idempotency-Key` header (§4.9). */
-export const Idempotent = () => SetMetadata(IDEMPOTENT_KEY, true);
+export const Idempotent = (options: IdempotentOptions = {}) =>
+  applyDecorators(
+    SetMetadata(IDEMPOTENT_KEY, true),
+    SetMetadata(IDEMPOTENT_WITHHOLD_KEY, options.withhold ?? []),
+  );
 
 type ClaimOutcome =
   | { kind: 'claimed'; token: string }
@@ -94,6 +113,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
       context.getClass(),
     ]);
     if (!idempotent) return next.handle();
+    const withhold =
+      this.reflector.get<readonly string[] | undefined>(
+        IDEMPOTENT_WITHHOLD_KEY,
+        context.getHandler(),
+      ) ?? [];
 
     const request = context.switchToHttp().getRequest<RequestWithContext>();
     const response = context.switchToHttp().getResponse<Response>();
@@ -122,8 +146,16 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const outcome = await this.claim(organizationId, scopeKey, key, requestHash);
     switch (outcome.kind) {
       case 'replay': {
-        response.status(outcome.status);
         response.setHeader('Idempotent-Replayed', 'true');
+        if (withhold.length > 0 && outcome.status < 300) {
+          // §4.9 still holds (the command is not run again and the record is named), but the
+          // one-time secret was never stored (§4.14).
+          const stored = outcome.body as { id?: unknown } | null;
+          throw errors.idempotencySecretWithheld({
+            resourceId: typeof stored?.id === 'string' ? stored.id : null,
+          });
+        }
+        response.status(outcome.status);
         const body = outcome.body;
         if (body && typeof body === 'object' && 'correlationId' in body && 'code' in body) {
           return of({ ...(body as Record<string, unknown>), correlationId: request.correlationId });
@@ -155,7 +187,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
       mergeMap((body: unknown) => {
         handlerSucceeded = true;
         fenced.close();
-        return from(this.complete(claim, successStatus, body)).pipe(mergeMap(() => of(body)));
+        return from(this.complete(claim, successStatus, withholdFields(body, withhold))).pipe(
+          mergeMap(() => of(body)),
+        );
       }),
       catchError((error: unknown) => {
         fenced.close();
@@ -166,15 +200,25 @@ export class IdempotencyInterceptor implements NestInterceptor {
           return throwError(() => error);
         }
         const { status, body } = toErrorResponse(error, request.correlationId);
-        const settle =
-          DomainError.is(error) && error.httpStatus < 500
-            ? this.complete(claim, status, body)
-            : this.settleUnexpected(claim, status, body);
+        if (DomainError.is(error) && error.httpStatus < 500) {
+          return from(
+            this.complete(claim, status, body).catch((settleError: unknown) => {
+              this.logger.error(`could not settle idempotency key: ${String(settleError)}`);
+            }),
+          ).pipe(mergeMap(() => throwError(() => error)));
+        }
         return from(
-          settle.catch((settleError: unknown) => {
+          this.settleUnexpected(claim, status, body).catch((settleError: unknown) => {
             this.logger.error(`could not settle idempotency key: ${String(settleError)}`);
+            return { body, operationId: null };
           }),
-        ).pipe(mergeMap(() => throwError(() => error)));
+        ).pipe(
+          mergeMap((settled) =>
+            throwError(() =>
+              settled.operationId ? this.withOperation(error, settled.body, request) : error,
+            ),
+          ),
+        );
       }),
       finalize(() => fenced.close()),
     );
@@ -188,6 +232,21 @@ export class IdempotencyInterceptor implements NestInterceptor {
   private fenceFor(claim: ClaimRef): CommitFence {
     let committed = false;
     return {
+      linkOperation: async (trx, operationId, options) => {
+        // A key taken over by a retry matches nothing here; beforeCommit then rolls this back.
+        await trx
+          .updateTable('idempotency_keys')
+          .set({
+            operation_id: options?.primary
+              ? operationId
+              : sql<string>`coalesce(operation_id, ${operationId}::uuid)`,
+          })
+          .where('organization_id', '=', claim.organizationId)
+          .where('scope_key', '=', claim.scopeKey)
+          .where('idempotency_key', '=', claim.key)
+          .where('claim_token', '=', claim.token)
+          .execute();
+      },
       beforeCommit: async (trx) => {
         if (committed) return undefined;
         const wrote = await sql<{
@@ -328,24 +387,41 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * `committed_at` was written in the business transaction itself, so this decision follows what
    * actually committed, even when a commit acknowledgement was lost.
    */
-  private async settleUnexpected(claim: ClaimRef, status: number, body: unknown): Promise<void> {
-    await this.db.transaction().execute(async (trx) => {
-      const stored = await trx
-        .updateTable('idempotency_keys')
-        .set({
-          status: 'completed',
-          response_status: status,
-          response_body: json(body as object),
-          completed_at: this.clock.now(),
-        })
+  private async settleUnexpected(
+    claim: ClaimRef,
+    status: number,
+    body: ErrorResponseBody,
+  ): Promise<{ body: ErrorResponseBody; operationId: string | null }> {
+    return this.db.transaction().execute(async (trx) => {
+      const key = await trx
+        .selectFrom('idempotency_keys')
+        .select(['operation_id', 'committed_at'])
         .where('organization_id', '=', claim.organizationId)
         .where('scope_key', '=', claim.scopeKey)
         .where('idempotency_key', '=', claim.key)
         .where('claim_token', '=', claim.token)
         .where('status', '=', 'in_progress')
-        .where('committed_at', 'is not', null)
+        .forUpdate()
         .executeTakeFirst();
-      if (Number(stored.numUpdatedRows) > 0) return;
+      if (key?.committed_at) {
+        // §4.9: the stored error (and its replays) names the operation the command started, which
+        // records the real outcome, so the client can poll it instead of retrying blind.
+        const stored = key.operation_id ? withOperationDetails(body, key.operation_id) : body;
+        await trx
+          .updateTable('idempotency_keys')
+          .set({
+            status: 'completed',
+            response_status: status,
+            response_body: json(stored),
+            completed_at: this.clock.now(),
+          })
+          .where('organization_id', '=', claim.organizationId)
+          .where('scope_key', '=', claim.scopeKey)
+          .where('idempotency_key', '=', claim.key)
+          .where('claim_token', '=', claim.token)
+          .execute();
+        return { body: stored, operationId: key.operation_id };
+      }
       await trx
         .deleteFrom('idempotency_keys')
         .where('organization_id', '=', claim.organizationId)
@@ -355,6 +431,48 @@ export class IdempotencyInterceptor implements NestInterceptor {
         .where('status', '=', 'in_progress')
         .where('committed_at', 'is', null)
         .execute();
+      return { body, operationId: null };
     });
   }
+
+  /**
+   * The error the first response carries once the key names an operation: the same code, status and
+   * message as the stored body, with the operation reference, so the first response and its replays
+   * agree. The original error is logged here because the filter only sees its replacement.
+   */
+  private withOperation(
+    original: unknown,
+    body: ErrorResponseBody,
+    request: RequestWithContext,
+  ): DomainError {
+    const err = original instanceof Error ? original : new Error(String(original));
+    this.logger.error(
+      `[${request.correlationId}] failed after committing operation work: ${err.message}`,
+      err.stack,
+    );
+    return new DomainError(body.code, body.message, {
+      details: body.details,
+      nextAction: body.nextAction,
+      cause: original,
+    });
+  }
+}
+
+/** A copy of a success body without its one-time secret fields, for storage. */
+function withholdFields(body: unknown, fields: readonly string[]): unknown {
+  if (fields.length === 0 || !body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const stored: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+  for (const field of fields) delete stored[field];
+  return stored;
+}
+
+/** Adds `operationId` to an error body's details (merged into object details). */
+function withOperationDetails(body: ErrorResponseBody, operationId: string): ErrorResponseBody {
+  const details =
+    body.details && typeof body.details === 'object' && !Array.isArray(body.details)
+      ? { ...(body.details as Record<string, unknown>), operationId }
+      : body.details === undefined
+        ? { operationId }
+        : { operationId, details: body.details };
+  return { ...body, details };
 }

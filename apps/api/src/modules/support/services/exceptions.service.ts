@@ -23,6 +23,7 @@ import {
   Outbox,
   UnitOfWork,
   type Clock,
+  listFacilityScope,
 } from '../../../kernel';
 import { ExceptionTransitioned } from '../support.events';
 import {
@@ -102,11 +103,15 @@ export class ExceptionsService {
     if (query.queue) base = base.where('owner_queue', '=', query.queue);
     if (query.facilityId) base = base.where('facility_id', '=', query.facilityId);
     if (query.severity) base = base.where('severity', '=', query.severity);
-    // Facility-scoped staff see their facilities' exceptions and organization-wide ones (§4.3).
-    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      const facilityIds = principal.facilityIds;
+    // Facility-scoped staff see their facilities' exceptions and organization-wide ones (§4.3),
+    // through the roles that hold the read action (§4.14, identity-05).
+    const scope = listFacilityScope(principal, ExceptionActions.read);
+    if (scope) {
+      const facilityIds = [...scope];
       base = base.where((eb) =>
-        eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)]),
+        facilityIds.length > 0
+          ? eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)])
+          : eb('facility_id', 'is', null),
       );
     }
     // Queue visibility is decided per row (configured owning roles); scan in bounded batches.

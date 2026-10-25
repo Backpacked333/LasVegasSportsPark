@@ -8,7 +8,13 @@ import {
   type ReportResponse,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
-import { AuthorizationService, CLOCK, DATABASE, type Clock } from '../../../kernel';
+import {
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  type Clock,
+  listFacilityScope,
+} from '../../../kernel';
 import type { FacilityRef, ReportContext, ReportDefinition } from '../engine/report-definition';
 import { metricsForReport } from '../reporting.metrics';
 import { REPORTING_POLICY, type ReportingPolicy } from '../reporting.policy';
@@ -111,8 +117,7 @@ export class ReportsService {
     // G2: an organization-wide report would show facilities a facility-scoped principal may not see.
     if (
       definition.scope === 'organization' &&
-      principal.kind === 'staff' &&
-      principal.facilityIds.length > 0
+      listFacilityScope(principal, definition.viewAction)
     ) {
       if (options.protectedRecord) throw errors.protectedNotFound(options.recordType ?? 'report');
       throw errors.accessDenied(

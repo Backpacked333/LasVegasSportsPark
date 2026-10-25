@@ -9,7 +9,7 @@ import {
   type WithdrawCostInputInput,
 } from '@sportspark/contracts';
 import { isExclusionViolation, json, type CostInputsTable, type Db } from '@sportspark/db';
-import { sql, type Selectable } from 'kysely';
+import { sql, type Selectable, type SqlBool } from 'kysely';
 import {
   assertExpectedRevision,
   AuditWriter,
@@ -21,6 +21,7 @@ import {
   UnitOfWork,
   type Clock,
   type Trx,
+  listFacilityScope,
 } from '../../../kernel';
 import { ReportingActions } from '../reporting.actions';
 import { CostInputRecorded, CostInputWithdrawn } from '../reporting.events';
@@ -218,8 +219,11 @@ export class CostInputsService {
       .orderBy('id');
     if (query.facilityId) q = q.where('facility_id', '=', query.facilityId);
     if (!query.includeWithdrawn) q = q.where('status', '=', 'active');
-    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      q = q.where('facility_id', 'in', principal.facilityIds);
+    // §4.3, §4.14: narrowed by the facilities of the roles that hold the read action.
+    const scope = listFacilityScope(principal, ReportingActions.readCostInputs);
+    if (scope) {
+      q =
+        scope.length > 0 ? q.where('facility_id', 'in', [...scope]) : q.where(sql<SqlBool>`false`);
     }
     return (await q.execute()).map((r) => this.view(r));
   }

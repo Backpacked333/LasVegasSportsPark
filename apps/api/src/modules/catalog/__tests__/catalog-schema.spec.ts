@@ -357,6 +357,48 @@ describe('catalog schema invariants (migrations 0200, 0201)', () => {
     ).rejects.toSatisfy(isCheckViolation);
   });
 
+  it('SPK-REG-009: the database refuses rewriting acknowledgment signer evidence, reopening a withdrawal and deleting', async () => {
+    const policy = await createPolicyVersionFixture(t, { kind: 'form' });
+    const adult = await createPersonFixture(t, { kind: 'adult' });
+    const child = await createPersonFixture(t, { kind: 'child' });
+    const other = await createPersonFixture(t, { kind: 'adult' });
+    const id = await createAcknowledgmentFixture(t, {
+      subjectPersonId: child,
+      policyVersionId: policy,
+      signedByPersonId: adult,
+    });
+    const rewrite = (values: Record<string, unknown>) =>
+      db
+        .updateTable('acknowledgments')
+        .set(values as never)
+        .where('id', '=', id)
+        .execute();
+    for (const values of [
+      { signed_at: new Date('2000-01-01T00:00:00Z') },
+      { evidence: json({ forged: true }) },
+      { signed_by_person_id: other },
+      { recorded_by_kind: 'system' },
+      { basis: 'self', signed_by_person_id: child },
+    ]) {
+      await expect(rewrite(values)).rejects.toThrow(/cannot be rewritten/);
+    }
+    await expect(db.deleteFrom('acknowledgments').where('id', '=', id).execute()).rejects.toThrow(
+      /append-only/,
+    );
+    // the one allowed change: active -> withdrawn, final
+    await rewrite({ status: 'withdrawn', withdrawn_at: t.clock.now(), withdrawn_reason: 'test' });
+    await expect(
+      rewrite({ status: 'active', withdrawn_at: null, withdrawn_reason: null }),
+    ).rejects.toThrow(/withdrawal is final/);
+    await expect(rewrite({ withdrawn_reason: 'changed' })).rejects.toThrow(/withdrawal is final/);
+    const row = await db
+      .selectFrom('acknowledgments')
+      .select(['status', 'signed_by_person_id'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ status: 'withdrawn', signed_by_person_id: adult });
+  });
+
   it('SPK-REG-009: one active acknowledgment per (subject, policy); a staff recorder is never the signer', async () => {
     const policy = await createPolicyVersionFixture(t, { kind: 'form' });
     const adult = await createPersonFixture(t, { kind: 'adult' });
@@ -489,6 +531,31 @@ describe('catalog schema invariants (migrations 0200, 0201)', () => {
         .values({ ...bare(), publication_state: 'draft', ends_on: '2026-12-31' })
         .execute(),
     ).rejects.toSatisfy(isCheckViolation);
+  });
+
+  it('SPK-CAT-001 / SPK-CAT-004: a published offering keeps a description, a format and a location (0203)', async () => {
+    const offering = await createOfferingFixture(t, {
+      responsibleManagerPersonId: manager,
+      publicationState: 'published',
+    });
+    const set = (values: Record<string, unknown>) =>
+      db
+        .updateTable('offerings')
+        .set(values as never)
+        .where('id', '=', offering.offeringId)
+        .execute();
+    await expect(set({ description: null })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ description: '   ' })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ format: null })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ location: json({}) })).rejects.toSatisfy(isCheckViolation);
+    await expect(set({ location: json({ label: ' ', resourceIds: [] }) })).rejects.toSatisfy(
+      isCheckViolation,
+    );
+    await expect(set({ location: json({ resourceIds: [newId()] }) })).resolves.toBeDefined();
+    // a draft may still be incomplete
+    await expect(
+      set({ publication_state: 'draft', description: null, format: null, location: json({}) }),
+    ).resolves.toBeDefined();
   });
 
   it("§4.3: an offering cannot reference another organization's program, policy or manager", async () => {

@@ -26,6 +26,7 @@ import {
   Outbox,
   snapshotActor,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -362,7 +363,7 @@ export class PoliciesService implements PolicyPort {
     policyVersionId: string,
     trx?: Trx,
   ): Promise<PolicyVersion | null> {
-    const row = await (trx ?? this.db)
+    const row = await (trx ?? executorFor(this.db))
       .selectFrom('policy_versions')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -378,7 +379,7 @@ export class PoliciesService implements PolicyPort {
     at: Date,
     trx?: Trx,
   ): Promise<PolicyVersion | null> {
-    const row = await (trx ?? this.db)
+    const row = await (trx ?? executorFor(this.db))
       .selectFrom('policy_versions')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -398,7 +399,7 @@ export class PoliciesService implements PolicyPort {
     policyVersionId: string,
     trx?: Trx,
   ): Promise<boolean> {
-    const row = await (trx ?? this.db)
+    const row = await (trx ?? executorFor(this.db))
       .selectFrom('acknowledgments')
       .select('id')
       .where('organization_id', '=', organizationId)

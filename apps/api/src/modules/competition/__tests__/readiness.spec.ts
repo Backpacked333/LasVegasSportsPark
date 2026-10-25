@@ -1,7 +1,9 @@
+import { systemPrincipal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import {
   ClosuresService,
+  EventsService,
   at,
   createAppliedClosure,
   seedPitchWithHalves,
@@ -181,6 +183,40 @@ describe('match readiness (SPK-READY-001..004, §4.8 GET /fixtures/{id}/readines
     const responded = await readiness(fixtureId, leagueManager);
     expect(codes(responded.body)).not.toHaveProperty('rsvp_missing');
     expect(responded.body.status).toBe('unknown');
+  });
+
+  it('SPK-READY-002 / SPK-READY-004: when the scheduling event moved and the fixture copy has not caught up, readiness says the schedule evidence is stale and evaluates at the event time', async () => {
+    const fixtureId = await scheduled(home, away, '2027-01-30');
+    const fixture = await t.http.get(`/v1/fixtures/${fixtureId}`).set(leagueManager.header);
+    const eventId = fixture.body.schedulingEventId as string;
+    const inSync = await readiness(fixtureId, leagueManager);
+    expect(codes(inSync.body)).not.toHaveProperty('schedule_out_of_sync');
+    // the scheduler moves the event directly; the competition follow-up has not run yet
+    const events = t.app.get(EventsService);
+    const moved = await events.moveEvent(systemPrincipal(t.organizationId, 'test'), eventId, {
+      scheduledStart: at('2027-01-31', '10:00'),
+      scheduledEnd: at('2027-01-31', '11:00'),
+      expectedRevision: (await events.getEvent(systemPrincipal(t.organizationId, 'test'), eventId))
+        .revision,
+    });
+    expect(
+      (await t.http.get(`/v1/fixtures/${fixtureId}`).set(leagueManager.header)).body.scheduledStart,
+    ).toBe(at('2027-01-30', '18:00'));
+    const stale = await readiness(fixtureId, leagueManager);
+    expect(stale.status).toBe(200);
+    expect(stale.body.status).not.toBe('ready');
+    expect(stale.body.scheduledStart).toBe(moved.scheduledStart);
+    const issue = stale.body.issues.find(
+      (i: { code: string }) => i.code === 'schedule_out_of_sync',
+    );
+    expect(issue).toMatchObject({
+      severity: 'unknown',
+      source: { type: 'event', id: eventId },
+      deadline: moved.scheduledStart,
+    });
+    expect(stale.body.checks.find((c: { name: string }) => c.name === 'schedule')).toMatchObject({
+      status: 'unknown',
+    });
   });
 
   it('a registered readiness check replaces the unknown officials verdict; its blocking issue blocks the fixture; the minimum roster is a blocking condition', async () => {

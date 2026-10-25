@@ -491,6 +491,11 @@ export class BasketsService implements BasketPort {
         correlationId,
         input: { basketId, lines: lines.map((l) => l.id) },
         status: 'running',
+        // §4.14: a household's basket outcome is read as the basket itself is (protected).
+        readScope: {
+          action: EnrollmentActions.readBasket,
+          subjectPersonIds: [basket.owner_person_id],
+        },
       });
       const expiresAt = minutesFrom(now, policy.holdMinutes);
       const holdIds: string[] = [];
@@ -915,6 +920,10 @@ export class BasketsService implements BasketPort {
         correlationId,
         input: { basketId },
         status: 'running',
+        readScope: {
+          action: EnrollmentActions.readBasket,
+          subjectPersonIds: [basket.owner_person_id],
+        },
       });
       const confirmed: string[] = [];
       for (const line of current.lines) {

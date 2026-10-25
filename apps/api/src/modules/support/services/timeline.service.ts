@@ -11,7 +11,13 @@ import {
   type TimelineQuery,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
-import { AuthorizationService, CLOCK, DATABASE, type Clock } from '../../../kernel';
+import {
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  type Clock,
+  listFacilityScope,
+} from '../../../kernel';
 import { NotificationsService } from '../../communications';
 import { ApplicationsService, EnrollmentsService, SessionBookingsService } from '../../enrollment';
 import {
@@ -557,8 +563,9 @@ export class TimelineService {
 
     // Facility-scoped staff see their facilities' records and organization-wide ones (§4.3).
     let entries = c.entries;
-    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      const allowed = new Set(principal.facilityIds);
+    const facilityScope = listFacilityScope(principal, SupportActions.readTimeline);
+    if (facilityScope) {
+      const allowed = new Set(facilityScope);
       entries = entries.filter((e) => e.facilityId === null || allowed.has(e.facilityId));
     }
     entries.sort((a, b) =>

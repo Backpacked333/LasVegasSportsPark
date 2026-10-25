@@ -1,4 +1,10 @@
-import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
+import {
+  newId,
+  systemPrincipal,
+  type DomainEvent,
+  type EventPayload,
+  type Principal,
+} from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EventHandlerRegistry, Outbox, UnitOfWork, type EventHandler } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
@@ -11,6 +17,7 @@ import {
   type OrganizationPeople,
 } from '../../identity';
 import {
+  EventChanged,
   EventsService,
   SchedulePublished,
   SchedulingModule,
@@ -21,10 +28,13 @@ import {
   type PitchFixture,
 } from '../../scheduling';
 import { CommunicationsModule } from '../communications.module';
+import { CalendarEntriesService } from '../services/calendar-entries.service';
 import { NotificationsService } from '../services/notifications.service';
 import {
   attemptsOf,
+  deliverQueued,
   dispatchOutbox,
+  fakeProviders,
   inboxOf,
   recipientsOf,
 } from '../testing/communications-fixtures';
@@ -360,6 +370,70 @@ describe('schedule notices (SPK-COMMS-002 "schedule publication or change", SPK-
       expect(published?.superseded_by_notification_id).toBe(changed[0]?.id);
     });
 
+    it('SPK-COMMS-008 / §4.12: the event revision orders changes even when outbox ids disagree (clock skew between instances)', async () => {
+      const calendar = t.app.get(CalendarEntriesService);
+      const uow = t.app.get(UnitOfWork);
+      const eventId = newId();
+      const base = Date.parse('2026-10-23T12:00:00Z');
+      const change = (
+        idAt: number,
+        revision: number,
+        change: 'created' | 'moved',
+        start: string,
+      ): DomainEvent<EventPayload<typeof EventChanged>> => ({
+        // UUID v7 ids carry the creating instance's clock: a skewed instance mints a lower id
+        id: newId(base + idAt),
+        type: 'scheduling.event_changed',
+        organizationId: org,
+        aggregateType: 'event',
+        aggregateId: eventId,
+        occurredAt: new Date(base + idAt).toISOString(),
+        correlationId: null,
+        causationId: null,
+        operationId: null,
+        payload: {
+          eventId,
+          facilityId: t.facilityId,
+          change,
+          before: null,
+          after: {
+            title: 'Skewed clocks',
+            kind: 'game',
+            scheduledStart: start,
+            scheduledEnd: new Date(Date.parse(start) + 3_600_000).toISOString(),
+            timezone: 'America/Los_Angeles',
+            facilityId: t.facilityId,
+            resources: [],
+            status: 'published',
+          },
+          sourceType: null,
+          sourceId: null,
+          seriesId: null,
+          commitments: [],
+          publicationId: null,
+          closureId: null,
+          reason: null,
+          revision,
+        },
+      });
+      const apply = (event: DomainEvent<EventPayload<typeof EventChanged>>) =>
+        uow.run(({ trx }) => calendar.applyEventChange(trx, event));
+      expect(await apply(change(0, 1, 'created', at('2026-12-19', '10:00')))).toBe('applied');
+      // revision 3 was committed last but minted on an instance whose clock runs 5 s behind
+      const newest = change(1_000, 3, 'moved', at('2026-12-19', '18:00'));
+      const older = change(6_000, 2, 'moved', at('2026-12-19', '14:00'));
+      expect(await apply(newest)).toBe('applied');
+      expect(await apply(older)).toBe('stale');
+      const entry = await entryOf(eventId);
+      expect(entry).toMatchObject({
+        sequence: 1,
+        source_revision: 3,
+        last_source_event_id: newest.id,
+      });
+      expect(new Date(entry.scheduled_start).toISOString()).toBe(at('2026-12-19', '18:00'));
+      expect(await apply(newest)).toBe('replayed');
+    });
+
     it('SPK-COMMS-008 / SPK-COMMS-005: a late retry of a move made before a cancellation leaves the entry canceled and composes no change notice after the cancellation', async () => {
       const event = await createScheduledEvent(events, {
         organizationId: org,
@@ -395,6 +469,118 @@ describe('schedule notices (SPK-COMMS-002 "schedule publication or change", SPK-
       const kinds = (await noticesFor(event.id)).map((n) => n.kind);
       expect(kinds).toEqual(['schedule_published', 'cancellation']);
     });
+  });
+
+  it('SPK-COMMS-005: unsent push/email of an already-dispatched schedule notice are suppressed when a newer change or cancellation arrives', async () => {
+    const fakes = fakeProviders(t.app);
+    const event = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.southHalfId],
+      start: at('2026-12-12', '10:00'),
+      end: at('2026-12-12', '11:00'),
+      title: 'U10 Hawks practice',
+      commitments: [
+        personCommitment(people.child.personId, 'participant'),
+        personCommitment(adultPlayer, 'participant'),
+      ],
+    });
+    await dispatchOutbox(t.app);
+    await deliverQueued(t.app); // the publication notice goes out
+    const moved = await events.moveEvent(system, event.id, {
+      scheduledStart: at('2026-12-12', '17:00'),
+      scheduledEnd: at('2026-12-12', '18:00'),
+      expectedRevision: event.revision,
+    });
+    await dispatchOutbox(t.app);
+    const moveNotice = (await noticesFor(event.id)).find((n) => n.kind === 'schedule_changed')!;
+    expect(moveNotice.status).toBe('dispatched');
+    const queued = (await attemptsOf(t.db, org, moveNotice.id)).filter(
+      (a) => a.channel !== 'in_app',
+    );
+    expect(queued.length).toBeGreaterThan(0);
+    expect(queued.every((a) => a.status === 'queued' && a.attempted_at === null)).toBe(true);
+
+    // the cancellation arrives before the delivery worker handed the move notice over
+    fakes.push.reset();
+    fakes.email.reset();
+    await events.cancelEvent(system, event.id, {
+      reason: 'Pitch flooded',
+      expectedRevision: moved.revision,
+    });
+    await dispatchOutbox(t.app);
+    await deliverQueued(t.app);
+    const cancellation = (await noticesFor(event.id)).find((n) => n.kind === 'cancellation')!;
+    expect(cancellation.status).toBe('dispatched');
+    const sentIds = [...fakes.push.sent, ...fakes.email.sent].map((r) => r.notificationId);
+    expect(sentIds).not.toContain(moveNotice.id);
+    expect(sentIds).toContain(cancellation.id);
+    const attempts = await attemptsOf(t.db, org, moveNotice.id);
+    for (const attempt of attempts) {
+      if (attempt.channel === 'in_app') {
+        expect(attempt.status).toBe('delivered');
+      } else {
+        expect(attempt).toMatchObject({
+          status: 'failed',
+          failure_code: 'SUPERSEDED',
+          attempted_at: null,
+        });
+      }
+    }
+    expect(
+      (await noticesFor(event.id)).find((n) => n.id === moveNotice.id)
+        ?.superseded_by_notification_id,
+    ).toBe(cancellation.id);
+    // obsolete notices are not delivery failures: no front-desk exception
+    const exceptions = await t.db
+      .selectFrom('operational_exceptions')
+      .select('affected_id')
+      .where('category', '=', 'communications.delivery_failed')
+      .execute();
+    expect(exceptions.map((e) => e.affected_id)).not.toEqual(
+      expect.arrayContaining(queued.map((a) => a.id)),
+    );
+    expect(exceptions.some((e) => queued.some((a) => a.id === e.affected_id))).toBe(false);
+  });
+
+  it('SPK-COMMS-005: the delivery worker never hands over an attempt of a notice found superseded', async () => {
+    const fakes = fakeProviders(t.app);
+    const event = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.southHalfId],
+      start: at('2026-12-13', '10:00'),
+      end: at('2026-12-13', '11:00'),
+      title: 'U10 Hawks game',
+      commitments: [personCommitment(adultPlayer, 'participant')],
+    });
+    await dispatchOutbox(t.app);
+    const published = (await noticesFor(event.id))[0]!;
+    // a supersede pointer recorded without failing the attempts (for example before this rule)
+    const newer = await t.db
+      .selectFrom('notifications')
+      .select('id')
+      .where('organization_id', '=', org)
+      .where('id', '<>', published.id)
+      .executeTakeFirstOrThrow();
+    await t.db
+      .updateTable('notifications')
+      .set({ superseded_by_notification_id: newer.id })
+      .where('id', '=', published.id)
+      .execute();
+    fakes.push.reset();
+    fakes.email.reset();
+    await deliverQueued(t.app);
+    expect([...fakes.push.sent, ...fakes.email.sent].map((r) => r.notificationId)).not.toContain(
+      published.id,
+    );
+    const external = (await attemptsOf(t.db, org, published.id)).filter(
+      (a) => a.channel !== 'in_app',
+    );
+    expect(external.length).toBeGreaterThan(0);
+    expect(external.every((a) => a.status === 'failed' && a.failure_code === 'SUPERSEDED')).toBe(
+      true,
+    );
   });
 
   it('a publication group produces a staff summary for schedulers of the facility', async () => {

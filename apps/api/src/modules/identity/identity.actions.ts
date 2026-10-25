@@ -149,6 +149,12 @@ export const IdentityActions = defineActions({
     staffRoles: SUPPORT_STAFF,
     requirements: ['SPK-IAM-002'],
   },
+  revokeClaim: {
+    id: 'identity.revoke_claim',
+    description: 'Revoke a pending claim token (leaked, misdelivered or issued in error)',
+    staffRoles: SUPPORT_STAFF,
+    requirements: ['SPK-IAM-002', 'SPK-IAM-006'],
+  },
   acceptClaim: {
     id: 'identity.accept_claim',
     description: 'Claim a staff-created participant with a verified account',

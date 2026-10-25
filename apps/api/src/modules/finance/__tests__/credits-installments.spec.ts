@@ -86,6 +86,45 @@ describe('credits (SPK-PAY-009, §4.7 invariant 7)', () => {
     expect(list.body.items).toHaveLength(1);
   });
 
+  it('SPK-IAM-007 / §4.2: a credit is never issued to a merged person record; the survivor is named', async () => {
+    const survivor = await adult(t);
+    const merged = await adult(t);
+    // identity's merge leaves the merged record pointing at the survivor (SPK-IAM-007)
+    await t.db
+      .updateTable('persons')
+      .set({ status: 'merged', merged_into_person_id: survivor.personId })
+      .where('id', '=', merged.personId)
+      .execute();
+    const refused = await post(t, '/v1/credits', finance.header, {
+      ownerPersonId: merged.personId,
+      amountMinor: 1_000,
+      currency: 'USD',
+      permittedUses: ['obligation'],
+      sourceKind: 'goodwill',
+      reason: 'Goodwill',
+    });
+    expect(refused.status).toBe(400);
+    expect(refused.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'person_merged', canonicalPersonId: survivor.personId },
+    });
+    const credits = await t.db
+      .selectFrom('credits')
+      .select('id')
+      .where('owner_person_id', '=', merged.personId)
+      .execute();
+    expect(credits).toEqual([]);
+    const issued = await post(t, '/v1/credits', finance.header, {
+      ownerPersonId: survivor.personId,
+      amountMinor: 1_000,
+      currency: 'USD',
+      permittedUses: ['obligation'],
+      sourceKind: 'goodwill',
+      reason: 'Goodwill',
+    });
+    expect(issued.status).toBe(201);
+  });
+
   it('§4.7 invariant 7: concurrent redemption cannot consume the same credit twice', async () => {
     const creditId = await createCreditFixture(t, {
       ownerPersonId: owner.personId,

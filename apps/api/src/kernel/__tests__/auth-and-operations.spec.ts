@@ -1,8 +1,19 @@
+import { newId, type Principal, type StaffRole } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { customerPrincipal, staffPrincipal } from '../../testing/principals';
 import { createTestApp, type TestApp } from '../../testing/test-app';
+import { defineActions } from '../authorization/actions';
 import { UnitOfWork } from '../database/unit-of-work';
-import { OperationsService } from '../operations/operations.service';
+import { OperationsService, type CreateOperationInput } from '../operations/operations.service';
+
+const ScopedReadActions = defineActions({
+  readOutcome: {
+    id: 'kernel_test.read_outcome',
+    description: 'Test-only read action of a module that owns a sensitive operation',
+    staffRoles: ['finance_operator'],
+    allowSelf: true,
+  },
+});
 
 describe('authentication guard and operations endpoint', () => {
   let t: TestApp;
@@ -82,6 +93,57 @@ describe('authentication guard and operations endpoint', () => {
       .get(`/v1/operations/${id}`)
       .set(await t.authHeader(otherOrgStaff));
     expect(crossOrg.status).toBe(404);
+  });
+
+  it('§4.14: operation outcomes are least privilege: coaches and officials read only their own, and a scoped operation follows its module read action, facility and subjects', async () => {
+    const uow = t.app.get(UnitOfWork);
+    const operations = t.app.get(OperationsService);
+    const create = (input: Omit<CreateOperationInput, 'organizationId' | 'kind'>) =>
+      uow.run((ctx) =>
+        operations.create(ctx.trx, { organizationId: t.organizationId, kind: 'test.op', ...input }),
+      );
+    const status = async (id: string, principal: Principal) =>
+      (await t.http.get(`/v1/operations/${id}`).set(await t.authHeader(principal))).status;
+    const staff = (roles: StaffRole[], facilityIds: string[] = []) =>
+      staffPrincipal(t.organizationId, roles, { facilityIds });
+
+    const requester = staff(['front_desk']);
+    const plain = await create({ requestedBy: requester });
+    expect(await status(plain, staff(['coach']))).toBe(404);
+    expect(await status(plain, staff(['official']))).toBe(404);
+    expect(await status(plain, staff(['front_desk']))).toBe(200);
+    const coach = staff(['coach']);
+    const own = await create({ requestedBy: coach });
+    expect(await status(own, coach)).toBe(200);
+
+    const subject = newId();
+    const scoped = await create({
+      requestedBy: requester,
+      readScope: {
+        action: ScopedReadActions.readOutcome,
+        facilityId: t.facilityId,
+        subjectPersonIds: [subject],
+      },
+    });
+    const stored = await t.db
+      .selectFrom('operations')
+      .select(['read_action', 'facility_id', 'subject_person_ids'])
+      .where('id', '=', scoped)
+      .executeTakeFirstOrThrow();
+    expect(stored).toEqual({
+      read_action: 'kernel_test.read_outcome',
+      facility_id: t.facilityId,
+      subject_person_ids: [subject],
+    });
+    expect(await status(scoped, requester)).toBe(200); // the requester always reads its outcome
+    expect(await status(scoped, staff(['front_desk']))).toBe(404);
+    expect(await status(scoped, staff(['support_operator', 'general_manager']))).toBe(404);
+    expect(await status(scoped, staff(['finance_operator'], [newId()]))).toBe(404);
+    expect(await status(scoped, staff(['finance_operator'], [t.facilityId]))).toBe(200);
+    expect(await status(scoped, staff(['finance_operator']))).toBe(200);
+    const self = customerPrincipal(t.organizationId, { personId: subject });
+    expect(await status(scoped, self)).toBe(200);
+    expect(await status(scoped, customerPrincipal(t.organizationId))).toBe(404);
   });
 
   it('operation transitions follow the lifecycle and terminal states are final', async () => {

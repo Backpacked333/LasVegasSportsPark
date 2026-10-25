@@ -18,6 +18,7 @@ import {
   OperationalExceptions,
   Outbox,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -32,6 +33,7 @@ import type {
 import { SchedulingActions } from '../scheduling.actions';
 import { ClosureApplied, ClosureLifted } from '../scheduling.events';
 import { ClosureMachine } from '../scheduling.state-machines';
+import { ClosureLiftGuards } from './closure-lift-guards';
 import { EventWriter } from './event-writer';
 import { organizationOf } from './events.service';
 
@@ -57,6 +59,7 @@ export class ClosuresService implements ClosurePort {
     private readonly outbox: Outbox,
     private readonly exceptions: OperationalExceptions,
     private readonly writer: EventWriter,
+    private readonly liftGuards: ClosureLiftGuards,
   ) {}
 
   async previewImpact(principal: Principal, input: PreviewClosureInput): Promise<ClosureImpact> {
@@ -66,14 +69,14 @@ export class ClosuresService implements ClosurePort {
       organizationId,
       facilityId: input.facilityId,
     });
-    await this.writer.loadFacility(this.db, organizationId, input.facilityId);
+    await this.writer.loadFacility(executorFor(this.db), organizationId, input.facilityId);
     if (input.resourceId) {
-      await this.writer.loadResources(this.db, organizationId, input.facilityId, [
+      await this.writer.loadResources(executorFor(this.db), organizationId, input.facilityId, [
         input.resourceId,
       ]);
     }
     return this.computeImpact(
-      this.db,
+      executorFor(this.db),
       organizationId,
       input.facilityId,
       input.resourceId ?? null,
@@ -274,6 +277,9 @@ export class ClosuresService implements ClosurePort {
       });
       assertExpectedRevision(input.expectedRevision, closure.revision);
       const next = ClosureMachine.next(closure.status, 'lift');
+      // SPK-FAC-004: a closure another module backs with its own authority (a facilities
+      // restriction) is lifted only through that module's release (ClosureLiftGuards).
+      await this.liftGuards.check(trx, organizationId, closureId);
       await trx
         .updateTable('closures')
         .set({ status: next, lifted_at: this.clock.now(), revision: closure.revision + 1 })
@@ -313,7 +319,7 @@ export class ClosuresService implements ClosurePort {
 
   async getClosure(principal: Principal, closureId: string): Promise<Closure> {
     const organizationId = organizationOf(principal);
-    const closure = await this.load(this.db, organizationId, closureId);
+    const closure = await this.load(executorFor(this.db), organizationId, closureId);
     if (!closure) throw errors.notFound('closure', closureId);
     await this.authorization.require(principal, SchedulingActions.readInventory, {
       type: 'closure',
@@ -335,7 +341,7 @@ export class ClosuresService implements ClosurePort {
       organizationId,
       facilityId,
     });
-    let q = this.baseQuery(this.db)
+    let q = this.baseQuery(executorFor(this.db))
       .where('organization_id', '=', organizationId)
       .where('facility_id', '=', facilityId)
       .orderBy(sql`lower(during)`)

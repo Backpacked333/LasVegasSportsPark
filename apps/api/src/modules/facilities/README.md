@@ -8,7 +8,7 @@ Restriction), §4.8 `POST /v1/maintenance-restrictions`, SPK-AT-021, SPK-UX-006 
 escalation)
 
 **Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999` (present: `0900`,
-`0901_facilities_task_owner_fk`)
+`0901_facilities_task_owner_fk`, `0902_facilities_facility_scoped_keys`)
 
 **Depends on:** scheduling (closure port, resources public API) and identity
 (`PERSON_DIRECTORY_PORT`, to check assigned task owners). Restrictions create scheduling closures
@@ -36,7 +36,9 @@ until the template is edited. Facilities API tests keep the fake principals thro
 `__tests__/support.ts`, because importing IdentityModule brings its principal resolver.
 
 Invariants enforced by the database: composite `(organization_id, id)` foreign keys everywhere
-(including the closure reference and the assigned owner); one closure backs at most one restriction; a task carries at
+(including the closure reference and the assigned owner); facility-scoped keys (migration `0902`,
+§4.3): an asset, preventive schedule, task or restriction names only the space, asset, task,
+schedule and closure of its own facility; one closure backs at most one restriction; a task carries at
 most one unreleased restriction; a preventive schedule materializes each occurrence's task and
 restriction at most once; `active` needs a closure, `released` needs who/when/which closure.
 
@@ -70,10 +72,13 @@ multi-step commands recorded as operations (`facilities.approve_restriction`,
   `applyClosure`), then activates the restriction with the conflict units of the affected
   resource (read through `ResourcesService`). A subdivision restriction blocks only that
   subdivision's unit (the other half stays bookable; a whole-pitch booking is rejected because the
-  pitch shares the unit); a whole-pitch restriction blocks every subdivision. The port calls run
-  between this module's transactions (a nested transaction through the root database deadlocks
-  under PGlite and would not be atomic on PostgreSQL either); an interruption leaves the
-  restriction `approved` and `POST …/approve` resumes it (closure id recorded as soon as created).
+  pitch shares the unit); a whole-pitch restriction blocks every subdivision. Approval, the
+  closure commands and the activation run in ONE transaction (scheduling's commands join it;
+  `UnitOfWork.run` is reentrant), so an interruption or a refused step leaves the restriction as it
+  was, never `approved` with the field still bookable (§4.7 invariant 12; **Verified**,
+  `__tests__/restrictions.spec.ts` "approval, closure and activation commit together"). A
+  restriction left `approved` by an earlier version is still resumed by `POST …/approve`. Release
+  (lift the closure, then release) is one transaction in the same way.
   Exactly one closure backs a restriction (SPK-FAC-004, SPK-AT-021): the closure id is linked under
   the restriction's row lock, a concurrent or retried approval that created its own closure uses the
   linked one instead (audit `facilities.restriction_closure_superseded`; its own closure stays
@@ -83,14 +88,20 @@ multi-step commands recorded as operations (`facilities.approve_restriction`,
 - **SPK-FAC-004.** Closing a task never touches its restriction (`openRestrictionIds` says so).
   `release` requires `facilities.release_to_service`, and when the task `requires_inspection` the
   latest inspection must be `passed` (`ELIGIBILITY_FAILED`, `details.code = inspection_required`
-  otherwise). While a restriction on the task is open (proposed, approved or active), turning
+  otherwise). An inspection is recorded only once it has happened: an `inspectedAt` after the
+  server clock is refused (`VALIDATION_FAILED`, `details.code = inspection_in_future`), so a
+  future-dated pass can never outrank a later failed inspection. While a restriction on the task is open (proposed, approved or active), turning
   `requiresInspection` off is refused the same way, so the gate cannot be removed before release;
   any change of the requirement is audited (`details.requiresInspection { from, to }`). The
   closure is lifted through the port, then the release is recorded. A failed
   inspection sends a resolved task back to `in_progress`; on a closed task it raises an
-  operational exception. A closure lifted directly in scheduling raises
-  `facilities.closure_lifted_outside_release` (outbox handler on `scheduling.closure_lifted`),
-  the restriction keeps its state.
+  operational exception. A closure backing an approved or active restriction cannot be lifted
+  directly in scheduling: facilities registers a `ClosureLiftGuards` guard that refuses the lift
+  (422 `ELIGIBILITY_FAILED`, `details.code = restriction_release_required`) unless the
+  restriction's own release operation is running (conservative default; who may reopen a
+  maintained space is pending with Operations, DEC-001). As defense in depth, a closure found
+  lifted anyway raises `facilities.closure_lifted_outside_release` (outbox handler on
+  `scheduling.closure_lifted`) and the restriction keeps its state.
 - **SPK-FAC-005.** `generate` materializes occurrences starting before `now + leadTimeDays` (or
   `through`) and not yet ended: a task from the template (due at the occurrence end) plus a
   restriction approved under the schedule's own authority (`system` principal

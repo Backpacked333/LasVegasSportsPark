@@ -306,6 +306,22 @@ export function toOfferingSession(row: Selectable<OfferingSessionsTable>): Offer
   };
 }
 
+/**
+ * The child-safe session view for readers who are not catalog staff (anonymous discovery,
+ * customers), §4.14 "child information minimized and separated from public schedules": the same
+ * shape, without the free-text cancel reason, the scheduling event id or capacity staffing and
+ * group internals (the public capacity is the unit and its limit, as in `PublicOffering`).
+ */
+export function toPublicOfferingSession(row: Selectable<OfferingSessionsTable>): OfferingSession {
+  const full = toOfferingSession(row);
+  return {
+    ...full,
+    schedulingEventId: null,
+    capacityOverride: full.capacityOverride?.map((u) => ({ unit: u.unit, limit: u.limit })) ?? null,
+    cancelReason: null,
+  };
+}
+
 export function toPriceRule(row: Selectable<PriceRulesTable>): PriceRule {
   return {
     id: row.id,

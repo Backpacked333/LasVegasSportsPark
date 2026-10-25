@@ -43,6 +43,7 @@ import {
   type Clock,
   type HandlerContext,
   type Trx,
+  listFacilityScope,
 } from '../../../kernel';
 import type { CatalogEvents } from '../../catalog';
 import type { CompetitionEvents } from '../../competition';
@@ -317,11 +318,11 @@ export class AssignmentsService {
         operationId: opId,
       });
       await this.coverage.resolveIfCovered(trx, updated, correlationId);
+      // SPK-STAFF-004, §4.7 invariant 12: the access is granted in this transaction (identity's
+      // command joins it), so an acceptance never commits with its access left `pending`.
+      if (opId) await this.access.grant(principal, id, organizationId, opId, correlationId);
       return { row: updated, operationId: opId };
     });
-    if (operationId) {
-      await this.access.grant(principal, id, organizationId, operationId, correlationId);
-    }
     const final = await this.load(this.db, organizationId, id);
     return {
       assignment: toAssignment(final ?? row, this.clock.now()),
@@ -388,23 +389,25 @@ export class AssignmentsService {
     const result = await this.uow.run(async ({ trx }) => {
       const current = await this.lock(trx, organizationId, id);
       assertExpectedRevision(body.expectedRevision, current.revision);
-      return this.withdrawInTransaction(trx, principal, current, {
+      const withdrawn = await this.withdrawInTransaction(trx, principal, current, {
         reason: body.reason,
         cause: 'withdrawn',
         correlationId,
         facilitySettings: facility.settings,
       });
+      // SPK-STAFF-004: granted access ends with the withdrawal, in the same transaction.
+      if (withdrawn.operationId) {
+        await this.access.end(
+          principal,
+          id,
+          organizationId,
+          withdrawn.operationId,
+          body.reason,
+          correlationId,
+        );
+      }
+      return withdrawn;
     });
-    if (result.operationId) {
-      await this.access.end(
-        principal,
-        id,
-        organizationId,
-        result.operationId,
-        body.reason,
-        correlationId,
-      );
-    }
     const final = await this.load(this.db, organizationId, id);
     return {
       assignment: toAssignment(final ?? result.row, this.clock.now()),
@@ -479,10 +482,13 @@ export class AssignmentsService {
     if (query.status) q = q.where('status', '=', query.status);
     if (query.from) q = q.where('scheduled_end', '>', new Date(query.from));
     if (query.to) q = q.where('scheduled_start', '<', new Date(query.to));
-    // Staff limited to some facilities see those facilities' assignments only (§4.3).
+    // Staff limited to some facilities see those facilities' assignments only (§4.3), through the
+    // roles that hold the view action (§4.14, identity-05).
     const selfOnly = query.personId !== undefined && query.personId === principal.personId;
-    if (!selfOnly && principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      q = q.where('facility_id', 'in', principal.facilityIds);
+    const scope = selfOnly ? null : listFacilityScope(principal, WorkforceActions.viewAssignments);
+    if (scope) {
+      q =
+        scope.length > 0 ? q.where('facility_id', 'in', [...scope]) : q.where(sql<boolean>`false`);
     }
     if (cursor) {
       q = q.where(
@@ -721,7 +727,8 @@ export class AssignmentsService {
 
   /**
    * Withdraws inside the caller's transaction. Returns the operation that must end granted access
-   * after commit (identity runs its own transaction) and the uncovered-slot notice, if any.
+   * (the caller ends it in the same transaction through TemporaryAccessService.end) and the
+   * uncovered-slot notice, if any.
    */
   async withdrawInTransaction(
     trx: Trx,
@@ -815,22 +822,25 @@ export class AssignmentsService {
     const p = event.payload;
     const rows = await this.liveFor(ctx.trx, event.organizationId, 'event', p.eventId);
     if (rows.length === 0) return;
-    if (p.change === 'canceled') {
+    // §4.12, §4.6: deliveries arrive late and out of order (a retried move can follow a newer
+    // move), so assignments follow the event's CURRENT state read in this transaction, never the
+    // payload's `after`: every delivery, in any order, converges on the latest committed times.
+    const current = await this.targets.currentEvent(event.organizationId, p.eventId);
+    if (!current) return;
+    if (current.status === 'canceled') {
       for (const row of rows) {
         await this.systemWithdraw(ctx.trx, row, 'The event was canceled.', event, false);
       }
       return;
     }
-    if (p.after && (p.change === 'moved' || p.change === 'resized' || p.change === 'updated')) {
-      await this.retime(
-        ctx.trx,
-        rows,
-        new Date(p.after.scheduledStart),
-        new Date(p.after.scheduledEnd),
-        p.eventId,
-        event,
-      );
-    }
+    await this.retime(
+      ctx.trx,
+      rows,
+      new Date(current.scheduledStart),
+      new Date(current.scheduledEnd),
+      p.eventId,
+      event,
+    );
   }
 
   /** catalog.session_canceled: live assignments of the session are withdrawn. */
@@ -915,6 +925,14 @@ export class AssignmentsService {
         continue;
       }
       if (!changed) continue;
+      // SPK-STAFF-004: granted access follows the new time (identity's command joins this
+      // transaction), so it neither expires before a later game nor outlives an earlier one.
+      await this.access.move(
+        systemPrincipal(row.organization_id, 'workforce.target_sync'),
+        (await this.load(trx, row.organization_id, row.id)) as AssignmentRow,
+        end,
+        event.correlationId,
+      );
       const updated = (await this.load(trx, row.organization_id, row.id)) as AssignmentRow;
       await this.audit.record(trx, {
         organizationId: row.organization_id,
@@ -947,8 +965,8 @@ export class AssignmentsService {
 
   /**
    * Withdrawal decided by a follow-up (target canceled, rescheduled into a conflict). Granted
-   * access is not ended here — identity runs its own transaction — and expires at its scheduled
-   * end (README "Known gaps").
+   * access ends with it inside the handler's transaction (identity's command joins it), so a
+   * withdrawn official or coach keeps no staff role (§4.14 least privilege, SPK-STAFF-004).
    */
   private async systemWithdraw(
     trx: Trx,
@@ -960,6 +978,17 @@ export class AssignmentsService {
     const system = systemPrincipal(row.organization_id, 'workforce.target_sync');
     const facility = await this.targets.facility(trx, row.organization_id, row.facility_id);
     const next = AssignmentMachine.next(row.status, 'withdraw');
+    const endsAccess = row.access_status === 'granted';
+    const operationId = endsAccess
+      ? await this.operations.create(trx, {
+          organizationId: row.organization_id,
+          kind: 'workforce.withdraw_assignment',
+          requestedBy: system,
+          correlationId: event.correlationId,
+          input: { assignmentId: row.id, sourceEventId: event.id },
+          status: 'running',
+        })
+      : null;
     const updated = await this.transition(trx, system, row, next, {
       set: {
         withdrawn_at: this.clock.now(),
@@ -969,9 +998,19 @@ export class AssignmentsService {
       action: 'workforce.assignment_withdrawn_by_target_change',
       reason,
       correlationId: event.correlationId,
-      operationId: null,
+      operationId,
       details: { sourceEventId: event.id, sourceEventType: event.type },
     });
+    if (operationId) {
+      await this.access.end(
+        system,
+        row.id,
+        row.organization_id,
+        operationId,
+        reason,
+        event.correlationId,
+      );
+    }
     if (escalate && row.status === 'accepted') {
       await this.coverage.escalateIfUncovered(
         trx,

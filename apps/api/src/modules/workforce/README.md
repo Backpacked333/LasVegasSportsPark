@@ -36,7 +36,9 @@ pending or gap.
 - Outbox handlers (idempotent under replay, writes through `ctx.trx`):
   `workforce.follow_fixture` (`competition.fixture_changed`: rescheduled → assignments retimed;
   canceled/postponed/unscheduled → live assignments withdrawn), `workforce.follow_event`
-  (`scheduling.event_changed` for event targets: moved/resized → retimed, canceled → withdrawn),
+  (`scheduling.event_changed` for event targets: the event's current state, read in the
+  handler's transaction, decides — canceled → withdrawn, otherwise retimed to its current times —
+  so a late or reordered delivery never retimes back to an older time, §4.12, §4.6),
   `workforce.follow_session` (`catalog.session_canceled` → withdrawn). A retime that would
   overlap another accepted assignment of the person withdraws the moved assignment and escalates
   the slot as uncovered (`schedule_conflict`), never double-books.
@@ -118,10 +120,15 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   identity staff membership (roles per kind, scoped to the activity's facility) from acceptance
   until the activity's end plus the trailing hours. The principal resolver drops the roles when
   the window closes; the assignment, its audit trail, its fee records and the membership row
-  remain. Withdrawal ends the membership immediately. If identity refuses (for example a youth
-  referee, identity grants staff memberships to adults only) the acceptance stands, access is
-  `failed`, the operation is `recovery_required` and `workforce.temporary_access_failed` is raised
-  for the system administrator.
+  remain. Every change to the access runs inside the workforce transaction that causes it
+  (identity's command joins it; `UnitOfWork.run` is reentrant), so the assignment and the
+  membership commit together (§4.7 invariant 12): acceptance grants it, a withdrawal — by a person,
+  by a replacement, or by a follow-up such as a canceled fixture, event or session — ends it at
+  once, and a retime moves its end with the activity (new end plus the trailing hours). If
+  identity refuses (for example a youth referee, identity grants staff memberships to adults only)
+  the acceptance stands, access is `failed`, the operation is `recovery_required` and
+  `workforce.temporary_access_failed` is raised for the system administrator. **Verified**
+  (`__tests__/access-follow-ups.spec.ts`, `__tests__/access-fees-workspace.spec.ts`).
 - **Fees** (SPK-STAFF-006, §1.7): the computed amount comes from the rate basis (per assignment,
   hourly with half-up rounding, flat) next to the submitted amount; approval records the approver;
   every adjustment appends a history row; export batches are immutable records handed to payment
@@ -170,13 +177,9 @@ targetId)` per requirement and `acceptedAssignees(...)` for communications (noti
   checked through scheduling's `ConflictDetector` (early feedback, not a cross-table database
   guarantee). Scheduling would need `addCommitment/releaseCommitment` on `EVENT_SCHEDULING_PORT`
   for one exclusion constraint to cover both.
-- **Access after follow-up changes:** withdrawals decided by outbox handlers (target canceled,
-  rescheduled into a conflict) do not end granted access early, and a retime does not move the
-  access window — identity commands run their own transaction and cannot be called inside a
-  handler's transaction. The access still expires at its originally granted end.
-- **Access start:** access begins at acceptance rather than shortly before the activity, because
-  identity's `end` of a membership that has not started yet would violate identity's own
-  `effective_to >= effective_from` check (an identity defect to fix there).
+- **Access start:** access begins at acceptance rather than shortly before the activity. Identity
+  can now end a membership before it starts (an empty window), so starting access a policy lead
+  time before the activity is possible; the lead time is a proposed option pending DEC-011.
 - Offers do not expire automatically (no offer deadline or reminder sweep); communications does
   not yet notify assignees from `workforce.assignment_changed`.
 - Hours are submitted as rate-basis minutes; there is no clock-in/clock-out record (entry module)

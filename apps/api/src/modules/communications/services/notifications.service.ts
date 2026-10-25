@@ -8,16 +8,19 @@ import {
   systemPrincipal,
   z,
   type Audience,
+  type DeliveryFailureCodeValue,
   type ListNotificationsQuery,
   type Notification,
+  type NotificationCategoryValue,
+  type NotificationKindValue,
   type NotificationDeliveries,
   type Page,
   type Principal,
   type RecipientPreview,
   type SuppressionReasonSchema,
 } from '@sportspark/contracts';
-import { json, type Db } from '@sportspark/db';
-import { sql } from 'kysely';
+import { json, type Db, type DeliveryAttemptsTable } from '@sportspark/db';
+import { sql, type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -31,6 +34,7 @@ import {
   type ActionDefinition,
   type Clock,
   type Trx,
+  listFacilityScope,
 } from '../../../kernel';
 import { PERSON_DIRECTORY_PORT, PeopleService, type PersonDirectoryPort } from '../../identity';
 import { CommunicationsActions } from '../communications.actions';
@@ -137,6 +141,7 @@ export class NotificationsService {
       parsed.audience,
     );
     if (parsed.facilityId) await this.assertFacility(trx, organizationId, parsed.facilityId);
+    const category = this.categoryOf(parsed.kind, parsed.category);
     const id = newId();
     const createdByPersonId = await this.knownPersonId(trx, organizationId, principal.personId);
     await trx
@@ -146,7 +151,7 @@ export class NotificationsService {
         organization_id: organizationId,
         facility_id: parsed.facilityId ?? null,
         kind: parsed.kind,
-        category: parsed.category,
+        category,
         subject_type: parsed.subject?.type ?? null,
         subject_id: parsed.subject?.id ?? null,
         audience: json(parsed.audience),
@@ -180,7 +185,7 @@ export class NotificationsService {
       correlationId: input.correlationId ?? null,
       details: {
         kind: parsed.kind,
-        category: parsed.category,
+        category,
         protected: parsed.protected,
         subject: parsed.subject ?? null,
       },
@@ -192,12 +197,45 @@ export class NotificationsService {
       payload: {
         notificationId: id,
         kind: parsed.kind,
-        category: parsed.category,
+        category,
         protected: parsed.protected,
       },
       correlationId: input.correlationId ?? null,
     });
     return this.loadOrThrow(trx, organizationId, id);
+  }
+
+  /**
+   * SPK-COMMS-007: the category follows the policy's binding for the kind; a contradicting one is
+   * refused, and a kind the policy leaves open must name its category (DEC-062 pending: the binding
+   * is configuration, the refusal is the conservative default).
+   */
+  private categoryOf(
+    kind: NotificationKindValue,
+    requested: NotificationCategoryValue | undefined,
+  ): NotificationCategoryValue {
+    const bound = this.policy.categoryByKind[kind] ?? 'choose';
+    if (bound === 'choose') {
+      if (!requested) {
+        throw errors.validation('This kind of notice must name its category.', {
+          code: 'CATEGORY_REQUIRED',
+          path: 'category',
+          kind,
+          allowed: ['operational', 'promotional'],
+        });
+      }
+      return requested;
+    }
+    if (requested && requested !== bound) {
+      throw errors.validation(`A ${kind.replace(/_/g, ' ')} notice is ${bound}.`, {
+        code: 'CATEGORY_MISMATCH',
+        path: 'category',
+        kind,
+        category: requested,
+        required: bound,
+      });
+    }
+    return bound;
   }
 
   /** For other modules: compose and queue in the caller's transaction (system or staff principal). */
@@ -637,35 +675,13 @@ export class NotificationsService {
       .where('status', '=', 'queued')
       .where('attempted_at', 'is', null)
       .execute();
-    for (const attempt of unsent) {
-      await trx
-        .updateTable('delivery_attempts')
-        .set({
-          status: DeliveryAttemptMachine.next(attempt.status, 'fail'),
-          failed_at: now,
-          failure_code: 'RECIPIENT_REVOKED',
-          error: `recipient authority revoked before hand-off (${reason})`,
-          revision: attempt.revision + 1,
-        })
-        .where('id', '=', attempt.id)
-        .where('revision', '=', attempt.revision)
-        .execute();
-      await this.outbox.enqueue(trx, DeliveryFailed, {
-        organizationId,
-        aggregateType: 'delivery_attempt',
-        aggregateId: attempt.id,
-        payload: {
-          attemptId: attempt.id,
-          notificationId: notification.id,
-          recipientId: recipient.id,
-          channel: attempt.channel,
-          provider: attempt.provider,
-          failureCode: 'RECIPIENT_REVOKED',
-          error: reason,
-        },
-        correlationId,
-      });
-    }
+    await this.failUnsent(trx, unsent, {
+      failureCode: 'RECIPIENT_REVOKED',
+      error: `recipient authority revoked before hand-off (${reason})`,
+      eventError: reason,
+      at: now,
+      correlationId,
+    });
     await this.audit.record(trx, {
       organizationId,
       actor,
@@ -729,10 +745,14 @@ export class NotificationsService {
     if (query.facilityId) q = q.where('facility_id', '=', query.facilityId);
     // §4.14 object-level authorization: a facility-scoped staff reader lists only organization-wide
     // notices and notices of their own facilities, the same rows get()/deliveries() would allow.
-    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      const facilityIds = [...principal.facilityIds];
+    // The scope is that of the roles holding the read action (identity-05).
+    const scope = listFacilityScope(principal, CommunicationsActions.readNotification);
+    if (scope) {
+      const facilityIds = [...scope];
       q = q.where((eb) =>
-        eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)]),
+        facilityIds.length > 0
+          ? eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)])
+          : eb('facility_id', 'is', null),
       );
     }
     if (cursor) {
@@ -835,8 +855,7 @@ export class NotificationsService {
       });
     }
     if (
-      principal.kind === 'staff' &&
-      principal.facilityIds.length > 0 &&
+      listFacilityScope(principal, action) !== null &&
       audience.staffRoles.length > 0 &&
       audience.facilityId === null
     ) {
@@ -845,6 +864,59 @@ export class NotificationsService {
         { action: action.id },
       );
     }
+  }
+
+  /**
+   * Fails attempts that were never handed to a provider (queued, `attempted_at` null), fenced on
+   * that state so an attempt a worker marked for hand-off in the meantime is left to the worker
+   * (its provider call is in flight and cannot be recalled). Returns the attempts failed.
+   */
+  private async failUnsent(
+    trx: Trx,
+    attempts: Selectable<DeliveryAttemptsTable>[],
+    input: {
+      failureCode: DeliveryFailureCodeValue;
+      error: string;
+      eventError: string;
+      at: Date;
+      correlationId: string | null;
+    },
+  ): Promise<string[]> {
+    const failed: string[] = [];
+    for (const attempt of attempts) {
+      const updated = await trx
+        .updateTable('delivery_attempts')
+        .set({
+          status: DeliveryAttemptMachine.next(attempt.status, 'fail'),
+          failed_at: input.at,
+          failure_code: input.failureCode,
+          error: input.error,
+          revision: attempt.revision + 1,
+        })
+        .where('id', '=', attempt.id)
+        .where('revision', '=', attempt.revision)
+        .where('status', '=', 'queued')
+        .where('attempted_at', 'is', null)
+        .executeTakeFirst();
+      if (Number(updated.numUpdatedRows) === 0) continue;
+      failed.push(attempt.id);
+      await this.outbox.enqueue(trx, DeliveryFailed, {
+        organizationId: attempt.organization_id,
+        aggregateType: 'delivery_attempt',
+        aggregateId: attempt.id,
+        payload: {
+          attemptId: attempt.id,
+          notificationId: attempt.notification_id,
+          recipientId: attempt.recipient_id,
+          channel: attempt.channel,
+          provider: attempt.provider,
+          failureCode: input.failureCode,
+          error: input.eventError,
+        },
+        correlationId: input.correlationId,
+      });
+    }
+    return failed;
   }
 
   private async supersedeObsolete(
@@ -873,10 +945,14 @@ export class NotificationsService {
       await this.suppress(trx, principal, old, 'obsolete', row.id, correlationId);
       supersedes = old.id;
     }
-    // Already delivered notices about the subject point at the newer one so inboxes can show it.
-    await trx
-      .updateTable('notifications')
-      .set({ superseded_by_notification_id: row.id })
+    // Already dispatched notices about the subject point at the newer one so inboxes can show it,
+    // and their push/email/SMS attempts not yet handed to a provider are never sent: the stale
+    // "moved to 5 pm" must not arrive after the cancellation (SPK-COMMS-005). Delivered in-app items
+    // stay; their inbox shows the pointer. An attempt a worker already marked for hand-off is the
+    // worker's (fenced in failUnsent; the worker re-checks the pointer under its own lock).
+    const dispatched = await trx
+      .selectFrom('notifications')
+      .select('id')
       .where('organization_id', '=', row.organization_id)
       .where('subject_type', '=', row.subject_type)
       .where('subject_id', '=', row.subject_id)
@@ -884,7 +960,53 @@ export class NotificationsService {
       .where('kind', 'in', supersedable)
       .where('status', '=', 'dispatched')
       .where('superseded_by_notification_id', 'is', null)
+      .orderBy('created_at')
+      .orderBy('id')
+      .forUpdate()
       .execute();
+    if (dispatched.length === 0) return supersedes;
+    const ids = dispatched.map((d) => d.id);
+    await trx
+      .updateTable('notifications')
+      .set({ superseded_by_notification_id: row.id })
+      .where('organization_id', '=', row.organization_id)
+      .where('id', 'in', ids)
+      .execute();
+    const unsent = await trx
+      .selectFrom('delivery_attempts')
+      .selectAll()
+      .where('organization_id', '=', row.organization_id)
+      .where('notification_id', 'in', ids)
+      .where('channel', '<>', 'in_app')
+      .where('status', '=', 'queued')
+      .where('attempted_at', 'is', null)
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const failed = await this.failUnsent(trx, unsent, {
+      failureCode: 'SUPERSEDED',
+      error: `superseded by notification ${row.id} before hand-off`,
+      eventError: `superseded by notification ${row.id}`,
+      at: this.clock.now(),
+      correlationId,
+    });
+    for (const id of ids) {
+      await this.audit.record(trx, {
+        organizationId: row.organization_id,
+        actor: principal,
+        action: 'communications.notification_superseded',
+        targetType: 'notification',
+        targetId: id,
+        reason: 'obsolete',
+        correlationId,
+        details: {
+          supersededBy: row.id,
+          failedAttemptIds: failed.filter(
+            (a) => unsent.find((u) => u.id === a)?.notification_id === id,
+          ),
+        },
+      });
+    }
     return supersedes;
   }
 

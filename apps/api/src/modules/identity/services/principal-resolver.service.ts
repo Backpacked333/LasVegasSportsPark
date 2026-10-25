@@ -26,6 +26,11 @@ export interface EffectiveStaffMembership {
 /**
  * Pure mapping from account + person + staff memberships in effect to a Principal (unit-tested).
  * The actor label never carries names or other child data (§4.14): it is built from ids only.
+ *
+ * Each role keeps the facility scope of the memberships that hold it (§2.1 staff assignment
+ * scope, §4.3, §4.14 least privilege): a role is organization-wide only when one of its own
+ * memberships is unscoped, so front_desk at F1 plus an organization-wide coach membership is
+ * still front_desk at F1 only. `facilityIds` stays the union over every role, for display.
  */
 export function buildPrincipal(
   account: ResolvedAccount,
@@ -35,10 +40,19 @@ export function buildPrincipal(
   const roles = new Set<StaffRole>();
   let allFacilities = false;
   const facilities = new Set<string>();
+  const byRole = new Map<StaffRole, { all: boolean; facilities: Set<string> }>();
   for (const membership of memberships) {
-    for (const role of membership.roles) roles.add(role as StaffRole);
+    if (membership.roles.length === 0) continue;
     if (membership.facilityIds.length === 0) allFacilities = true;
     for (const facility of membership.facilityIds) facilities.add(facility);
+    for (const name of membership.roles) {
+      const role = name as StaffRole;
+      roles.add(role);
+      const scope = byRole.get(role) ?? { all: false, facilities: new Set<string>() };
+      if (membership.facilityIds.length === 0) scope.all = true;
+      for (const facility of membership.facilityIds) scope.facilities.add(facility);
+      byRole.set(role, scope);
+    }
   }
   const staffRoles = [...roles].sort();
   const isStaff = staffRoles.length > 0;
@@ -49,6 +63,14 @@ export function buildPrincipal(
     personId: account.personId,
     staffRoles,
     facilityIds: isStaff && !allFacilities ? [...facilities].sort() : [],
+    ...(isStaff
+      ? {
+          staffScopes: staffRoles.map((role) => {
+            const scope = byRole.get(role)!;
+            return { role, facilityIds: scope.all ? [] : [...scope.facilities].sort() };
+          }),
+        }
+      : {}),
     sessionId,
     actorLabel: isStaff
       ? `staff:${staffRoles.join('+')}:${account.id.slice(0, 8)}`

@@ -328,6 +328,10 @@ export function toClaim(row: Selectable<ClaimsTable>): Claim {
     acceptedAt: isoOrNull(row.accepted_at),
     acceptedByPersonId: row.accepted_by_person_id,
     revokedAt: isoOrNull(row.revoked_at),
+    recipientContact:
+      row.recipient_contact_kind && row.recipient_contact_value
+        ? { kind: row.recipient_contact_kind, value: row.recipient_contact_value }
+        : null,
     revision: row.revision,
     createdAt: iso(row.created_at),
   };

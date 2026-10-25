@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
   errors,
@@ -22,6 +22,7 @@ import {
   Outbox,
   snapshotActor,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -78,8 +79,6 @@ export interface ProposeRestrictionInput {
  */
 @Injectable()
 export class RestrictionsService implements OperatingStatusPort {
-  private readonly logger = new Logger(RestrictionsService.name);
-
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
@@ -123,7 +122,7 @@ export class RestrictionsService implements OperatingStatusPort {
   /** Records a proposed restriction on the affected area (no scheduling effect yet). */
   async propose(principal: Principal, input: ProposeRestrictionInput): Promise<Restriction> {
     const organizationId = organizationOf(principal);
-    await this.reader.loadFacility(this.db, organizationId, input.facilityId);
+    await this.reader.loadFacility(executorFor(this.db), organizationId, input.facilityId);
     const resource = await this.resolveResource(principal, organizationId, input);
     return this.uow.run(async ({ trx }) => {
       const facility = await this.reader.loadFacility(trx, organizationId, input.facilityId);
@@ -206,11 +205,24 @@ export class RestrictionsService implements OperatingStatusPort {
    * Approve (from proposed) and make effective: creates and applies the scheduling closure through
    * the closure port, then activates the restriction with the area's conflict units. Resumes an
    * `approved` restriction whose activation did not complete (idempotent per step).
+   *
+   * §4.7 invariant 12, SPK-AT-021: approval, the closure and the activation commit in ONE
+   * transaction (scheduling's closure commands join it; UnitOfWork.run is reentrant). A stop or a
+   * refused step leaves the restriction as it was, never `approved` with the field still bookable
+   * and an operation left `running`.
    */
   async approve(
     principal: Principal,
     restrictionId: string,
     input: ApproveRestrictionInput = {},
+  ): Promise<Restriction> {
+    return this.uow.run(() => this.approveSteps(principal, restrictionId, input));
+  }
+
+  private async approveSteps(
+    principal: Principal,
+    restrictionId: string,
+    input: ApproveRestrictionInput,
   ): Promise<Restriction> {
     const organizationId = organizationOf(principal);
     const operationId = await this.uow.run(async ({ trx }) => {
@@ -263,12 +275,7 @@ export class RestrictionsService implements OperatingStatusPort {
       });
       return opId;
     });
-    try {
-      return await this.activate(principal, organizationId, restrictionId, operationId, input);
-    } catch (error) {
-      await this.failOperation(operationId, error);
-      throw error;
-    }
+    return this.activate(principal, organizationId, restrictionId, operationId, input);
   }
 
   private async activate(
@@ -278,7 +285,11 @@ export class RestrictionsService implements OperatingStatusPort {
     operationId: string,
     input: ApproveRestrictionInput,
   ): Promise<Restriction> {
-    const approved = await this.reader.loadRestriction(this.db, organizationId, restrictionId);
+    const approved = await this.reader.loadRestriction(
+      executorFor(this.db),
+      organizationId,
+      restrictionId,
+    );
     if (!approved) throw errors.notFound('restriction', restrictionId);
     const interval = { start: iso(approved.start), end: iso(approved.end) };
     let closureId = approved.scheduling_closure_id;
@@ -454,6 +465,15 @@ export class RestrictionsService implements OperatingStatusPort {
     restrictionId: string,
     input: ReleaseRestrictionInput,
   ): Promise<Restriction> {
+    // §4.7 invariant 12: the release request, the closure lift and the release commit together.
+    return this.uow.run(() => this.releaseSteps(principal, restrictionId, input));
+  }
+
+  private async releaseSteps(
+    principal: Principal,
+    restrictionId: string,
+    input: ReleaseRestrictionInput,
+  ): Promise<Restriction> {
     const organizationId = organizationOf(principal);
     const { operationId, closureId } = await this.uow.run(async ({ trx }) => {
       const current = await this.reader.loadRestriction(trx, organizationId, restrictionId, true);
@@ -496,7 +516,7 @@ export class RestrictionsService implements OperatingStatusPort {
       });
       return { operationId: opId, closureId: current.scheduling_closure_id as string };
     });
-    try {
+    {
       const closure = await this.closures.getClosure(principal, closureId);
       if (closure.status === 'active') {
         await this.closurePort.liftClosure(principal, closureId, {
@@ -580,15 +600,16 @@ export class RestrictionsService implements OperatingStatusPort {
         const row = await this.reader.loadRestriction(trx, organizationId, restrictionId);
         return this.reader.restrictionView(row as RestrictionRow);
       });
-    } catch (error) {
-      await this.failOperation(operationId, error);
-      throw error;
     }
   }
 
   async get(principal: Principal, restrictionId: string): Promise<Restriction> {
     const organizationId = organizationOf(principal);
-    const row = await this.reader.loadRestriction(this.db, organizationId, restrictionId);
+    const row = await this.reader.loadRestriction(
+      executorFor(this.db),
+      organizationId,
+      restrictionId,
+    );
     if (!row) throw errors.notFound('restriction', restrictionId);
     await this.authorization.require(principal, FacilitiesActions.viewMaintenance, {
       type: 'restriction',
@@ -601,14 +622,14 @@ export class RestrictionsService implements OperatingStatusPort {
 
   async list(principal: Principal, query: ListRestrictionsQuery): Promise<Restriction[]> {
     const organizationId = organizationOf(principal);
-    await this.reader.loadFacility(this.db, organizationId, query.facilityId);
+    await this.reader.loadFacility(executorFor(this.db), organizationId, query.facilityId);
     await this.authorization.require(principal, FacilitiesActions.viewMaintenance, {
       type: 'restriction',
       organizationId,
       facilityId: query.facilityId,
     });
     let q = this.reader
-      .restrictionQuery(this.db)
+      .restrictionQuery(executorFor(this.db))
       .where('organization_id', '=', organizationId)
       .where('facility_id', '=', query.facilityId)
       .orderBy(sql`lower(during)`)
@@ -626,14 +647,14 @@ export class RestrictionsService implements OperatingStatusPort {
     resourceId?: string | null,
   ): Promise<Restriction[]> {
     const organizationId = organizationOf(principal);
-    await this.reader.loadFacility(this.db, organizationId, facilityId);
+    await this.reader.loadFacility(executorFor(this.db), organizationId, facilityId);
     await this.authorization.require(principal, FacilitiesActions.viewMaintenance, {
       type: 'restriction',
       organizationId,
       facilityId,
     });
     let q = this.reader
-      .restrictionQuery(this.db)
+      .restrictionQuery(executorFor(this.db))
       .where('organization_id', '=', organizationId)
       .where('facility_id', '=', facilityId)
       .where('status', '=', 'active')
@@ -655,7 +676,7 @@ export class RestrictionsService implements OperatingStatusPort {
     at?: Date | string,
   ): Promise<FacilityOperatingStatus> {
     const organizationId = organizationOf(principal);
-    await this.reader.loadFacility(this.db, organizationId, facilityId);
+    await this.reader.loadFacility(executorFor(this.db), organizationId, facilityId);
     await this.authorization.require(principal, FacilitiesActions.viewMaintenance, {
       type: 'facility',
       id: facilityId,
@@ -665,7 +686,7 @@ export class RestrictionsService implements OperatingStatusPort {
     const instant = at ? new Date(at) : this.clock.now();
     const inventory: Resource[] = await this.resources.listResources(principal, facilityId);
     const active = await this.reader
-      .restrictionQuery(this.db)
+      .restrictionQuery(executorFor(this.db))
       .where('organization_id', '=', organizationId)
       .where('facility_id', '=', facilityId)
       .where('status', '=', 'active')
@@ -702,9 +723,59 @@ export class RestrictionsService implements OperatingStatusPort {
   }
 
   /**
+   * Scheduling closure lift guard (SPK-FAC-004, SPK-AT-021): a closure that backs an approved or
+   * active restriction may be lifted only by that restriction's facilities release, which checks
+   * `facilities.release_to_service` and a passed inspection before it marks its
+   * `facilities.release_restriction` operation running. Any other lift (a scheduler, a system
+   * administrator, or a facilities operator skipping the inspection through `POST
+   * /v1/closures/{id}/lift`) is refused. Which roles may reopen a maintained space is pending with
+   * Operations (DEC-001, acceptance fixtures §9 item 15); refusing is the conservative default.
+   * Closures that no restriction backs stay liftable in scheduling.
+   */
+  async assertClosureLiftAllowed(
+    trx: Trx,
+    organizationId: string,
+    closureId: string,
+  ): Promise<void> {
+    const restriction = await this.reader
+      .restrictionQuery(trx)
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_closure_id', '=', closureId)
+      .where('status', 'in', ['approved', 'active'])
+      .executeTakeFirst();
+    if (!restriction) return;
+    if (await this.releaseInProgress(trx, organizationId, restriction.operation_id)) return;
+    throw errors.eligibility(
+      'This closure backs a maintenance restriction; the space returns to service only through the facilities release (inspection and release authority).',
+      { code: 'restriction_release_required', restrictionId: restriction.id, closureId },
+    );
+  }
+
+  /** Whether the restriction's operation is its own facilities release, still in progress. */
+  private async releaseInProgress(
+    trx: Trx,
+    organizationId: string,
+    operationId: string | null,
+  ): Promise<boolean> {
+    if (!operationId) return false;
+    const operation = await trx
+      .selectFrom('operations')
+      .select(['kind', 'status'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', operationId)
+      .executeTakeFirst();
+    return (
+      operation?.kind === 'facilities.release_restriction' &&
+      (operation.status === 'pending' || operation.status === 'running')
+    );
+  }
+
+  /**
    * Outbox handler target for `scheduling.closure_lifted`: a closure backing an active restriction
    * that was lifted outside a facilities release is surfaced to the facilities operator (the
-   * restriction keeps its authority state; nothing reopens silently, SPK-FAC-004).
+   * restriction keeps its authority state; nothing reopens silently, SPK-FAC-004). The lift guard
+   * above refuses such lifts; this stays as defense in depth (for example a lift written before
+   * the guard was registered).
    */
   async reconcileLiftedClosure(trx: Trx, organizationId: string, closureId: string): Promise<void> {
     const restriction = await this.reader
@@ -714,19 +785,8 @@ export class RestrictionsService implements OperatingStatusPort {
       .where('status', 'in', ['approved', 'active'])
       .executeTakeFirst();
     if (!restriction) return;
-    if (restriction.operation_id) {
-      const operation = await trx
-        .selectFrom('operations')
-        .select(['kind', 'status'])
-        .where('id', '=', restriction.operation_id)
-        .executeTakeFirst();
-      if (
-        operation?.kind === 'facilities.release_restriction' &&
-        (operation.status === 'pending' || operation.status === 'running')
-      ) {
-        return; // our own release is in progress
-      }
-    }
+    // our own release is in progress
+    if (await this.releaseInProgress(trx, organizationId, restriction.operation_id)) return;
     await this.exceptions.raise(trx, {
       organizationId,
       facilityId: restriction.facility_id,
@@ -757,7 +817,11 @@ export class RestrictionsService implements OperatingStatusPort {
   ): Promise<Resource> {
     let resourceId = input.resourceId ?? null;
     if (!resourceId && input.assetId) {
-      const asset = await this.reader.loadAsset(this.db, organizationId, input.assetId);
+      const asset = await this.reader.loadAsset(
+        executorFor(this.db),
+        organizationId,
+        input.assetId,
+      );
       if (!asset) throw errors.notFound('asset', input.assetId);
       resourceId = asset.resource_id;
       if (!resourceId) {
@@ -828,19 +892,5 @@ export class RestrictionsService implements OperatingStatusPort {
       operationId: context.operationId,
       details: { status: next, restrictionId: context.restrictionId },
     });
-  }
-
-  private async failOperation(operationId: string, error: unknown): Promise<void> {
-    try {
-      await this.uow.run((ctx) =>
-        this.operations.transition(ctx.trx, operationId, 'failed', {
-          error: DomainError.is(error)
-            ? { code: error.code, message: error.message, details: error.details }
-            : { code: 'INTERNAL_ERROR', message: String(error) },
-        }),
-      );
-    } catch (failure) {
-      this.logger.error(`could not record failure of operation ${operationId}: ${String(failure)}`);
-    }
   }
 }

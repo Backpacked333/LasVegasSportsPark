@@ -380,6 +380,8 @@ export const ClaimSchema = z
     acceptedAt: Instant.nullable(),
     acceptedByPersonId: z.uuid().nullable(),
     revokedAt: Instant.nullable(),
+    /** The verified contact point a guardian claim is bound to (SPK-IAM-002); null for self claims. */
+    recipientContact: z.object({ kind: ContactPointKindSchema, value: z.string() }).nullable(),
     revision: Revision,
     createdAt: Instant,
   })
@@ -401,10 +403,29 @@ export const IssueClaimBody = withCommandMeta({
     message: 'self claims carry no permissions; guardian claims require at least one',
     path: ['requestedPermissions'],
   })
+  // SPK-IAM-002 "claimable by the correct verified customer": a guardian claim is bound to the
+  // contact point its recipient must have verified, like an invitation (SPK-IAM-004).
+  .refine((v) => v.kind !== 'guardian' || v.recipientContact !== undefined, {
+    message: 'a guardian claim names the contact point its recipient has verified',
+    path: ['recipientContact'],
+  })
+  // A self claim is accepted by an account with no person yet, which holds no verified contact
+  // point; until provider-verified contact claims reach the service (identity provider, DEC-018),
+  // a recipient on a self claim could not be enforced, so it is refused rather than ignored.
+  .refine((v) => v.kind !== 'self' || v.recipientContact === undefined, {
+    message:
+      'a self claim cannot be bound to a contact point until verified provider contact claims are available; hand the token over in person',
+    path: ['recipientContact'],
+  })
   .openapi('IssueClaimRequest');
 export type IssueClaimInput = z.infer<typeof IssueClaimBody>;
 
 export const ClaimIssuedResponse = ClaimSchema.extend({ token: z.string() }).openapi('ClaimIssued');
+/** The claim token travels in the body, never in the URL path (§4.14). */
+export const AcceptClaimBody = z.object({ token: Token }).openapi('AcceptClaimRequest');
+export const RevokeClaimBody = withCommandMeta({})
+  .extend({ reason: Reason })
+  .openapi('RevokeClaimRequest');
 export const ClaimAcceptedResponse = z
   .object({
     claim: ClaimSchema,
@@ -606,6 +627,7 @@ function register(input: {
   status?: 200 | 201;
   idempotent?: boolean;
   security?: [];
+  deprecated?: boolean;
 }): void {
   const status = input.status ?? (input.method === 'post' ? 201 : 200);
   openApiRegistry.registerPath({
@@ -617,6 +639,7 @@ function register(input: {
     }`,
     tags: ['Identity'],
     ...(input.security ? { security: input.security } : {}),
+    ...(input.deprecated ? { deprecated: true } : {}),
     request: {
       ...(input.params ? { params: input.params as never } : {}),
       ...(input.body ? { body: { content: { 'application/json': { schema: input.body } } } } : {}),
@@ -682,7 +705,8 @@ register({
 register({
   method: 'post',
   path: '/people/{id}/claims',
-  summary: 'Issue a claim token so a verified customer can claim a staff-created participant',
+  summary:
+    'Issue a claim token so a verified customer can claim a staff-created participant; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   requirements: 'SPK-IAM-002',
   params: IdParams,
   body: IssueClaimBody,
@@ -691,11 +715,36 @@ register({
 });
 register({
   method: 'post',
+  path: '/claims/accept',
+  summary:
+    'Claim a staff-created participant with a verified account (no duplicate person); the token is sent in the body',
+  requirements: 'SPK-IAM-002, §4.14',
+  body: AcceptClaimBody,
+  response: ClaimAcceptedResponse,
+  status: 200,
+  idempotent: true,
+});
+register({
+  method: 'post',
   path: '/claims/{token}/accept',
-  summary: 'Claim a staff-created participant with a verified account (no duplicate person)',
-  requirements: 'SPK-IAM-002, SPK-AT-025',
+  summary:
+    'Deprecated: use POST /claims/accept, which keeps the token out of the URL path (§4.14). Kept until clients move.',
+  requirements: 'SPK-IAM-002',
   params: z.object({ token: Token }),
   response: ClaimAcceptedResponse,
+  status: 200,
+  idempotent: true,
+  deprecated: true,
+});
+register({
+  method: 'post',
+  path: '/claims/{id}/revoke',
+  summary: 'Revoke a pending claim (a leaked or misdelivered token can no longer be accepted)',
+  requirements: 'SPK-IAM-002, SPK-IAM-006',
+  params: IdParams,
+  body: RevokeClaimBody,
+  response: ClaimSchema,
+  status: 200,
   idempotent: true,
 });
 register({
@@ -769,7 +818,8 @@ register({
 register({
   method: 'post',
   path: '/invitations',
-  summary: 'Invite a person to hold permissions over a scope',
+  summary:
+    'Invite a person to hold permissions over a scope; the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   requirements: 'SPK-IAM-004',
   body: CreateInvitationBody,
   response: InvitationIssuedResponse,

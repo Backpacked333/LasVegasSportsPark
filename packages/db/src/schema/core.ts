@@ -74,6 +74,10 @@ export interface OperationsTable {
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
   completed_at: NullableTimestamp;
+  /** The owning module's read action for the outcome (0006); null: the kernel's operations.read. */
+  read_action: ColumnType<string | null, string | null | undefined, never>;
+  facility_id: ColumnType<string | null, string | null | undefined, never>;
+  subject_person_ids: ColumnType<string[], string[] | undefined, never>;
 }
 
 export interface IdempotencyKeysTable {

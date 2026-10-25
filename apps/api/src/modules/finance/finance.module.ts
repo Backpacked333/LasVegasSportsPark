@@ -1,21 +1,15 @@
-import {
-  Inject,
-  Module,
-  type OnApplicationBootstrap,
-  type OnModuleDestroy,
-  type OnModuleInit,
-  type Provider,
-} from '@nestjs/common';
+import { Module, type OnModuleDestroy, type OnModuleInit, type Provider } from '@nestjs/common';
 import type { EventPayload } from '@sportspark/contracts';
 import {
   APP_CONFIG,
+  BackgroundWorkers,
   EventHandlerRegistry,
   Inbox,
   runWithTransaction,
   type AppConfig,
 } from '../../kernel';
 import { CatalogModule } from '../catalog';
-import { CompetitionModule } from '../competition';
+import { CompetitionModule, FINANCIAL_CONDITIONS_IMPL } from '../competition';
 import { EnrollmentModule, FINANCE_POLICY_IMPL } from '../enrollment';
 import { IdentityModule } from '../identity';
 import {
@@ -45,6 +39,7 @@ import { CheckoutFinalizer } from './services/checkout-finalizer.service';
 import { CheckoutService } from './services/checkout.service';
 import { CreditsService } from './services/credits.service';
 import { FinancePolicyAdapter } from './services/finance-policy.adapter';
+import { ParticipationStandingService } from './services/participation-standing.service';
 import { FinancePolicyResolver } from './services/finance-policy.resolver';
 import { FinanceWorker } from './services/finance-worker';
 import { InstallmentsService } from './services/installments.service';
@@ -93,6 +88,10 @@ const providers: Provider[] = [
   // Enrollment's FinancePolicyPort (transfer/cancellation consequences), resolved lazily there.
   FinancePolicyAdapter,
   { provide: FINANCE_POLICY_IMPL, useExisting: FinancePolicyAdapter },
+  // Fixture readiness "Applicable financial conditions" (SPK-READY-001) and the arrival standing
+  // entry reads (SPK-ENTRY-004).
+  ParticipationStandingService,
+  { provide: FINANCIAL_CONDITIONS_IMPL, useExisting: ParticipationStandingService },
 ];
 
 /**
@@ -137,11 +136,12 @@ const providers: Provider[] = [
     CashTendersService,
     ReconciliationService,
     FinanceWorker,
+    ParticipationStandingService,
   ],
 })
-export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
+export class FinanceModule implements OnModuleInit, OnModuleDestroy {
   constructor(
-    @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly backgroundWorkers: BackgroundWorkers,
     private readonly registry: EventHandlerRegistry,
     private readonly inbox: Inbox,
     private readonly finalizer: CheckoutFinalizer,
@@ -151,6 +151,14 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
   ) {}
 
   onModuleInit(): void {
+    // §4.1, §4.12: the provider-facing poll loop belongs to the worker process (worker.ts starts
+    // every registered background worker); request-serving API processes never run it. Tests
+    // drive `runOnce()` directly.
+    this.backgroundWorkers.register({
+      name: 'finance.provider_worker',
+      start: () => this.worker.start(),
+      stop: () => this.worker.stop(),
+    });
     // Handlers run in the dispatcher's transaction; binding it as the active transaction makes
     // every port read (enrollment, catalog, identity) go through it, never a second connection.
 
@@ -168,6 +176,7 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
             event.correlationId,
           );
         }),
+      { failureOwner: 'finance_operator' },
     );
     // An awaiting checkout whose hold expired and that holds no live payment is aborted.
     this.registry.on<EventPayload<typeof CheckoutExpiryDue>>(
@@ -182,6 +191,7 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
             event.correlationId,
           ),
         ),
+      { failureOwner: 'finance_operator' },
     );
     // A compensation refund that settled completes (or re-opens) its checkout's recovery.
     this.registry.on<EventPayload<typeof RefundSettled>>(
@@ -196,6 +206,7 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
             event.correlationId,
           ),
         ),
+      { failureOwner: 'finance_operator' },
     );
     // SPK-PAY-006 notices before an installment falls due.
     this.registry.on<EventPayload<typeof InstallmentNoticeDue>>(
@@ -210,6 +221,7 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
             event.correlationId,
           ),
         ),
+      { failureOwner: 'finance_operator' },
     );
     // Provider evidence through the kernel inbox: duplicates consumed once, reordering tolerated.
     this.inbox.on(FAKE_PAYMENTS_PROVIDER, 'finance.apply_payment_event', (event, ctx) =>
@@ -217,11 +229,6 @@ export class FinanceModule implements OnModuleInit, OnApplicationBootstrap, OnMo
         await this.webhooks.apply(ctx.trx, event);
       }),
     );
-  }
-
-  /** The provider-facing worker runs in every non-test process; tests drive `FinanceWorker.runOnce()`. */
-  onApplicationBootstrap(): void {
-    if (this.config.NODE_ENV !== 'test') this.worker.start();
   }
 
   onModuleDestroy(): void {

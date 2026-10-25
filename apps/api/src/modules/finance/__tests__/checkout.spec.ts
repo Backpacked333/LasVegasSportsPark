@@ -106,11 +106,27 @@ describe('registration quotes and checkout (§4.11, SPK-PAY-001/002/007)', () =>
     const setup = await offering(t, { basePriceMinor: 10_000 });
     const { basketId, participants } = await basketFor(t, parent, [setup], { hold: false });
     const quote = await quoteFor(t, parent, basketId);
-    const res = await post(t, '/v1/registration-checkouts', parent.header, {
-      quoteId: quote.id,
-      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
-    });
+    const checkoutKey = key();
+    const res = await post(
+      t,
+      '/v1/registration-checkouts',
+      parent.header,
+      {
+        quoteId: quote.id,
+        payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      },
+      checkoutKey,
+    );
     expect(res.status).toBe(201);
+    // §4.9: the key names the checkout operation, not the enrollment.hold_basket operation that
+    // holding the open basket created first in the same request.
+    const keyRow = await t.db
+      .selectFrom('idempotency_keys')
+      .innerJoin('operations', 'operations.id', 'idempotency_keys.operation_id')
+      .select(['operations.id', 'operations.kind'])
+      .where('idempotency_keys.idempotency_key', '=', checkoutKey)
+      .executeTakeFirstOrThrow();
+    expect(keyRow).toEqual({ id: res.body.operationId, kind: 'finance.registration_checkout' });
     expect(res.body).toMatchObject({
       status: 'completed',
       paymentKind: 'provider',

@@ -798,7 +798,11 @@ describe('relationships and access grants (SPK-IAM-001, SPK-IAM-003, SPK-IAM-006
         .post(`/v1/people/${personId}/claims`)
         .set(header)
         .set('Idempotency-Key', key())
-        .send({ kind: 'guardian', requestedPermissions: ['view'] });
+        .send({
+          kind: 'guardian',
+          requestedPermissions: ['view'],
+          recipientContact: { kind: 'email', value: 'probe@example.test' },
+        });
       return { status: res.status, message: res.body.message };
     };
     expect(await claim(active)).toEqual(await claim(newId()));

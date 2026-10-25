@@ -49,6 +49,8 @@ export const ConfigSchema = z
      * nothing. It must exceed the longest-running idempotent request.
      */
     IDEMPOTENCY_LEASE_SECONDS: z.coerce.number().int().min(5).default(120),
+    /** How often the worker deletes idempotency records past their expiry (§4.9, §4.14). */
+    IDEMPOTENCY_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
     LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
   })
   .superRefine((cfg, ctx) => {

@@ -600,6 +600,58 @@ describe('schedule drafts and publication (SPK-SCHED-005/006, SPK-FIX-005, SPK-A
     ]);
   });
 
+  it('SPK-SCHED-005 / SPK-SCHED-006 step 2: autosave keeps base revisions, so a draft autosaved after a concurrent change still fails with STALE_REVISION', async () => {
+    const event = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.northHalfId],
+      start: at('2026-11-08', '10:00'),
+      end: at('2026-11-08', '11:00'),
+    });
+    const move = {
+      kind: 'move',
+      targetEventId: event.id,
+      proposed: {
+        scheduledStart: at('2026-11-08', '12:00'),
+        scheduledEnd: at('2026-11-08', '13:00'),
+      },
+    };
+    const draft = await openDraft('rebase', [move]);
+    expect(draft.baseRevision.eventRevisions[event.id]).toBe(1);
+    // another scheduler moves the event directly (revision 2)
+    await events.moveEvent(scheduler, event.id, {
+      scheduledStart: at('2026-11-08', '15:00'),
+      scheduledEnd: at('2026-11-08', '16:00'),
+    });
+    // the author's editor autosaves the same move plus one more change
+    const saved = await t.http
+      .patch(`/v1/schedule-drafts/${draft.id}`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({
+        expectedRevision: draft.revision,
+        name: 'rebase',
+        changes: [
+          move,
+          createChange(at('2026-11-08', '18:00'), at('2026-11-08', '19:00'), [pitch.southHalfId]),
+        ],
+      });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body.changes[0]).toMatchObject({ targetEventId: event.id, baseEventRevision: 1 });
+    expect(saved.body.baseRevision.eventRevisions).toEqual({ [event.id]: 1 });
+    const res = await publish(draft.id);
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'STALE_REVISION',
+      details: { expectedRevision: 1, currentRevision: 2 },
+    });
+    // the concurrent move is kept
+    expect(await events.getEvent(scheduler, event.id)).toMatchObject({
+      revision: 2,
+      scheduledStart: at('2026-11-08', '15:00'),
+    });
+  });
+
   it('SPK-SCHED-006 step 4: blocking fixture obligations fail the group', async () => {
     const before = await countEvents();
     const draft = await openDraft('needs-fixtures', [

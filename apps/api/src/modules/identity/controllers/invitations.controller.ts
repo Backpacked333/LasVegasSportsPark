@@ -18,7 +18,8 @@ export class InvitationsController {
   constructor(private readonly invitations: InvitationsService) {}
 
   @Post()
-  @Idempotent()
+  // §4.14: the invitation token is stored only as a hash; never keep it with the idempotency key.
+  @Idempotent({ withhold: ['token'] })
   create(
     @CurrentPrincipal() principal: Principal,
     @ZodBody(CreateInvitationBody) body: z.infer<typeof CreateInvitationBody>,

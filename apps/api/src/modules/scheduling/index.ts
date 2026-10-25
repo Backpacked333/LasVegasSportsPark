@@ -7,6 +7,7 @@ export * from './ports';
 export * from './services/events.service';
 export * from './services/resources.service';
 export * from './services/closures.service';
+export * from './services/closure-lift-guards';
 export * from './services/event-series.service';
 export * from './services/schedule-drafts.service';
 export { EventWriter } from './services/event-writer';

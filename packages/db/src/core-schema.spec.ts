@@ -231,4 +231,59 @@ describe('core schema invariants', () => {
     expect(b).toHaveLength(1);
     expect(new Set([...a, ...b]).size).toBe(3);
   });
+
+  it('§4.3 / §4.7-1: references to kernel operations, audit records and exceptions cannot cross organizations', async () => {
+    const other = await seedOrganization(t.db);
+    const operationId = newId();
+    await t.db
+      .insertInto('operations')
+      .values({
+        id: operationId,
+        organization_id: other.organizationId,
+        kind: 'test.other_org',
+        status: 'running',
+        requested_by: json({ kind: 'system', actorLabel: 'test' }),
+        correlation_id: null,
+        input: null,
+        result: null,
+        error: null,
+        completed_at: null,
+      })
+      .execute();
+    const keyRow = (organization: string) => ({
+      organization_id: organization,
+      scope_key: 'account:test',
+      idempotency_key: `k-${newId()}`,
+      request_hash: 'h',
+      status: 'in_progress' as const,
+      response_status: null,
+      response_body: null,
+      operation_id: operationId,
+      completed_at: null,
+      expires_at: new Date(Date.UTC(2100, 0, 1)),
+      claim_token: null,
+      locked_until: null,
+      committed_at: null,
+    });
+    // another organization's operation is refused by the database, not only by the service
+    await expect(
+      t.db.insertInto('idempotency_keys').values(keyRow(organizationId)).execute(),
+    ).rejects.toMatchObject({ constraint: 'idempotency_keys_operation_fk' });
+    // the same organization's operation is accepted
+    await t.db.insertInto('idempotency_keys').values(keyRow(other.organizationId)).execute();
+
+    // No single-column foreign key to these kernel tables remains, so no module can point at
+    // another organization's row (each reference carries organization_id).
+    const singleColumn = await sql<{ name: string; table: string }>`
+      select c.conname as name, c.conrelid::regclass::text as table
+      from pg_constraint c
+      where c.contype = 'f'
+        and c.confrelid in (
+          'operations'::regclass, 'audit_records'::regclass, 'operational_exceptions'::regclass
+        )
+        and array_length(c.conkey, 1) = 1
+      order by 1
+    `.execute(t.db);
+    expect(singleColumn.rows).toEqual([]);
+  });
 });

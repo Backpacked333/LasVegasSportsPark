@@ -192,9 +192,10 @@ ownership decisions.
 
 ## Kernel limitations worked around here
 
-- The kernel tables `operations`, `audit_records` and `operational_exceptions` have no
-  `unique (organization_id, id)`, so composite foreign keys are impossible: plain foreign keys plus
-  triggers (`case_actions_scope`, `cases_guard`) refuse another organization's rows.
+- References to the kernel tables `operations`, `audit_records` and `operational_exceptions` are
+  organization-scoped composite foreign keys (`0005_core_org_scoped_keys.sql`,
+  `1180_support_org_scoped_kernel_fks.sql`); the earlier triggers (`case_actions_scope`,
+  `cases_guard`) are kept as earlier feedback with their messages.
 - `OperationalExceptions` offers `listOpen` only: lists by status, single reads and the resolution
   history read `operational_exceptions` and `audit_records` read-only; every write stays with the
   kernel service. Its `transition` loads by id without the organization, so support checks the

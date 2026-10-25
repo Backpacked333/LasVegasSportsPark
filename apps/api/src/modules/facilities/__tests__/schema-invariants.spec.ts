@@ -25,7 +25,7 @@ import { seedAsset } from '../testing/facilities-fixtures';
  * Integrity invariants proven at the database (CLAUDE.md "Integrity that matters is enforced in
  * the database"): rows are inserted through Kysely, bypassing the services.
  */
-describe('facilities schema invariants (migrations 0900-0901)', () => {
+describe('facilities schema invariants (migrations 0900-0902)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -120,6 +120,83 @@ describe('facilities schema invariants (migrations 0900-0901)', () => {
     });
     return created.id;
   }
+
+  it('§4.3: an asset, task or restriction of one facility cannot name a space, asset, task or closure of another facility (0301, 0902)', async () => {
+    const otherFacility = newId();
+    await db
+      .insertInto('facilities')
+      .values({
+        id: otherFacility,
+        organization_id: org,
+        slug: `other-${otherFacility.slice(0, 8)}`,
+        name: 'Other facility',
+        timezone: 'America/Los_Angeles',
+      })
+      .execute();
+    const there = await seedResource(db, {
+      organizationId: org,
+      facilityId: otherFacility,
+      name: 'Pitch over there',
+    });
+    const assetThere = await seedAsset(db, {
+      organizationId: org,
+      facilityId: otherFacility,
+      resourceId: there.resourceId,
+      identifier: 'GOAL-THERE',
+    });
+    // an asset of this facility on the other facility's pitch
+    await expect(
+      seedAsset(db, {
+        organizationId: org,
+        facilityId: facility,
+        resourceId: there.resourceId,
+        identifier: 'GOAL-BORROWED',
+      }),
+    ).rejects.toSatisfy(isForeignKeyViolation);
+    // a task of this facility about the other facility's space or asset
+    await expect(insertTask({ asset_id: null, resource_id: there.resourceId })).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    await expect(insertTask({ asset_id: assetThere, resource_id: null })).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    // a restriction of this facility closing the other facility's pitch, asset or task
+    await expect(insertRestriction({ resource_id: there.resourceId })).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    await expect(insertRestriction({ asset_id: assetThere })).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    const taskThere = await insertTask({
+      facility_id: otherFacility,
+      asset_id: assetThere,
+      resource_id: there.resourceId,
+    });
+    await expect(insertRestriction({ task_id: taskThere })).rejects.toSatisfy(
+      isForeignKeyViolation,
+    );
+    // a restriction of the other facility backed by this facility's closure
+    const closureHere = await appliedClosure();
+    await expect(
+      insertRestriction({
+        facility_id: otherFacility,
+        resource_id: there.resourceId,
+        status: 'approved',
+        approved_by: json({ kind: 'staff' }),
+        approved_at: new Date(),
+        scheduling_closure_id: closureHere,
+      }),
+    ).rejects.toSatisfy(isForeignKeyViolation);
+    // the same rows within one facility are accepted
+    await expect(
+      insertRestriction({
+        facility_id: otherFacility,
+        resource_id: there.resourceId,
+        asset_id: assetThere,
+        task_id: taskThere,
+      }),
+    ).resolves.toEqual(expect.any(String));
+  });
 
   it('§4.3: references cannot cross organizations (composite foreign keys)', async () => {
     const other = await seedOrganization(db);

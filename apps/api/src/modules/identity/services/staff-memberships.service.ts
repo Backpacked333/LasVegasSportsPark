@@ -19,6 +19,7 @@ import {
   UnitOfWork,
   assertExpectedRevision,
   ensureUpdated,
+  executorFor,
   snapshotActor,
   type Clock,
   type Trx,
@@ -226,10 +227,14 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       assertExpectedRevision(input.expectedRevision, current.revision);
       const next = StaffMembershipMachine.next(current.status, 'end');
       const now = this.clock.now();
-      const effectiveTo =
+      const cap =
         current.effective_to && new Date(current.effective_to).getTime() < now.getTime()
-          ? current.effective_to
+          ? new Date(current.effective_to)
           : now;
+      // SPK-STAFF-004, SPK-IAM-006: a membership ended before it started gets the empty window
+      // [effective_from, effective_from), which never grants anything (the 0100 check allows it).
+      const neverEffective = cap.getTime() < new Date(current.effective_from).getTime();
+      const effectiveTo = neverEffective ? new Date(current.effective_from) : cap;
       const ended = await trx
         .updateTable('staff_memberships')
         .set({
@@ -255,7 +260,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
         afterRevision: current.revision + 1,
         reason: input.reason,
         correlationId,
-        details: { operation: 'end' },
+        details: { operation: 'end', ...(neverEffective ? { neverEffective: true } : {}) },
       });
       await this.outbox.enqueue(trx, IdentityEvents.staffMembershipChanged, {
         organizationId,
@@ -273,8 +278,22 @@ export class StaffMembershipsService implements StaffDirectoryPort {
     });
   }
 
+  /**
+   * One membership, or null. Reads through the active transaction when called from another
+   * module's command or handler (executorFor), so it sees that transaction's own writes.
+   */
+  async find(organizationId: string, id: string): Promise<StaffMembership | null> {
+    const row = await executorFor(this.db)
+      .selectFrom('staff_memberships')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .executeTakeFirst();
+    return row ? toStaffMembership(row) : null;
+  }
+
   async listForPerson(organizationId: string, personId: string): Promise<StaffMembership[]> {
-    const rows = await this.db
+    const rows = await executorFor(this.db)
       .selectFrom('staff_memberships')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -292,7 +311,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
     trx?: Trx,
   ): Promise<string[]> {
     const now = this.clock.now();
-    let query = (trx ?? this.db)
+    let query = (trx ?? executorFor(this.db))
       .selectFrom('staff_memberships')
       .select('person_id')
       .distinct()

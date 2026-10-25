@@ -1,4 +1,4 @@
-import { newId, type Principal } from '@sportspark/contracts';
+import { MaintenanceTaskSchema, newId, type Principal } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
@@ -162,6 +162,12 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
         dueAt: restriction.interval.end,
         openRestrictionIds: [restriction.id],
       });
+      // §4.8 exact schemas: the response declares every field it returns, including the note that
+      // names a generated task's origin
+      expect(task.body.reporter.note).toMatch(/^preventive schedule /);
+      const declared = Object.keys(MaintenanceTaskSchema.shape.reporter.shape);
+      expect(Object.keys(task.body.reporter).filter((k) => !declared.includes(k))).toEqual([]);
+      expect(MaintenanceTaskSchema.strict().safeParse(task.body).success).toBe(true);
     }
     // the future closures affect availability on the half and the whole pitch, not the other half
     await expect(
@@ -258,6 +264,14 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
       .send({ status: 'paused', expectedRevision: 9 });
     expect(stale.status).toBe(409);
     expect(stale.body.code).toBe('STALE_REVISION');
+    // §4.9: without expectedRevision the edit is refused, never applied over newer work
+    const blind = await t.http
+      .patch(`/v1/preventive-schedules/${schedule.id}`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ status: 'paused' });
+    expect(blind.status).toBe(400);
+    expect(blind.body.code).toBe('VALIDATION_FAILED');
     const paused = await t.http
       .patch(`/v1/preventive-schedules/${schedule.id}`)
       .set(auth)
@@ -267,12 +281,21 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
     const blocked = await post(`/v1/preventive-schedules/${schedule.id}/generate`, {});
     expect(blocked.status).toBe(409);
     expect(blocked.body.code).toBe('INVALID_TRANSITION');
-    const resumed = await schedules.update(scheduler, schedule.id, { status: 'active' });
+    const resumed = await schedules.update(scheduler, schedule.id, {
+      status: 'active',
+      expectedRevision: paused.body.revision,
+    });
     expect(resumed.status).toBe('active');
-    const ended = await schedules.update(scheduler, schedule.id, { status: 'ended' });
+    const ended = await schedules.update(scheduler, schedule.id, {
+      status: 'ended',
+      expectedRevision: resumed.revision,
+    });
     expect(ended.status).toBe('ended');
     await expect(
-      schedules.update(scheduler, schedule.id, { status: 'active' }),
+      schedules.update(scheduler, schedule.id, {
+        status: 'active',
+        expectedRevision: ended.revision,
+      }),
     ).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
     const list = await t.http
       .get('/v1/preventive-schedules')

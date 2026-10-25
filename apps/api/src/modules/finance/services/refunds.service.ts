@@ -177,6 +177,8 @@ export class RefundsService {
         correlationId,
         input: { paymentAttemptId, amountMinor: input.amountMinor },
         status: 'running',
+        // §4.14: a refund outcome is read by finance operators, not by every staff role.
+        readScope: { action: FinanceActions.refund },
       });
       const row = await this.reserveInTrx(trx, {
         organizationId,

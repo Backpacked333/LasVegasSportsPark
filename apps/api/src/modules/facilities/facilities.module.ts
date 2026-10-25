@@ -2,7 +2,7 @@ import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import type { EventPayload } from '@sportspark/contracts';
 import { EventHandlerRegistry } from '../../kernel';
 import { IdentityModule } from '../identity';
-import { ClosureLifted, SchedulingModule } from '../scheduling';
+import { ClosureLiftGuards, ClosureLifted, SchedulingModule } from '../scheduling';
 import { AssetsController } from './controllers/assets.controller';
 import { MaintenanceTasksController } from './controllers/maintenance-tasks.controller';
 import { PreventiveSchedulesController } from './controllers/preventive-schedules.controller';
@@ -58,9 +58,15 @@ export class FacilitiesModule implements OnModuleInit {
     private readonly registry: EventHandlerRegistry,
     private readonly tasks: MaintenanceTasksService,
     private readonly restrictions: RestrictionsService,
+    private readonly liftGuards: ClosureLiftGuards,
   ) {}
 
   onModuleInit(): void {
+    // SPK-FAC-004: a closure backing an unreleased restriction is lifted only by the facilities
+    // release (inspection and release authority checked), never directly in scheduling.
+    this.liftGuards.register('facilities.restriction_release', (trx, organizationId, closureId) =>
+      this.restrictions.assertClosureLiftAllowed(trx, organizationId, closureId),
+    );
     // Due timer (enqueued with availableAt = dueAt): escalate an overdue critical task once (SPK-UX-006).
     this.registry.on<EventPayload<typeof MaintenanceTaskDueReached>>(
       MaintenanceTaskDueReached.type,
@@ -68,6 +74,7 @@ export class FacilitiesModule implements OnModuleInit {
       async (event, ctx) => {
         await this.tasks.escalateIfOverdue(ctx.trx, event.organizationId, event.payload.taskId);
       },
+      { failureOwner: 'facilities_operator' },
     );
     // A closure lifted in scheduling outside a facilities release never reopens silently (SPK-FAC-004).
     this.registry.on<EventPayload<typeof ClosureLifted>>(
@@ -80,6 +87,7 @@ export class FacilitiesModule implements OnModuleInit {
           event.payload.closureId,
         );
       },
+      { failureOwner: 'facilities_operator' },
     );
   }
 }

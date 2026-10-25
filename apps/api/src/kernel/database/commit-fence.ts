@@ -14,6 +14,13 @@ export interface CommitFence {
    * Throwing rolls the transaction back. The returned callback, if any, runs once COMMIT succeeded.
    */
   beforeCommit(trx: Trx): Promise<(() => void) | undefined>;
+  /**
+   * Records, inside `trx` (so it commits or rolls back with the operation row), that the request's
+   * key started operation `operationId` (§4.9: a replay or an unknown outcome names the operation the
+   * client can poll at GET /v1/operations/{id}). The first operation of a request is linked unless a
+   * later one is marked `primary` (a coordinator whose step created a nested operation first).
+   */
+  linkOperation(trx: Trx, operationId: string, options?: { primary?: boolean }): Promise<void>;
 }
 
 interface FenceHolder {

@@ -62,6 +62,48 @@ describe('staff composition flow (SPK-COMMS-002/003/006, §4.9 commands)', () =>
     ...overrides,
   });
 
+  it('SPK-COMMS-007: the category follows the kind; a contradicting category is refused and a staff broadcast must name its own', async () => {
+    const plain = { protected: false };
+    const renewal = await post(
+      '/v1/notifications',
+      composeBody({ ...plain, kind: 'renewal_opportunity' }),
+    );
+    expect(renewal.status).toBe(201);
+    expect(renewal.body.category).toBe('promotional');
+    const essential = await post(
+      '/v1/notifications',
+      composeBody({ ...plain, kind: 'payment_attention' }),
+    );
+    expect(essential.body.category).toBe('operational');
+    const disguised = await post(
+      '/v1/notifications',
+      composeBody({ ...plain, kind: 'cancellation', category: 'promotional' }),
+    );
+    expect(disguised.status).toBe(400);
+    expect(disguised.body.details).toMatchObject({
+      code: 'CATEGORY_MISMATCH',
+      required: 'operational',
+    });
+    const marketing = await post(
+      '/v1/notifications',
+      composeBody({ ...plain, kind: 'renewal_opportunity', category: 'operational' }),
+    );
+    expect(marketing.status).toBe(400);
+    expect(marketing.body.details).toMatchObject({ code: 'CATEGORY_MISMATCH' });
+    const unnamed = await post(
+      '/v1/notifications',
+      composeBody({ ...plain, kind: 'staff_broadcast' }),
+    );
+    expect(unnamed.status).toBe(400);
+    expect(unnamed.body.details).toMatchObject({ code: 'CATEGORY_REQUIRED', path: 'category' });
+    const named = await post(
+      '/v1/notifications',
+      composeBody({ ...plain, kind: 'staff_broadcast', category: 'promotional' }),
+    );
+    expect(named.status).toBe(201);
+    expect(named.body.category).toBe('promotional');
+  });
+
   it('SPK-COMMS-006: only composer roles may compose; a customer is denied and a reader role may read but not compose', async () => {
     expect((await post('/v1/notifications', composeBody(), parent)).status).toBe(403);
     const finance = await createStaffMemberFixture(t, { roles: ['finance_operator'] });
@@ -217,6 +259,7 @@ describe('staff composition flow (SPK-COMMS-002/003/006, §4.9 commands)', () =>
       '/v1/notifications',
       composeBody({
         kind: 'staff_broadcast',
+        category: 'operational',
         facilityId: t.facilityId,
         audience: { staffRoles: ['scheduler'], facilityId: t.facilityId },
         protected: false,
@@ -300,7 +343,12 @@ describe('staff composition flow (SPK-COMMS-002/003/006, §4.9 commands)', () =>
 
     it('SPK-COMMS-006: a facility-scoped composer cannot address another facility’s staff, whatever the notification’s own facility says', async () => {
       const broadcast = (overrides: object) =>
-        composeBody({ kind: 'staff_broadcast', protected: false, ...overrides });
+        composeBody({
+          kind: 'staff_broadcast',
+          category: 'operational',
+          protected: false,
+          ...overrides,
+        });
       const omitted = await post(
         '/v1/notifications',
         broadcast({ audience: { staffRoles: ['scheduler'], facilityId: second } }),
@@ -330,6 +378,7 @@ describe('staff composition flow (SPK-COMMS-002/003/006, §4.9 commands)', () =>
         '/v1/notifications',
         composeBody({
           kind: 'staff_broadcast',
+          category: 'operational',
           protected: false,
           audience: { staffRoles: ['scheduler'] },
         }),
@@ -347,6 +396,7 @@ describe('staff composition flow (SPK-COMMS-002/003/006, §4.9 commands)', () =>
         '/v1/notifications',
         composeBody({
           kind: 'staff_broadcast',
+          category: 'operational',
           protected: false,
           audience: { staffRoles: ['scheduler'], facilityId: second },
         }),

@@ -7,6 +7,7 @@ import { ClosuresService } from '../services/closures.service';
 import { EventWriter } from '../services/event-writer';
 import { EventsService } from '../services/events.service';
 import { ResourcesService } from '../services/resources.service';
+import { ScheduleDraftsService } from '../services/schedule-drafts.service';
 import { SchedulingModule } from '../scheduling.module';
 import {
   at,
@@ -246,6 +247,101 @@ describe('scheduling rules under concurrent commands (§4.7, SPK-SCHED-002/004/0
       .where('status', '=', 'active')
       .execute();
     expect(active).toHaveLength(1);
+  });
+
+  it('SPK-AT-008 / §4.7: concurrent publications of drafts that hold the same space commit a non-overlapping set and leave no partial rows', async () => {
+    const drafts = t.app.get(ScheduleDraftsService);
+    const pitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Publication race pitch',
+    });
+    const day = '2026-11-09';
+    const title = `Race ${newId()}`;
+    const open = (name: string, resourceId: string) =>
+      drafts.create(scheduler, {
+        facilityId: t.facilityId,
+        name,
+        changes: [
+          {
+            kind: 'create',
+            proposed: {
+              kind: 'game',
+              title,
+              scheduledStart: at(day, '10:00'),
+              scheduledEnd: at(day, '11:00'),
+            },
+            resourceIds: [resourceId],
+          },
+        ],
+      });
+    const whole = await Promise.all([0, 1, 2, 3].map((i) => open(`whole ${i}`, pitch.pitchId)));
+    const north = await Promise.all([0, 1].map((i) => open(`north ${i}`, pitch.northHalfId)));
+    const south = await Promise.all([0, 1].map((i) => open(`south ${i}`, pitch.southHalfId)));
+    const all = [...whole, ...north, ...south];
+    // Every publication starts at once; under TEST_DATABASE_URL they race for the same units.
+    const results = await Promise.all(all.map((d) => settle(drafts.publish(scheduler, d.id, {}))));
+    const committed = (group: typeof all) =>
+      group.filter((d) => results[all.indexOf(d)]?.ok === true).length;
+    const [w, n, so] = [committed(whole), committed(north), committed(south)];
+    // Either the whole pitch alone, or at most one booking of each half (the two halves may share
+    // the hour under the active two-halves configuration), never a half under the whole pitch.
+    expect(
+      (w === 1 && n === 0 && so === 0) || (w === 0 && n <= 1 && so <= 1 && n + so >= 1),
+      `whole=${w} north=${n} south=${so}`,
+    ).toBe(true);
+    const failures = results.filter((r) => !r.ok);
+    expect(failures.length).toBe(all.length - (w + n + so));
+    expect(new Set(failures.map(codeOf))).toEqual(new Set(['RESOURCE_CONFLICT']));
+
+    // No partial publication: one event, one publication and one succeeded operation per committed
+    // draft; every refused draft is failed with its operation failed and nothing else written.
+    const created = await t.db
+      .selectFrom('events')
+      .select('id')
+      .where('title', '=', title)
+      .execute();
+    expect(created).toHaveLength(w + n + so);
+    const publications = await t.db
+      .selectFrom('publications')
+      .select('draft_id')
+      .where(
+        'draft_id',
+        'in',
+        all.map((d) => d.id),
+      )
+      .execute();
+    expect(publications).toHaveLength(w + n + so);
+    const operations = await t.db
+      .selectFrom('operations')
+      .select(['status', sql<string>`input->>'draftId'`.as('draftId')])
+      .where('kind', '=', 'scheduling.publish_schedule')
+      .where(
+        sql<string>`input->>'draftId'`,
+        'in',
+        all.map((d) => d.id),
+      )
+      .execute();
+    expect(operations).toHaveLength(all.length);
+    expect(operations.filter((o) => o.status === 'succeeded')).toHaveLength(w + n + so);
+    expect(operations.filter((o) => o.status === 'failed')).toHaveLength(failures.length);
+    for (const [index, draft] of all.entries()) {
+      const after = await drafts.get(scheduler, draft.id);
+      expect(after.status).toBe(results[index]?.ok ? 'published' : 'failed');
+    }
+    // The database holds no two active reservations of one conflict unit that overlap.
+    const overlapping = await sql<{ count: string }>`
+      select count(*)::text as count
+      from reservation_units a
+      join reservation_units b
+        on a.organization_id = b.organization_id
+       and a.conflict_unit_id = b.conflict_unit_id
+       and a.id < b.id
+       and a.occupied && b.occupied
+      where a.status = 'active' and b.status = 'active'
+        and a.conflict_unit_id in (${sql.join(Object.values(pitch.units))})
+    `.execute(t.db);
+    expect(overlapping.rows[0]?.count).toBe('0');
   });
 
   it('SPK-SCHED-004: required rest between a team commitments holds under overlapping bookings', async () => {
