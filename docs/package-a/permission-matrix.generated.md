@@ -3,7 +3,7 @@
 > Generated from code by `apps/api/scripts/emit-permission-matrix.ts`; do not edit by hand.
 > Regenerate with `pnpm build && pnpm permission-matrix` from the repository root.
 
-Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 228 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
+Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 229 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
 
 Columns: **Staff roles** may perform the action within their organization or facility scope; **Self** means a customer may act on themselves as the subject person; **Subject permission** is the grant a customer must hold over every subject person; **Team role** is the role a customer must hold on the target team entry; **Requirements** are the specification ids the action declares.
 
@@ -18,7 +18,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `communications` | 9       |
 | `competition`    | 36      |
 | `enrollment`     | 28      |
-| `entry`          | 22      |
+| `entry`          | 23      |
 | `exceptions`     | 2       |
 | `facilities`     | 8       |
 | `finance`        | 19      |
@@ -29,7 +29,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `scheduling`     | 8       |
 | `support`        | 7       |
 | `workforce`      | 19      |
-| **Total**        | **228** |
+| **Total**        | **229** |
 
 ## Actions
 
@@ -134,8 +134,9 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `entry.correct_attendance`                   | Correct an attendance observation (new row with actor, time and reason)                                                                                                    | `front_desk`, `program_manager`, `league_manager`, `general_manager`                                                                                                                          | no   | —                  | —         | SPK-ENTRY-005, §4.5                                           |
 | `entry.issue_pass`                           | Issue an opaque pass to a person (self) or a household (staff)                                                                                                             | `front_desk`, `program_manager`, `general_manager`, `system_administrator`                                                                                                                    | yes  | —                  | —         | SPK-ENTRY-002                                                 |
 | `entry.read_assigned_attendance`             | Read attendance of an activity the coach or official is assigned to                                                                                                        | `coach`, `official`                                                                                                                                                                           | no   | —                  | —         | SPK-UX-007                                                    |
+| `entry.read_assigned_checkin`                | Read a check-in of an activity the coach or official is assigned to                                                                                                        | `coach`, `official`                                                                                                                                                                           | no   | —                  | —         | SPK-ENTRY-004, SPK-UX-007, §4.14                              |
 | `entry.read_attendance`                      | Read attendance (staff, or a holder of view over the person)                                                                                                               | `front_desk`, `program_manager`, `league_manager`, `general_manager`, `support_operator`                                                                                                      | yes  | `view`             | —         | SPK-ENTRY-005                                                 |
-| `entry.read_checkin`                         | Read a session check-in (staff, or a holder of view over the person)                                                                                                       | `front_desk`, `program_manager`, `league_manager`, `general_manager`, `support_operator`, `coach`, `official`                                                                                 | yes  | `view`             | —         | SPK-ENTRY-004                                                 |
+| `entry.read_checkin`                         | Read a session check-in (staff, or a holder of view over the person)                                                                                                       | `front_desk`, `program_manager`, `league_manager`, `general_manager`, `support_operator`                                                                                                      | yes  | `view`             | —         | SPK-ENTRY-004, §4.14                                          |
 | `entry.read_occupancy`                       | Read arrivals, departures and occupancy status of a facility                                                                                                               | `front_desk`, `program_manager`, `league_manager`, `general_manager`, `support_operator`, `facilities_operator`, `scheduler`                                                                  | no   | —                  | —         | SPK-ENTRY-008                                                 |
 | `entry.read_release`                         | Read a release record (staff, or a holder of view over the child)                                                                                                          | `front_desk`, `program_manager`, `general_manager`, `support_operator`                                                                                                                        | no   | `view`             | —         | SPK-ENTRY-007                                                 |
 | `entry.read_visits`                          | List the visits of a facility day                                                                                                                                          | `front_desk`, `program_manager`, `league_manager`, `general_manager`, `support_operator`, `facilities_operator`                                                                               | no   | —                  | —         | SPK-ENTRY-001                                                 |

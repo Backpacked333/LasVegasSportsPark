@@ -109,7 +109,11 @@ in id order, so a lift racing another review's restriction never clears it
 - `PERSON_DIRECTORY_PORT` (`PersonDirectoryPort`): `findPerson`, `resolveCanonicalPersonId`
   (follows merges).
 - `AUTHORITY_LOOKUP_PORT` (`AuthorityLookupPort`): `hasPermission`, `actorsWithPermission`
-  (communications resolves protected recipients from current permissions, SPK-COMMS-003).
+  (communications resolves protected recipients from current permissions, SPK-COMMS-003), and
+  `hasPermissionAt(…, asOf)`: whether a permission was effective at a past instant, from the grant
+  and relationship windows, revocation and end times and the append-only
+  `access_grant_suspensions` history (entry re-checks an offline release at its recorded handover
+  time, SPK-AT-018). Tested in `__tests__/access-reviews.spec.ts`.
 - `STAFF_DIRECTORY_PORT` (`StaffDirectoryPort`): `staffWithRole(org, role, facilityId?)`.
 - Fixtures for downstream tests: `testing/identity-fixtures.ts` (`createOrganizationPeople`,
   `createPersonFixture`, `createAccountFixture`, `createRelationshipFixture`,

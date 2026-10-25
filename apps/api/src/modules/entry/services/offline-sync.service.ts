@@ -10,9 +10,11 @@ import {
   type Principal,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, pgConstraintName, type Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
+  canonicalHash,
   CLOCK,
   OperationalExceptions,
   OperationsService,
@@ -26,7 +28,7 @@ import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity'
 import { EntryActions } from '../entry.actions';
 import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
-import { addMinutes, organizationOf, toBatch, type BatchRow } from '../entry.shared';
+import { addMinutes, organizationOf, toBatch, type BatchRow, type VisitRow } from '../entry.shared';
 import {
   activityKey,
   ActivityResolver,
@@ -36,7 +38,21 @@ import {
 import { AttendanceService } from './attendance.service';
 import { denialReasonFor, ReleasesService } from './releases.service';
 import { StaffScope } from './staff-scope';
+import { attendanceLockKey, lockEntrySubjects, presenceLockKey } from './subject-locks';
 import { VisitsService } from './visits.service';
+
+/** A departure synchronized while the person had no open visit, kept for review (§4.15). */
+const UNMATCHED_DEPARTURE = 'entry.offline_departure_unmatched';
+/** A queued release or child departure that could not be recorded as a verified release. */
+const UNRECORDED_RELEASE = 'entry.offline_release_unrecorded';
+
+interface UnmatchedDepartureDetails {
+  personId: string;
+  observedAt: string;
+  deviceId: string;
+  clientObservationId: string;
+  batchId: string;
+}
 
 interface BatchContext {
   principal: Principal;
@@ -44,6 +60,10 @@ interface BatchContext {
   facility: FacilityFacts;
   policy: EntryPolicy;
   desk: boolean;
+  /** The principal holds entry.record_release at the facility (the online pickup desk roles). */
+  releaseDesk: boolean;
+  /** Per activity: entry.record_assigned_release is held and the principal is assigned to it. */
+  releaseAssigned: Map<string, boolean>;
   batchId: string;
   deviceId: string;
   snapshotReference: string;
@@ -75,15 +95,30 @@ const result = (
  * queued against a roster snapshot. Each item carries its unique client id, the observed time and
  * the snapshot reference; the actor is the signed-in principal and the received time is the
  * server clock. The batch is applied once:
- *   - a re-uploaded batch (same device and client batch id) returns the stored outcome;
+ *   - a re-uploaded batch (same device and client batch id) returns the stored outcome only when
+ *     its facility and contents match the stored request fingerprint; the same client batch id
+ *     with different contents is a RESOURCE_CONFLICT `batch_id_reused` that reveals nothing about
+ *     the stored batch (§4.9, §4.14);
  *   - an item already recorded (same device and client observation id) is a `duplicate`;
  *   - an item observed against a roster older than the maximum roster age (DEC-033, proposed two
  *     hours) is accepted but flagged `stale_snapshot`, and the batch is raised for review;
  *   - a conflicting observation is kept and raised for review (`accepted_with_conflict`);
+ *   - a departure synchronized before the arrival it closes is kept for review
+ *     (`entry.offline_departure_unmatched`), and closes the visit once that arrival synchronizes;
+ *     an arrival synchronized after a release of the child closes through that release;
  *   - a queued release is REJECTED unless it names a separately approved manual outage procedure
- *     (DEC-005, DEC-034; none approved by default). Even then current authority is re-checked
- *     online now, and a release made without it raises a critical exception — stale authority is
- *     never asserted.
+ *     (DEC-005, DEC-034; none approved by default) and the principal may record that release
+ *     online (entry.record_release, or entry.record_assigned_release for a child of the assigned
+ *     activity). Even then authority is re-checked: `collect` must be held now AND at the recorded
+ *     handover time, and a release made without it raises a critical exception — stale authority
+ *     is never asserted;
+ *   - every queued release that is rejected, and every child departure rejected because a
+ *     release is required, raises a critical `entry.offline_release_unrecorded` exception: the
+ *     device saw the child leave, so someone must confirm where the child is (§4.7 invariant 12).
+ *     Whether such a release may be recorded as a fact depends on the outage procedure (DEC-034,
+ *     DEC-005 pending); until then no authority is ever asserted for it.
+ * Writes about one person (presence, attendance in one activity) are serialized by
+ * transaction-scoped advisory locks taken up front in a stable order (subject-locks.ts).
  * Nothing offline can authorize payments, capacity, guardian changes or roster transfers: those
  * kinds do not exist in the batch contract.
  */
@@ -119,8 +154,9 @@ export class OfflineSyncService {
       facilityId: body.facilityId,
     });
     const facility = await this.resolver.facility(organizationId, body.facilityId);
+    const fingerprint = requestFingerprint(body);
     const stored = await this.findBatch(this.uow.reader(), organizationId, body);
-    if (stored) return toBatch(stored, true);
+    if (stored) return replayOf(stored, body, fingerprint);
 
     const policy = policyForFacility(this.policy, facility.settings);
     const desk = this.scope.hasDeskRole(principal);
@@ -143,8 +179,43 @@ export class OfflineSyncService {
         );
       }
     }
+    // §4.11 one action registry: a queued release needs the same authority as an online one
+    // (SPK-ENTRY-007) — the pickup desk roles, or a coach assigned to the release's activity.
+    const releaseDesk = (
+      await this.authorization.decide(principal, EntryActions.recordRelease, {
+        type: 'facility',
+        id: body.facilityId,
+        organizationId,
+        facilityId: body.facilityId,
+      })
+    ).allowed;
+    const releaseAssigned = new Map<string, boolean>();
+    if (!releaseDesk && principal.personId) {
+      for (const [key, activity] of activities) {
+        if (!activity) continue;
+        const field = await this.authorization.decide(
+          principal,
+          EntryActions.recordAssignedRelease,
+          {
+            type: 'activity',
+            id: activity.detail.id,
+            organizationId,
+            facilityId: activity.facilityId,
+          },
+        );
+        releaseAssigned.set(
+          key,
+          field.allowed &&
+            (assigned.get(key) ??
+              (await this.scope.isAssigned(organizationId, activity, principal.personId))),
+        );
+      }
+    }
     try {
       return await this.uow.run(async ({ trx }) => {
+        // Every per-subject lock the batch needs, up front and sorted, so two batches listing the
+        // same people in opposite orders cannot deadlock (§4.15, SPK-AT-018).
+        await lockEntrySubjects(trx, subjectLockKeys(organizationId, body.items, activities));
         const receivedAt = this.clock.now();
         const snapshotTakenAt = new Date(body.snapshot.takenAt);
         if (
@@ -174,6 +245,8 @@ export class OfflineSyncService {
           facility,
           policy,
           desk,
+          releaseDesk,
+          releaseAssigned,
           batchId,
           deviceId: body.deviceId,
           snapshotReference: body.snapshot.reference,
@@ -185,7 +258,11 @@ export class OfflineSyncService {
           exceptionIds: new Set(),
         };
         const results: OfflineItemResult[] = [];
-        for (const item of body.items) results.push(await this.apply(trx, ctx, item));
+        for (const item of body.items) {
+          const applied = await this.apply(trx, ctx, item);
+          await this.followUpUnrecordedRelease(trx, ctx, item, applied);
+          results.push(applied);
+        }
 
         const applied = results.filter(
           (r) => r.outcome === 'accepted' || r.outcome === 'accepted_with_conflict',
@@ -246,6 +323,7 @@ export class OfflineSyncService {
             stale: counts.stale > 0,
             results: json(results),
             exception_ids: [...ctx.exceptionIds],
+            request_fingerprint: fingerprint,
             operation_id: operationId,
             submitted_by: json(snapshotActor(principal)),
             submitted_by_person_id: principal.personId,
@@ -287,16 +365,111 @@ export class OfflineSyncService {
         return toBatch(row, false);
       });
     } catch (error) {
-      // A concurrent upload of the same batch committed first: return its stored outcome.
+      // A concurrent upload of the same batch committed first: return its stored outcome (or a
+      // conflict when the winner carried different contents under the same client batch id).
       if (
         isUniqueViolation(error) &&
         pgConstraintName(error) === 'offline_sync_batches_client_unique'
       ) {
         const winner = await this.findBatch(this.uow.reader(), organizationId, body);
-        if (winner) return toBatch(winner, true);
+        if (winner) return replayOf(winner, body, fingerprint);
       }
       throw error;
     }
+  }
+
+  /**
+   * §4.15 / §4.7 invariant 12 / SPK-ENTRY-007: a device queues a release (or a departure) because
+   * staff saw the child leave while offline. When the server cannot record it as a verified
+   * release — no approved procedure, outside the device's scope or authority, a collector who
+   * cannot be identified, an impossible time, or a child departure that needed a release — the
+   * item stays rejected (no authority is asserted, the visit is not closed) and a critical
+   * exception asks the pickup queue to confirm where the child is. One exception per queued item
+   * (device and client observation id), so re-sending the item does not open a second one.
+   * Whether such a handover may later be recorded as a fact is DEC-034 / DEC-005 (pending).
+   */
+  private async followUpUnrecordedRelease(
+    trx: Trx,
+    ctx: BatchContext,
+    item: OfflineItem,
+    outcome: OfflineItemResult,
+  ): Promise<void> {
+    if (outcome.outcome !== 'rejected') return;
+    let childPersonId: string;
+    let details: Record<string, unknown>;
+    if (item.kind === 'release') {
+      childPersonId = item.childPersonId;
+      details = {
+        collectorPersonId: 'personId' in item.collector ? item.collector.personId : null,
+        collectorDescription: 'description' in item.collector ? item.collector.description : null,
+        manualProcedureReference: item.manualProcedureReference ?? null,
+        activity: item.activity ?? null,
+      };
+    } else if (item.kind === 'departure' && outcome.reason === 'release_required') {
+      childPersonId = item.personId;
+      const visit = await this.visits.openVisit(
+        trx,
+        ctx.organizationId,
+        ctx.facility.id,
+        item.personId,
+      );
+      details = { visitId: visit?.id ?? null };
+    } else {
+      return;
+    }
+    const child = await this.people.findPerson(ctx.organizationId, childPersonId, trx);
+    if (!child || child.kind !== 'child' || child.status !== 'active') return;
+    await this.raiseUnrecordedRelease(trx, ctx, {
+      childPersonId,
+      deviceId: ctx.deviceId,
+      clientObservationId: item.clientObservationId,
+      batchId: ctx.batchId,
+      kind: item.kind,
+      observedAt: new Date(item.observedAt).toISOString(),
+      reason: outcome.reason,
+      details,
+    });
+  }
+
+  /** The critical follow-up for one queued item (device and client observation id). */
+  private async raiseUnrecordedRelease(
+    trx: Trx,
+    ctx: BatchContext,
+    input: {
+      childPersonId: string;
+      deviceId: string;
+      clientObservationId: string;
+      batchId: string;
+      kind: OfflineItem['kind'];
+      observedAt: string;
+      reason: string | null;
+      details: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    const raised = await this.exceptions.raise(trx, {
+      organizationId: ctx.organizationId,
+      facilityId: ctx.facility.id,
+      category: UNRECORDED_RELEASE,
+      severity: 'critical',
+      title:
+        'A child was reported leaving while offline, but no verified release could be recorded',
+      affectedType: 'person',
+      affectedId: input.childPersonId,
+      ownerQueue: ctx.policy.pickupEscalationQueue,
+      dedupeKey: `${UNRECORDED_RELEASE}:${input.deviceId}:${input.clientObservationId}`,
+      details: {
+        batchId: input.batchId,
+        deviceId: input.deviceId,
+        clientObservationId: input.clientObservationId,
+        kind: input.kind,
+        childPersonId: input.childPersonId,
+        observedAt: input.observedAt,
+        reason: input.reason,
+        ...input.details,
+        nextAction: 'confirm_the_child_whereabouts_and_follow_the_pickup_procedure',
+      },
+    });
+    ctx.exceptionIds.add(raised.id);
   }
 
   private async apply(trx: Trx, ctx: BatchContext, item: OfflineItem): Promise<OfflineItemResult> {
@@ -429,7 +602,143 @@ export class OfflineSyncService {
       return result(item, 'duplicate', raced ? 'already_recorded' : 'already_on_site', raced);
     }
     await this.visits.afterVisit(trx, ctx.principal, ctx.organizationId, row, ctx.correlationId);
-    return result(item, 'accepted', null, row.id, flags);
+    const closedBy = await this.closeFromEarlierSync(trx, ctx, row, observedAt);
+    return result(item, 'accepted', null, row.id, closedBy ? [...flags, closedBy] : flags);
+  }
+
+  /**
+   * §4.15 / SPK-AT-018 reordered uploads: an arrival synchronized after the release or departure
+   * that ended it (an exit tablet reconnecting before the entrance tablet) closes the new visit
+   * from that record instead of leaving the person on site:
+   *   (a) a release of this child at this facility, released at or after the arrival while no
+   *       visit was open, that no departure names yet — the visit departs through the release;
+   *   (b) otherwise the earliest departure held for review (`entry.offline_departure_unmatched`)
+   *       for this person, observed at or after the arrival and not recorded since — the visit
+   *       departs at the observed time, attributed to the original device, item and batch. A
+   *       child who must leave through a release is never closed this way: the visit stays open
+   *       and a critical `entry.offline_release_unrecorded` asks the pickup queue to confirm
+   *       where the child is (SPK-ENTRY-007, §4.7 invariant 12).
+   * The review exception stays open for staff to close.
+   */
+  private async closeFromEarlierSync(
+    trx: Trx,
+    ctx: BatchContext,
+    visit: VisitRow,
+    observedAt: Date,
+  ): Promise<string | null> {
+    const personId = visit.person_id;
+    if (!personId) return null;
+    const release = await trx
+      .selectFrom('release_records as r')
+      .select(['r.id', 'r.released_at'])
+      .where('r.organization_id', '=', ctx.organizationId)
+      .where('r.facility_id', '=', ctx.facility.id)
+      .where('r.child_person_id', '=', personId)
+      .where('r.outcome', '=', 'released')
+      .where('r.released_at', '>=', observedAt)
+      // Recorded while the child had no open visit: the arrival it ends had not synchronized.
+      .where('r.visit_id', 'is', null)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('departures as d')
+              .select('d.id')
+              .whereRef('d.organization_id', '=', 'r.organization_id')
+              .whereRef('d.release_record_id', '=', 'r.id'),
+          ),
+        ),
+      )
+      .orderBy('r.released_at')
+      .orderBy('r.id')
+      .executeTakeFirst();
+    if (release?.released_at) {
+      await this.visits.recordDeparture(
+        trx,
+        ctx.principal,
+        ctx.organizationId,
+        {
+          visit,
+          departedAt: new Date(release.released_at),
+          source: 'release',
+          releaseRecordId: release.id,
+        },
+        ctx.correlationId,
+      );
+      return 'closed_by_earlier_synced_release';
+    }
+    const held = await trx
+      .selectFrom('operational_exceptions')
+      .select(['id', 'details'])
+      .where('organization_id', '=', ctx.organizationId)
+      .where('facility_id', '=', ctx.facility.id)
+      .where('category', '=', UNMATCHED_DEPARTURE)
+      .where('status', 'in', ['open', 'acknowledged'])
+      .where(sql<string>`details->>'personId'`, '=', personId)
+      .execute();
+    const candidates = held
+      .map((row) => row.details as Partial<UnmatchedDepartureDetails>)
+      .filter(
+        (d): d is UnmatchedDepartureDetails =>
+          d.personId === personId &&
+          typeof d.observedAt === 'string' &&
+          typeof d.deviceId === 'string' &&
+          typeof d.clientObservationId === 'string' &&
+          typeof d.batchId === 'string' &&
+          new Date(d.observedAt).getTime() >= observedAt.getTime(),
+      )
+      .sort(
+        (a, b) =>
+          new Date(a.observedAt).getTime() - new Date(b.observedAt).getTime() ||
+          (a.clientObservationId < b.clientObservationId ? -1 : 1),
+      );
+    if (candidates.length === 0) return null;
+    const releaseRequired = await this.visits.releaseRequired(
+      trx,
+      ctx.organizationId,
+      visit,
+      ctx.policy,
+    );
+    for (const pending of candidates) {
+      const recorded = await trx
+        .selectFrom('departures')
+        .select('id')
+        .where('organization_id', '=', ctx.organizationId)
+        .where('device_id', '=', pending.deviceId)
+        .where('client_observation_id', '=', pending.clientObservationId)
+        .executeTakeFirst();
+      if (recorded) continue;
+      if (releaseRequired) {
+        // SPK-ENTRY-007 / §4.7 invariant 12: the child was seen leaving without a release; the
+        // visit stays open and the pickup queue is asked to confirm where the child is.
+        await this.raiseUnrecordedRelease(trx, ctx, {
+          childPersonId: personId,
+          deviceId: pending.deviceId,
+          clientObservationId: pending.clientObservationId,
+          batchId: pending.batchId,
+          kind: 'departure',
+          observedAt: pending.observedAt,
+          reason: 'release_required',
+          details: { visitId: visit.id },
+        });
+        return null;
+      }
+      await this.visits.recordDeparture(
+        trx,
+        ctx.principal,
+        ctx.organizationId,
+        {
+          visit,
+          departedAt: new Date(pending.observedAt),
+          source: 'offline_sync',
+          deviceId: pending.deviceId,
+          clientObservationId: pending.clientObservationId,
+          syncBatchId: pending.batchId,
+        },
+        ctx.correlationId,
+      );
+      return 'closed_by_earlier_synced_departure';
+    }
+    return null;
   }
 
   private async applyDeparture(
@@ -448,13 +757,37 @@ export class OfflineSyncService {
       ctx.facility.id,
       item.personId,
     );
-    if (!visit) return result(item, 'rejected', 'no_open_visit', null);
-    if (
-      visit.visitor_category === 'participant' &&
-      ctx.policy.childParticipantDepartureRequiresRelease
-    ) {
-      const person = await this.people.findPerson(ctx.organizationId, item.personId, trx);
-      if (person?.kind === 'child') return result(item, 'rejected', 'release_required', null);
+    if (!visit) {
+      // §4.15 / SPK-AT-018: the arrival it closes may not have synchronized yet (another device,
+      // or a later batch). The departure is kept for review — and closes the visit when that
+      // arrival arrives (closeFromEarlierSync) — instead of being dropped.
+      if (await this.personActive(ctx, trx, item.personId)) {
+        const raised = await this.exceptions.raise(trx, {
+          organizationId: ctx.organizationId,
+          facilityId: ctx.facility.id,
+          category: UNMATCHED_DEPARTURE,
+          severity: 'warning',
+          title: 'An offline departure was synchronized while the person had no open visit',
+          affectedType: 'offline_sync_batch',
+          affectedId: ctx.batchId,
+          ownerQueue: ctx.policy.attendanceReviewQueue,
+          dedupeKey: `${UNMATCHED_DEPARTURE}:${ctx.deviceId}:${item.clientObservationId}`,
+          details: {
+            facilityId: ctx.facility.id,
+            personId: item.personId,
+            observedAt: observedAt.toISOString(),
+            deviceId: ctx.deviceId,
+            clientObservationId: item.clientObservationId,
+            batchId: ctx.batchId,
+            nextAction: 'record_the_departure_or_void_the_visit',
+          } satisfies UnmatchedDepartureDetails & Record<string, unknown>,
+        });
+        ctx.exceptionIds.add(raised.id);
+      }
+      return result(item, 'rejected', 'no_open_visit', null);
+    }
+    if (await this.visits.releaseRequired(trx, ctx.organizationId, visit, ctx.policy)) {
+      return result(item, 'rejected', 'release_required', null);
     }
     const departure = await this.visits.recordDeparture(
       trx,
@@ -493,7 +826,25 @@ export class OfflineSyncService {
     const resolved = this.activityFor(ctx, item);
     if (resolved && 'rejected' in resolved)
       return result(item, 'rejected', resolved.rejected, null);
-    if (!ctx.desk && !resolved) return result(item, 'rejected', 'not_permitted', null);
+    // §4.11 / SPK-ENTRY-007: the same authority as POST /v1/releases — a pickup desk role, or a
+    // coach assigned to the activity (an official, or a desk role without record_release, cannot).
+    if (!ctx.releaseDesk) {
+      if (!item.activity || !resolved || !ctx.releaseAssigned.get(activityKey(item.activity))) {
+        return result(item, 'rejected', 'not_permitted', null);
+      }
+      // §4.14: an assigned coach releases only a child taking part in their activity; checked
+      // before anything is evaluated about the child or the collector.
+      if (
+        !(await this.releases.takesPart(
+          trx,
+          ctx.organizationId,
+          item.childPersonId,
+          resolved.activity,
+        ))
+      ) {
+        return result(item, 'rejected', 'not_in_activity', null);
+      }
+    }
     try {
       await this.releases.requireChild(trx, ctx.organizationId, item.childPersonId);
     } catch (error) {
@@ -512,13 +863,26 @@ export class OfflineSyncService {
       return result(item, 'rejected', 'person_not_found', null);
     }
     // The online re-check at synchronization (SPK-AT-018: stale authority is not asserted).
+    // `collect` must be held now AND at the recorded handover time: a grant that began, or a
+    // restriction that ended, after the child left does not make the release authorized.
     const permissions = await this.releases.currentPermissions(
       trx,
       ctx.organizationId,
       collectorPersonId,
       item.childPersonId,
     );
-    const held = collectorPersonId !== null && permissions.includes('collect');
+    const heldNow = collectorPersonId !== null && permissions.includes('collect');
+    const heldAtRelease =
+      heldNow &&
+      collectorPersonId !== null &&
+      (await this.releases.heldAt(
+        trx,
+        ctx.organizationId,
+        collectorPersonId,
+        item.childPersonId,
+        observedAt,
+      ));
+    const held = heldNow && heldAtRelease;
     const releaseId = newId();
     let exceptionId: string | null = null;
     if (!held) {
@@ -551,7 +915,11 @@ export class OfflineSyncService {
         verificationOutcome: 'manual_outage_procedure',
         collectorPermissions: permissions,
         authorityCheckedAt: ctx.receivedAt,
-        denialReason: held ? null : denialReasonFor(collectorPersonId, permissions),
+        denialReason: held
+          ? null
+          : heldNow
+            ? 'The collecting person did not hold pickup (collect) permission at the recorded release time; it was granted, or a restriction ended, afterwards.'
+            : denialReasonFor(collectorPersonId, permissions),
         restrictionNotes: null,
         escalationNotes: null,
         escalationExceptionId: exceptionId,
@@ -571,7 +939,13 @@ export class OfflineSyncService {
     const flags = stale ? ['stale_snapshot'] : [];
     return held
       ? result(item, 'accepted', null, release.id, flags)
-      : result(item, 'accepted_with_conflict', 'authority_not_held_at_sync', release.id, flags);
+      : result(
+          item,
+          'accepted_with_conflict',
+          heldNow ? 'authority_not_held_at_release' : 'authority_not_held_at_sync',
+          release.id,
+          flags,
+        );
   }
 
   private async byClientId(
@@ -603,4 +977,90 @@ export class OfflineSyncService {
       .where('client_batch_id', '=', body.clientBatchId)
       .executeTakeFirst();
   }
+}
+
+/**
+ * The request fingerprint of a batch (§4.9 "the same key with different contents returns a
+ * conflict", applied to the client batch id): facility, snapshot and every item, items in client
+ * observation id order and times normalized, so a faithful re-send matches and anything else
+ * does not. Command metadata (reason, policy references) is not part of the observations.
+ */
+function requestFingerprint(body: OfflineSyncBody): string {
+  return canonicalHash({
+    facilityId: body.facilityId,
+    snapshot: {
+      reference: body.snapshot.reference,
+      takenAt: new Date(body.snapshot.takenAt).toISOString(),
+    },
+    items: [...body.items]
+      .map((item) => ({ ...item, observedAt: new Date(item.observedAt).toISOString() }))
+      .sort((a, b) =>
+        a.clientObservationId < b.clientObservationId
+          ? -1
+          : a.clientObservationId > b.clientObservationId
+            ? 1
+            : 0,
+      ),
+  });
+}
+
+/**
+ * The stored outcome of a re-uploaded batch, or a conflict when the client batch id was used for
+ * a different upload (other items, snapshot or facility). The conflict carries nothing about the
+ * stored batch: a principal of another facility learns neither its records nor its counts (§4.14).
+ * Batches stored before the fingerprint existed compare facility, snapshot and item ids.
+ */
+function replayOf(stored: BatchRow, body: OfflineSyncBody, fingerprint: string): OfflineSyncBatch {
+  const reused = () =>
+    errors.resourceConflict(
+      'This client batch id was already used for a different upload; send these items under a new client batch id.',
+      { code: 'batch_id_reused', clientBatchId: body.clientBatchId },
+    );
+  if (stored.facility_id !== body.facilityId) throw reused();
+  if (stored.request_fingerprint !== null) {
+    if (stored.request_fingerprint !== fingerprint) throw reused();
+    return toBatch(stored, true);
+  }
+  const storedItems = (stored.results as OfflineItemResult[])
+    .map((r) => `${r.kind}:${r.clientObservationId}`)
+    .sort();
+  const requestItems = body.items.map((i) => `${i.kind}:${i.clientObservationId}`).sort();
+  if (
+    stored.snapshot_reference !== body.snapshot.reference ||
+    new Date(stored.snapshot_taken_at).getTime() !== new Date(body.snapshot.takenAt).getTime() ||
+    storedItems.join(',') !== requestItems.join(',')
+  ) {
+    throw reused();
+  }
+  return toBatch(stored, true);
+}
+
+/** The advisory lock keys a batch needs (attendance per activity and person; presence per person). */
+function subjectLockKeys(
+  organizationId: string,
+  items: readonly OfflineItem[],
+  activities: Map<string, ResolvedActivity | null>,
+): string[] {
+  return items.flatMap((item) => {
+    switch (item.kind) {
+      case 'attendance': {
+        const activity = activities.get(activityKey(item.activity));
+        return activity
+          ? [
+              attendanceLockKey(
+                organizationId,
+                activity.detail.type,
+                activity.detail.id,
+                item.personId,
+              ),
+            ]
+          : [];
+      }
+      case 'arrival':
+      case 'departure':
+        return [presenceLockKey(organizationId, item.personId)];
+      case 'release':
+        return [presenceLockKey(organizationId, item.childPersonId)];
+    }
+  });
 }
