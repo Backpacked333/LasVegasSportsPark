@@ -39,7 +39,8 @@ describe('useApiCommand (§4.9)', () => {
     await act(async () => {
       await result.current.submit(request).catch(() => undefined);
     });
-    expect(result.current.error?.code).toBe('INTEGRATION_UNAVAILABLE');
+    // The mutation error reaches the hook through TanStack Query's timer-batched notifier.
+    await waitFor(() => expect(result.current.error?.code).toBe('INTEGRATION_UNAVAILABLE'));
     expect(result.current.error?.retryable).toBe(true);
 
     await act(async () => {
