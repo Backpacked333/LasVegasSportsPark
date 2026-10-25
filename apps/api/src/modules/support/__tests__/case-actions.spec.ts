@@ -1,9 +1,12 @@
 import { errors } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { TestApp } from '../../../testing';
+import { createTestApp, type TestApp } from '../../../testing';
 import { createCapturedPaymentFixture, RefundsService } from '../../finance';
 import { createOrganizationPeople, type OrganizationPeople } from '../../identity';
+import { MigrationModule, createAuthorityAssignmentFixture } from '../../migration';
+import { SupportModule } from '../support.module';
 import {
+  CLOCK_START,
   drainOutbox,
   get,
   key,
@@ -282,6 +285,66 @@ describe('case actions (SPK-SUPPORT-003)', () => {
     expect(fresh.body.action.status).toBe('succeeded');
   });
 
+  it('support-migration-09 / §4.7 invariant 12: a case cannot be closed while an action outcome is unknown, in the service and in the database', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 2500,
+    });
+    const caseId = await openCase(manager);
+    const refunds = t.app.get(RefundsService);
+    const spy = vi
+      .spyOn(refunds, 'request')
+      .mockRejectedValueOnce(new Error('connection reset after the request was sent'));
+    const first = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 500,
+      reason: 'Late fee waived',
+    });
+    expect(first.status).toBe(500);
+    spy.mockRestore();
+    const detail = await get(t, `/v1/cases/${caseId}`, manager);
+    const action = detail.body.actions[0];
+    expect(action.status).toBe('unknown');
+    const resolved = await post(t, `/v1/cases/${caseId}/transition`, manager, {
+      event: 'resolve',
+      expectedRevision: detail.body.revision,
+      resolution: {
+        kind: 'information_provided',
+        summary: 'Told the customer finance is checking',
+      },
+    });
+    expect(resolved.status, JSON.stringify(resolved.body)).toBe(200);
+    const close = await post(t, `/v1/cases/${caseId}/transition`, manager, {
+      event: 'close',
+      expectedRevision: resolved.body.revision,
+    });
+    expect(close.status).toBe(409);
+    expect(close.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: { code: 'ACTION_OUTCOME_UNKNOWN', caseActionIds: [action.id] },
+    });
+    // The database refuses the same close, whatever the caller.
+    await expect(
+      t.db
+        .updateTable('cases')
+        .set({ status: 'closed', revision: resolved.body.revision + 1 })
+        .where('id', '=', caseId)
+        .execute(),
+    ).rejects.toThrow(/settle it before closing/);
+    // Once the outcome is recorded the case closes normally.
+    const settled = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, manager, {
+      outcome: 'failed',
+      reason: 'Finance confirms no refund was reserved for this payment',
+    });
+    expect(settled.status, JSON.stringify(settled.body)).toBe(200);
+    const closed = await post(t, `/v1/cases/${caseId}/transition`, manager, {
+      event: 'close',
+      expectedRevision: settled.body.case.revision,
+    });
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+    expect(closed.body.status).toBe('closed');
+  });
+
   it('CaseActionMachine unknown → succeeded: only with the evidence of the command the helper ran, never a note', async () => {
     const payment = await createCapturedPaymentFixture(t, {
       payerPersonId: people.adult.personId,
@@ -521,5 +584,83 @@ describe('case actions (SPK-SUPPORT-003)', () => {
       reason: 'Front desk resend',
     });
     expect(viaDesk.status).toBe(201);
+  });
+});
+
+/**
+ * §4.7 invariant 11 / §5.6: the refund helper runs finance's normal command with all of its
+ * guards (SPK-SUPPORT-003), including the record authority finance checks in-process.
+ */
+describe('case actions under legacy refund authority (§4.7 invariant 11, §5.6)', () => {
+  let t: TestApp;
+  let manager: Actor;
+  let people: OrganizationPeople;
+
+  beforeAll(async () => {
+    t = await createTestApp({
+      imports: [SupportModule, MigrationModule],
+      principalResolver: 'module',
+      clockStart: CLOCK_START,
+    });
+    manager = await staffMember(t, ['general_manager']);
+    people = await createOrganizationPeople(t);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  it('§4.7 invariant 11 / §5.6: request-refund is refused while the legacy system is authoritative for refunds; the action is failed and nothing moves', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 4000,
+    });
+    await createAuthorityAssignmentFixture(t, {
+      recordCategory: 'refund',
+      authoritativeSystem: 'legacy',
+    });
+    const opened = await post(t, '/v1/cases', manager, {
+      category: 'payment',
+      title: 'Duplicate charge',
+      subjectPersonId: people.adult.personId,
+    });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(201);
+    const caseId = opened.body.id as string;
+    const res = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 1000,
+      reason: 'Charged twice',
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body).toMatchObject({
+      code: 'ACCESS_DENIED',
+      nextAction: 'write_in_authoritative_system',
+      details: { code: 'LEGACY_AUTHORITY', recordCategory: 'refund' },
+    });
+    const refunds = await t.db
+      .selectFrom('refund_attempts')
+      .select('id')
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .execute();
+    expect(refunds).toEqual([]);
+    const refundable = await t.db
+      .selectFrom('payment_refundables')
+      .select(['reserved_minor', 'refunded_minor'])
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    expect(refundable).toEqual({ reserved_minor: 0, refunded_minor: 0 });
+    const detail = await get(t, `/v1/cases/${caseId}`, manager);
+    expect(detail.body.actions).toHaveLength(1);
+    expect(detail.body.actions[0]).toMatchObject({
+      actionId: 'finance.refund',
+      via: 'helper',
+      status: 'failed',
+      error: { code: 'ACCESS_DENIED' },
+    });
+    const op = await t.db
+      .selectFrom('operations')
+      .select('status')
+      .where('id', '=', detail.body.actions[0].supportOperationId)
+      .executeTakeFirstOrThrow();
+    expect(op.status).toBe('failed');
   });
 });

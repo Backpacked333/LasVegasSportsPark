@@ -572,6 +572,31 @@ export class CasesService implements SupportCasesPort {
       assertExpectedRevision(input.expectedRevision, row.revision);
       const to = CaseMachine.next(row.status, input.event);
       const now = this.clock.now();
+      if (to === 'closed') {
+        // support-migration-09: an action whose outcome is unknown must be settled first, or the
+        // outcome could never be recorded on the case (§4.7 invariant 12). The database refuses
+        // the same close (cases_close_requires_settled_actions).
+        const unsettled = await trx
+          .selectFrom('case_actions')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('case_id', '=', id)
+          .where('status', 'in', ['requested', 'unknown'])
+          .execute();
+        if (unsettled.length) {
+          throw new DomainError(
+            'RESOURCE_CONFLICT',
+            'This case has an action whose outcome is not recorded yet; record it before closing the case.',
+            {
+              details: {
+                code: 'ACTION_OUTCOME_UNKNOWN',
+                caseActionIds: unsettled.map((a) => a.id),
+              },
+              nextAction: 'settle_case_action',
+            },
+          );
+        }
+      }
       if (input.event === 'resolve' && input.resolution?.kind === 'action_taken') {
         // SPK-SUPPORT-003: "action taken" means an authorized command ran; a note never counts.
         const evidence = await trx
@@ -833,11 +858,16 @@ export class CasesService implements SupportCasesPort {
     id: string,
     operation: string,
     action: ActionDefinition = SupportActions.workCase,
+    options: { allowClosed?: boolean } = {},
   ): Promise<CaseRow> {
     const row = await this.loadForUpdate(trx, organizationId, id);
     if (!row) throw errors.protectedNotFound('case');
     await this.requireOn(principal, action, row);
-    if (row.status === 'closed') throw errors.invalidTransition('Case', 'closed', operation);
+    // A closed case accepts no new action; recording the outcome of an action it already has is
+    // not a new action (support-migration-09, §4.7 invariant 12).
+    if (row.status === 'closed' && !options.allowClosed) {
+      throw errors.invalidTransition('Case', 'closed', operation);
+    }
     return row;
   }
 

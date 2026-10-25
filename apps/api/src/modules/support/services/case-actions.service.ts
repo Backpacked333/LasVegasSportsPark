@@ -578,6 +578,7 @@ export class CaseActionsService {
         caseId,
         'settle_action',
         SupportActions.linkAction,
+        { allowClosed: true },
       );
       const current = await trx
         .selectFrom('case_actions')

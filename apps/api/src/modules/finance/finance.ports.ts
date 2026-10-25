@@ -1,3 +1,6 @@
+import type { ImportEntityTypeValue } from '@sportspark/contracts';
+import type { Trx } from '../../kernel';
+
 /**
  * Payment provider port (specification §5.2: the processor is not selected, DEC-019). Code runs
  * against this interface with the deterministic `FakePaymentProvider`; a real adapter implements
@@ -66,4 +69,27 @@ export interface PaymentProviderPort {
 /** The provider did not answer with an outcome (timeout or transport failure). */
 export class PaymentOutcomeUnknownError extends Error {
   override readonly name = 'PaymentOutcomeUnknownError';
+}
+
+/**
+ * Record authority for money records finance writes (§5.6 "a synchronized copy does not become an
+ * independent writer", §4.7 invariant 11, authority matrix row 15). MigrationModule registers
+ * RECORD_AUTHORITY_IMPL (its AuthorityGuard); finance resolves it lazily at call time through
+ * RECORD_AUTHORITY_PORT, so every in-process caller of a guarded command (support's refund
+ * helper, automation's refund proposal) is refused exactly like the HTTP route. Without the
+ * migration module there is no assignment and SportsPark is authoritative.
+ */
+export const RECORD_AUTHORITY_IMPL = Symbol('RECORD_AUTHORITY_IMPL');
+export const RECORD_AUTHORITY_PORT = Symbol('RECORD_AUTHORITY_PORT');
+
+export interface RecordAuthorityPort {
+  /**
+   * Throws ACCESS_DENIED (`nextAction: write_in_authoritative_system`, `details.code:
+   * LEGACY_AUTHORITY`) while any assignment of the category in effect names the legacy system.
+   */
+  assertNoLegacyAuthorityInEffect(
+    organizationId: string,
+    category: ImportEntityTypeValue,
+    trx?: Trx,
+  ): Promise<void>;
 }

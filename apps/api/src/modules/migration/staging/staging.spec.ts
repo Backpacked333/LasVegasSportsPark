@@ -152,9 +152,10 @@ describe('categories', () => {
 describe('authority routes', () => {
   it('match Express route patterns with or without the /v1 prefix', () => {
     expect(matchAuthorityRoute('POST', '/v1/people')?.category).toBe('person');
+    // support-migration-01: the program scope comes from the path, never from the request body.
     expect(matchAuthorityRoute('patch', '/v1/programs/:id')).toMatchObject({
       category: 'program',
-      idIsProgram: true,
+      scope: { programId: 'params.id' },
     });
     expect(matchAuthorityRoute('GET', '/v1/people')).toBeUndefined();
     expect(matchAuthorityRoute('POST', '/v1/import-batches')).toBeUndefined();
