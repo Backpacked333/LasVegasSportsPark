@@ -25058,7 +25058,8 @@
               "format": "uuid"
             },
             "maxItems": 10,
-            "default": []
+            "default": [],
+            "uniqueItems": true
           },
           "paymentPlan": {
             "$ref": "#/components/schemas/PaymentPlanRequest"

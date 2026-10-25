@@ -31,6 +31,12 @@ import {
 import { MoneyFacts } from './money-facts.service';
 import { PaymentsService } from './payments.service';
 
+/** The plan's notice lead time (POL-016), the default three days when it records none. */
+function noticeDaysBefore(plan: InstallmentPlanRow): number {
+  const days = (plan.notice_policy as { daysBefore?: unknown } | null)?.daysBefore;
+  return typeof days === 'number' && Number.isFinite(days) && days >= 0 ? days : 3;
+}
+
 /**
  * Installment plans (SPK-PAY-006): amounts, due dates, authorization, retry policy, notices,
  * extensions and the outstanding obligations (one obligation per installment). Collection
@@ -124,13 +130,15 @@ export class InstallmentsService {
     correlationId: string | null,
   ): Promise<InstallmentPlan> {
     const organizationId = organizationOf(principal);
-    const existing = await this.loadInstallment(this.db, organizationId, id);
-    if (!existing) throw errors.protectedNotFound('installment');
+    // §4.10: a finance-only command is authorized before the record is read, so a caller without
+    // the role gets the same answer whether or not the installment exists.
     await this.authorization.require(principal, FinanceActions.manageInstallments, {
       type: 'installment',
       id,
       organizationId,
     });
+    const existing = await this.loadInstallment(this.db, organizationId, id);
+    if (!existing) throw errors.protectedNotFound('installment');
     assertExpectedRevision(input.expectedRevision, existing.revision);
     const planId = await this.collectInternal(principal, organizationId, id, correlationId);
     const plan = await this.loadPlan(this.db, organizationId, planId);
@@ -156,10 +164,16 @@ export class InstallmentsService {
       )) as InstallmentPlanRow;
       if (plan.status !== 'active')
         throw errors.invalidTransition('InstallmentPlan', plan.status, 'collect');
-      const live = await this.payments.liveAttempt(trx, organizationId, { installmentId: id });
+      await this.assertOrderCollectable(trx, organizationId, plan.order_id);
+      // SPK-PAY-007, §4.7 invariant 5: one live charge per obligation, whatever its purpose (the
+      // checkout attempt names the due-now installment's obligation; a payer may pay it directly).
+      const live = await this.payments.liveAttempt(trx, organizationId, {
+        obligationId: installment.obligation_id,
+      });
       if (live) {
-        if (live.status === 'unknown')
-          throw errors.paymentOutcomeUnknown({ paymentAttemptId: live.id });
+        if (live.purpose !== 'installment' || live.status === 'unknown') {
+          throw errors.paymentOutcomeUnknown({ paymentAttemptId: live.id, status: live.status });
+        }
         return live;
       }
       const retry = plan.retry_policy as { maxAttempts: number };
@@ -223,6 +237,35 @@ export class InstallmentsService {
     return installment.plan_id;
   }
 
+  /**
+   * An installment of a plan is collected only once the checkout that created the plan has been
+   * paid (SPK-PAY-007: its own charge of the due-now installment may still be in flight, processing
+   * or unknown) and its registration fulfilled (SPK-AT-006, §4.11 step 10: a checkout in recovery,
+   * compensated or canceled never charges for a registration the family did not receive). Staff
+   * `recover` fulfils the order, and collection resumes.
+   */
+  private async assertOrderCollectable(
+    trx: Trx,
+    organizationId: string,
+    orderId: string,
+  ): Promise<void> {
+    const order = await trx
+      .selectFrom('orders')
+      .select(['payment_status', 'fulfillment_status'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', orderId)
+      .executeTakeFirstOrThrow();
+    if (order.payment_status !== 'paid') {
+      throw errors.resourceConflict('The checkout payment for this plan has not settled.', {
+        code: 'CHECKOUT_PAYMENT_PENDING',
+        paymentStatus: order.payment_status,
+      });
+    }
+    if (order.fulfillment_status !== 'fulfilled') {
+      throw errors.invalidTransition('Order', order.fulfillment_status, 'collect_installment');
+    }
+  }
+
   /** POST /installments/{id}/extend: a new due date with a reason; retries start over. */
   async extend(
     principal: Principal,
@@ -232,13 +275,13 @@ export class InstallmentsService {
   ): Promise<InstallmentPlan> {
     const organizationId = organizationOf(principal);
     const planId = await this.uow.run(async ({ trx }) => {
-      const installment = await this.loadInstallment(trx, organizationId, id, true);
-      if (!installment) throw errors.protectedNotFound('installment');
       await this.authorization.require(principal, FinanceActions.manageInstallments, {
         type: 'installment',
         id,
         organizationId,
       });
+      const installment = await this.loadInstallment(trx, organizationId, id, true);
+      if (!installment) throw errors.protectedNotFound('installment');
       assertExpectedRevision(input.expectedRevision, installment.revision);
       if (installment.status !== 'scheduled' && installment.status !== 'failed') {
         throw errors.invalidTransition('Installment', installment.status, 'extend');
@@ -246,6 +289,11 @@ export class InstallmentsService {
       const dueAt = new Date(input.dueAt);
       if (dueAt <= this.clock.now())
         throw errors.validation('The new due date must be in the future.');
+      const plan = (await this.loadPlan(
+        trx,
+        organizationId,
+        installment.plan_id,
+      )) as InstallmentPlanRow;
       await trx
         .updateTable('installments')
         .set({
@@ -255,6 +303,8 @@ export class InstallmentsService {
           next_retry_at: null,
           extension_count: installment.extension_count + 1,
           extension_reason: input.reason,
+          // SPK-PAY-006 (POL-016): the new due date gets its own notice.
+          notice_sent_at: null,
           revision: installment.revision + 1,
         })
         .where('id', '=', id)
@@ -278,7 +328,14 @@ export class InstallmentsService {
         correlationId,
         details: { from: installment.due_at, to: dueAt.toISOString() },
       });
-      await this.scheduleNotice(trx, organizationId, id, dueAt, correlationId);
+      await this.scheduleNotice(
+        trx,
+        organizationId,
+        id,
+        dueAt,
+        correlationId,
+        noticeDaysBefore(plan),
+      );
       return installment.plan_id;
     });
     const plan = await this.loadPlan(this.db, organizationId, planId);
@@ -306,7 +363,11 @@ export class InstallmentsService {
     });
   }
 
-  /** Timer handler: records that the notice went out (once) and emits it for communications. */
+  /**
+   * Timer handler: records that the notice went out (once per due date) and emits it for
+   * communications. A timer scheduled for an earlier due date that an extension has moved fires
+   * before the new notice time and does nothing; the extension enqueued the timer for the new date.
+   */
   async onNoticeDue(
     trx: Trx,
     organizationId: string,
@@ -320,6 +381,8 @@ export class InstallmentsService {
       organizationId,
       installment.plan_id,
     )) as InstallmentPlanRow;
+    const noticeAt = new Date(installment.due_at).getTime() - noticeDaysBefore(plan) * 86_400_000;
+    if (this.clock.now().getTime() < noticeAt) return; // a timer for a due date since moved
     await trx
       .updateTable('installments')
       .set({ notice_sent_at: this.clock.now(), revision: installment.revision + 1 })
@@ -347,8 +410,16 @@ export class InstallmentsService {
     const rows = await this.db
       .selectFrom('installments')
       .innerJoin('installment_plans', 'installment_plans.id', 'installments.plan_id')
+      .innerJoin('orders', (join) =>
+        join
+          .onRef('orders.organization_id', '=', 'installment_plans.organization_id')
+          .onRef('orders.id', '=', 'installment_plans.order_id'),
+      )
       .select(['installments.id as id', 'installments.organization_id as organization_id'])
       .where('installment_plans.status', '=', 'active')
+      // Only plans whose checkout was paid and fulfilled (see assertOrderCollectable).
+      .where('orders.payment_status', '=', 'paid')
+      .where('orders.fulfillment_status', '=', 'fulfilled')
       .where((eb) =>
         eb.or([
           eb.and([

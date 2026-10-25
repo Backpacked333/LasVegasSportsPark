@@ -57,6 +57,18 @@ export interface PaymentProviderPort {
   createPayment(request: CreatePaymentRequest): Promise<ProviderPaymentResult>;
   /** Authoritative lookup by idempotency key for reconciliation; null when the provider has no record. */
   retrievePayment(idempotencyKey: string): Promise<ProviderPaymentResult | null>;
+  /**
+   * Cancels a payment that still waits for the customer (an abandoned challenge, SPK-PAY-007).
+   * Returns `canceled`, or the state the payment already reached when it can no longer be canceled
+   * (succeeded, failed, processing); null when the provider has no record. Idempotent per key.
+   * Throws when no answer arrives (unknown outcome). The challenge validity window and the exact
+   * cancel semantics depend on the processor (DEC-019 pending).
+   */
+  cancelPayment(idempotencyKey: string): Promise<ProviderPaymentResult | null>;
+  /**
+   * An adapter must bound this call well below `reconcileAfterMinutes`: reconciliation treats a
+   * refund the provider still has no record of after that threshold as never received.
+   */
   createRefund(request: CreateRefundRequest): Promise<ProviderRefundResult>;
   retrieveRefund(idempotencyKey: string): Promise<ProviderRefundResult | null>;
   /** Authenticates a webhook body (§4.11 "Webhook handlers must authenticate provider events"). */

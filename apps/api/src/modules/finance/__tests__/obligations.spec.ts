@@ -7,8 +7,17 @@ import {
   createTeamEntryFixture,
 } from '../../competition';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
-import { createObligationFixture } from '../testing/finance-fixtures';
-import { adult, balanceOf, child, financeTestApp, post, staff, type Actor } from './support';
+import { createCreditFixture, createObligationFixture } from '../testing/finance-fixtures';
+import {
+  adult,
+  balanceOf,
+  child,
+  financeTestApp,
+  post,
+  provider,
+  staff,
+  type Actor,
+} from './support';
 
 describe('obligations and team billing (SPK-PAY-004/005, SPK-AT-022)', () => {
   let t: TestApp;
@@ -382,5 +391,89 @@ describe('obligations and team billing (SPK-PAY-004/005, SPK-AT-022)', () => {
       (await post(t, '/v1/obligations', (await staff(t, ['scheduler'])).header, body)).status,
     ).toBe(403);
     expect((await post(t, '/v1/obligations', finance.header, body)).status).toBe(201);
+  });
+
+  it('SPK-PAY-004 / SPK-PAY-005: a contribution request cannot be paid once its team obligation is settled; no charge is made', async () => {
+    const { captain, teamEntryId, roster } = await team(1);
+    const [player] = roster as [Actor];
+    const obligation = await teamObligation(teamEntryId, 50_000);
+    const requested = await post(
+      t,
+      `/v1/obligations/${obligation.id}/contribution-requests`,
+      captain.header,
+      { requestedPersonId: player.personId, amountMinor: 25_000 },
+    );
+    expect(requested.status).toBe(201);
+    // The captain pays the whole team balance (allowed in the contributions model).
+    const settled = await post(t, `/v1/obligations/${obligation.id}/payments`, captain.header, {
+      paymentMethodToken: FakePaymentTokens.succeed,
+    });
+    expect(settled.status).toBe(201);
+    expect(settled.body.obligation.status).toBe('settled');
+    const charges = provider(t).chargeCount('succeeded');
+    const liability = await balanceOf(t, 'overpayment_liability');
+    const paid = await post(
+      t,
+      `/v1/contribution-requests/${requested.body.id as string}/pay`,
+      player.header,
+      { paymentMethodToken: FakePaymentTokens.succeed },
+    );
+    expect(paid.status).toBe(409);
+    expect(paid.body.code).toBe('INVALID_TRANSITION');
+    expect(provider(t).chargeCount('succeeded')).toBe(charges);
+    expect(await balanceOf(t, 'overpayment_liability')).toBe(liability);
+    const receipts = await t.db
+      .selectFrom('receipts')
+      .select('id')
+      .where('obligation_id', '=', obligation.id)
+      .execute();
+    expect(receipts).toHaveLength(1);
+    const view = await t.http
+      .get(`/v1/contribution-requests/${requested.body.id as string}`)
+      .set(player.header);
+    expect(view.body).toMatchObject({
+      status: 'requested',
+      obligation: { status: 'settled', totals: { remainingMinor: 0 } },
+    });
+  });
+
+  it("§4.10 / §4.14: a stranger cannot redeem a credit into another team's obligation nor learn its balance; the captain can", async () => {
+    const { captain, teamEntryId } = await team(0);
+    const obligation = await teamObligation(teamEntryId, 70_000);
+    const stranger = await adult(t);
+    const strangerCredit = await createCreditFixture(t, {
+      ownerPersonId: stranger.personId,
+      amountMinor: 100_000,
+    });
+    expect((await t.http.get(`/v1/obligations/${obligation.id}`).set(stranger.header)).status).toBe(
+      404,
+    );
+    for (const amountMinor of [99_999, 1_000]) {
+      const probe = await post(t, `/v1/credits/${strangerCredit}/redeem`, stranger.header, {
+        obligationId: obligation.id,
+        amountMinor,
+      });
+      expect(probe.status).toBe(404);
+      expect(probe.body.code).toBe('NOT_FOUND');
+      expect(probe.body.details).toBeUndefined();
+    }
+    const untouched = await t.db
+      .selectFrom('obligations')
+      .select('allocated_minor')
+      .where('id', '=', obligation.id)
+      .executeTakeFirstOrThrow();
+    expect(untouched.allocated_minor).toBe(0);
+    // The captain may apply a credit they own to the team balance (SPK-PAY-004).
+    const captainCredit = await createCreditFixture(t, {
+      ownerPersonId: captain.personId,
+      amountMinor: 10_000,
+    });
+    const applied = await post(t, `/v1/credits/${captainCredit}/redeem`, captain.header, {
+      obligationId: obligation.id,
+      amountMinor: 10_000,
+    });
+    expect(applied.status).toBe(201);
+    const after = await t.http.get(`/v1/obligations/${obligation.id}`).set(captain.header);
+    expect(after.body.totals).toMatchObject({ allocatedMinor: 10_000, remainingMinor: 60_000 });
   });
 });

@@ -217,7 +217,15 @@ export type Quote = z.infer<typeof QuoteSchema>;
 export const CreateQuoteBody = withCommandMeta({
   basketId: z.uuid(),
   discountCodes: z.array(DiscountCode).max(10).default([]),
-  creditIds: z.array(z.uuid()).max(10).default([]),
+  /** SPK-PAY-002/009: each credit is listed once (a repeated id would count its balance twice). */
+  creditIds: z
+    .array(z.uuid())
+    .max(10)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: 'A credit may be listed only once.',
+    })
+    .openapi({ uniqueItems: true })
+    .default([]),
   paymentPlan: PaymentPlanRequestSchema.default({ kind: 'full' }),
 })
   .strict()

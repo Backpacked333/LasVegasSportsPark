@@ -572,7 +572,13 @@ export class CheckoutService {
     const future = quote.future_obligations as unknown as FutureObligation[];
     let firstObligationId: string | null = null;
     if (quote.payment_plan === 'installments') {
-      const resolved = await this.policy.resolve(organizationId, now, trx);
+      // SPK-PAY-002: the plan's retry and notice terms come from the installment policy the quote
+      // recorded (the one its schedule was computed with), not from a version approved since.
+      const resolved = await this.policy.resolveRecorded(
+        organizationId,
+        quote.policy_references as unknown as QuotePolicyReferences,
+        trx,
+      );
       planId = newId();
       const token = payment.kind === 'provider' ? payment.token : '';
       await trx
@@ -685,7 +691,7 @@ export class CheckoutService {
 
     // Credits applied (SPK-PAY-009, invariant 7) and discount redemptions (catalog, invariant 7).
     for (const credit of quote.applied_credits as unknown as AppliedCredit[]) {
-      await this.facts.redeemCredit(trx, {
+      const redeemed = await this.facts.redeemCredit(trx, {
         organizationId,
         creditId: credit.creditId,
         amountMinor: credit.amountMinor,
@@ -698,6 +704,12 @@ export class CheckoutService {
         actor,
         correlationId,
       });
+      if (redeemed.replayed) {
+        // SPK-PAY-002/009: the order was created in this transaction, so an existing redemption
+        // can only mean the quote applied the same credit twice. The whole preparation rolls
+        // back rather than recording credits that were never redeemed.
+        throw errors.internal('A quote applied the same credit twice.');
+      }
     }
     for (const discount of quote.discounts as unknown as QuoteDiscountLine[]) {
       await this.pricing.redeemDiscount(trx, organizationId, {
@@ -760,6 +772,9 @@ export class CheckoutService {
         purpose: 'checkout',
         checkoutId,
         orderId,
+        // §4.7 invariant 5 (payment_attempts_live_obligation_idx): the checkout charge names the
+        // obligation it pays, so no installment charge of the same debt can be live beside it.
+        obligationId: firstObligationId,
         installmentId: null,
         payerPersonId,
         amountMinor: quote.due_now_minor,
@@ -1001,11 +1016,22 @@ export class CheckoutService {
         .where('organization_id', '=', organizationId)
         .where('id', '=', checkout.order_id)
         .executeTakeFirstOrThrow();
+      // The obligation the capture will be allocated to (as PaymentsService.onCaptured does).
+      const due = await trx
+        .selectFrom('obligations')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('order_id', '=', order.id)
+        .where('status', '=', 'open')
+        .orderBy('due_at')
+        .orderBy('created_at')
+        .executeTakeFirst();
       const attempt = await this.payments.createAttemptInTrx(trx, {
         organizationId,
         purpose: 'checkout',
         checkoutId: id,
         orderId: order.id,
+        obligationId: due?.id ?? null,
         payerPersonId: checkout.payer_person_id,
         amountMinor: order.due_now_minor,
         currency: order.currency,
