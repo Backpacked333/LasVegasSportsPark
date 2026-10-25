@@ -40,6 +40,13 @@ export interface FinancePolicyConfig {
   creditExpiryDays: number | null;
   /** SPK-PAY-007: an attempt older than this without evidence is reconciled with the provider. */
   reconcileAfterMinutes: number;
+  /**
+   * SPK-PAY-007, §4.11 step 10: a payment challenge (`action_required`) still open this long after
+   * submission is treated as abandoned and canceled at the provider, so the checkout can end. The
+   * challenge validity window depends on the processor (DEC-019 pending); the value must stay above
+   * the basket hold (DEC-027) plus `checkoutAbandonGraceMinutes`.
+   */
+  actionRequiredCancelAfterMinutes: number;
   /** SPK-PAY-001 rounding of percentage taxes and fees (DEC-007). */
   rounding: 'half_up';
 }
@@ -58,5 +65,6 @@ export const DEFAULT_FINANCE_POLICY: FinancePolicyConfig = {
   },
   creditExpiryDays: null,
   reconcileAfterMinutes: 15,
+  actionRequiredCancelAfterMinutes: 60,
   rounding: 'half_up',
 };

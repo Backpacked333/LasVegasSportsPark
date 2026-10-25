@@ -550,6 +550,7 @@ export function enrollment(overrides: Partial<Model<'Enrollment'>> = {}): Model<
     transferredAt: null,
     transferredToEnrollmentId: null,
     transferredFromEnrollmentId: null,
+    transferConsequence: null,
     completedAt: null,
     revision: 5,
     createdAt: NOW,

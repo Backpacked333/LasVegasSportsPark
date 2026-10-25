@@ -127,6 +127,75 @@ describe('disputed access reviews (SPK-IAM-005)', () => {
     ).toBe(false);
   });
 
+  it('SPK-IAM-005: an opener who is not a decider reads their submission and progress, never staff notes, affected grants or the outcome', async () => {
+    const people = await createOrganizationPeople(t, { guardianPermissions: ['view', 'collect'] });
+    const mother = await authHeaderForPerson(t, people.adult.personId);
+    const opened = await t.http
+      .post('/v1/access-reviews')
+      .set(mother)
+      .set('Idempotency-Key', key())
+      .send({
+        subjectPersonId: people.child.personId,
+        reason: 'contested pickup',
+        parties: [{ description: 'father (no account)' }],
+        evidence: [{ type: 'court_order', reference: 'case-2026-200', note: 'my copy' }],
+      });
+    expect(opened.status).toBe(201);
+    const reviewId = opened.body.id as string;
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const header = await authHeaderForPerson(t, support.personId);
+    const decide = async (body: Record<string, unknown>) => {
+      const res = await t.http
+        .post(`/v1/access-reviews/${reviewId}/decisions`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send(body);
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      return res;
+    };
+    const internal =
+      'Internal: father produced court order ref 2026-FAM-123; mother prior incident';
+    await decide({ kind: 'note', note: internal });
+    await decide({
+      kind: 'restrict',
+      actorPersonId: people.adult.personId,
+      note: 'pending hearing',
+    });
+    await decide({ kind: 'reassign', ownerPersonId: support.personId });
+    await decide({ kind: 'decide', outcome: { finding: 'father has sole custody per order' } });
+
+    const asMother = await t.http.get(`/v1/access-reviews/${reviewId}`).set(mother);
+    expect(asMother.status).toBe(200);
+    expect(asMother.body).toMatchObject({
+      id: reviewId,
+      status: 'decided',
+      reason: 'contested pickup',
+      parties: [{ description: 'father (no account)' }],
+      evidence: [{ type: 'court_order', reference: 'case-2026-200', note: 'my copy' }],
+      decisions: [],
+      outcome: null,
+      ownerPersonId: null,
+    });
+    expect(asMother.body.decidedAt).not.toBeNull();
+    const text = JSON.stringify(asMother.body);
+    expect(text).not.toContain('2026-FAM-123');
+    expect(text).not.toContain('pending hearing');
+    expect(text).not.toContain('sole custody');
+    expect(text).not.toContain(people.guardianGrants.view);
+
+    const asSupport = await t.http.get(`/v1/access-reviews/${reviewId}`).set(header);
+    expect(asSupport.status).toBe(200);
+    expect(asSupport.body.decisions.map((d: { kind: string }) => d.kind)).toEqual([
+      'note',
+      'restrict',
+      'reassign',
+      'decide',
+    ]);
+    expect(asSupport.body.decisions[0].note).toBe(internal);
+    expect(asSupport.body.outcome).toEqual({ finding: 'father has sole custody per order' });
+    expect(asSupport.body.ownerPersonId).toBe(support.personId);
+  });
+
   it('state machine: open → escalated → decided → closed; closed reviews accept no decisions', async () => {
     const people = await createOrganizationPeople(t);
     const gm = await createStaffMemberFixture(t, { roles: ['general_manager'] });
@@ -441,5 +510,77 @@ describe('disputed access reviews (SPK-IAM-005)', () => {
       .set('Idempotency-Key', key())
       .send({ kind: 'restrict', grantIds: [stranger.guardianGrants.view] });
     expect(foreignGrant.status).toBe(400);
+  });
+
+  it('SPK-AT-018 / SPK-ENTRY-007: hasPermissionAt answers from the grant, relationship and suspension history at a past instant', async () => {
+    const people = await createOrganizationPeople(t, { guardianPermissions: ['view', 'collect'] });
+    const org = t.organizationId;
+    const adult = people.adult.personId;
+    const child = people.child.personId;
+    const start = t.clock.now();
+    const plus = (minutes: number) => new Date(start.getTime() + minutes * 60_000);
+    const heldAt = (minutes: number) =>
+      authority.hasPermissionAt(org, adult, child, 'collect', plus(minutes));
+    // Before the grant's effective start it was not held, whatever holds now.
+    expect(await authority.hasPermission(org, adult, child, 'collect')).toBe(true);
+    expect(await heldAt(-30)).toBe(false);
+    expect(await heldAt(0)).toBe(true);
+
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const header = await authHeaderForPerson(t, support.personId);
+    const review = async () =>
+      (
+        await t.http
+          .post('/v1/access-reviews')
+          .set(header)
+          .set('Idempotency-Key', key())
+          .send({ subjectPersonId: child, reason: 'pickup dispute' })
+      ).body.id as string;
+    const decide = (id: string, body: object) =>
+      t.http
+        .post(`/v1/access-reviews/${id}/decisions`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send(body);
+
+    // A time-bounded restriction [60, 120): suspended inside the window only, even once it ended.
+    t.clock.set(plus(60).toISOString());
+    const bounded = await review();
+    expect(
+      (
+        await decide(bounded, {
+          kind: 'restrict',
+          actorPersonId: adult,
+          effectiveTo: plus(120).toISOString(),
+        })
+      ).status,
+    ).toBe(201);
+    t.clock.set(plus(130).toISOString());
+    expect(await authority.hasPermission(org, adult, child, 'collect')).toBe(true);
+    expect(await heldAt(30)).toBe(true);
+    expect(await heldAt(90)).toBe(false);
+    expect(await heldAt(125)).toBe(true);
+
+    // An open-ended restriction at 150, lifted at 200: not held in between.
+    t.clock.set(plus(150).toISOString());
+    const open = await review();
+    expect((await decide(open, { kind: 'restrict', actorPersonId: adult })).status).toBe(201);
+    t.clock.set(plus(200).toISOString());
+    expect(
+      (await decide(open, { kind: 'lift', grantIds: [people.guardianGrants.collect] })).status,
+    ).toBe(201);
+    expect(await heldAt(175)).toBe(false);
+    expect(await heldAt(205)).toBe(true);
+
+    // Revoked at 240: held before, not after.
+    t.clock.set(plus(240).toISOString());
+    const revoked = await t.http
+      .post(`/v1/access-grants/${people.guardianGrants.collect}/revoke`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ reason: 'withdrawn' });
+    expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+    expect(await heldAt(230)).toBe(true);
+    expect(await heldAt(245)).toBe(false);
   });
 });

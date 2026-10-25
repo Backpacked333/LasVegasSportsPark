@@ -40,6 +40,16 @@ export interface RegisteredHandler {
   name: string;
   eventType: string;
   handler: EventHandler;
+  /**
+   * The queue that owns this handler's failures (§4.12 "failure owner", SPK-UX-006 "owner or
+   * responsible queue"): a dead-lettered event names the owner of the handler that failed.
+   */
+  failureOwner?: string;
+}
+
+export interface HandlerOptions {
+  /** Owner queue (by convention a staff role name) for this handler's dead letters. */
+  failureOwner?: string;
 }
 
 /**
@@ -50,12 +60,22 @@ export interface RegisteredHandler {
 export class EventHandlerRegistry {
   private readonly byType = new Map<string, RegisteredHandler[]>();
 
-  on<TPayload>(eventType: string, name: string, handler: EventHandler<TPayload>): void {
+  on<TPayload>(
+    eventType: string,
+    name: string,
+    handler: EventHandler<TPayload>,
+    options: HandlerOptions = {},
+  ): void {
     const list = this.byType.get(eventType) ?? [];
     if (list.some((h) => h.name === name)) {
       throw new Error(`handler ${name} already registered for ${eventType}`);
     }
-    list.push({ name, eventType, handler: handler as EventHandler });
+    list.push({
+      name,
+      eventType,
+      handler: handler as EventHandler,
+      ...(options.failureOwner ? { failureOwner: options.failureOwner } : {}),
+    });
     this.byType.set(eventType, list);
   }
 

@@ -87,7 +87,8 @@ export class MeCommunicationsController {
   }
 
   @Post('calendar-feeds')
-  @Idempotent()
+  // §4.14: the feed token (and the path that embeds it) is stored only as a hash.
+  @Idempotent({ withhold: ['token', 'path'] })
   createFeed(
     @CurrentPrincipal() principal: Principal,
     @ZodBody(CreateCalendarFeedBody) body: z.infer<typeof CreateCalendarFeedBody>,

@@ -7,6 +7,8 @@ import { RefundsService } from './refunds.service';
 export interface FinanceWorkerSummary {
   refundsExecuted: number;
   refundsReconciled: number;
+  /** Abandoned payment challenges canceled at the provider (SPK-PAY-007, DEC-019 pending). */
+  paymentsCanceled: number;
   paymentsReconciled: number;
   installmentsCollected: number;
 }
@@ -14,10 +16,11 @@ export interface FinanceWorkerSummary {
 /**
  * The provider-facing half of finance's durable work (§4.11 step 10, §4.12). Outbox handlers run
  * inside a transaction and therefore never call the provider; this worker does, OUTSIDE any
- * transaction: it executes requested refunds (customer and compensation), reconciles payment and
- * refund attempts whose outcome is still unknown or stale, and collects due installments. Every
- * step is idempotent (provider idempotency keys, state-machine guards), so several workers and
- * restarts never double-charge or double-refund. Tests drive `runOnce()`.
+ * transaction: it executes requested refunds (customer and compensation), cancels abandoned payment
+ * challenges, reconciles payment and refund attempts whose outcome is still unknown or stale, and
+ * collects due installments. Every step is idempotent (provider idempotency keys, state-machine
+ * guards), so several workers and restarts never double-charge or double-refund. Tests drive
+ * `runOnce()`.
  */
 @Injectable()
 export class FinanceWorker {
@@ -34,11 +37,13 @@ export class FinanceWorker {
 
   async runOnce(): Promise<FinanceWorkerSummary> {
     const refunds = await this.refunds.runPending();
+    const paymentsCanceled = await this.payments.cancelAbandoned();
     const paymentsReconciled = await this.payments.reconcileStale();
     const installmentsCollected = await this.installments.collectDue();
     return {
       refundsExecuted: refunds.executed,
       refundsReconciled: refunds.reconciled,
+      paymentsCanceled,
       paymentsReconciled,
       installmentsCollected,
     };

@@ -15,6 +15,12 @@ export const COMMUNICATIONS_POLICY = Symbol('COMMUNICATIONS_POLICY');
 export interface CommunicationsPolicy {
   /** Effective channels per category when a person has stored no preference (SPK-COMMS-007). */
   defaultChannels: Record<NotificationCategoryValue, Record<DeliveryChannelValue, boolean>>;
+  /**
+   * SPK-COMMS-007: the category each notification kind belongs to, or `choose` when the composer
+   * must name it explicitly. A composed category that contradicts the binding is refused, so the
+   * essential/promotional separation never depends on what a composer happens to send.
+   */
+  categoryByKind: Record<NotificationKindValue, NotificationCategoryValue | 'choose'>;
   /** How long a delivery worker holds a claimed attempt before another worker may retry the claim. */
   deliveryLeaseSeconds: number;
   /** Attempts handed to providers per worker pass. */
@@ -39,6 +45,24 @@ export const DEFAULT_COMMUNICATIONS_POLICY: CommunicationsPolicy = {
     operational: { in_app: true, push: true, email: true, sms: false },
     // Promotional: never pushed by default so marketing cannot obscure today's activity (SPK-UX-003).
     promotional: { in_app: true, push: false, email: true, sms: false },
+  },
+  // Proposed split, pending the operator/privacy owner (DEC-062, DEC-012): every trigger of
+  // SPK-COMMS-002 is essential except the renewal opportunity, which is promotional; a staff
+  // broadcast can be either, so its composer chooses.
+  categoryByKind: {
+    registration_outcome: 'operational',
+    team_invitation: 'operational',
+    placement: 'operational',
+    waitlist_offer: 'operational',
+    schedule_published: 'operational',
+    schedule_changed: 'operational',
+    cancellation: 'operational',
+    payment_attention: 'operational',
+    assignment_offer: 'operational',
+    result_published: 'operational',
+    youth_feedback: 'operational',
+    renewal_opportunity: 'promotional',
+    staff_broadcast: 'choose',
   },
   deliveryLeaseSeconds: 60,
   deliveryBatchSize: 25,

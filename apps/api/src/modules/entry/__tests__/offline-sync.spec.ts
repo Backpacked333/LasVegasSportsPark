@@ -188,34 +188,77 @@ describe('offline synchronization (§4.15, SPK-AT-018)', () => {
     expect(raised.map((e) => e.id)).toEqual(expect.arrayContaining(res.body.exceptionIds));
   });
 
-  it('SPK-AT-018 / §4.15: a queued release is rejected without an approved manual outage procedure; stale authority is never asserted', async () => {
+  it('SPK-AT-018 / §4.15 / §4.7 invariant 12: a queued release is rejected without an approved manual outage procedure, stale authority is never asserted, and a critical follow-up is raised', async () => {
+    const items = [
+      {
+        kind: 'release',
+        clientObservationId: newId(),
+        observedAt: at(TODAY, '11:05'),
+        childPersonId: fam.childA,
+        collector: { personId: fam.guardian.personId },
+      },
+      {
+        kind: 'release',
+        clientObservationId: newId(),
+        observedAt: at(TODAY, '11:06'),
+        childPersonId: fam.childA,
+        collector: { personId: fam.guardian.personId },
+        manualProcedureReference: 'PAPER-PICKUP-LOG',
+      },
+      // SPK-ENTRY-007: the child participant seen leaving: a release was required.
+      {
+        kind: 'departure',
+        clientObservationId: newId(),
+        observedAt: at(TODAY, '11:07'),
+        personId: fam.childA,
+      },
+    ];
     const res = await post(t, '/v1/offline-sync', desk, {
       deviceId: 'tablet-3',
       clientBatchId: newId(),
       facilityId: t.facilityId,
       snapshot: snapshot(),
-      items: [
-        {
-          kind: 'release',
-          clientObservationId: newId(),
-          observedAt: at(TODAY, '11:05'),
-          childPersonId: fam.childA,
-          collector: { personId: fam.guardian.personId },
-        },
-        {
-          kind: 'release',
-          clientObservationId: newId(),
-          observedAt: at(TODAY, '11:06'),
-          childPersonId: fam.childA,
-          collector: { personId: fam.guardian.personId },
-          manualProcedureReference: 'PAPER-PICKUP-LOG',
-        },
-      ],
+      items,
     });
     expect(res.status).toBe(201);
     expect(
       res.body.items.map((i: { outcome: string; reason: string }) => `${i.outcome}:${i.reason}`),
-    ).toEqual(['rejected:release_requires_online_check', 'rejected:release_requires_online_check']);
+    ).toEqual([
+      'rejected:release_requires_online_check',
+      'rejected:release_requires_online_check',
+      'rejected:release_required',
+    ]);
+    // Nobody may assume the child is still in care: each item opens a critical exception for the
+    // pickup queue, naming the child, the device and the observed time.
+    expect(res.body.exceptionIds).toHaveLength(3);
+    const raised = (await exceptionsOf(t, 'entry.offline_release_unrecorded')).filter((e) =>
+      res.body.exceptionIds.includes(e.id),
+    );
+    expect(raised).toHaveLength(3);
+    for (const exception of raised) {
+      expect(exception).toMatchObject({
+        severity: 'critical',
+        status: 'open',
+        affected_type: 'person',
+        affected_id: fam.childA,
+        owner_queue: 'general_manager',
+        facility_id: t.facilityId,
+      });
+      expect(exception.details).toMatchObject({ deviceId: 'tablet-3', batchId: res.body.id });
+    }
+    // Re-sending the same items in a new batch opens no second exception.
+    const resent = await post(t, '/v1/offline-sync', desk, {
+      deviceId: 'tablet-3',
+      clientBatchId: newId(),
+      facilityId: t.facilityId,
+      snapshot: snapshot(),
+      items,
+    });
+    expect([...resent.body.exceptionIds].sort()).toEqual([...res.body.exceptionIds].sort());
+    const open = (await exceptionsOf(t, 'entry.offline_release_unrecorded')).filter(
+      (e) => (e.details as { deviceId?: string }).deviceId === 'tablet-3',
+    );
+    expect(open).toHaveLength(3);
     const releases = await t.db
       .selectFrom('release_records')
       .select('id')

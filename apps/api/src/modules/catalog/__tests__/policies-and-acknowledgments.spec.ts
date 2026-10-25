@@ -568,5 +568,80 @@ describe('policy versions and acknowledgments (§4.4 Policies, SPK-REG-002, SPK-
         });
       expect(coachTry.status).toBe(403);
     });
+
+    it('SPK-REG-009: the signing time is server-stamped for customers; staff may backdate a paper form only within the policy and with evidence', async () => {
+      const people = await createOrganizationPeople(t, {
+        guardianPermissions: ['view', 'complete_forms'],
+      });
+      const guardian = await authHeaderForPerson(t, people.adult.personId);
+      const form = await createPolicyVersionFixture(t, { kind: 'form' });
+      const record = (auth: Record<string, string>, body: Record<string, unknown>) =>
+        t.http
+          .post('/v1/acknowledgments')
+          .set(auth)
+          .set('Idempotency-Key', key())
+          .send({ subjectPersonId: people.child.personId, policyVersionId: form, ...body });
+
+      const customerBackdated = await record(guardian, { signedAt: '2001-01-01T00:00:00Z' });
+      expect(customerBackdated.status).toBe(400);
+      expect(customerBackdated.body.code).toBe('VALIDATION_FAILED');
+      const customerFuture = await record(guardian, { signedAt: '2099-01-01T00:00:00Z' });
+      expect(customerFuture.status).toBe(400);
+
+      const staff = (body: Record<string, unknown>) =>
+        record(frontDesk, { signedByPersonId: people.adult.personId, ...body });
+      const future = await staff({
+        signedAt: '2026-10-23T12:00:01Z',
+        evidence: { channel: 'paper', documentRef: 'box-7' },
+      });
+      expect(future.status).toBe(400);
+      expect(future.body.details).toMatchObject({ code: 'signed_in_future' });
+      const beforePolicy = await staff({
+        signedAt: '1990-05-05T00:00:00Z',
+        evidence: { channel: 'paper', documentRef: 'box-7' },
+      });
+      expect(beforePolicy.status).toBe(400);
+      expect(beforePolicy.body.details).toMatchObject({ code: 'signed_before_policy' });
+      const noEvidence = await staff({ signedAt: '2026-10-22T18:00:00Z' });
+      expect(noEvidence.status).toBe(400);
+      expect(noEvidence.body.details).toMatchObject({ path: 'evidence' });
+      expect(
+        await t.db
+          .selectFrom('acknowledgments')
+          .select('id')
+          .where('subject_person_id', '=', people.child.personId)
+          .where('policy_version_id', '=', form)
+          .execute(),
+      ).toHaveLength(0);
+
+      const paper = await staff({
+        signedAt: '2026-10-22T18:00:00Z',
+        evidence: { channel: 'paper', documentRef: 'box-7' },
+      });
+      expect(paper.status, JSON.stringify(paper.body)).toBe(201);
+      expect(paper.body.signedAt).toBe('2026-10-22T18:00:00.000Z');
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select(['details', 'occurred_at'])
+        .where('target_id', '=', paper.body.id)
+        .where('action', '=', 'catalog.acknowledgment_recorded')
+        .executeTakeFirstOrThrow();
+      expect(audit.details).toMatchObject({
+        retrospective: true,
+        signedAt: '2026-10-22T18:00:00.000Z',
+      });
+
+      // without signedAt the server stamps the clock, for customers and staff alike
+      const other = await createOrganizationPeople(t, {
+        guardianPermissions: ['view', 'complete_forms'],
+      });
+      const stamped = await t.http
+        .post('/v1/acknowledgments')
+        .set(await authHeaderForPerson(t, other.adult.personId))
+        .set('Idempotency-Key', key())
+        .send({ subjectPersonId: other.child.personId, policyVersionId: form });
+      expect(stamped.status).toBe(201);
+      expect(stamped.body.signedAt).toBe(t.clock.now().toISOString());
+    });
   });
 });

@@ -5,6 +5,7 @@ import type { TestApp } from '../../../testing';
 import { createAcknowledgmentFixture } from '../../catalog';
 import { createSessionBookingFixture } from '../../enrollment';
 import { createPersonFixture } from '../../identity';
+import { createAssignmentFixture } from '../../workforce';
 import { hashPassReference, PASS_REFERENCE_PREFIX } from '../entry.shared';
 import {
   adultCustomer,
@@ -459,6 +460,45 @@ describe('arrival: passes, visits and session check-ins (SPK-ENTRY-001..004, 006
     const stranger = await adultCustomer(t);
     const asStranger = await t.http.get(`/v1/session-checkins/${row.id}`).set(stranger.header);
     expect(asStranger.status).toBe(404);
+  });
+
+  it('§4.14 / SPK-UX-007: a coach or official reads a check-in only of an activity they are assigned to; a customer reads it without staff identifiers', async () => {
+    const row = await t.db
+      .selectFrom('session_checkins')
+      .select('id')
+      .where('person_id', '=', fam.childA)
+      .executeTakeFirstOrThrow();
+    const path = `/v1/session-checkins/${row.id}`;
+    const unassignedCoach = await staffMember(t, ['coach']);
+    expect((await t.http.get(path).set(unassignedCoach.header)).status).toBe(404);
+    const unassignedOfficial = await staffMember(t, ['official']);
+    expect((await t.http.get(path).set(unassignedOfficial.header)).status).toBe(404);
+    const coach = await staffMember(t, ['coach']);
+    await createAssignmentFixture(t, {
+      targetType: 'session',
+      targetId: p.sessionId,
+      offeringId: p.offering.offeringId,
+      personId: coach.personId,
+      kind: 'coach',
+      status: 'accepted',
+      scheduledStart: p.start,
+      scheduledEnd: p.end,
+    });
+    const assigned = await t.http.get(path).set(coach.header);
+    expect(assigned.status, JSON.stringify(assigned.body)).toBe(200);
+    expect(assigned.body.recordedBy.personId).toBe(desk.personId);
+    const asDesk = await t.http.get(path).set(desk.header);
+    expect(asDesk.body.recordedBy).toMatchObject({ personId: desk.personId, kind: 'staff' });
+    const asGuardian = await t.http.get(path).set(fam.guardian.header);
+    expect(asGuardian.status).toBe(200);
+    expect(asGuardian.body.recordedBy).toEqual({
+      kind: 'staff',
+      accountId: null,
+      personId: null,
+      staffRoles: [],
+      sessionId: null,
+      actorLabel: 'staff',
+    });
   });
 
   it('enforces facility scope and organization scope', async () => {

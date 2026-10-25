@@ -110,6 +110,40 @@ describe('workforce schema invariants (migration 0700)', () => {
     });
   });
 
+  it('SPK-STAFF-003: a completed assignment keeps holding its interval and turnaround (migration 0701)', async () => {
+    const official = await person();
+    await createAssignmentFixture(t, {
+      ...fixtureTarget(game),
+      personId: official,
+      status: 'completed',
+      role: 'assessor',
+      turnaroundMinutes: 30,
+    });
+    // overlapping the completed game
+    await expectPgError(
+      createAssignmentFixture(t, {
+        targetType: 'event',
+        targetId: game.eventId,
+        scheduledStart: at('2027-02-01', '10:30'),
+        scheduledEnd: at('2027-02-01', '11:30'),
+        personId: official,
+        status: 'accepted',
+        role: 'observer',
+      }),
+      '23P01',
+    );
+    // inside the completed game's turnaround
+    await expectPgError(
+      createAssignmentFixture(t, {
+        ...fixtureTarget(later),
+        personId: official,
+        status: 'accepted',
+        role: 'assessor',
+      }),
+      '23P01',
+    );
+  });
+
   it('SPK-STAFF-002: one accepted (or completed) assignment per role slot; one live assignment per person per slot', async () => {
     const a = await person();
     const b = await person();

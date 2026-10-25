@@ -1,6 +1,7 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { ConflictDetector } from './conflicts/conflict-detector';
+import { PartyCommitmentSources } from './conflicts/party-commitment-sources';
 import { ClosuresController } from './controllers/closures.controller';
 import { EventSeriesController } from './controllers/event-series.controller';
 import { EventsController } from './controllers/events.controller';
@@ -17,6 +18,7 @@ import {
   type FixtureObligationPort,
 } from './ports';
 import { DEFAULT_SCHEDULING_POLICY, SCHEDULING_POLICY } from './scheduling.policy';
+import { ClosureLiftGuards } from './services/closure-lift-guards';
 import { ClosuresService } from './services/closures.service';
 import { EventSeriesService } from './services/event-series.service';
 import { EventWriter } from './services/event-writer';
@@ -61,10 +63,12 @@ const providers: Provider[] = [
     inject: [ModuleRef],
     useFactory: (moduleRef: ModuleRef) => lazyFixtureObligations(moduleRef),
   },
+  PartyCommitmentSources,
   ConflictDetector,
   EventWriter,
   EventsService,
   ResourcesService,
+  ClosureLiftGuards,
   ClosuresService,
   EventSeriesService,
   ScheduleDraftsService,
@@ -93,6 +97,7 @@ const providers: Provider[] = [
     EventsService,
     ResourcesService,
     ClosuresService,
+    ClosureLiftGuards,
     EventSeriesService,
     ScheduleDraftsService,
     EVENT_SCHEDULING_PORT,
@@ -101,6 +106,8 @@ const providers: Provider[] = [
     CLOSURE_PORT,
     FIXTURE_OBLIGATION_PORT,
     SCHEDULING_POLICY,
+    // Other modules register the party commitments they hold (SPK-SCHED-004, SPK-STAFF-003).
+    PartyCommitmentSources,
   ],
 })
 export class SchedulingModule {}

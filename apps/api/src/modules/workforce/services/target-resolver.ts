@@ -4,6 +4,7 @@ import {
   errors,
   systemPrincipal,
   type AssignmentTargetType,
+  type Event,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { DATABASE, type Trx } from '../../../kernel';
@@ -148,6 +149,23 @@ export class TargetResolver {
       offeringSessionId: null,
       offeringId: null,
     };
+  }
+
+  /**
+   * The scheduling event's latest committed state, read through the active transaction (a
+   * follow-up handler's), or null when it is not found. Follow-ups apply this rather than an
+   * event payload, because deliveries can arrive late and out of order (§4.12, §4.6).
+   */
+  async currentEvent(organizationId: string, eventId: string): Promise<Event | null> {
+    try {
+      return await this.events.getEvent(
+        systemPrincipal(organizationId, 'workforce.targets'),
+        eventId,
+      );
+    } catch (error) {
+      if (DomainError.is(error) && error.code === 'NOT_FOUND') return null;
+      throw error;
+    }
   }
 
   private async resolveEvent(organizationId: string, eventId: string): Promise<ResolvedTarget> {

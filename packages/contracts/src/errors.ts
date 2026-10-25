@@ -20,6 +20,7 @@ export const ErrorCodes = {
   IDEMPOTENCY_CONFLICT: { httpStatus: 409, nextAction: 'use_new_idempotency_key' },
   IDEMPOTENCY_IN_PROGRESS: { httpStatus: 409, nextAction: 'retry_later_with_same_key' },
   IDEMPOTENCY_OUTCOME_UNAVAILABLE: { httpStatus: 409, nextAction: 'reload_current_state' },
+  IDEMPOTENCY_SECRET_WITHHELD: { httpStatus: 409, nextAction: 'revoke_and_reissue' },
   PAYMENT_OUTCOME_UNKNOWN: { httpStatus: 409, nextAction: 'await_reconciliation' },
   REFUND_PENDING: { httpStatus: 409, nextAction: 'await_refund_resolution' },
   INTEGRATION_UNAVAILABLE: { httpStatus: 503, nextAction: 'retry_later' },
@@ -132,6 +133,17 @@ export const errors = {
     new DomainError(
       'IDEMPOTENCY_OUTCOME_UNAVAILABLE',
       'The request with this idempotency key changed data but its response was not recorded; reload the current state instead of retrying it.',
+      { details },
+    ),
+  /**
+   * A replay of a command whose response carried a one-time secret (§4.9). The record exists (named
+   * in `details.resourceId`) but its secret is returned only once and is never stored with the
+   * idempotency key (§4.14); revoke it and issue a new one to obtain a new secret.
+   */
+  idempotencySecretWithheld: (details: { resourceId: string | null }) =>
+    new DomainError(
+      'IDEMPOTENCY_SECRET_WITHHELD',
+      'This request already succeeded. Its one-time secret is returned only in the original response; revoke the record and issue a new one to obtain a new secret.',
       { details },
     ),
   paymentOutcomeUnknown: (details?: unknown) =>

@@ -1,5 +1,5 @@
 import { defineEvent, z, type DomainEvent } from '@sportspark/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../../testing/test-app';
 import { currentTransaction } from '../database/transaction-context';
 import { UnitOfWork } from '../database/unit-of-work';
@@ -199,6 +199,87 @@ describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)', () =>
     failuresLeft = 0;
   });
 
+  describe('failure owner (§4.12, SPK-UX-006)', () => {
+    const Owned = defineEvent('test.owned_followup_requested', z.object({ n: z.number() }));
+    let ownedFailing = false;
+    let producerFailing = false;
+    beforeAll(() => {
+      registry.on(Owned.type, 'owned_ok', async () => undefined, {
+        failureOwner: 'front_desk',
+      });
+      registry.on(
+        Owned.type,
+        'owned_failing',
+        async () => {
+          if (ownedFailing) throw new Error('owned handler failed');
+        },
+        { failureOwner: 'program_manager' },
+      );
+      registry.on(Owned.type, 'unowned_failing', async () => {
+        if (producerFailing) throw new Error('unowned handler failed');
+      });
+    });
+    const deadLetter = async (failureOwner?: string) => {
+      const event = await uow.run((ctx) =>
+        outbox.enqueue(ctx.trx, Owned, {
+          organizationId: t.organizationId,
+          aggregateType: 'owned',
+          aggregateId: 'o1',
+          payload: { n: 1 },
+          maxAttempts: 1,
+          ...(failureOwner ? { failureOwner } : {}),
+        }),
+      );
+      const pending = await t.db
+        .selectFrom('outbox_events')
+        .select('failure_owner')
+        .where('id', '=', event.id)
+        .executeTakeFirstOrThrow();
+      expect(pending.failure_owner).toBe(failureOwner ?? null);
+      expect(await dispatcher.runOnce()).toMatchObject({ dead: 1 });
+      const row = await t.db
+        .selectFrom('outbox_events')
+        .select(['status', 'failure_owner'])
+        .where('id', '=', event.id)
+        .executeTakeFirstOrThrow();
+      const exception = await t.db
+        .selectFrom('operational_exceptions')
+        .select(['owner_queue', 'details'])
+        .where('dedupe_key', '=', `outbox:${event.id}`)
+        .executeTakeFirstOrThrow();
+      return { row, exception };
+    };
+
+    it('dead-letters to the failing handler failure owner (§4.12, SPK-UX-006)', async () => {
+      ownedFailing = true;
+      producerFailing = false;
+      const { row, exception } = await deadLetter('finance_operator');
+      expect(row).toEqual({ status: 'dead', failure_owner: 'program_manager' });
+      expect(exception.owner_queue).toBe('program_manager');
+      expect(exception.details).toMatchObject({
+        failingHandlers: [{ handler: 'owned_failing', failureOwner: 'program_manager' }],
+      });
+      ownedFailing = false;
+    });
+
+    it('uses the producer failure owner when the failing handler declares none', async () => {
+      ownedFailing = false;
+      producerFailing = true;
+      const { row, exception } = await deadLetter('finance_operator');
+      expect(row).toEqual({ status: 'dead', failure_owner: 'finance_operator' });
+      expect(exception.owner_queue).toBe('finance_operator');
+      producerFailing = false;
+    });
+
+    it('falls back to system_administrator when nobody declares an owner', async () => {
+      producerFailing = true;
+      const { row, exception } = await deadLetter();
+      expect(row).toEqual({ status: 'dead', failure_owner: 'system_administrator' });
+      expect(exception.owner_queue).toBe('system_administrator');
+      producerFailing = false;
+    });
+  });
+
   it('reclaims events whose worker died (expired lease)', async () => {
     const event = await uow.run((ctx) =>
       outbox.enqueue(ctx.trx, Pinged, {
@@ -318,5 +399,101 @@ describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)', () =>
       }),
     );
     expect(await dispatcher.runOnce()).toMatchObject({ claimed: 1, dispatched: 1 });
+  });
+
+  describe('§4.12: status writes are fenced on the claim lease', () => {
+    const Leased = defineEvent('test.leased', z.object({ n: z.number() }));
+    const enqueueLeased = (n: number, maxAttempts = 10) =>
+      uow.run((ctx) =>
+        outbox.enqueue(ctx.trx, Leased, {
+          organizationId: t.organizationId,
+          aggregateType: 'leased',
+          aggregateId: `l${n}`,
+          payload: { n },
+          maxAttempts,
+        }),
+      );
+    // Stands in for worker B, which re-claimed the event after this run's lease lapsed.
+    const takeOver = (id: string, set: { status?: 'pending' | 'dispatched'; attempts?: number }) =>
+      t.db
+        .updateTable('outbox_events')
+        .set({
+          locked_by: 'worker-b:claim',
+          locked_until: new Date(t.clock.now().getTime() + 60_000),
+          ...set,
+        })
+        .where('id', '=', id)
+        .execute();
+    beforeAll(() => {
+      registry.on(Leased.type, 'leased', async () => undefined);
+    });
+    const rowOf = (id: string) =>
+      t.db.selectFrom('outbox_events').selectAll().where('id', '=', id).executeTakeFirstOrThrow();
+
+    it('a run whose lease lapsed cannot dead-letter an event another worker dispatched', async () => {
+      const event = await enqueueLeased(1, 1);
+      const spy = vi
+        .spyOn(dispatcher as unknown as { runHandler: () => Promise<string | null> }, 'runHandler')
+        .mockImplementationOnce(async () => {
+          // the handler failed here while worker B handled the event and dispatched it
+          await takeOver(event.id, { status: 'dispatched' });
+          return 'transient failure';
+        });
+      expect(await dispatcher.runOnce()).toMatchObject({ claimed: 1, dead: 0, superseded: 1 });
+      spy.mockRestore();
+      expect(await rowOf(event.id)).toMatchObject({ status: 'dispatched', failure_owner: null });
+      const exception = await t.db
+        .selectFrom('operational_exceptions')
+        .select('id')
+        .where('dedupe_key', '=', `outbox:${event.id}`)
+        .executeTakeFirst();
+      expect(exception).toBeUndefined();
+    });
+
+    it('a run whose lease lapsed cannot overwrite the attempts and lease of the new owner', async () => {
+      const event = await enqueueLeased(2);
+      const spy = vi
+        .spyOn(dispatcher as unknown as { runHandler: () => Promise<string | null> }, 'runHandler')
+        .mockImplementationOnce(async () => {
+          await takeOver(event.id, { attempts: 4 });
+          return null;
+        });
+      expect(await dispatcher.runOnce()).toMatchObject({
+        claimed: 1,
+        dispatched: 0,
+        superseded: 1,
+      });
+      spy.mockRestore();
+      expect(await rowOf(event.id)).toMatchObject({
+        status: 'pending',
+        attempts: 4,
+        locked_by: 'worker-b:claim',
+      });
+    });
+
+    it('skips claimed events another worker took over before this run reached them', async () => {
+      const first = await enqueueLeased(3);
+      const second = await enqueueLeased(4);
+      const calls: string[] = [];
+      const spy = vi
+        .spyOn(
+          dispatcher as unknown as { runHandler: (e: DomainEvent) => Promise<string | null> },
+          'runHandler',
+        )
+        .mockImplementation(async (e: DomainEvent) => {
+          calls.push(e.id);
+          // the batch is slow: while the first event runs, worker B re-claims the tail
+          if (e.id === first.id) await takeOver(second.id, {});
+          return null;
+        });
+      const summary = await dispatcher.runOnce();
+      spy.mockRestore();
+      expect(summary).toMatchObject({ claimed: 2, dispatched: 1, superseded: 1 });
+      expect(calls).toEqual([first.id]);
+      expect(await rowOf(second.id)).toMatchObject({
+        status: 'pending',
+        locked_by: 'worker-b:claim',
+      });
+    });
   });
 });

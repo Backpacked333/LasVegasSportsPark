@@ -481,6 +481,22 @@ export class ObligationsService {
       if (request.status !== 'requested') {
         throw errors.invalidTransition('ContributionRequest', request.status, 'pay');
       }
+      // SPK-PAY-004/005: a contribution pays toward an open team obligation; once the balance is
+      // settled (or canceled, written off) nothing is charged. A plain read: capture locks the
+      // obligation before the request, and a capture racing the settlement is still handled as
+      // visible overpayment (SPK-AT-022).
+      const obligation = await this.facts.loadObligation(
+        trx,
+        organizationId,
+        request.obligation_id,
+      );
+      if (!obligation || obligation.status !== 'open') {
+        throw errors.invalidTransition(
+          'Obligation',
+          obligation?.status ?? 'missing',
+          'pay_contribution',
+        );
+      }
       if (!principal.personId) throw errors.accessDenied();
       return this.payments.createAttemptInTrx(trx, {
         organizationId,
@@ -534,6 +550,22 @@ export class ObligationsService {
       if (amount > remaining) {
         throw errors.validation('The payment exceeds the remaining balance.', {
           remainingMinor: remaining,
+        });
+      }
+      // SPK-PAY-007, §4.7 invariant 5: the checkout or the installment worker may already be
+      // charging this debt; no second charge while that outcome is pending or unknown.
+      const charging = await trx
+        .selectFrom('payment_attempts')
+        .select(['id', 'status'])
+        .where('organization_id', '=', organizationId)
+        .where('obligation_id', '=', obligationId)
+        .where('purpose', 'in', ['checkout', 'installment'])
+        .where('status', 'in', ['created', 'action_required', 'processing', 'unknown'])
+        .executeTakeFirst();
+      if (charging) {
+        throw errors.paymentOutcomeUnknown({
+          paymentAttemptId: charging.id,
+          status: charging.status,
         });
       }
       if (!principal.personId) throw errors.accessDenied();

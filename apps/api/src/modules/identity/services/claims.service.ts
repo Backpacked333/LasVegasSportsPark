@@ -18,6 +18,7 @@ import {
   DATABASE,
   Outbox,
   UnitOfWork,
+  assertExpectedRevision,
   ensureUpdated,
   snapshotActor,
   type Clock,
@@ -88,6 +89,13 @@ export class ClaimsService {
         throw errors.invalidTransition('Person', subject.status, 'issue_claim');
       }
       if (input.kind === 'self') {
+        // The contract refuses this too; kept here for callers of the exported service.
+        if (input.recipientContact) {
+          throw errors.validation(
+            'A self claim cannot be bound to a contact point until verified provider contact claims are available; hand the token over in person.',
+            { path: 'recipientContact' },
+          );
+        }
         if (subject.kind !== 'adult') {
           throw errors.validation('A child record cannot be self-claimed; issue a guardian claim.');
         }
@@ -196,6 +204,14 @@ export class ClaimsService {
       let relationship: Relationship | null = null;
       let grants: AccessGrant[] = [];
       if (claim.kind === 'self') {
+        // SPK-IAM-002, §4.14: a self claim written to a contact point can only be honoured once the
+        // claimant's provider-verified contact is known (identity provider, DEC-018); an account
+        // without a person holds no verified contact point, so the claim fails closed.
+        if (claim.recipient_contact_kind) {
+          throw errors.accessDenied(
+            'This claim was issued to a contact point your account has not verified.',
+          );
+        }
         if (account.person_id === claim.subject_person_id) {
           personId = claim.subject_person_id;
         } else if (account.person_id === null) {
@@ -343,6 +359,81 @@ export class ClaimsService {
       );
     }
     return outcome.result;
+  }
+
+  /**
+   * SPK-IAM-002 / SPK-IAM-006: staff revoke a pending claim, so a leaked or misdelivered token can
+   * no longer be accepted. Locked against a concurrent accept (§4.9).
+   */
+  async revoke(
+    principal: Principal,
+    id: string,
+    input: { reason: string; expectedRevision?: number },
+    correlationId: string | null,
+  ): Promise<Claim> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    return runInTransaction(this.uow, async ({ trx }) => {
+      const claim = await trx
+        .selectFrom('claims')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!claim) throw errors.protectedNotFound('claim');
+      // §4.10: the claim concerns its subject person; a denial reads like a missing claim.
+      await this.authorization.require(principal, IdentityActions.revokeClaim, {
+        type: 'claim',
+        id,
+        organizationId,
+        subjectPersonIds: [claim.subject_person_id],
+        protected: true,
+      });
+      assertExpectedRevision(input.expectedRevision, claim.revision);
+      const next = ClaimMachine.next(claim.status, 'revoke');
+      const now = this.clock.now();
+      const revoked = await trx
+        .updateTable('claims')
+        .set({
+          status: next,
+          revoked_at: now,
+          revoked_by: json(snapshotActor(principal)),
+          revocation_reason: input.reason,
+          revision: claim.revision + 1,
+        })
+        .where('id', '=', id)
+        .where('revision', '=', claim.revision)
+        .executeTakeFirst();
+      ensureUpdated(revoked.numUpdatedRows, () =>
+        errors.staleRevision(claim.revision, claim.revision + 1),
+      );
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: IdentityActions.revokeClaim.id,
+        targetType: 'claim',
+        targetId: id,
+        beforeRevision: claim.revision,
+        afterRevision: claim.revision + 1,
+        reason: input.reason,
+        correlationId,
+        details: { subjectPersonId: claim.subject_person_id, kind: claim.kind },
+      });
+      await this.outbox.enqueue(trx, IdentityEvents.claimRevoked, {
+        organizationId,
+        aggregateType: 'claim',
+        aggregateId: id,
+        payload: { claimId: id, subjectPersonId: claim.subject_person_id, reason: input.reason },
+        correlationId,
+      });
+      const updated = await trx
+        .selectFrom('claims')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+      return toClaim(updated);
+    });
   }
 
   private async flagConflict(

@@ -483,7 +483,11 @@ describe('duplicate review and merge (SPK-IAM-007)', () => {
       .post(`/v1/people/${duplicate}/claims`)
       .set(staff)
       .set('Idempotency-Key', key())
-      .send({ kind: 'guardian', requestedPermissions: ['view'] });
+      .send({
+        kind: 'guardian',
+        requestedPermissions: ['view'],
+        recipientContact: { kind: 'email', value: 'merge-guardian@example.test' },
+      });
     const flagged = await t.http
       .post('/v1/duplicate-candidates')
       .set(header)

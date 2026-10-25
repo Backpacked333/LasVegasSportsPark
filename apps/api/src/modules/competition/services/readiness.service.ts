@@ -22,7 +22,13 @@ import {
   type FormsCheckPort,
 } from '../competition-matches.ports';
 import { loadRuleSetRow, loadSeasonRow } from '../competition.queries';
-import { isStaffLike, iso, organizationOf, ruleSetContentOf } from '../competition.shared';
+import {
+  RESTRICTED_SOURCE_TYPES,
+  isStaffLike,
+  iso,
+  organizationOf,
+  ruleSetContentOf,
+} from '../competition.shared';
 import {
   READINESS_CHECK_REGISTRY,
   SUSPENSION_CHECK_PORT,
@@ -36,11 +42,8 @@ import { FixturesService } from './fixtures.service';
 import { RosterService } from './roster.service';
 import { TeamEntriesService } from './team-entries.service';
 
-/** Source records customers may learn about only through the issue itself (SPK-DISC-004, §4.10). */
 /** Readiness checks registered by the workforce module carry this prefix (required officials). */
 export const WORKFORCE_CHECK_PREFIX = 'workforce.';
-
-const RESTRICTED_SOURCES = new Set(['suspension', 'dispute', 'audit_record', 'incident']);
 
 interface IssueInput {
   code: string;
@@ -89,8 +92,11 @@ export class ReadinessService {
     const detail = await this.fixtures.get(principal, fixtureId);
     const now = this.clock.now();
     const evaluatedAt = iso(now);
-    const at = detail.scheduledStart ? new Date(detail.scheduledStart) : now;
-    const deadline = detail.scheduledStart;
+    // The fixture's copied time until the authoritative event is read below (SPK-READY-004).
+    let scheduledStart = detail.scheduledStart;
+    let scheduledEnd = detail.scheduledEnd;
+    let at = scheduledStart ? new Date(scheduledStart) : now;
+    let deadline = scheduledStart;
     const system = systemPrincipal(organizationId, 'competition.readiness');
     // Issues remember the check that raised them, so each check's verdict is computed from its own
     // issues whatever order the checks report in.
@@ -107,7 +113,7 @@ export class ReadinessService {
         // SPK-DISC-004 / §4.10: discipline, dispute and audit record ids are restricted; customers
         // see the reason, the responsible role and the action, never the restricted record id.
         source:
-          restricted && RESTRICTED_SOURCES.has(input.source.type)
+          restricted && RESTRICTED_SOURCE_TYPES.has(input.source.type)
             ? { type: input.source.type, id: null }
             : input.source,
         responsibleRole: input.responsibleRole,
@@ -158,6 +164,27 @@ export class ReadinessService {
           source: { type: 'event', id: event.id },
           responsibleRole: 'scheduler',
           requiredAction: 'Publish the schedule draft that holds this game.',
+        });
+      }
+      // SPK-READY-002 / SPK-READY-004: scheduling is the authority for the time. When the event
+      // moved and the fixture's copy has not caught up yet, that evidence is stale: say so, and
+      // evaluate rosters, eligibility and the deadline at the event's time, never the old one.
+      if (
+        event.scheduledStart !== detail.scheduledStart ||
+        event.scheduledEnd !== detail.scheduledEnd
+      ) {
+        scheduledStart = event.scheduledStart;
+        scheduledEnd = event.scheduledEnd;
+        at = new Date(event.scheduledStart);
+        deadline = event.scheduledStart;
+        add('schedule', {
+          code: 'schedule_out_of_sync',
+          severity: 'unknown',
+          message:
+            'The fixture still shows an earlier time than its scheduling event; it is being brought up to date.',
+          source: { type: 'event', id: event.id },
+          responsibleRole: 'league_manager',
+          requiredAction: 'Retry shortly; investigate the competition follow-up if it persists.',
         });
       }
     }
@@ -347,6 +374,7 @@ export class ReadinessService {
       teamEntryIds: sides.map((s) => s.teamEntryId),
       personIds: [...allPersons],
       at,
+      registrationOfferingRef: season?.registration_offering_ref ?? null,
     };
     check('forms');
     for (const finding of await this.forms.requiredForms(organizationId, conditionContext)) {
@@ -417,6 +445,8 @@ export class ReadinessService {
         ...conditionContext,
         changedAt: new Date(change.occurred_at),
         schedulingEventId: detail.schedulingEventId,
+        scheduledStart,
+        scheduledEnd,
       });
       for (const finding of findings) this.addCondition(add, 'notifications', finding);
     }
@@ -442,7 +472,7 @@ export class ReadinessService {
       fixtureStatus: detail.status,
       status: statusOf(issues),
       evaluatedAt,
-      scheduledStart: detail.scheduledStart,
+      scheduledStart,
       checks: checkNames.map((name) => {
         const own = issues.filter((i) => i.check === name);
         return { name, status: statusOf(own), issueCount: own.length };

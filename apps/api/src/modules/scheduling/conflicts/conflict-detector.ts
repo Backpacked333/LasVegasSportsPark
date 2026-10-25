@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import type { ConflictDetail, EventKind, PartyCommitment } from '@sportspark/contracts';
 import { tstzrange, type ResourceStatus } from '@sportspark/db';
 import { sql } from 'kysely';
 import type { Trx } from '../../../kernel';
 import type { SchedulingPolicy } from '../scheduling.policy';
-import { minutesOf, minutesSinceMidnight, toLocal } from '../time/local-time';
+import { localMinuteSpan, minutesOf } from '../time/local-time';
+import { PartyCommitmentSources } from './party-commitment-sources';
 
 /** One event as it would exist after a command: new or moved events use the proposed values. */
 export interface ProposedEvent {
@@ -38,6 +39,11 @@ export interface DetectOptions {
   policy: SchedulingPolicy;
   /** Events whose active rows are released by the same command (moves, cancels in the same group). */
   ignoreEventIds?: string[];
+  /**
+   * Whether party checks also consult the registered external sources (default true). The module
+   * that owns a source checks its own records itself and passes false.
+   */
+  externalSources?: boolean;
 }
 
 interface ResourceRow {
@@ -60,10 +66,16 @@ interface ResourceRow {
  * - configured arrangements between sibling subdivisions (SPK-SCHED-002): `detect` serializes on
  *   the parent resource row before it reads sibling reservations;
  * - required rest (SPK-SCHED-004): `EventWriter.reserve` takes a per-party advisory lock and
- *   re-checks the rest gap after the lock.
+ *   re-checks the rest gap after the lock;
+ * - commitments held by other modules (`PartyCommitmentSources`, for example accepted workforce
+ *   assignments, SPK-STAFF-003): reported here as `party_overlap` / `insufficient_rest` naming
+ *   `externalCommitments`, and re-checked by `EventWriter.reserve` under the same party lock the
+ *   owning module takes before it writes.
  */
 @Injectable()
 export class ConflictDetector {
+  constructor(@Optional() private readonly sources?: PartyCommitmentSources) {}
+
   async detect(
     trx: Trx,
     organizationId: string,
@@ -231,10 +243,9 @@ export class ConflictDetector {
       }
 
       // operating hours (SPK-SCHED-001): resource windows, falling back to facility windows
-      const local = toLocal(facility.timezone, p.scheduledStart);
-      const startMinute = minutesSinceMidnight(facility.timezone, p.scheduledStart);
-      const endMinute =
-        startMinute + Math.round((p.scheduledEnd.getTime() - p.scheduledStart.getTime()) / 60_000);
+      // SPK-SCHED-008: compare local wall-clock start and end, so a daylight-saving change inside
+      // the event neither rejects a fitting event nor accepts one that runs past closing.
+      const span = localMinuteSpan(facility.timezone, p.scheduledStart, p.scheduledEnd);
       for (const resourceId of p.resourceIds) {
         if (!resources.has(resourceId)) continue;
         let windows = hours.filter((h) => h.resource_id === resourceId);
@@ -242,9 +253,9 @@ export class ConflictDetector {
         if (windows.length === 0) continue;
         const fits = windows.some(
           (w) =>
-            w.weekday === local.weekday &&
-            minutesOf(w.opens_at) <= startMinute &&
-            endMinute <= minutesOf(w.closes_at),
+            w.weekday === span.weekday &&
+            minutesOf(w.opens_at) <= span.startMinute &&
+            span.endMinute <= minutesOf(w.closes_at),
         );
         if (!fits) {
           push('error', {
@@ -299,6 +310,19 @@ export class ConflictDetector {
             party: { partyType: c.partyType, partyId: c.partyId },
             conflictingEventIds: [...new Set(tooClose.map((r) => r.event_id))].sort(),
           });
+        }
+        if (options.externalSources !== false && this.sources?.covers(c.partyType)) {
+          for (const detail of await externalPartyConflicts(
+            this.sources,
+            trx,
+            organizationId,
+            c,
+            { start: p.scheduledStart, end: p.scheduledEnd },
+            rest,
+            ignoreIds,
+          )) {
+            push('error', detail);
+          }
         }
       }
 
@@ -516,4 +540,59 @@ export class ConflictDetector {
       .forNoKeyUpdate()
       .execute();
   }
+}
+
+/**
+ * Overlaps and too-short rest against commitments held by other modules for one party
+ * (SPK-SCHED-004, SPK-STAFF-003). Shared by detection and the post-lock re-check.
+ */
+export async function externalPartyConflicts(
+  sources: PartyCommitmentSources,
+  trx: Trx,
+  organizationId: string,
+  party: Pick<PartyCommitment, 'partyType' | 'partyId'>,
+  scheduled: { start: Date; end: Date },
+  restMinutes: number,
+  ignoreEventIds: readonly string[],
+): Promise<ConflictDetail[]> {
+  const held = await sources.held(
+    trx,
+    organizationId,
+    party.partyType,
+    party.partyId,
+    {
+      start: new Date(scheduled.start.getTime() - restMinutes * 60_000),
+      end: new Date(scheduled.end.getTime() + restMinutes * 60_000),
+    },
+    ignoreEventIds,
+  );
+  const overlapping = held.filter(
+    (h) =>
+      h.start.getTime() < scheduled.end.getTime() && scheduled.start.getTime() < h.end.getTime(),
+  );
+  const tooClose = held.filter((h) => !overlapping.includes(h));
+  const refs = (rows: typeof held) =>
+    rows
+      .map((h) => ({ source: h.source, id: h.id }))
+      .sort((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
+  const out: ConflictDetail[] = [];
+  if (overlapping.length > 0) {
+    out.push({
+      code: 'party_overlap',
+      message: `The ${party.partyType} is already held by another commitment at an overlapping time.`,
+      party: { partyType: party.partyType, partyId: party.partyId },
+      conflictingEventIds: [],
+      externalCommitments: refs(overlapping),
+    });
+  }
+  if (tooClose.length > 0) {
+    out.push({
+      code: 'insufficient_rest',
+      message: `The ${party.partyType} needs ${restMinutes} minutes of rest between commitments.`,
+      party: { partyType: party.partyType, partyId: party.partyId },
+      conflictingEventIds: [],
+      externalCommitments: refs(tooClose),
+    });
+  }
+  return out;
 }

@@ -39,6 +39,11 @@ export const FakePaymentTokens = {
 } as const;
 
 export type FakeRefundOutcome = 'succeed' | 'fail' | 'processing' | 'timeout';
+/**
+ * Scripted behaviour of the next cancel calls: `timeout` answers nothing (the payment is left as
+ * it was); `succeed` means the customer completed the challenge just before the cancel arrived.
+ */
+export type FakeCancelOutcome = 'timeout' | 'succeed';
 
 interface FakeCharge {
   reference: string;
@@ -84,9 +89,12 @@ export class FakePaymentProvider implements PaymentProviderPort {
   private readonly refunds = new Map<string, FakeRefund>();
   private readonly refundScript: FakeRefundOutcome[] = [];
   private readonly paymentScript: string[] = [];
+  private readonly cancelScript: FakeCancelOutcome[] = [];
   /** Every createPayment call, including deduplicated repeats (tests assert on it). */
   readonly paymentCalls: CreatePaymentRequest[] = [];
   readonly refundCalls: CreateRefundRequest[] = [];
+  /** Every cancelPayment call (idempotency keys), including repeats. */
+  readonly cancelCalls: string[] = [];
   private eventCounter = 0;
 
   reset(): void {
@@ -94,8 +102,10 @@ export class FakePaymentProvider implements PaymentProviderPort {
     this.refunds.clear();
     this.refundScript.length = 0;
     this.paymentScript.length = 0;
+    this.cancelScript.length = 0;
     this.paymentCalls.length = 0;
     this.refundCalls.length = 0;
+    this.cancelCalls.length = 0;
   }
 
   /**
@@ -111,6 +121,11 @@ export class FakePaymentProvider implements PaymentProviderPort {
   /** The next refund calls, in order, produce these outcomes (default `succeed`). */
   scriptRefunds(...outcomes: FakeRefundOutcome[]): void {
     this.refundScript.push(...outcomes);
+  }
+
+  /** The next cancel calls, in order, behave like this (default: cancel what can be canceled). */
+  scriptCancels(...outcomes: FakeCancelOutcome[]): void {
+    this.cancelScript.push(...outcomes);
   }
 
   /** Distinct charges the provider holds (a deduplicated repeat is not a second charge). */
@@ -172,6 +187,29 @@ export class FakePaymentProvider implements PaymentProviderPort {
   async retrievePayment(idempotencyKey: string): Promise<ProviderPaymentResult | null> {
     const charge = this.charges.get(idempotencyKey);
     return charge ? this.paymentResult(charge) : null;
+  }
+
+  /**
+   * Cancels a payment still waiting for the customer's challenge; any other state is returned as
+   * it is (it can no longer be canceled). Null when no charge exists for the key.
+   */
+  async cancelPayment(idempotencyKey: string): Promise<ProviderPaymentResult | null> {
+    this.cancelCalls.push(idempotencyKey);
+    const outcome = this.cancelScript.shift();
+    if (outcome === 'timeout') {
+      throw new PaymentOutcomeUnknownError('fake provider cancel timed out (scenario)');
+    }
+    const charge = this.charges.get(idempotencyKey);
+    if (!charge) return null;
+    if (outcome === 'succeed' && charge.status === 'requires_action') {
+      this.settlePayment(idempotencyKey, 'succeeded');
+    } else if (charge.status === 'requires_action') {
+      charge.status = 'canceled';
+      charge.sequence += 1;
+      charge.actionPayload = null;
+      charge.failureReason = 'action_abandoned';
+    }
+    return this.paymentResult(charge);
   }
 
   async createRefund(request: CreateRefundRequest): Promise<ProviderRefundResult> {

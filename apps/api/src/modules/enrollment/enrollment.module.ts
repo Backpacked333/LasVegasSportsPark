@@ -3,7 +3,7 @@ import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
 import { EventHandlerRegistry, lazyPort, runWithTransaction } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
-import { CompetitionModule } from '../competition';
+import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
 import { IdentityModule } from '../identity';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
@@ -13,7 +13,12 @@ import { PlacementController } from './controllers/placement.controller';
 import { SessionBookingsController } from './controllers/session-bookings.controller';
 import { WaitlistController } from './controllers/waitlist.controller';
 import { YouthController } from './controllers/youth.controller';
-import { CapacityReleased, HoldExpiryDue, MakeupExpiryDue } from './enrollment.events';
+import {
+  CapacityReleased,
+  EnrollmentEvents,
+  HoldExpiryDue,
+  MakeupExpiryDue,
+} from './enrollment.events';
 import { DEFAULT_ENROLLMENT_POLICY, ENROLLMENT_POLICY } from './enrollment.policy';
 import {
   BASKET_PORT,
@@ -30,6 +35,7 @@ import { ApplicationsService } from './services/applications.service';
 import { BasketsService } from './services/baskets.service';
 import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
+import { CompetitionFormsCheck } from './services/competition-forms-check';
 import { EnrollmentsService } from './services/enrollments.service';
 import { FamilyCalendarService } from './services/family-calendar.service';
 import { MakeupsService } from './services/makeups.service';
@@ -71,6 +77,10 @@ const providers: Provider[] = [
   { provide: CAPACITY_PORT, useExisting: CapacityService },
   { provide: BASKET_PORT, useExisting: BasketsService },
   { provide: WAITLIST_PORT, useExisting: WaitlistService },
+  // Fixture readiness "Required forms" (SPK-READY-001): the season's registration offering's
+  // required forms, checked against catalog acknowledgments.
+  CompetitionFormsCheck,
+  { provide: FORMS_CHECK_IMPL, useExisting: CompetitionFormsCheck },
 ];
 
 /**
@@ -173,6 +183,7 @@ export class EnrollmentModule implements OnModuleInit {
               break; // placement and staff holds simply lapse
           }
         }),
+      { failureOwner: 'program_manager' },
     );
     // SPK-REG-008: freed capacity is offered to the waitlist by priority, each offer holding its place.
     this.registry.on<EventPayload<typeof CapacityReleased>>(
@@ -187,7 +198,58 @@ export class EnrollmentModule implements OnModuleInit {
             event.correlationId,
           );
         }),
+      { failureOwner: 'program_manager' },
     );
+    // SPK-REG-008: once a participant holds a confirmed place (registered directly, transferred,
+    // or booked the session), their live waitlist entries for it leave the queue and any open
+    // offer is declined, so freed places go to the next real waiter.
+    const retire = 'enrollment.retire_redundant_waitlist_entries';
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
+      EnrollmentEvents.enrollmentConfirmed.type,
+      retire,
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.waitlist.retireRedundantEntries(
+            ctx.trx,
+            event.organizationId,
+            { enrollmentId: event.payload.enrollmentId },
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentTransferred>>(
+      EnrollmentEvents.enrollmentTransferred.type,
+      retire,
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.waitlist.retireRedundantEntries(
+            ctx.trx,
+            event.organizationId,
+            { enrollmentId: event.payload.toEnrollmentId },
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    for (const booked of [EnrollmentEvents.sessionBooked, EnrollmentEvents.sessionBookingChanged]) {
+      this.registry.on<{ bookingId: string; status: string }>(
+        booked.type,
+        retire,
+        async (event, ctx) => {
+          if (event.payload.status !== 'confirmed') return;
+          await runWithTransaction(ctx.trx, () =>
+            this.waitlist.retireRedundantEntries(
+              ctx.trx,
+              event.organizationId,
+              { sessionBookingId: event.payload.bookingId },
+              event.correlationId,
+            ),
+          );
+        },
+        { failureOwner: 'program_manager' },
+      );
+    }
     // SPK-YOUTH-004: an unused makeup lapses at its expiry.
     this.registry.on<EventPayload<typeof MakeupExpiryDue>>(
       MakeupExpiryDue.type,
@@ -201,6 +263,7 @@ export class EnrollmentModule implements OnModuleInit {
             event.correlationId,
           ),
         ),
+      { failureOwner: 'program_manager' },
     );
     // SPK-REG-005 / SPK-YOUTH-002: commercial pools follow the catalog limits; staffing pools keep
     // their staff count so a raised commercial limit never bypasses the staffing requirement.
@@ -219,6 +282,7 @@ export class EnrollmentModule implements OnModuleInit {
             event.correlationId,
           );
         }),
+      { failureOwner: 'program_manager' },
     );
   }
 }

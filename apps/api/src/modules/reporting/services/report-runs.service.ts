@@ -26,6 +26,7 @@ import {
   Outbox,
   snapshotActor,
   UnitOfWork,
+  listFacilityScope,
 } from '../../../kernel';
 import { resultDigest } from '../output/report-output';
 import { ReportRunRecorded } from '../reporting.events';
@@ -88,7 +89,7 @@ export class ReportRunsService {
         type: 'report_run',
         organizationId,
       });
-      const facilityScoped = principal.kind === 'staff' && principal.facilityIds.length > 0;
+      const facilityScoped = listFacilityScope(principal, definition.viewAction) !== null;
       if (decision.allowed && !(definition.scope === 'organization' && facilityScoped))
         visible.push(key);
     }
@@ -105,8 +106,26 @@ export class ReportRunsService {
       .orderBy('produced_at', 'desc')
       .orderBy('id', 'desc')
       .limit(query.limit + 1);
-    if (principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      q = q.where('facility_id', 'in', principal.facilityIds);
+    // §4.3, §4.14: each report's runs are narrowed by the facilities of the roles that hold that
+    // report's view action (identity-05).
+    if (principal.kind === 'staff') {
+      const scoped = visible.map((key) => ({
+        key,
+        scope: listFacilityScope(principal, this.reports.definition(key).viewAction),
+      }));
+      if (scoped.some((s) => s.scope !== null)) {
+        q = q.where((eb) =>
+          eb.or(
+            scoped.map(({ key, scope }) =>
+              scope === null
+                ? eb('report_key', '=', key)
+                : scope.length > 0
+                  ? eb.and([eb('report_key', '=', key), eb('facility_id', 'in', [...scope])])
+                  : eb.val(false),
+            ),
+          ),
+        );
+      }
     }
     if (cursor) {
       q = q.where(

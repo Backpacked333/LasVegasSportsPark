@@ -125,7 +125,10 @@ export const UpdateResourceBody = withCommandMeta({
   staffingConstraints: z.record(z.string(), z.unknown()).optional(),
   status: ResourceStatus.optional(),
   conflictUnitIds: z.array(z.uuid()).min(1).max(100).optional(),
-}).openapi('UpdateResourceBody');
+})
+  // §4.9: a sensitive stale edit fails rather than overwrite newer work
+  .extend({ expectedRevision: Revision })
+  .openapi('UpdateResourceBody');
 export type UpdateResourceBody = z.infer<typeof UpdateResourceBody>;
 
 export const ListResourcesQuery = z.object({ facilityId: z.uuid() });
@@ -160,7 +163,10 @@ export const UpdateResourceConfigurationBody = withCommandMeta({
   description: z.string().max(2000).nullable().optional(),
   active: z.boolean().optional(),
   memberResourceIds: z.array(z.uuid()).min(1).max(100).optional(),
-}).openapi('UpdateResourceConfigurationBody');
+})
+  // §4.9: a sensitive stale edit fails rather than overwrite newer work
+  .extend({ expectedRevision: Revision })
+  .openapi('UpdateResourceConfigurationBody');
 export type UpdateResourceConfigurationBody = z.infer<typeof UpdateResourceConfigurationBody>;
 
 export const ConflictUnitSchema = z
@@ -345,6 +351,11 @@ export const ConflictDetailSchema = z
     closureId: z.uuid().optional(),
     party: PartyCommitmentSchema.pick({ partyType: true, partyId: true }).optional(),
     changeSequences: z.array(z.number().int()).optional(),
+    /**
+     * Commitments of the party held by another module (for example `workforce.assignments`, an
+     * accepted assignment, SPK-STAFF-003), named by source and record id.
+     */
+    externalCommitments: z.array(z.object({ source: z.string(), id: z.uuid() })).optional(),
   })
   .openapi('ConflictDetail');
 export type ConflictDetail = z.infer<typeof ConflictDetailSchema>;
@@ -410,7 +421,13 @@ export const CreateEventSeriesBody = withCommandMeta({
     .max(24 * 60),
   setupMinutes: Minutes.optional(),
   cleanupMinutes: Minutes.optional(),
+  /**
+   * SPK-SCHED-008: required when the local start time does not exist on some date of the rule
+   * (spring-forward gap); without it the series is refused with details.code
+   * dst_resolution_required naming those dates.
+   */
   nonexistentPolicy: NonexistentTimePolicy.optional(),
+  /** SPK-SCHED-008: required when the local start time occurs twice on some date (fall-back overlap). */
   ambiguousPolicy: AmbiguousTimePolicy.optional(),
   exceptions: z.array(LocalDate).max(366).optional(),
   resourceIds: z.array(z.uuid()).min(1).max(20),
@@ -446,6 +463,9 @@ export const EditEventSeriesBody = withCommandMeta({
   preview: z.boolean().default(false),
   changes: SeriesEditChanges,
 })
+  // §4.9: a sensitive stale edit fails rather than overwrite newer work (previews too: the series
+  // view returns its revision)
+  .extend({ expectedRevision: Revision })
   .refine((b) => b.scope === 'entire_series' || b.occurrenceIndex !== undefined, {
     message: 'occurrenceIndex is required for this scope',
     path: ['occurrenceIndex'],
@@ -697,7 +717,10 @@ export type CreateScheduleDraftBody = z.infer<typeof CreateScheduleDraftBody>;
 export const AutosaveScheduleDraftBody = withCommandMeta({
   name: z.string().min(1).max(200).optional(),
   changes: z.array(DraftChangeInputSchema).max(500),
-}).openapi('AutosaveScheduleDraftBody');
+})
+  // §4.9: a sensitive stale edit fails rather than overwrite newer work
+  .extend({ expectedRevision: Revision })
+  .openapi('AutosaveScheduleDraftBody');
 export type AutosaveScheduleDraftBody = z.infer<typeof AutosaveScheduleDraftBody>;
 
 export const ValidateScheduleDraftBody = withCommandMeta({}).openapi('ValidateScheduleDraftBody');

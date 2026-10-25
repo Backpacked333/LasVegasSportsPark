@@ -1,8 +1,10 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { UnitOfWork } from '../../../kernel';
 import { createTestApp, customerPrincipal, staffPrincipal, type TestApp } from '../../../testing';
 import { EVENT_SCHEDULING_PORT, type EventSchedulingPort } from '../ports';
+import { EventWriter } from '../services/event-writer';
 import { EventsService } from '../services/events.service';
 import { SchedulingModule } from '../scheduling.module';
 import {
@@ -349,6 +351,123 @@ describe('EventSchedulingPort: direct scheduling for owning records (SPK-SCHED-0
       }),
     ).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
     await t.db.deleteFrom('operating_hours').where('organization_id', '=', org).execute();
+  });
+
+  it('SPK-SCHED-008 / SPK-SCHED-001: operating hours compare the local wall-clock start and end across daylight-saving changes', async () => {
+    const room = await seedResource(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      name: 'DST room',
+      kind: 'room',
+    });
+    await seedOperatingHours(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      resourceId: room.resourceId,
+      weekdays: [0],
+      opensAt: '00:00',
+      closesAt: '02:00',
+    });
+    const outside = (r: unknown) =>
+      expect(r).rejects.toMatchObject({
+        code: 'RESOURCE_CONFLICT',
+        details: { conflicts: [expect.objectContaining({ code: 'outside_operating_hours' })] },
+      });
+    // Fall-back night (Sunday 2026-11-01): 01:30 PDT to 01:30 PST is 01:30-01:30 on the wall
+    // clock, inside the 00:00-02:00 window, although 60 real minutes pass; the slot search offers it.
+    const slots = await events.findAvailableSlots(scheduler, {
+      resourceId: room.resourceId,
+      interval: { start: '2026-11-01T07:00:00.000Z', end: '2026-11-01T10:00:00.000Z' },
+      durationMinutes: 60,
+      stepMinutes: 30,
+    });
+    expect(slots.map((s) => s.start)).toContain('2026-11-01T08:30:00.000Z');
+    // 00:30 PDT to 01:30 PST (120 real minutes) ends at 01:30 local: it fits.
+    const fallBack = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [room.resourceId],
+      start: '2026-11-01T07:30:00.000Z',
+      end: '2026-11-01T09:30:00.000Z',
+    });
+    expect(fallBack.status).toBe('published');
+    // Spring-forward night (Sunday 2027-03-14), window 00:00-03:00: 01:30 PST to 03:30 PDT is 60
+    // real minutes but ends at 03:30 local, after closing.
+    await t.db
+      .updateTable('operating_hours')
+      .set({ closes_at: '03:00' })
+      .where('resource_id', '=', room.resourceId)
+      .execute();
+    await outside(
+      createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: facility,
+        resourceIds: [room.resourceId],
+        start: '2027-03-14T09:30:00.000Z',
+        end: '2027-03-14T10:30:00.000Z',
+      }),
+    );
+    // Local midnight is explicit: an event may end exactly at 24:00 of its start day, and one that
+    // runs past midnight never fits a single day's window (Sunday 20:00-24:00 here).
+    await t.db
+      .updateTable('operating_hours')
+      .set({ opens_at: '20:00', closes_at: '24:00' })
+      .where('resource_id', '=', room.resourceId)
+      .execute();
+    const toMidnight = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [room.resourceId],
+      start: at('2026-11-08', '22:00'),
+      end: at('2026-11-09', '00:00'),
+    });
+    expect(toMidnight.status).toBe('published');
+    await outside(
+      createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: facility,
+        resourceIds: [room.resourceId],
+        start: at('2026-11-15', '23:30'),
+        end: at('2026-11-16', '00:30'),
+      }),
+    );
+    await t.db.deleteFrom('operating_hours').where('organization_id', '=', org).execute();
+  });
+
+  it('§4.9: cancelling an event row that another command changed since it was read answers STALE_REVISION and changes nothing', async () => {
+    const event = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.southHalfId],
+      start: at('2026-10-29', '18:00'),
+      end: at('2026-10-29', '19:00'),
+    });
+    const read = await t.db
+      .selectFrom('events')
+      .selectAll()
+      .where('id', '=', event.id)
+      .executeTakeFirstOrThrow();
+    await events.moveEvent(scheduler, event.id, {
+      scheduledStart: at('2026-10-29', '19:00'),
+      scheduledEnd: at('2026-10-29', '20:00'),
+      expectedRevision: 1,
+    });
+    const writer = t.app.get(EventWriter);
+    await expect(
+      t.app.get(UnitOfWork).run(({ trx }) => writer.cancel(trx, read, 'stale cancel')),
+    ).rejects.toMatchObject({
+      code: 'STALE_REVISION',
+      details: { expectedRevision: 1, currentRevision: 2 },
+    });
+    const after = await events.getEvent(scheduler, event.id);
+    expect(after).toMatchObject({ status: 'published', revision: 2 });
+    const held = await t.db
+      .selectFrom('reservation_units')
+      .select('id')
+      .where('event_id', '=', event.id)
+      .where('status', '=', 'active')
+      .execute();
+    expect(held.length).toBeGreaterThan(0);
   });
 
   it('moves and cancels an event with revision checks, releasing the old holds and carrying old and new details', async () => {

@@ -193,6 +193,28 @@ export class CapacityService implements CapacityPort {
       .execute();
   }
 
+  /**
+   * SPK-REG-005 / SPK-PLACE-003: the roster-place pools staff configured for a team entry (every
+   * constraint kind), in lock order. A join_team registration naming the team and a placement
+   * assignment onto it hold the same pools, so they share one roster constraint (§4.7 invariant 3).
+   */
+  async teamEntryPools(
+    db: Reader,
+    organizationId: string,
+    teamEntryId: string,
+  ): Promise<PoolRow[]> {
+    return db
+      .selectFrom('capacity_pools')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('scope_type', '=', 'team_entry')
+      .where('scope_id', '=', teamEntryId)
+      .where('unit', '=', 'roster_places')
+      .where('status', '=', 'active')
+      .orderBy('id')
+      .execute();
+  }
+
   /** The offering-level pools an intent must hold (commercial and staffing constraints alike). */
   poolsForIntent(pools: readonly PoolRow[], intent: RegistrationIntent): PoolRow[] {
     const units: readonly string[] = INTENT_CAPACITY_UNITS[intent];

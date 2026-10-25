@@ -251,6 +251,12 @@ export function ExistingEventForm({
   const previewCommand = useApiCommand('post', '/event-series/{id}/edits');
 
   const event = events.data?.items.find((e) => e.id === eventId);
+  // §4.9: a series edit, previews included, carries the series revision it was based on.
+  const series = useApiQuery({
+    path: '/event-series/{id}',
+    request: { path: { id: event?.seriesId ?? '' } },
+    enabled: !!event?.seriesId,
+  });
   const startAt = toInstant(start, tz);
   const endAt = toInstant(end, tz);
 
@@ -271,6 +277,10 @@ export function ExistingEventForm({
     if (!event) return 'Choose an event.';
     if (!action) return 'Choose what to change.';
     if (event.seriesId && !scope) return 'Choose which occurrences to change.';
+    if (event.seriesId && scope && scope !== 'one' && !series.data)
+      return series.isError
+        ? 'The series could not be loaded. Reload and try again.'
+        : 'Loading the series…';
     if (action === 'move' && (!startAt.ok || !endAt.ok)) return 'Enter a valid new start and end.';
     if (action === 'resize' && !endAt.ok) return 'Enter a valid new end.';
     if (
@@ -325,7 +335,7 @@ export function ExistingEventForm({
   };
 
   const requestPreview = () => {
-    if (!event?.seriesId || !scope || scope === 'one' || !action) return;
+    if (!event?.seriesId || !scope || scope === 'one' || !action || !series.data) return;
     const changes =
       action === 'cancel'
         ? { cancel: true }
@@ -347,6 +357,7 @@ export function ExistingEventForm({
           ...(event.occurrenceIndex !== null ? { occurrenceIndex: event.occurrenceIndex } : {}),
           preview: true,
           changes,
+          expectedRevision: series.data.revision,
         },
       })
       .then(setPreview)

@@ -9,7 +9,7 @@ import type {
 } from './core';
 
 /**
- * Enrollment module tables (migration 0500, specification §3.3 SPK-REG-001..010, §3.6
+ * Enrollment module tables (migrations 0500-0502, specification §3.3 SPK-REG-001..010, §3.6
  * SPK-PLACE-001..005, §3.13 SPK-YOUTH-001..007, §4.4 Participation + Capacity, §4.6
  * Application/Enrollment/Placement/Hold/SessionBooking machines, §4.7 invariants 2, 3, 7).
  */
@@ -174,6 +174,8 @@ export interface EnrollmentsTable {
   transferred_at: NullableTimestamp;
   transferred_to_enrollment_id: string | null;
   transferred_from_enrollment_id: string | null;
+  /** Migration 0501: the financial consequence accepted with the transfer (SPK-REG-010). */
+  transfer_consequence: Json<Record<string, unknown>> | null;
   completed_at: NullableTimestamp;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
@@ -400,6 +402,8 @@ export interface TrialParticipationsTable {
   status: Generated<TrialParticipationStatus>;
   scheduled_for: NullableTimestamp;
   attended_at: NullableTimestamp;
+  /** Migration 0502: the no-show outcome, kept after conversion (SPK-AT-019). */
+  no_show_at: NullableTimestamp;
   canceled_at: NullableTimestamp;
   cancel_reason: string | null;
   follow_up_consent: Generated<boolean>;

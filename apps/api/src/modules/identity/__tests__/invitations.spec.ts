@@ -1,5 +1,6 @@
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { idempotencyStoreContains } from '../../../testing/idempotency-store';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import { RelationshipAuthority } from '../services/relationship-authority.service';
@@ -102,6 +103,43 @@ describe('invitations (SPK-IAM-004)', () => {
       .send({ token: created.body.token });
     expect(replay.status).toBe(409);
     expect(replay.body.code).toBe('INVALID_TRANSITION');
+  });
+
+  it('§4.14 / SPK-IAM-004: the invitation token never rests in the idempotency store; a replay withholds it', async () => {
+    const people = await createOrganizationPeople(t, { guardianPermissions: ['view', 'collect'] });
+    const sitter = await invitedAdult();
+    const parent = await authHeaderForPerson(t, people.adult.personId);
+    const body = {
+      recipientPersonId: sitter.personId,
+      scope: { type: 'person', personId: people.child.personId },
+      relationshipKind: 'delegate',
+      requestedPermissions: ['view'],
+      expiresInHours: 24,
+    };
+    const idempotencyKey = key();
+    const created = await t.http
+      .post('/v1/invitations')
+      .set(parent)
+      .set('Idempotency-Key', idempotencyKey)
+      .send(body);
+    expect(created.status).toBe(201);
+    expect(await idempotencyStoreContains(t.db, created.body.token as string)).toBe(false);
+    const replay = await t.http
+      .post('/v1/invitations')
+      .set(parent)
+      .set('Idempotency-Key', idempotencyKey)
+      .send(body);
+    expect(replay.status).toBe(409);
+    expect(replay.body).toMatchObject({
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      details: { resourceId: created.body.id },
+    });
+    const invitations = await t.db
+      .selectFrom('invitations')
+      .select('id')
+      .where('recipient_person_id', '=', sitter.personId)
+      .execute();
+    expect(invitations).toHaveLength(1);
   });
 
   it('acceptance by the wrong person is denied as not-found; a wrong token is not-found', async () => {

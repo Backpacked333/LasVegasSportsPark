@@ -49,6 +49,34 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
     expect(await inbox.runOnce()).toMatchObject({ processed: 0 });
   });
 
+  it('§4.11: an event recorded without a verified signature is ignored and never reaches a handler', async () => {
+    const before = handled.length;
+    const { id } = await inbox.record({
+      provider: 'fake-payments',
+      providerEventId: 'evt_unverified',
+      eventType: 'payment.succeeded',
+      payload: { ok: true },
+      organizationId: t.organizationId,
+      signatureVerified: false,
+    });
+    expect(await inbox.runOnce()).toMatchObject({ processed: 0, ignored: 1 });
+    expect(handled.length).toBe(before);
+    const row = await t.db
+      .selectFrom('inbox_events')
+      .selectAll()
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(row).toMatchObject({ status: 'ignored', signature_verified: false, locked_by: null });
+    const consumed = await t.db
+      .selectFrom('event_consumptions')
+      .select('handler')
+      .where('event_id', '=', id)
+      .execute();
+    expect(consumed).toEqual([]);
+    // An ignored event is final: it is never claimed again.
+    expect(await inbox.runOnce()).toMatchObject({ processed: 0, ignored: 0 });
+  });
+
   it('§4.12: retries failed events with backoff and dead-letters with an owned exception after max attempts', async () => {
     failing = true;
     const { id } = await inbox.record({
@@ -69,7 +97,7 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
         t.clock.now().getTime() + retryDelayMs(attempt),
       );
       // Not before its retry time: an immediate poll leaves it alone and uses no attempt.
-      expect(await inbox.runOnce()).toEqual({ processed: 0, failed: 0, dead: 0 });
+      expect(await inbox.runOnce()).toEqual({ processed: 0, failed: 0, dead: 0, ignored: 0 });
       expect((await row()).attempts).toBe(attempt);
       t.clock.advance(retryDelayMs(attempt));
       expect(await inbox.runOnce()).toMatchObject({ failed: 1 });
@@ -169,7 +197,7 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
       })
       .where('id', '=', id)
       .execute();
-    expect(await inbox.runOnce()).toEqual({ processed: 0, failed: 0, dead: 0 });
+    expect(await inbox.runOnce()).toEqual({ processed: 0, failed: 0, dead: 0, ignored: 0 });
     t.clock.advance(t.config.OUTBOX_LOCK_LEASE_SECONDS * 1000 + 1);
     expect(await inbox.runOnce()).toMatchObject({ processed: 1 });
     expect(handled.filter((e) => e === 'evt_leased')).toHaveLength(1);

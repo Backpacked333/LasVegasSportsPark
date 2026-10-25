@@ -261,6 +261,8 @@ export class DuplicatesService {
         correlationId,
         input: { candidateId, survivorPersonId: survivorId, mergedPersonId: mergedId },
         status: 'running',
+        // §4.14: the merge summary is read by those who may merge, not by every staff role.
+        readScope: { action: IdentityActions.mergePersons },
       });
       const summary: MergeSummary = {
         contactPointsMoved: 0,

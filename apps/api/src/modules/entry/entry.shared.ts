@@ -172,6 +172,33 @@ export function actorOf(value: unknown): ActorSnapshot {
   };
 }
 
+/**
+ * Who a read is for (§4.14 field-level authorization). `staff` is a principal whose authority is
+ * a staff role in scope (or the system); `customer` is anyone reading through a relationship or
+ * as themselves, who receives a minimized projection: no staff account, person, role or session
+ * identifiers, no device or batch identifiers, and (for a release) no staff notes, denial
+ * details, other adults' permissions or exception id.
+ */
+export type ReadAudience = 'staff' | 'customer';
+
+/** The audience of an allowed authorization decision: only a staff role (or the system) is staff. */
+export function audienceOf(basis: string | undefined): ReadAudience {
+  return basis === 'staff role' || basis === 'system' ? 'staff' : 'customer';
+}
+
+/** A recorded actor as a customer may see it: the kind and a generic label, no identifiers. */
+export function customerActor(value: unknown): ActorSnapshot {
+  const actor = actorOf(value);
+  return {
+    kind: actor.kind,
+    accountId: null,
+    personId: null,
+    staffRoles: [],
+    sessionId: null,
+    actorLabel: actor.kind === 'staff' || actor.kind === 'system' ? actor.kind : actor.actorLabel,
+  };
+}
+
 interface ActivityColumns {
   activity_type: 'session' | 'event';
   activity_id: string;
@@ -224,7 +251,7 @@ export function toVisit(row: VisitRow): Visit {
   };
 }
 
-export function toCheckin(row: CheckinRow): SessionCheckin {
+export function toCheckin(row: CheckinRow, audience: ReadAudience = 'staff'): SessionCheckin {
   const basisId =
     row.basis_kind === 'enrollment'
       ? row.enrollment_id
@@ -247,12 +274,16 @@ export function toCheckin(row: CheckinRow): SessionCheckin {
     admittedAt: isoOrNull(row.admitted_at),
     withdrawnAt: isoOrNull(row.withdrawn_at),
     withdrawnReason: row.withdrawn_reason,
-    recordedBy: actorOf(row.recorded_by),
+    recordedBy: audience === 'staff' ? actorOf(row.recorded_by) : customerActor(row.recorded_by),
     revision: row.revision,
   };
 }
 
-export function toObservation(row: ObservationRow): AttendanceObservation {
+export function toObservation(
+  row: ObservationRow,
+  audience: ReadAudience = 'staff',
+): AttendanceObservation {
+  const staff = audience === 'staff';
   return {
     id: row.id,
     facilityId: row.facility_id,
@@ -262,15 +293,15 @@ export function toObservation(row: ObservationRow): AttendanceObservation {
     observedAt: iso(row.observed_at),
     receivedAt: iso(row.received_at),
     source: row.source,
-    deviceId: row.device_id,
-    clientObservationId: row.client_observation_id,
-    syncBatchId: row.sync_batch_id,
-    snapshotReference: row.snapshot_reference,
-    snapshotTakenAt: isoOrNull(row.snapshot_taken_at),
+    deviceId: staff ? row.device_id : null,
+    clientObservationId: staff ? row.client_observation_id : null,
+    syncBatchId: staff ? row.sync_batch_id : null,
+    snapshotReference: staff ? row.snapshot_reference : null,
+    snapshotTakenAt: staff ? isoOrNull(row.snapshot_taken_at) : null,
     flags: [...row.flags],
     correctsObservationId: row.corrects_observation_id,
     correctionReason: row.correction_reason,
-    recordedBy: actorOf(row.recorded_by),
+    recordedBy: staff ? actorOf(row.recorded_by) : customerActor(row.recorded_by),
   };
 }
 
@@ -323,6 +354,27 @@ export function toRelease(row: ReleaseRow): ReleaseRecord {
     staffActor: actorOf(row.staff_actor),
     source: row.source,
     receivedAt: iso(row.received_at),
+  };
+}
+
+/**
+ * A release record as a customer (a holder of `view` over the child) may read it (§4.14
+ * field-level authorization, SPK-IAM-005 restricted review workflow): who collected the child,
+ * when, from which activity, and the outcome. Staff restriction and escalation notes, the denial
+ * details, the permissions any adult holds, the exception, the outage procedure and the staff
+ * actor's identifiers are withheld; pickup staff read the full record.
+ */
+export function toCustomerRelease(row: ReleaseRow): ReleaseRecord {
+  return {
+    ...toRelease(row),
+    collectorPermissions: [],
+    denialReason: null,
+    restrictionNotes: null,
+    escalationNotes: null,
+    escalationExceptionId: null,
+    manualProcedureReference: null,
+    postSyncAuthority: null,
+    staffActor: customerActor(row.staff_actor),
   };
 }
 

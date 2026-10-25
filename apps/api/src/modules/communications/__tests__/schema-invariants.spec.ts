@@ -16,7 +16,7 @@ import { IdentityModule, createPersonFixture } from '../../identity';
  * Integrity that matters is enforced by the database (CLAUDE.md, §4.7). Each test proves that
  * PostgreSQL rejects the violation regardless of what a service does.
  */
-describe('communications schema invariants (migration 1000)', () => {
+describe('communications schema invariants (migrations 1000-1003)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -196,6 +196,38 @@ describe('communications schema invariants (migration 1000)', () => {
     await insertAttempt(notificationId, recipientId, { channel: 'push' }); // other channel
   });
 
+  it('SPK-COMMS-004: an attempt or acknowledgment names a recipient of its own notification, and an acknowledgment one of that recipient’s attempts (1003)', async () => {
+    const x = await insertNotification();
+    const y = await insertNotification();
+    const recipientOfX = await insertRecipient(x);
+    const recipientOfY = await insertRecipient(y);
+    await expect(insertAttempt(x, recipientOfY)).rejects.toSatisfy(isForeignKeyViolation);
+    const attemptOfX = await insertAttempt(x, recipientOfX);
+    const attemptOfY = await insertAttempt(y, recipientOfY);
+    const acknowledge = (
+      notificationId: string,
+      recipientId: string,
+      deliveryAttemptId: string | null,
+    ) =>
+      db
+        .insertInto('notification_acknowledgments')
+        .values({
+          id: newId(),
+          organization_id: org,
+          notification_id: notificationId,
+          recipient_id: recipientId,
+          delivery_attempt_id: deliveryAttemptId,
+          acknowledged_at: now(),
+          via: 'email',
+          acknowledged_by: actor,
+          note: null,
+        })
+        .execute();
+    await expect(acknowledge(x, recipientOfY, null)).rejects.toSatisfy(isForeignKeyViolation);
+    await expect(acknowledge(x, recipientOfX, attemptOfY)).rejects.toSatisfy(isForeignKeyViolation);
+    await expect(acknowledge(x, recipientOfX, attemptOfX)).resolves.toBeDefined();
+  });
+
   it('SPK-COMMS-004: delivery states are consistent with their timestamps and the in-app channel is platform-delivered', async () => {
     const notificationId = await insertNotification();
     const recipientId = await insertRecipient(notificationId);
@@ -236,6 +268,48 @@ describe('communications schema invariants (migration 1000)', () => {
         provider_message_id: 'msg-1',
       }),
     ).rejects.toSatisfy(isUniqueViolation);
+  });
+
+  it('SPK-COMMS-005: a superseded attempt is recorded with failure code SUPERSEDED; unknown codes stay refused', async () => {
+    const notificationId = await insertNotification();
+    const recipientId = await insertRecipient(notificationId);
+    await insertAttempt(notificationId, recipientId, {
+      status: 'failed',
+      failed_at: now(),
+      failure_code: 'SUPERSEDED',
+      error: 'superseded before hand-off',
+    });
+    await expect(
+      insertAttempt(notificationId, recipientId, {
+        channel: 'push',
+        status: 'failed',
+        failed_at: now(),
+        failure_code: 'OBSOLETE',
+      }),
+    ).rejects.toSatisfy(isCheckViolation);
+  });
+
+  it('SPK-COMMS-008: a calendar entry source revision is positive or unknown', async () => {
+    await expect(
+      db
+        .insertInto('calendar_entries')
+        .values({
+          id: newId(),
+          organization_id: org,
+          event_id: newId(),
+          facility_id: t.facilityId,
+          title: 'x',
+          kind: 'game',
+          scheduled_start: now(),
+          scheduled_end: new Date(now().getTime() + 3_600_000),
+          timezone: 'America/Los_Angeles',
+          status: 'published',
+          last_change: 'created',
+          last_source_event_id: newId(),
+          source_revision: 0,
+        } as never)
+        .execute(),
+    ).rejects.toSatisfy(isCheckViolation);
   });
 
   it('acknowledgments are append-only and recorded at most once per recipient', async () => {

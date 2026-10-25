@@ -52,6 +52,8 @@ export interface OfflineSyncBatchesTable {
   stale: boolean;
   results: Json<unknown[]>;
   exception_ids: UuidArray;
+  /** SHA-256 of the canonical request (facility, snapshot, items); null for batches before 0801. */
+  request_fingerprint: ColumnType<string | null, string | null | undefined, string | null>;
   operation_id: string | null;
   submitted_by: Json<Record<string, unknown>>;
   submitted_by_person_id: string | null;

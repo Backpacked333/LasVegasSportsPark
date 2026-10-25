@@ -121,6 +121,69 @@ describe('staff memberships (§2.1, §4.14) and households (§4.5)', () => {
     ]);
   });
 
+  it('SPK-STAFF-004 / SPK-IAM-006: ending a future-dated staff membership succeeds and it never takes effect', async () => {
+    const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const header = await authHeaderForPerson(t, admin.personId);
+    const service = t.app.get(StaffMembershipsService);
+    for (const effectiveToDays of [null, 14] as const) {
+      const person = await createPersonFixture(t, { kind: 'adult' });
+      await createAccountFixture(t, { personId: person });
+      const effectiveFrom = new Date(t.clock.now().getTime() + 7 * 86_400_000).toISOString();
+      const created = await t.http
+        .post('/v1/staff-memberships')
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({
+          personId: person,
+          roles: ['official'],
+          effectiveFrom,
+          ...(effectiveToDays
+            ? {
+                effectiveTo: new Date(
+                  t.clock.now().getTime() + effectiveToDays * 86_400_000,
+                ).toISOString(),
+              }
+            : {}),
+        });
+      expect(created.status).toBe(201);
+      const ended = await t.http
+        .post(`/v1/staff-memberships/${created.body.id}/end`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ reason: 'assignment withdrawn before it started' });
+      expect(ended.status).toBe(200);
+      expect(ended.body).toMatchObject({
+        status: 'ended',
+        effectiveFrom,
+        effectiveTo: effectiveFrom,
+        revision: 2,
+      });
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select('reason')
+        .where('target_id', '=', created.body.id)
+        .execute();
+      expect(audit.map((a) => a.reason)).toContain('assignment withdrawn before it started');
+      const events = await t.db
+        .selectFrom('outbox_events')
+        .select('payload')
+        .where('aggregate_id', '=', created.body.id)
+        .orderBy('occurred_at')
+        .execute();
+      expect(events.map((e) => (e.payload as { status: string }).status)).toEqual([
+        'active',
+        'ended',
+      ]);
+      // the window it would have opened grants nothing
+      const clockAt = t.clock.now();
+      t.clock.set(new Date(new Date(effectiveFrom).getTime() + 3600_000));
+      const me = await t.http.get('/v1/me').set(await authHeaderForPerson(t, person));
+      expect(me.body.principal.kind).toBe('customer');
+      expect(await service.staffWithRole(t.organizationId, 'official')).not.toContain(person);
+      t.clock.set(clockAt);
+    }
+  });
+
   it('a child or an inactive person cannot be staff', async () => {
     const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
     const child = await createPersonFixture(t, { kind: 'child' });

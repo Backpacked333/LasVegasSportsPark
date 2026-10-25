@@ -452,6 +452,7 @@ export function enrollment(
     transferredAt: null,
     transferredToEnrollmentId: null,
     transferredFromEnrollmentId: null,
+    transferConsequence: null,
     completedAt: null,
     revision: 1,
     createdAt: T,

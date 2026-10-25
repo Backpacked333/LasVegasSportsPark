@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OutboxDispatcher } from '../../../kernel';
-import type { TestApp } from '../../../testing';
+import { idempotencyStoreContains, type TestApp } from '../../../testing';
 import { get, HOUR, post, reportingTestApp, staff, type Actor } from './support';
 
 const DATE = '2027-02-03';
@@ -144,6 +144,20 @@ describe('exports (SPK-REPORT-007, §4.14 expiring exports)', () => {
     const again = await download(scheduler, created.body.id, created.body.downloadToken);
     expect(again.status).toBe(409);
     expect(again.body.code).toBe('INVALID_TRANSITION');
+  });
+
+  it('§4.14: the download token never rests in the idempotency store; a replay withholds it', async () => {
+    const body = { reportRunId: utilizationRunId, format: 'csv', reason: 'Replay check' };
+    const idempotencyKey = `k-export-replay-${utilizationRunId}`;
+    const created = await post(t, '/v1/reports/exports', scheduler, body, idempotencyKey);
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(await idempotencyStoreContains(t.db, created.body.downloadToken as string)).toBe(false);
+    const replay = await post(t, '/v1/reports/exports', scheduler, body, idempotencyKey);
+    expect(replay.status).toBe(409);
+    expect(replay.body).toMatchObject({
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      details: { resourceId: created.body.id },
+    });
   });
 
   it('§4.10: an export is bound to its requester and its one-time token', async () => {

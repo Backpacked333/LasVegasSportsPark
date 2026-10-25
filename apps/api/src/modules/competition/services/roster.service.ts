@@ -40,6 +40,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  executorFor,
   snapshotActor,
   type Clock,
   type Trx,
@@ -72,7 +73,7 @@ import {
 import { JoinRequestMachine, TeamInvitationMachine } from '../competition.state-machines';
 import type { EffectiveRosterMember, RosterPort } from '../ports';
 import { EligibilityService } from './eligibility.service';
-import { TeamEntriesService, indicatorOf } from './team-entries.service';
+import { TeamEntriesService, indicatorOf, teammateView } from './team-entries.service';
 
 /**
  * Rosters, invitations and join requests (SPK-COMP-005, SPK-CAP-001/002/004, SPK-AT-002/013).
@@ -213,7 +214,10 @@ export class RosterService implements RosterPort {
     const roles = await effectiveRoles(this.db, organizationId, teamEntryId, now);
     const viewer = await this.entries.viewerOf(principal, context, playing, roles, now);
     if (query.includeHistory && !viewer.canManage) throw errors.protectedNotFound('team_entry');
-    return this.rosterView(this.db, context, at, query.includeHistory);
+    const view = await this.rosterView(this.db, context, at, query.includeHistory);
+    if (viewer.canManage) return view;
+    // SPK-CAP-002 / SPK-DISC-004: ordinary viewers get no removal reasons or other players' codes
+    return { ...view, members: view.members.map((m) => teammateView(m, principal.personId)) };
   }
 
   /** Explain a player's eligibility for the entry (captain or staff only, SPK-CAP-004). */
@@ -240,6 +244,8 @@ export class RosterService implements RosterPort {
         membershipStatus: query.status,
         actorIsStaff: isStaffLike(principal),
         existingMembership: open !== null && statusAt(open) !== null,
+        // SPK-CAP-002 / SPK-DISC-004: captains get codes, limits and dates, never restricted detail
+        restricted: !isStaffLike(principal),
       },
     );
   }
@@ -289,6 +295,7 @@ export class RosterService implements RosterPort {
           {
             membershipStatus: 'active',
             actorIsStaff: isStaffLike(principal),
+            restricted: !isStaffLike(principal),
           },
           trx,
         );
@@ -621,6 +628,7 @@ export class RosterService implements RosterPort {
         {
           membershipStatus: 'active',
           actorIsStaff: false,
+          restricted: !isStaffLike(principal),
         },
         trx,
       );
@@ -800,7 +808,8 @@ export class RosterService implements RosterPort {
     at: Date,
     trx?: Trx,
   ): Promise<EffectiveRosterMember[]> {
-    const db = trx ?? this.db;
+    // Called from other modules' commands and handlers: read through their transaction.
+    const db = trx ?? executorFor(this.db);
     const rows = await rosterRowsEffectiveAt(db, organizationId, teamEntryId, at);
     const roles = rolesByPerson(await effectiveRoles(db, organizationId, teamEntryId, at));
     const out: EffectiveRosterMember[] = [];
@@ -863,6 +872,8 @@ export class RosterService implements RosterPort {
       {
         membershipStatus: input.status,
         actorIsStaff: input.actorIsStaff,
+        // the 422 details reach the caller: a captain approving or adding sees codes only
+        restricted: !input.actorIsStaff,
       },
       trx,
     );

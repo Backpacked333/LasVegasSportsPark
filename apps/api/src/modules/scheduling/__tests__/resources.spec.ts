@@ -106,6 +106,45 @@ describe('physical inventory: resources, configurations, conflict units, operati
     expect(duplicate.body.code).toBe('VALIDATION_FAILED');
   });
 
+  it('§4.9: resource and configuration edits without expectedRevision are refused, never applied over newer work', async () => {
+    const room = await post('/v1/resources', {
+      facilityId: facility,
+      kind: 'room',
+      name: 'Meeting room',
+    });
+    const closed = await t.http
+      .patch(`/v1/resources/${room.body.id}`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: 1, status: 'closed' });
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+    const blind = await t.http
+      .patch(`/v1/resources/${room.body.id}`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ status: 'active' });
+    expect(blind.status).toBe(400);
+    expect(blind.body.code).toBe('VALIDATION_FAILED');
+    const current = await t.http.get(`/v1/resources/${room.body.id}`).set(auth);
+    expect(current.body).toMatchObject({ status: 'closed', revision: 2 });
+
+    const a = await post('/v1/resources', { facilityId: facility, kind: 'room', name: 'Room A' });
+    const b = await post('/v1/resources', { facilityId: facility, kind: 'room', name: 'Room B' });
+    const combined = await post('/v1/resource-configurations', {
+      facilityId: facility,
+      name: 'A+B',
+      memberResourceIds: [a.body.id, b.body.id],
+    });
+    expect(combined.status, JSON.stringify(combined.body)).toBe(201);
+    const blindConfig = await t.http
+      .patch(`/v1/resource-configurations/${combined.body.id}`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ active: false });
+    expect(blindConfig.status).toBe(400);
+    expect(blindConfig.body.code).toBe('VALIDATION_FAILED');
+  });
+
   it('updates with optimistic concurrency and audits status changes', async () => {
     const created = await post('/v1/resources', {
       facilityId: facility,

@@ -10,7 +10,12 @@ import {
   type ReadinessCheckRegistry,
 } from '../competition';
 import { IdentityModule } from '../identity';
-import { ConflictDetector, EventChanged, SchedulingModule } from '../scheduling';
+import {
+  ConflictDetector,
+  EventChanged,
+  PartyCommitmentSources,
+  SchedulingModule,
+} from '../scheduling';
 import { AssignmentsController } from './controllers/assignments.controller';
 import { AvailabilityController } from './controllers/availability.controller';
 import { FeesController } from './controllers/fees.controller';
@@ -96,9 +101,19 @@ export class WorkforceModule implements OnModuleInit {
     @Inject(READINESS_CHECK_REGISTRY) private readonly readiness: ReadinessCheckRegistry,
     private readonly coverage: CoverageService,
     private readonly assignments: AssignmentsService,
+    private readonly checker: CommitmentChecker,
+    private readonly partySources: PartyCommitmentSources,
   ) {}
 
   onModuleInit(): void {
+    // SPK-STAFF-003, SPK-SCHED-004: scheduling refuses to commit a person an accepted assignment
+    // holds (official or assigned coach overlap), under the party lock both modules take.
+    this.partySources.register({
+      id: 'workforce.assignments',
+      partyTypes: ['person'],
+      held: (trx, organizationId, _partyType, personId, range, ignoreEventIds) =>
+        this.checker.held(trx, organizationId, personId, range, ignoreEventIds),
+    });
     // SPK-STAFF-002 / SPK-READY-001: required officials are satisfied only by accepted assignments.
     this.readiness.registerCheck(REQUIRED_OFFICIALS_CHECK, (context) =>
       this.coverage.readinessIssues(context),
@@ -110,6 +125,7 @@ export class WorkforceModule implements OnModuleInit {
       async (event, ctx) => {
         await this.assignments.onFixtureChanged(event, ctx);
       },
+      { failureOwner: 'league_manager' },
     );
     this.registry.on<EventPayload<typeof EventChanged>>(
       EventChanged.type,
@@ -117,6 +133,7 @@ export class WorkforceModule implements OnModuleInit {
       async (event, ctx) => {
         await this.assignments.onSchedulingEventChanged(event, ctx);
       },
+      { failureOwner: 'scheduler' },
     );
     this.registry.on<EventPayload<typeof CatalogEvents.sessionCanceled>>(
       CatalogEvents.sessionCanceled.type,
@@ -124,6 +141,7 @@ export class WorkforceModule implements OnModuleInit {
       async (event, ctx) => {
         await this.assignments.onSessionCanceled(event, ctx);
       },
+      { failureOwner: 'program_manager' },
     );
   }
 }

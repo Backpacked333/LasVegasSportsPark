@@ -18,6 +18,7 @@ import {
   AuditWriter,
   AuthorizationService,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -86,6 +87,31 @@ export class EventSeriesService {
       });
       if (occurrences.length === 0) {
         throw errors.validation('The recurrence rule produces no occurrences.');
+      }
+      // SPK-SCHED-008 "ambiguous or nonexistent times require resolution": a rule whose local start
+      // time falls in a daylight-saving gap or overlap on some date is refused until the scheduler
+      // chooses how to resolve it; the policy defaults are never applied silently.
+      const unresolvedGap = occurrences
+        .filter(
+          (o) => o.dstResolution === 'shifted_forward' && body.nonexistentPolicy === undefined,
+        )
+        .map((o) => o.localDate);
+      const unresolvedOverlap = occurrences
+        .filter((o) => o.dstResolution === 'first' && body.ambiguousPolicy === undefined)
+        .map((o) => o.localDate);
+      if (unresolvedGap.length > 0 || unresolvedOverlap.length > 0) {
+        throw errors.validation(
+          'The local start time does not exist or occurs twice on some dates; choose how to resolve them.',
+          {
+            code: 'dst_resolution_required',
+            nonexistentLocalDates: unresolvedGap,
+            ambiguousLocalDates: unresolvedOverlap,
+            options: {
+              nonexistentPolicy: unresolvedGap.length > 0 ? ['shift_forward', 'skip'] : [],
+              ambiguousPolicy: unresolvedOverlap.length > 0 ? ['first', 'second'] : [],
+            },
+          },
+        );
       }
       const commitments = (body.commitments ?? []).map((c) => PartyCommitmentSchema.parse(c));
       const { setupMinutes, cleanupMinutes } = buffers;
@@ -179,7 +205,7 @@ export class EventSeriesService {
 
   async getSeries(principal: Principal, seriesId: string): Promise<EventSeries> {
     const organizationId = organizationOf(principal);
-    const series = await this.load(this.db, organizationId, seriesId);
+    const series = await this.load(executorFor(this.db), organizationId, seriesId);
     if (!series) throw errors.notFound('event series', seriesId);
     await this.authorization.require(principal, SchedulingActions.readSchedule, {
       type: 'event_series',
@@ -187,7 +213,7 @@ export class EventSeriesService {
       organizationId,
       facilityId: series.facility_id,
     });
-    const events = await this.db
+    const events = await executorFor(this.db)
       .selectFrom('events')
       .select('id')
       .where('organization_id', '=', organizationId)
@@ -424,7 +450,8 @@ export class EventSeriesService {
           .where('id', '=', event.id)
           .where('revision', '=', event.revision)
           .returningAll()
-          .executeTakeFirstOrThrow();
+          .executeTakeFirst();
+        if (!updated) throw await this.writer.staleEvent(trx, event);
         if (updated.status === 'published') {
           await this.writer.reserve(trx, updated, facility);
           await this.writer.notifyChanged(trx, {

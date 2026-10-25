@@ -21,7 +21,12 @@ import {
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { relaxedStaffingRatios, requiredStaffFor } from '../catalog.policy';
-import { capacityUnitsOf, organizationOf, toOfferingSession } from '../catalog.shared';
+import {
+  capacityUnitsOf,
+  organizationOf,
+  toOfferingSession,
+  toPublicOfferingSession,
+} from '../catalog.shared';
 import { EDITABLE_PUBLICATION_STATES, OfferingSessionMachine } from '../catalog.state-machines';
 import { OfferingsService } from './offerings.service';
 
@@ -261,8 +266,12 @@ export class SessionsService {
   }
 
   /** Same visibility rule as the offering itself (public when published, every state for staff). */
+  /**
+   * Sessions of an offering the reader may see. Catalog staff (and system principals, which other
+   * modules use) get the full session; any other reader gets the child-safe view (§4.14).
+   */
   async list(principal: Principal, offeringId: string): Promise<OfferingSession[]> {
-    const { row } = await this.offerings.loadVisible(principal, offeringId);
+    const { row, staff } = await this.offerings.loadVisible(principal, offeringId);
     const rows = await this.db
       .selectFrom('offering_sessions')
       .selectAll()
@@ -270,6 +279,6 @@ export class SessionsService {
       .where('offering_id', '=', row.id)
       .orderBy('sequence')
       .execute();
-    return rows.map(toOfferingSession);
+    return rows.map(staff ? toOfferingSession : toPublicOfferingSession);
   }
 }

@@ -51,6 +51,8 @@ export const RECOVERY_ACTION_LABELS: Readonly<Record<string, { label: string; re
   reload_current_state: { label: 'Reload', retry: false },
   request_new_quote: { label: 'Get a new price', retry: false },
   use_new_idempotency_key: { label: 'Start again', retry: false },
+  // A one-time secret (invitation, claim, export or feed token) is shown only once (§4.14).
+  revoke_and_reissue: { label: 'Issue a new link', retry: false },
   retry_later_with_same_key: { label: 'Try again', retry: true },
   await_reconciliation: {
     label: 'Do not pay again. The outcome is being confirmed.',

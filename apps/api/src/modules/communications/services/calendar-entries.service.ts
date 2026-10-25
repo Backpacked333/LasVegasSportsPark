@@ -14,8 +14,10 @@ type EventChangedPayload = EventPayload<typeof EventChanged>;
  * (§4.2) and this read model is what private calendar feeds serve. `sequence` increases on every
  * change so subscribed calendars update or remove the right entry; replays are idempotent because
  * the last source event id is recorded, and reordering is tolerated: each change carries the full
- * snapshot, so an event older than the one last applied (a late retry, another worker's order) is
- * ignored instead of rolling the entry back with a higher SEQUENCE (§4.11, §4.12, SPK-COMMS-008).
+ * snapshot and the event's revision, so a change older than the one last applied (a late retry,
+ * another worker's order) is ignored instead of rolling the entry back with a higher SEQUENCE
+ * (§4.11, §4.12, §4.6, SPK-COMMS-008). The revision is exact; ordering by outbox event id (UUID v7,
+ * creation time) remains only for changes without a revision and for equal revisions.
  */
 @Injectable()
 export class CalendarEntriesService {
@@ -37,7 +39,7 @@ export class CalendarEntriesService {
     const status = payload.after ? payload.after.status : 'canceled';
     const existing = await trx
       .selectFrom('calendar_entries')
-      .select(['id', 'last_source_event_id', 'sequence'])
+      .select(['id', 'last_source_event_id', 'sequence', 'source_revision'])
       .where('organization_id', '=', event.organizationId)
       .where('event_id', '=', payload.eventId)
       .forUpdate()
@@ -54,16 +56,23 @@ export class CalendarEntriesService {
       last_change: payload.change,
       last_source_event_id: event.id,
     };
+    const incoming = payload.revision ?? null;
     let entryId: string;
     if (existing) {
       if (existing.last_source_event_id === event.id) return 'replayed'; // already applied
-      // Outbox event ids are UUID v7, ordered by creation time: an id lower than the one last
-      // applied is an older change delivered late; the entry already holds a newer full snapshot.
-      if (existing.last_source_event_id > event.id) return 'stale';
+      const held = existing.source_revision;
+      if (incoming !== null && held !== null && incoming !== held) {
+        // the event's revision orders its changes exactly, whatever the instance clocks
+        if (incoming < held) return 'stale';
+      } else if (existing.last_source_event_id > event.id) {
+        // Outbox event ids are UUID v7, ordered by creation time: an id lower than the one last
+        // applied is an older change delivered late; the entry already holds a newer snapshot.
+        return 'stale';
+      }
       entryId = existing.id;
       await trx
         .updateTable('calendar_entries')
-        .set({ ...values, sequence: existing.sequence + 1 })
+        .set({ ...values, source_revision: incoming ?? held, sequence: existing.sequence + 1 })
         .where('id', '=', entryId)
         .execute();
     } else {
@@ -75,6 +84,7 @@ export class CalendarEntriesService {
           organization_id: event.organizationId,
           event_id: payload.eventId,
           ...values,
+          source_revision: incoming,
         })
         .execute();
     }

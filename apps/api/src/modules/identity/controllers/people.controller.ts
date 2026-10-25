@@ -109,7 +109,8 @@ export class PeopleController {
   }
 
   @Post('people/:id/claims')
-  @Idempotent()
+  // §4.14: the claim token is stored only as a hash; never keep it with the idempotency key.
+  @Idempotent({ withhold: ['token'] })
   issueClaim(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,

@@ -636,12 +636,23 @@ export class MoneyFacts {
    * Redeems a credit against an obligation (invariant 7): `remaining = remaining - x WHERE
    * remaining >= x` under the row lock, so two concurrent redemptions cannot both consume the
    * same balance; the check `remaining >= 0` is the final guarantee. One redemption per credit
-   * and reference: a replay returns the earlier redemption.
+   * and reference: an existing one is returned with `replayed: true` and nothing is redeemed;
+   * the caller decides whether that is a replay or a refusal.
    */
   async redeemCredit(
     trx: Trx,
     input: RedeemCreditInput,
   ): Promise<{ redemptionId: string; replayed: boolean }> {
+    const now = this.clock.now();
+    // Lock order everywhere: obligation, then credit.
+    const obligation = await this.loadObligation(
+      trx,
+      input.organizationId,
+      input.obligationId,
+      true,
+    );
+    // Looked up under the obligation lock: a concurrent application to the same obligation has
+    // committed by now and is seen here, instead of failing on the unique key (SPK-PAY-009).
     const existing = await trx
       .selectFrom('credit_redemptions')
       .select('id')
@@ -652,14 +663,6 @@ export class MoneyFacts {
       .where('reference_id', '=', input.referenceId)
       .executeTakeFirst();
     if (existing) return { redemptionId: existing.id, replayed: true };
-    const now = this.clock.now();
-    // Lock order everywhere: obligation, then credit.
-    const obligation = await this.loadObligation(
-      trx,
-      input.organizationId,
-      input.obligationId,
-      true,
-    );
     if (!obligation || obligation.status !== 'open') {
       throw errors.resourceConflict('The obligation is not open.', {
         code: 'OBLIGATION_NOT_OPEN',
@@ -781,30 +784,38 @@ export class MoneyFacts {
     return { redemptionId, replayed: false };
   }
 
-  /** Gives a redemption back (an order that was never paid): a reversal row and a reversing journal. */
+  /**
+   * Gives a redemption back: a reversal row restores the credit's balance (invariant 7, history
+   * trigger). For an order that was never paid the redemption's journal is reversed (the
+   * receivable reopens and is canceled with its obligation). For a compensated order
+   * (`options.compensation`, SPK-AT-006, §4.11 step 10) the obligation stays settled, so the
+   * restoration is booked like the compensation refund or credit: refunds to credits payable.
+   * Idempotent: returns the amount restored, 0 when the redemption was already given back.
+   */
   async reverseCreditRedemption(
     trx: Trx,
     organizationId: string,
     redemptionId: string,
     actor: Principal,
     correlationId: string | null,
-  ): Promise<void> {
+    options: { compensation?: { personId: string; orderId: string } } = {},
+  ): Promise<number> {
     const redemption = await trx
       .selectFrom('credit_redemptions')
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('id', '=', redemptionId)
       .executeTakeFirst();
-    if (!redemption || redemption.kind !== 'redeem') return;
+    if (!redemption || redemption.kind !== 'redeem') return 0;
     const already = await trx
       .selectFrom('credit_redemptions')
       .select('id')
       .where('organization_id', '=', organizationId)
       .where('reverses_redemption_id', '=', redemptionId)
       .executeTakeFirst();
-    if (already) return;
+    if (already) return 0;
     const credit = await this.loadCredit(trx, organizationId, redemption.credit_id, true);
-    if (!credit) return;
+    if (!credit) return 0;
     await trx
       .updateTable('credits')
       .set({
@@ -832,15 +843,42 @@ export class MoneyFacts {
         redeemed_at: this.clock.now(),
       })
       .execute();
-    await this.ledger.reverse(trx, {
-      organizationId,
-      sourceType: 'credit_redemption',
-      sourceId: redemption.id,
-      purpose: 'credit_redeemed',
-      reversalPurpose: 'credit_redemption_reversed',
-      description: 'Credit redemption reversed',
-      actor,
-      correlationId,
-    });
+    if (options.compensation) {
+      await this.ledger.post(trx, {
+        organizationId,
+        sourceType: 'credit_redemption',
+        sourceId: redemption.id,
+        purpose: 'credit_restored_compensation',
+        description: 'Credit applied to an unfulfilled registration restored (compensation)',
+        currency: redemption.currency,
+        actor,
+        correlationId,
+        lines: [
+          {
+            account: 'refunds',
+            debitMinor: redemption.amount_minor,
+            personId: options.compensation.personId,
+            orderId: options.compensation.orderId,
+          },
+          {
+            account: 'credits_payable',
+            creditMinor: redemption.amount_minor,
+            personId: credit.owner_person_id,
+          },
+        ],
+      });
+    } else {
+      await this.ledger.reverse(trx, {
+        organizationId,
+        sourceType: 'credit_redemption',
+        sourceId: redemption.id,
+        purpose: 'credit_redeemed',
+        reversalPurpose: 'credit_redemption_reversed',
+        description: 'Credit redemption reversed',
+        actor,
+        correlationId,
+      });
+    }
+    return redemption.amount_minor;
   }
 }

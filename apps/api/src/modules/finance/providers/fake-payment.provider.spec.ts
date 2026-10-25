@@ -88,4 +88,33 @@ describe('FakePaymentProvider (§5.2 deterministic provider scenarios)', () => {
       }),
     ).toMatchObject({ status: 'succeeded' });
   });
+
+  it('SPK-PAY-007 (DEC-019 pending): an abandoned challenge is canceled; a resolved payment is reported as it is', async () => {
+    const provider = new FakePaymentProvider();
+    const request = (key: string, token: string) => ({
+      idempotencyKey: key,
+      amountMinor: 2_000,
+      currency: 'USD',
+      paymentMethodRef: token,
+      metadata: meta(key),
+    });
+    await provider.createPayment(request('c1', FakePaymentTokens.requireAction));
+    expect(await provider.cancelPayment('c1')).toMatchObject({
+      status: 'canceled',
+      actionPayload: null,
+      failureReason: 'action_abandoned',
+    });
+    // Idempotent: canceling again reports the same outcome.
+    expect(await provider.cancelPayment('c1')).toMatchObject({ status: 'canceled' });
+    await provider.createPayment(request('c2', FakePaymentTokens.succeed));
+    expect(await provider.cancelPayment('c2')).toMatchObject({ status: 'succeeded' });
+    expect(await provider.cancelPayment('never-sent')).toBeNull();
+    // Scripted: no answer (the challenge stays open), then a challenge completed just in time.
+    await provider.createPayment(request('c3', FakePaymentTokens.requireAction));
+    provider.scriptCancels('timeout', 'succeed');
+    await expect(provider.cancelPayment('c3')).rejects.toBeInstanceOf(PaymentOutcomeUnknownError);
+    expect(await provider.retrievePayment('c3')).toMatchObject({ status: 'requires_action' });
+    expect(await provider.cancelPayment('c3')).toMatchObject({ status: 'succeeded' });
+    expect(provider.cancelCalls).toEqual(['c1', 'c1', 'c2', 'never-sent', 'c3', 'c3']);
+  });
 });

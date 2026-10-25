@@ -381,6 +381,69 @@ describe('finance database guarantees (§4.7 invariants 5, 6, 7; SPK-PAY-004/008
     ).toBe(UNIQUE);
   });
 
+  it('§4.7 invariant 5 / SPK-PAY-007: the database allows one live checkout or installment charge per obligation', async () => {
+    const setup = await offering(t, { basePriceMinor: 30_000 });
+    const { basketId } = await basketFor(t, payer, [setup]);
+    const quote = await quoteFor(t, payer, basketId, {
+      paymentPlan: { kind: 'installments', count: 3 },
+    });
+    const res = await post(t, '/v1/registration-checkouts', payer.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.processing },
+      authorizeFutureInstallments: true,
+    });
+    expect(res.body).toMatchObject({
+      status: 'awaiting_payment',
+      payment: { status: 'processing' },
+    });
+    const charge = await t.db
+      .selectFrom('payment_attempts')
+      .selectAll()
+      .where('checkout_id', '=', res.body.id as string)
+      .executeTakeFirstOrThrow();
+    const first = await t.db
+      .selectFrom('installments')
+      .select(['id', 'obligation_id'])
+      .where('obligation_id', '=', charge.obligation_id as string)
+      .executeTakeFirstOrThrow();
+    expect(first.obligation_id).toBe(charge.obligation_id);
+    // An installment charge of the same debt while the checkout's charge is live is refused.
+    expect(
+      await rejectsWith(
+        t.db
+          .insertInto('payment_attempts')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            purpose: 'installment',
+            checkout_id: null,
+            order_id: charge.order_id,
+            obligation_id: first.obligation_id,
+            contribution_request_id: null,
+            installment_id: first.id,
+            payer_person_id: payer.personId,
+            amount_minor: 10_000,
+            currency: 'USD',
+            provider: 'fake-payments',
+            payment_method_ref: FakePaymentTokens.succeed,
+            provider_reference: null,
+            action_required_payload: null,
+            failure_reason: null,
+            processor_fee_minor: null,
+            evidence_source: null,
+            evidence_inbox_event_id: null,
+            evidence_sequence: null,
+            requested_by: ACTOR,
+            requested_by_person_id: null,
+            submitted_at: null,
+            unknown_since: null,
+            resolved_at: null,
+          })
+          .execute(),
+      ),
+    ).toBe(UNIQUE);
+  });
+
   it('CheckoutMachine and quotes: a completed checkout never moves again and a quote keeps its price basis', async () => {
     const setup = await offering(t, { basePriceMinor: 2_000 });
     const { basketId } = await basketFor(t, payer, [setup]);

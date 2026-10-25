@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, type InjectionToken } from '@nestjs/common';
 import type { ModuleRef } from '@nestjs/core';
 
 /**
@@ -10,9 +10,10 @@ import type { ModuleRef } from '@nestjs/core';
  */
 export function lazyPort<T extends object>(
   moduleRef: ModuleRef,
-  token: symbol | string,
+  token: InjectionToken,
   fallback: T,
-  warning: string,
+  /** Logged once when the fallback answers; null when falling back is the expected case. */
+  warning: string | null,
 ): T {
   const logger = new Logger('Kernel');
   let resolved: T | null = null;
@@ -29,7 +30,7 @@ export function lazyPort<T extends object>(
       resolved = impl;
       return impl;
     }
-    if (!warned) {
+    if (!warned && warning) {
       warned = true;
       logger.warn(warning);
     }

@@ -35,14 +35,18 @@ import { EntryActions } from '../entry.actions';
 import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
 import {
+  audienceOf,
   organizationOf,
+  toCustomerRelease,
   toDeparture,
   toRelease,
   type DepartureRow,
   type ReleaseRow,
 } from '../entry.shared';
 import { ActivityResolver, type ResolvedActivity } from './activity-resolver';
+import { ArrivalChecks } from './arrival-checks';
 import { StaffScope } from './staff-scope';
+import { lockEntrySubjects, presenceLockKey } from './subject-locks';
 import { VisitsService } from './visits.service';
 
 export interface ReleaseFacts {
@@ -110,6 +114,7 @@ export class ReleasesService {
     private readonly resolver: ActivityResolver,
     private readonly scope: StaffScope,
     private readonly visits: VisitsService,
+    private readonly checks: ArrivalChecks,
   ) {}
 
   async record(
@@ -126,8 +131,9 @@ export class ReleasesService {
         code: 'activity_facility_mismatch',
       });
     }
+    let authority: 'desk' | 'assigned' = 'desk';
     if (activity) {
-      await this.scope.requireForActivity(
+      authority = await this.scope.requireForActivity(
         principal,
         EntryActions.recordRelease,
         EntryActions.recordAssignedRelease,
@@ -144,6 +150,14 @@ export class ReleasesService {
     return this.uow.run(async ({ trx }) => {
       const facility = await this.resolver.facility(organizationId, body.facilityId, trx);
       const policy = policyForFacility(this.policy, facility.settings);
+      // SPK-ENTRY-007 / §4.14: an assigned coach releases only a child taking part in their
+      // activity. Checked before anything about the child or the collector is evaluated, so the
+      // command reveals nothing (kind, permissions) about anyone else's child (§4.10).
+      if (authority === 'assigned' && activity) {
+        if (!(await this.takesPart(trx, organizationId, body.childPersonId, activity))) {
+          throw errors.protectedNotFound('person');
+        }
+      }
       await this.requireChild(trx, organizationId, body.childPersonId);
       const collectorPersonId = 'personId' in body.collector ? body.collector.personId : null;
       if (collectorPersonId) {
@@ -219,11 +233,28 @@ export class ReleasesService {
         correlationId,
         body.reason ?? null,
       );
-      return { release: toRelease(release), departure: departure ? toDeparture(departure) : null };
+      const recorded = toRelease(release);
+      // §4.14 least privilege: the assigned coach learns only whether pickup authority is held,
+      // never which other permissions an adult holds over the child. The stored record keeps the
+      // full evidence for pickup staff (GET /v1/releases/{id}).
+      const response =
+        authority === 'assigned'
+          ? {
+              ...recorded,
+              collectorPermissions: recorded.collectorPermissions.filter((p) => p === 'collect'),
+              denialReason: release.denial_reason ? denialReasonFor(collectorPersonId, []) : null,
+            }
+          : recorded;
+      return { release: response, departure: departure ? toDeparture(departure) : null };
     });
   }
 
-  /** Protected read: pickup staff, or a holder of `view` over the child; otherwise NOT_FOUND. */
+  /**
+   * Protected read: pickup staff, or a holder of `view` over the child; otherwise NOT_FOUND.
+   * §4.14 field-level authorization / SPK-IAM-005: only a staff role (or the system) reads the
+   * full record; a holder of `view` reads the customer projection (no staff notes, denial
+   * details, other adults' permissions, exception or staff identifiers).
+   */
   async get(principal: Principal, id: string): Promise<ReleaseRecord> {
     const organizationId = organizationOf(principal);
     const row = await this.uow
@@ -234,7 +265,7 @@ export class ReleasesService {
       .where('id', '=', id)
       .executeTakeFirst();
     if (!row) throw errors.protectedNotFound('release');
-    await this.authorization.require(principal, EntryActions.readRelease, {
+    const decision = await this.authorization.decide(principal, EntryActions.readRelease, {
       type: 'release_record',
       id,
       organizationId,
@@ -242,12 +273,39 @@ export class ReleasesService {
       subjectPersonIds: [row.child_person_id],
       protected: true,
     });
-    return toRelease(row);
+    if (!decision.allowed) throw errors.protectedNotFound('release');
+    return audienceOf(decision.basis) === 'staff' ? toRelease(row) : toCustomerRelease(row);
   }
 
   // -------------------------------------------------------------------------------------------
   // Shared with offline synchronization
   // -------------------------------------------------------------------------------------------
+
+  /**
+   * Whether the child takes part in the activity: a live (held or admitted) check-in into it, or
+   * a participation basis (enrollment, session booking, event commitment or roster membership,
+   * confirmed or pending). Scopes an assigned coach's releases (SPK-ENTRY-007, §4.14).
+   */
+  async takesPart(
+    trx: Trx,
+    organizationId: string,
+    childPersonId: string,
+    activity: ResolvedActivity,
+  ): Promise<boolean> {
+    const checkin = await trx
+      .selectFrom('session_checkins')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('person_id', '=', childPersonId)
+      .where('activity_type', '=', activity.detail.type)
+      .where('activity_id', '=', activity.detail.id)
+      .where('status', 'in', ['held', 'admitted'])
+      .executeTakeFirst();
+    if (checkin) return true;
+    return (
+      (await this.checks.participationBasis(trx, organizationId, childPersonId, activity)) !== null
+    );
+  }
 
   async requireChild(trx: Trx, organizationId: string, childPersonId: string): Promise<void> {
     const child = await this.people.findPerson(organizationId, childPersonId, trx);
@@ -280,6 +338,28 @@ export class ReleasesService {
       }
     }
     return held;
+  }
+
+  /**
+   * Whether the collector held `collect` over the child at a past instant (the handover time of an
+   * offline release, SPK-AT-018): identity's as-of check from the grant, relationship and
+   * suspension history. Callers also require it to be held now.
+   */
+  async heldAt(
+    trx: Trx,
+    organizationId: string,
+    collectorPersonId: string,
+    childPersonId: string,
+    at: Date,
+  ): Promise<boolean> {
+    return this.authority.hasPermissionAt(
+      organizationId,
+      collectorPersonId,
+      childPersonId,
+      'collect',
+      at,
+      trx,
+    );
   }
 
   async raise(
@@ -315,6 +395,10 @@ export class ReleasesService {
     correlationId: string | null,
     reason: string | null,
   ): Promise<{ release: ReleaseRow; departure: DepartureRow | null }> {
+    // §4.15 / SPK-AT-018: one writer at a time about this child's presence, so the open visit read
+    // here, a concurrently synchronized arrival, and a re-sent offline release item all see each
+    // other (an offline release item is then a duplicate, never a unique-index failure).
+    await lockEntrySubjects(trx, [presenceLockKey(organizationId, facts.childPersonId)]);
     const visit = await this.visits.openVisit(
       trx,
       organizationId,

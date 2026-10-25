@@ -43,6 +43,7 @@ import {
   type Clock,
   type HandlerContext,
   type Trx,
+  listFacilityScope,
 } from '../../../kernel';
 import type { CatalogEvents } from '../../catalog';
 import type { CompetitionEvents } from '../../competition';
@@ -97,6 +98,8 @@ export interface NewAssignmentInput {
   slot: number;
   engagement: 'regular' | 'temporary' | 'substitute';
   turnaroundMinutes: number;
+  /** The facility policy's turnaround, recorded with an override below it (§4.9). */
+  policyTurnaroundMinutes?: number;
   offer: boolean;
   replacesAssignmentId: string | null;
   reason: string | null;
@@ -111,9 +114,10 @@ export interface NewAssignmentInput {
  *    at the start, not have declared themselves unavailable, and be free of overlapping
  *    commitments including turnaround (SPK-STAFF-001/003).
  *  - Accept/decline: only the assignee. Acceptance re-checks qualification and commitments; the
- *    database guarantees one accepted assignment per slot and no overlapping accepted
- *    assignments of a person (turnaround included). A temporary or substitute acceptance grants
- *    time-bounded access through identity (SPK-STAFF-004) as a recorded operation.
+ *    database guarantees one accepted assignment per slot and no overlapping accepted or
+ *    completed assignments of a person (turnaround included, migration 0701). A temporary or
+ *    substitute acceptance grants time-bounded access through identity (SPK-STAFF-004) as a
+ *    recorded operation.
  *  - Decline/withdraw of a required slot close to the start raises an uncovered-slot exception
  *    and event (SPK-STAFF-003, SPK-AT-012); acceptance of the slot resolves it.
  *  - Complete: staff, once the activity has started; nothing is ever deleted.
@@ -165,6 +169,24 @@ export class AssignmentsService {
       throw errors.validation('The activity has already ended.', { code: 'target_ended' });
     }
     const policy = workforcePolicyForFacility(this.policy, target.facilitySettings);
+    const policyTurnaround = policy.turnaroundMinutes[body.kind];
+    const turnaround = body.turnaroundMinutes ?? policyTurnaround;
+    if (turnaround < policyTurnaround) {
+      // §4.9, SPK-STAFF-003: shortening the required turnaround is an override: it needs its own
+      // authority (POL-033 pending) and a reason, and the audit records both values.
+      await this.authorization.require(principal, WorkforceActions.overrideTurnaround, {
+        type: 'assignment',
+        organizationId,
+        facilityId: target.facilityId,
+      });
+      if (!body.reason) {
+        throw errors.validation('A turnaround below the facility policy needs a reason.', {
+          code: 'turnaround_override_reason_required',
+          turnaroundMinutes: turnaround,
+          policyTurnaroundMinutes: policyTurnaround,
+        });
+      }
+    }
     const row = await this.uow.run(async ({ trx }) => {
       const requirement = await this.coverage.requirementFor(
         trx,
@@ -195,7 +217,8 @@ export class AssignmentsService {
         role: body.role,
         slot,
         engagement: body.engagement,
-        turnaroundMinutes: body.turnaroundMinutes ?? policy.turnaroundMinutes[body.kind],
+        turnaroundMinutes: turnaround,
+        policyTurnaroundMinutes: policyTurnaround,
         offer: body.offer,
         replacesAssignmentId: null,
         reason: body.reason ?? null,
@@ -219,6 +242,7 @@ export class AssignmentsService {
       organizationId,
       facilityId: existing.facility_id,
     });
+    await this.assertTargetScheduled(organizationId, existing);
     const facility = await this.targets.facility(this.db, organizationId, existing.facility_id);
     const row = await this.uow.run(async ({ trx }) => {
       const current = await this.lock(trx, organizationId, id);
@@ -269,6 +293,9 @@ export class AssignmentsService {
       facilityId: existing.facility_id,
       subjectPersonIds: [existing.person_id],
     });
+    // SPK-STAFF-004, §4.6: work on a canceled, postponed or unscheduled activity is never accepted
+    // (and so grants no access), even when the offer predates the cancellation's follow-up.
+    await this.assertTargetScheduled(organizationId, existing);
     const facility = await this.targets.facility(this.db, organizationId, existing.facility_id);
     const { row, operationId } = await this.uow.run(async ({ trx }) => {
       const current = await this.lock(trx, organizationId, id);
@@ -317,11 +344,11 @@ export class AssignmentsService {
         operationId: opId,
       });
       await this.coverage.resolveIfCovered(trx, updated, correlationId);
+      // SPK-STAFF-004, §4.7 invariant 12: the access is granted in this transaction (identity's
+      // command joins it), so an acceptance never commits with its access left `pending`.
+      if (opId) await this.access.grant(principal, id, organizationId, opId, correlationId);
       return { row: updated, operationId: opId };
     });
-    if (operationId) {
-      await this.access.grant(principal, id, organizationId, operationId, correlationId);
-    }
     const final = await this.load(this.db, organizationId, id);
     return {
       assignment: toAssignment(final ?? row, this.clock.now()),
@@ -388,23 +415,25 @@ export class AssignmentsService {
     const result = await this.uow.run(async ({ trx }) => {
       const current = await this.lock(trx, organizationId, id);
       assertExpectedRevision(body.expectedRevision, current.revision);
-      return this.withdrawInTransaction(trx, principal, current, {
+      const withdrawn = await this.withdrawInTransaction(trx, principal, current, {
         reason: body.reason,
         cause: 'withdrawn',
         correlationId,
         facilitySettings: facility.settings,
       });
+      // SPK-STAFF-004: granted access ends with the withdrawal, in the same transaction.
+      if (withdrawn.operationId) {
+        await this.access.end(
+          principal,
+          id,
+          organizationId,
+          withdrawn.operationId,
+          body.reason,
+          correlationId,
+        );
+      }
+      return withdrawn;
     });
-    if (result.operationId) {
-      await this.access.end(
-        principal,
-        id,
-        organizationId,
-        result.operationId,
-        body.reason,
-        correlationId,
-      );
-    }
     const final = await this.load(this.db, organizationId, id);
     return {
       assignment: toAssignment(final ?? result.row, this.clock.now()),
@@ -479,10 +508,13 @@ export class AssignmentsService {
     if (query.status) q = q.where('status', '=', query.status);
     if (query.from) q = q.where('scheduled_end', '>', new Date(query.from));
     if (query.to) q = q.where('scheduled_start', '<', new Date(query.to));
-    // Staff limited to some facilities see those facilities' assignments only (§4.3).
+    // Staff limited to some facilities see those facilities' assignments only (§4.3), through the
+    // roles that hold the view action (§4.14, identity-05).
     const selfOnly = query.personId !== undefined && query.personId === principal.personId;
-    if (!selfOnly && principal.kind === 'staff' && principal.facilityIds.length > 0) {
-      q = q.where('facility_id', 'in', principal.facilityIds);
+    const scope = selfOnly ? null : listFacilityScope(principal, WorkforceActions.viewAssignments);
+    if (scope) {
+      q =
+        scope.length > 0 ? q.where('facility_id', 'in', [...scope]) : q.where(sql<boolean>`false`);
     }
     if (cursor) {
       q = q.where(
@@ -712,6 +744,11 @@ export class AssignmentsService {
         status,
         engagement: input.engagement,
         replacesAssignmentId: input.replacesAssignmentId,
+        turnaroundMinutes: input.turnaroundMinutes,
+        ...(input.policyTurnaroundMinutes !== undefined &&
+        input.turnaroundMinutes < input.policyTurnaroundMinutes
+          ? { policyTurnaroundMinutes: input.policyTurnaroundMinutes, turnaroundOverride: true }
+          : {}),
       },
     });
     const row = (await this.load(trx, input.organizationId, id)) as AssignmentRow;
@@ -721,7 +758,8 @@ export class AssignmentsService {
 
   /**
    * Withdraws inside the caller's transaction. Returns the operation that must end granted access
-   * after commit (identity runs its own transaction) and the uncovered-slot notice, if any.
+   * (the caller ends it in the same transaction through TemporaryAccessService.end) and the
+   * uncovered-slot notice, if any.
    */
   async withdrawInTransaction(
     trx: Trx,
@@ -788,13 +826,23 @@ export class AssignmentsService {
   ): Promise<void> {
     const p = event.payload;
     const rows = await this.liveFor(ctx.trx, event.organizationId, 'fixture', p.fixtureId);
-    if (rows.length === 0) return;
     if (['canceled', 'postponed', 'unscheduled'].includes(p.status)) {
       for (const row of rows) {
         await this.systemWithdraw(ctx.trx, row, `The fixture was ${p.status}.`, event, false);
       }
+      // SPK-UX-006, SPK-AT-012: the slot no longer needs covering at this time; the queue must not
+      // keep sending managers to the replacement workflow of a game that will not be played.
+      await this.coverage.closeUncovered(
+        ctx.trx,
+        event.organizationId,
+        'fixture',
+        p.fixtureId,
+        `The fixture was ${p.status}.`,
+        event.correlationId,
+      );
       return;
     }
+    if (rows.length === 0) return;
     if (p.status === 'scheduled' && p.scheduledStart && p.scheduledEnd) {
       await this.retime(
         ctx.trx,
@@ -814,23 +862,40 @@ export class AssignmentsService {
   ): Promise<void> {
     const p = event.payload;
     const rows = await this.liveFor(ctx.trx, event.organizationId, 'event', p.eventId);
-    if (rows.length === 0) return;
-    if (p.change === 'canceled') {
+    if (
+      rows.length === 0 &&
+      !(await this.coverage.hasOpenUncovered(ctx.trx, event.organizationId, 'event', p.eventId))
+    ) {
+      return;
+    }
+    // §4.12, §4.6: deliveries arrive late and out of order (a retried move can follow a newer
+    // move), so assignments follow the event's CURRENT state read in this transaction, never the
+    // payload's `after`: every delivery, in any order, converges on the latest committed times.
+    const current = await this.targets.currentEvent(event.organizationId, p.eventId);
+    if (!current) return;
+    if (current.status === 'canceled') {
       for (const row of rows) {
         await this.systemWithdraw(ctx.trx, row, 'The event was canceled.', event, false);
       }
+      await this.coverage.closeUncovered(
+        ctx.trx,
+        event.organizationId,
+        'event',
+        p.eventId,
+        'The event was canceled.',
+        event.correlationId,
+      );
       return;
     }
-    if (p.after && (p.change === 'moved' || p.change === 'resized' || p.change === 'updated')) {
-      await this.retime(
-        ctx.trx,
-        rows,
-        new Date(p.after.scheduledStart),
-        new Date(p.after.scheduledEnd),
-        p.eventId,
-        event,
-      );
-    }
+    if (rows.length === 0) return;
+    await this.retime(
+      ctx.trx,
+      rows,
+      new Date(current.scheduledStart),
+      new Date(current.scheduledEnd),
+      p.eventId,
+      event,
+    );
   }
 
   /** catalog.session_canceled: live assignments of the session are withdrawn. */
@@ -847,6 +912,14 @@ export class AssignmentsService {
     for (const row of rows) {
       await this.systemWithdraw(ctx.trx, row, 'The session was canceled.', event, false);
     }
+    await this.coverage.closeUncovered(
+      ctx.trx,
+      event.organizationId,
+      'session',
+      event.payload.sessionId,
+      'The session was canceled.',
+      event.correlationId,
+    );
   }
 
   private async liveFor(
@@ -875,12 +948,39 @@ export class AssignmentsService {
     schedulingEventId: string | null,
     event: DomainEvent<unknown>,
   ): Promise<void> {
+    const retimeTo = { start, end, schedulingEventId };
     for (const row of rows) {
       const unchanged =
         new Date(row.scheduled_start).getTime() === start.getTime() &&
         new Date(row.scheduled_end).getTime() === end.getTime() &&
         row.scheduling_event_id === schedulingEventId;
       if (unchanged) continue;
+      if (row.status === 'accepted') {
+        // SPK-STAFF-003, SPK-SCHED-004: an accepted assignment keeps holding the person at its new
+        // time only when that time is free of their other commitments, including person
+        // commitments held in scheduling (no exclusion constraint spans the two modules' tables).
+        const conflicts = await this.checker.conflicts(trx, {
+          organizationId: row.organization_id,
+          facility: await this.targets.facility(trx, row.organization_id, row.facility_id),
+          personId: row.person_id,
+          scheduledStart: start,
+          scheduledEnd: end,
+          turnaroundMinutes: row.turnaround_minutes,
+          schedulingEventId,
+          ignoreAssignmentIds: [row.id],
+        });
+        if (conflicts.length > 0) {
+          await this.systemWithdraw(
+            trx,
+            row,
+            'The rescheduled time overlaps another commitment of the person.',
+            event,
+            true,
+            retimeTo,
+          );
+          continue;
+        }
+      }
       const savepoint = sql.id(`workforce_retime_${row.id.replaceAll('-', '')}`);
       await sql`savepoint ${savepoint}`.execute(trx);
       let changed: boolean;
@@ -911,10 +1011,19 @@ export class AssignmentsService {
           'The rescheduled time overlaps another accepted assignment of the person.',
           event,
           true,
+          retimeTo,
         );
         continue;
       }
       if (!changed) continue;
+      // SPK-STAFF-004: granted access follows the new time (identity's command joins this
+      // transaction), so it neither expires before a later game nor outlives an earlier one.
+      await this.access.move(
+        systemPrincipal(row.organization_id, 'workforce.target_sync'),
+        (await this.load(trx, row.organization_id, row.id)) as AssignmentRow,
+        end,
+        event.correlationId,
+      );
       const updated = (await this.load(trx, row.organization_id, row.id)) as AssignmentRow;
       await this.audit.record(trx, {
         organizationId: row.organization_id,
@@ -947,8 +1056,13 @@ export class AssignmentsService {
 
   /**
    * Withdrawal decided by a follow-up (target canceled, rescheduled into a conflict). Granted
-   * access is not ended here — identity runs its own transaction — and expires at its scheduled
-   * end (README "Known gaps").
+   * access ends with it inside the handler's transaction (identity's command joins it), so a
+   * withdrawn official or coach keeps no staff role (§4.14 least privilege, SPK-STAFF-004).
+   *
+   * `retimeTo` (a reschedule into a conflict): the withdrawal records the target's new time in the
+   * same update, so the escalation window, the deadline and the replacement workflow use the
+   * activity's current time (SPK-STAFF-003, SPK-AT-012). A withdrawn row holds no commitment, so the
+   * exclusion constraint permits it.
    */
   private async systemWithdraw(
     trx: Trx,
@@ -956,22 +1070,64 @@ export class AssignmentsService {
     reason: string,
     event: DomainEvent<unknown>,
     escalate: boolean,
+    retimeTo?: { start: Date; end: Date; schedulingEventId: string | null },
   ): Promise<void> {
     const system = systemPrincipal(row.organization_id, 'workforce.target_sync');
     const facility = await this.targets.facility(trx, row.organization_id, row.facility_id);
     const next = AssignmentMachine.next(row.status, 'withdraw');
+    const endsAccess = row.access_status === 'granted';
+    const operationId = endsAccess
+      ? await this.operations.create(trx, {
+          organizationId: row.organization_id,
+          kind: 'workforce.withdraw_assignment',
+          requestedBy: system,
+          correlationId: event.correlationId,
+          input: { assignmentId: row.id, sourceEventId: event.id },
+          status: 'running',
+        })
+      : null;
     const updated = await this.transition(trx, system, row, next, {
       set: {
         withdrawn_at: this.clock.now(),
         withdrawn_reason: reason,
         withdrawn_by: json(snapshotActor(system)),
+        ...(retimeTo
+          ? {
+              scheduled_start: retimeTo.start,
+              scheduled_end: retimeTo.end,
+              committed_end: addMinutes(retimeTo.end, row.turnaround_minutes),
+              scheduling_event_id: retimeTo.schedulingEventId,
+            }
+          : {}),
       },
       action: 'workforce.assignment_withdrawn_by_target_change',
       reason,
       correlationId: event.correlationId,
-      operationId: null,
-      details: { sourceEventId: event.id, sourceEventType: event.type },
+      operationId,
+      details: {
+        sourceEventId: event.id,
+        sourceEventType: event.type,
+        ...(retimeTo
+          ? {
+              before: {
+                start: new Date(row.scheduled_start).toISOString(),
+                end: new Date(row.scheduled_end).toISOString(),
+              },
+              after: { start: retimeTo.start.toISOString(), end: retimeTo.end.toISOString() },
+            }
+          : {}),
+      },
     });
+    if (operationId) {
+      await this.access.end(
+        system,
+        row.id,
+        row.organization_id,
+        operationId,
+        reason,
+        event.correlationId,
+      );
+    }
     if (escalate && row.status === 'accepted') {
       await this.coverage.escalateIfUncovered(
         trx,
@@ -986,6 +1142,19 @@ export class AssignmentsService {
   // -------------------------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------------------------
+
+  /**
+   * The activity is still scheduled in its owning module (TargetResolver refuses a canceled,
+   * postponed, unscheduled or finished fixture, a canceled event and an unscheduled session with
+   * `target_not_scheduled`). Runs outside the transaction, like every target resolution.
+   */
+  private async assertTargetScheduled(organizationId: string, row: AssignmentRow): Promise<void> {
+    await this.targets.resolve(organizationId, {
+      targetType: row.target_type,
+      targetId: row.target_id,
+      offeringId: row.offering_id,
+    });
+  }
 
   private assertNotEnded(row: AssignmentRow): void {
     if (this.clock.now().getTime() >= new Date(row.scheduled_end).getTime()) {
@@ -1045,7 +1214,7 @@ export class AssignmentsService {
     } catch (error) {
       if (isExclusionViolation(error)) {
         throw errors.resourceConflict(
-          'The person already holds an accepted assignment overlapping this one (turnaround included).',
+          'The person already holds an accepted or completed assignment overlapping this one (turnaround included).',
           { conflicts: [{ code: 'assignment_overlap' }], constraint: pgConstraintName(error) },
         );
       }

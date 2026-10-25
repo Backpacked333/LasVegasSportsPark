@@ -15,6 +15,7 @@ import {
   Outbox,
   snapshotActor,
   UnitOfWork,
+  executorFor,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -228,7 +229,7 @@ export class PriceRulesService {
   ): Promise<Map<string, PriceRule>> {
     const out = new Map<string, PriceRule>();
     if (offeringIds.length === 0) return out;
-    const rows = await (trx ?? this.db)
+    const rows = await (trx ?? executorFor(this.db))
       .selectFrom('price_rules')
       .selectAll()
       .where('organization_id', '=', organizationId)

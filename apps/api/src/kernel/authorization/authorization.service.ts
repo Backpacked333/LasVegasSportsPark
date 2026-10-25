@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
+  scopeCoversFacility,
+  staffFacilityScope,
   type ActionId,
   type AuthorizationDecision,
   type AuthorizationTarget,
@@ -18,8 +20,9 @@ export interface AuthorizationTargetInput extends Omit<AuthorizationTarget, 'id'
 /**
  * Single authorization path for every command and query (§4.14 object-level authorization).
  * Order of evaluation: organization scope → system principal → staff role within its facility
- * scope → self → relationship permission → team role → deny. A staff role held outside its
- * facility scope grants nothing, but it does not take away the person's own self, relationship or
+ * scope (the scope of the roles that hold the action, `staffFacilityScope`) → self →
+ * relationship permission → team role → deny. A staff role held outside its facility scope
+ * grants nothing, but it does not take away the person's own self, relationship or
  * team authority (SPK-IAM-001/003: a coach who is also a parent receives each permission only in
  * its proper scope); when none of those allows, the denial says 'facility scope mismatch'.
  * A denial on a protected record is reported as not-found so record existence is not revealed
@@ -53,11 +56,13 @@ export class AuthorizationService {
     }
     let denial = 'no applicable authority';
     if (principal.kind === 'staff') {
+      // §2.1, §4.3, §4.14: the facility check uses the scope of the roles that hold this action,
+      // never the union of every role's facilities (identity-05).
+      const held = definition.staffRoles.filter((r) => principal.staffRoles.includes(r));
+      const roleOk = held.length > 0;
       const facilityOk =
         !target.facilityId ||
-        principal.facilityIds.length === 0 ||
-        principal.facilityIds.includes(target.facilityId);
-      const roleOk = definition.staffRoles.some((r) => principal.staffRoles.includes(r));
+        scopeCoversFacility(staffFacilityScope(principal, held), target.facilityId);
       if (roleOk && facilityOk) {
         return { allowed: true, basis: `staff role` };
       }

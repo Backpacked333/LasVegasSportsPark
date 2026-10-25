@@ -1,4 +1,5 @@
 import { newId } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing';
@@ -162,6 +163,23 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
           .executeTakeFirstOrThrow()
       ).publication_state,
     ).toBe('draft');
+    // SPK-CAT-001: the description, the format (own or the program's) and the location are required
+    const formatless = await createProgramFixture(t, { format: null });
+    const undescribed = await t.http
+      .post('/v1/offerings')
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({ ...draftBody({ programId: formatless, location: {} }), description: undefined });
+    expect(undescribed.status).toBe(201);
+    const incomplete = await t.http
+      .post(`/v1/offerings/${undescribed.body.id as string}/publish`)
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({});
+    expect(incomplete.status).toBe(400);
+    expect(incomplete.body.details.problems.map((p: { code: string }) => p.code)).toEqual(
+      expect.arrayContaining(['description_missing', 'format_missing', 'location_missing']),
+    );
 
     // configure it, but with a draft eligibility policy and a form policy used as cancellation policy
     const draftEligibility = await createPolicyVersionFixture(t, {
@@ -937,6 +955,76 @@ describe('offerings (SPK-CAT-001..004, SPK-YOUTH-002, §4.14)', () => {
       .set('Idempotency-Key', key())
       .send({ scheduledStart: '2027-02-12T17:00:00Z', scheduledEnd: '2027-02-12T18:00:00Z' });
     expect(afterClose.status).toBe(409);
+  });
+
+  it('§4.14: anonymous and customer readers get the child-safe session view; catalog staff get the full session', async () => {
+    const fixture = await createOfferingFixture(t, {
+      responsibleManagerPersonId: managerPersonId,
+      publicationState: 'registration_open',
+    });
+    const id = fixture.offeringId;
+    const sessionId = newId();
+    const eventId = newId();
+    await t.db
+      .insertInto('offering_sessions')
+      .values({
+        id: sessionId,
+        organization_id: t.organizationId,
+        offering_id: id,
+        sequence: 1,
+        title: 'Camp day 1',
+        scheduled_start: new Date('2027-01-12T17:00:00Z'),
+        scheduled_end: new Date('2027-01-12T18:00:00Z'),
+        scheduling_event_id: eventId,
+        capacity_override: json([
+          {
+            unit: 'seats',
+            limit: 20,
+            groupSize: 10,
+            staffingRatio: { participantsPerStaff: 5 },
+          },
+        ]),
+      })
+      .execute();
+    const reason = 'Coach Smith out; Emma (age 7) injured last week';
+    const canceled = await t.http
+      .post(`/v1/sessions/${sessionId}/cancel`)
+      .set(pm)
+      .set('Idempotency-Key', key())
+      .send({ reason, expectedRevision: 1 });
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+
+    for (const reader of [undefined, customer]) {
+      const req = t.http.get(`/v1/offerings/${id}/sessions`);
+      const res = reader ? await req.set(reader) : await req;
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([
+        expect.objectContaining({
+          id: sessionId,
+          status: 'canceled',
+          title: 'Camp day 1',
+          cancelReason: null,
+          schedulingEventId: null,
+          capacityOverride: [{ unit: 'seats', limit: 20 }],
+        }),
+      ]);
+      const text = JSON.stringify(res.body);
+      expect(text).not.toContain('Emma');
+      expect(text).not.toContain(eventId);
+      expect(text).not.toContain('staffingRatio');
+      expect(text).not.toContain('groupSize');
+    }
+    const staffView = await t.http.get(`/v1/offerings/${id}/sessions`).set(pm);
+    expect(staffView.body).toEqual([
+      expect.objectContaining({
+        id: sessionId,
+        cancelReason: reason,
+        schedulingEventId: eventId,
+        capacityOverride: [
+          { unit: 'seats', limit: 20, groupSize: 10, staffingRatio: { participantsPerStaff: 5 } },
+        ],
+      }),
+    ]);
   });
 
   it('§4.3: offerings of another organization are not found for staff, customers and listings', async () => {

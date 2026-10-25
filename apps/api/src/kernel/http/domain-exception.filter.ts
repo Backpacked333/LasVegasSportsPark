@@ -35,6 +35,11 @@ function mapHttpStatus(status: number): ErrorCode {
  * The status and body the stable error contract (§4.10) gives `exception`. Unexpected errors carry
  * no internal details. Shared by the filter and by the idempotency interceptor, which stores the
  * same body for replay.
+ *
+ * Request input is validated by `ZodValidationPipe`, which raises a `VALIDATION_FAILED` DomainError.
+ * A raw `ZodError` reaching this point therefore comes from server code (an outbox payload, stored
+ * data parsed back): it is a server fault, answered as INTERNAL_ERROR without the internal schema
+ * paths, never as input the client should correct.
  */
 export function toErrorResponse(
   exception: unknown,
@@ -42,22 +47,6 @@ export function toErrorResponse(
 ): { status: number; body: ErrorResponseBody } {
   if (DomainError.is(exception)) {
     return { status: exception.httpStatus, body: exception.toResponseBody(correlationId) };
-  }
-  if (exception instanceof ZodError) {
-    return {
-      status: 400,
-      body: {
-        code: 'VALIDATION_FAILED',
-        message: 'Request validation failed.',
-        correlationId,
-        nextAction: 'correct_input',
-        details: exception.issues.map((i) => ({
-          path: i.path.join('.'),
-          message: i.message,
-          code: i.code,
-        })),
-      },
-    };
   }
   if (exception instanceof HttpException) {
     const status = exception.getStatus();
@@ -108,7 +97,13 @@ export class DomainExceptionFilter implements ExceptionFilter {
       }
     } else if (exception instanceof HttpException) {
       if (status >= 500) this.logger.error(`[${correlationId}] ${body.message}`, exception.stack);
-    } else if (!(exception instanceof ZodError)) {
+    } else if (exception instanceof ZodError) {
+      // §4.10: an internal parse failure is logged with its issues for the operator, never returned.
+      this.logger.error(
+        `[${correlationId}] unhandled validation failure in server code: ${JSON.stringify(exception.issues)}`,
+        exception.stack,
+      );
+    } else {
       const err = exception instanceof Error ? exception : new Error(String(exception));
       this.logger.error(`[${correlationId}] unhandled: ${err.message}`, err.stack);
     }

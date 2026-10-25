@@ -44,6 +44,7 @@ import {
 } from '../entry.shared';
 import { VisitMachine } from '../entry.state-machines';
 import { ActivityResolver } from './activity-resolver';
+import { lockEntrySubjects, presenceLockKey } from './subject-locks';
 
 const VisitCursor = z.object({ arrivedAt: z.iso.datetime(), id: z.uuid() });
 
@@ -75,8 +76,9 @@ export interface NewDeparture {
 /**
  * Facility arrival and departure (SPK-ENTRY-001, SPK-ENTRY-003, SPK-ENTRY-006, SPK-ENTRY-008).
  * Staff record the people who actually arrived, each in a visitor category; a visit never creates
- * an enrollment, a check-in or an attendance observation. A child participant leaves through a
- * supervised release (ReleasesService), which records the departure itself.
+ * an enrollment, a check-in or an attendance observation. A child participant, or a child with a
+ * live session check-in, leaves through a supervised release (ReleasesService), which records the
+ * departure itself (`releaseRequired`).
  */
 @Injectable()
 export class VisitsService {
@@ -266,10 +268,16 @@ export class VisitsService {
   ): Promise<Departure> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const visit = body.visitId
+      const found = body.visitId
         ? await this.load(trx, organizationId, body.visitId)
         : await this.openVisit(trx, organizationId, body.facilityId ?? '', body.personId ?? '');
-      if (!visit) throw errors.notFound('visit', body.visitId);
+      if (!found) throw errors.notFound('visit', body.visitId);
+      // §4.15: serialized with offline synchronization of this person's presence (an offline
+      // departure or release of the same visit then sees this one, and the reverse).
+      if (found.person_id) {
+        await lockEntrySubjects(trx, [presenceLockKey(organizationId, found.person_id)]);
+      }
+      const visit = (await this.load(trx, organizationId, found.id)) ?? found;
       await this.authorization.require(principal, EntryActions.recordDeparture, {
         type: 'visit',
         id: visit.id,
@@ -279,18 +287,11 @@ export class VisitsService {
       VisitMachine.next(visit.status, 'depart');
       const facility = await this.resolver.facility(organizationId, visit.facility_id, trx);
       const policy = policyForFacility(this.policy, facility.settings);
-      if (
-        visit.person_id &&
-        visit.visitor_category === 'participant' &&
-        policy.childParticipantDepartureRequiresRelease
-      ) {
-        const person = await this.people.findPerson(organizationId, visit.person_id, trx);
-        if (person?.kind === 'child') {
-          throw errors.resourceConflict(
-            'A child participant leaves through a supervised release (POST /v1/releases).',
-            { code: 'release_required', visitId: visit.id },
-          );
-        }
+      if (await this.releaseRequired(trx, organizationId, visit, policy)) {
+        throw errors.resourceConflict(
+          'A child in a supervised activity leaves through a supervised release (POST /v1/releases).',
+          { code: 'release_required', visitId: visit.id },
+        );
       }
       const departure = await this.recordDeparture(
         trx,
@@ -310,6 +311,46 @@ export class VisitsService {
   // -------------------------------------------------------------------------------------------
   // Shared with releases, offline synchronization and access events
   // -------------------------------------------------------------------------------------------
+
+  /**
+   * Whether the visit may close only through a supervised release (SPK-ENTRY-007, SPK-COND-004,
+   * §4.15). The rule follows the person, not the visit's category label: a child on a
+   * `participant` visit, or a child with a live (held or admitted) session check-in on this visit
+   * or at this facility for an activity that had not ended when the visit began. A turnstile
+   * arrival (`unclassified`) or a desk arrival recorded as a spectator therefore never removes
+   * the pickup check from a child admitted to a supervised session. Spectators, guardians and
+   * children with no live check-in leave by a plain departure (SPK-ENTRY-006). Whether supervised
+   * pickup applies at all is DEC-075 (pending); the facility policy flag keeps the conservative
+   * default (`childParticipantDepartureRequiresRelease: true`).
+   */
+  async releaseRequired(
+    trx: Trx,
+    organizationId: string,
+    visit: VisitRow,
+    policy: EntryPolicy,
+  ): Promise<boolean> {
+    if (!policy.childParticipantDepartureRequiresRelease || !visit.person_id) return false;
+    const person = await this.people.findPerson(organizationId, visit.person_id, trx);
+    if (person?.kind !== 'child') return false;
+    if (visit.visitor_category === 'participant') return true;
+    const live = await trx
+      .selectFrom('session_checkins')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('person_id', '=', visit.person_id)
+      .where('status', 'in', ['held', 'admitted'])
+      .where((eb) =>
+        eb.or([
+          eb('visit_id', '=', visit.id),
+          eb.and([
+            eb('facility_id', '=', visit.facility_id),
+            eb('activity_end', '>', new Date(visit.arrived_at)),
+          ]),
+        ]),
+      )
+      .executeTakeFirst();
+    return live !== undefined;
+  }
 
   /** Inserts a visit; returns null when a unique key already holds it (client id or access event). */
   async insertVisit(

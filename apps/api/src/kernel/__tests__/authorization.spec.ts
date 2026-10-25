@@ -126,6 +126,40 @@ describe('AuthorizationService (§4.14, SPK-IAM-003)', () => {
     ).toBe(false);
   });
 
+  it('identity-05 (§2.1, §4.14): a facility-scoped role is not widened by another role held organization-wide', async () => {
+    const f1 = newId();
+    const f2 = newId();
+    // front_desk at F1 plus an organization-wide coach membership (as the identity resolver builds it)
+    const mixed = staffPrincipal(org, ['coach', 'front_desk'], {
+      facilityIds: [],
+      staffScopes: [
+        { role: 'coach', facilityIds: [] },
+        { role: 'front_desk', facilityIds: [f1] },
+      ],
+    });
+    const at = (facilityId: string) => ({ type: 'child', organizationId: org, facilityId });
+    expect((await service().decide(mixed, Actions.collect, at(f1))).allowed).toBe(true);
+    expect(await service().decide(mixed, Actions.collect, at(f2))).toMatchObject({
+      allowed: false,
+      reason: 'facility scope mismatch',
+    });
+    // two scoped memberships: program_manager at F2, front_desk at F1; viewSchedule allows both
+    const twoScoped = staffPrincipal(org, ['front_desk', 'program_manager'], {
+      facilityIds: [f1, f2],
+      staffScopes: [
+        { role: 'front_desk', facilityIds: [f1] },
+        { role: 'program_manager', facilityIds: [f2] },
+      ],
+    });
+    expect((await service().decide(twoScoped, Actions.viewSchedule, at(f2))).allowed).toBe(true);
+    expect((await service().decide(twoScoped, Actions.collect, at(f1))).allowed).toBe(true);
+    // front_desk is not held at F2, where only program_manager (which cannot collect) applies
+    expect(await service().decide(twoScoped, Actions.collect, at(f2))).toMatchObject({
+      allowed: false,
+      reason: 'facility scope mismatch',
+    });
+  });
+
   it('SPK-IAM-001/003: a coach who is also a parent receives each permission only in its proper scope', async () => {
     const facilityA = newId();
     const facilityB = newId();

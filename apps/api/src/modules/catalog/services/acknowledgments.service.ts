@@ -110,7 +110,7 @@ export class AcknowledgmentsService {
       }
       const policy = await trx
         .selectFrom('policy_versions')
-        .select(['id', 'approval_status', 'kind'])
+        .select(['id', 'approval_status', 'kind', 'effective_from', 'approved_at'])
         .where('organization_id', '=', organizationId)
         .where('id', '=', body.policyVersionId)
         .executeTakeFirst();
@@ -121,6 +121,8 @@ export class AcknowledgmentsService {
           approvalStatus: policy.approval_status,
         });
       }
+      const now = this.clock.now();
+      const signedAt = this.signedAt(principal, body, policy, now);
 
       let basis: 'self' | 'guardian';
       if (signedByPersonId === body.subjectPersonId) {
@@ -161,7 +163,6 @@ export class AcknowledgmentsService {
       }
 
       const id = newId();
-      const now = this.clock.now();
       let row;
       try {
         row = await trx
@@ -181,7 +182,7 @@ export class AcknowledgmentsService {
                   ? 'system'
                   : 'staff',
             recorded_by_person_id: principal.personId,
-            signed_at: body.signedAt ? new Date(body.signedAt) : now,
+            signed_at: signedAt,
             evidence: json(body.evidence),
             withdrawn_at: null,
             withdrawn_reason: null,
@@ -209,6 +210,9 @@ export class AcknowledgmentsService {
           signedByPersonId,
           basis,
           assistedByStaff: staffActor,
+          signedAt: signedAt.toISOString(),
+          // a backdated (paper) signature is visible next to the true occurred_at
+          retrospective: body.signedAt !== undefined,
         },
       });
       await this.outbox.enqueue(trx, CatalogEvents.acknowledgmentRecorded, {
@@ -227,6 +231,49 @@ export class AcknowledgmentsService {
       });
       return toAcknowledgment(row);
     });
+  }
+
+  /**
+   * SPK-REG-009 signer evidence: a customer's signature is timestamped by the server. Staff (or a
+   * system import) may enter a paper form signed earlier, but never in the future, never before
+   * the policy version existed, and only with evidence of the paper record.
+   */
+  private signedAt(
+    principal: Principal,
+    body: RecordAcknowledgmentInput,
+    policy: { effective_from: Date | string; approved_at: Date | string | null },
+    now: Date,
+  ): Date {
+    if (body.signedAt === undefined) return now;
+    if (principal.kind === 'customer') {
+      throw errors.validation('A customer signature is timestamped by the server.', {
+        path: 'signedAt',
+      });
+    }
+    const signedAt = new Date(body.signedAt);
+    if (signedAt.getTime() > now.getTime()) {
+      throw errors.validation('A signature cannot be dated in the future.', {
+        path: 'signedAt',
+        code: 'signed_in_future',
+      });
+    }
+    const earliest = Math.min(
+      new Date(policy.effective_from).getTime(),
+      policy.approved_at ? new Date(policy.approved_at).getTime() : Number.POSITIVE_INFINITY,
+    );
+    if (signedAt.getTime() < earliest) {
+      throw errors.validation('A signature cannot predate the policy version it acknowledges.', {
+        path: 'signedAt',
+        code: 'signed_before_policy',
+      });
+    }
+    if (Object.keys(body.evidence).length === 0) {
+      throw errors.validation(
+        'A signature entered with an earlier signing time needs evidence of the paper record.',
+        { path: 'evidence' },
+      );
+    }
+    return signedAt;
   }
 
   /** Staff, or the signer giving up their own acknowledgment; strangers see NOT_FOUND. */

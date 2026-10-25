@@ -234,7 +234,11 @@ export class QuotesService {
       });
     }
 
-    // Credits the payer owns and may use for registration (redeemed only at checkout).
+    // Credits the payer owns and may use for registration (redeemed only at checkout). Each credit
+    // is applied once (SPK-PAY-002/009): a repeated id would count its balance again.
+    if (new Set(input.creditIds).size !== input.creditIds.length) {
+      throw errors.validation('A credit may be listed only once.', { field: 'creditIds' });
+    }
     const credits = [];
     for (const creditId of input.creditIds) {
       const credit = await this.facts.loadCredit(this.db, organizationId, creditId);

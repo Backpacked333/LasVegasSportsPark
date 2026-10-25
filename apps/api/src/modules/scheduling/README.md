@@ -13,21 +13,21 @@ SPK-AT-008/009/021, SPK-COMMS-005 (old and new practical details on every schedu
 **Status: implemented** (verified by `apps/api/src/modules/scheduling/__tests__` and
 `time/recurrence.spec.ts`). Pending decisions are listed at the end.
 
-## Tables (migration `0300_scheduling_core.sql`)
+## Tables (migration `0300_scheduling_core.sql`; facility-scoped keys `0301`)
 
-| Table                                    | Purpose                                                                                                                                                                                           |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resources`                              | Pitches, subdivisions (always with a parent), rooms, other spaces: dimensions, formats, default buffers, equipment, staffing, status `active/restricted/closed`                                   |
-| `resource_configurations` (+ `_members`) | A physical arrangement: the set of resources that may operate simultaneously ("full pitch", "two halves")                                                                                         |
-| `conflict_units`                         | Atomic physical areas; `resource_conflict_units` maps a whole pitch to all of its subdivisions' units and a subdivision to its own                                                                |
-| `operating_hours`                        | Local windows per weekday for a resource or (resource null) the whole facility                                                                                                                    |
-| `closures`                               | Facility- or resource-level `tstzrange` closures with impact preview, resolution and lifecycle `pending → active → lifted` (`withdrawn` from pending)                                             |
-| `event_series`                           | Recurrence rule in facility-local wall-clock time + IANA zone, DST policies, exceptions                                                                                                           |
-| `events`                                 | Scheduled instants in UTC with the facility zone, buffers, `dst_resolution`, lifecycle `draft → published → canceled`, `published_revision`, owning record                                        |
-| `reservations` / `reservation_units`     | Holds per resource / per conflict unit for the occupied interval (scheduled ± buffers). `EXCLUDE USING gist (organization_id, conflict_unit_id, occupied) WHERE status = 'active'` is invariant 4 |
-| `event_commitments`                      | Teams, people (officials, coaches, participants) and equipment committed to an event; exclusion on `(organization_id, party_type, party_id, occupied)`                                            |
-| `schedule_drafts` / `draft_changes`      | Autosaved drafts with base revisions, author, validation results, publication status; changes `create/move/cancel/resize/resource_change`                                                         |
-| `publications`                           | Append-only publication groups: actor, committed events, enqueued notices, remaining fixture obligations                                                                                          |
+| Table                                    | Purpose                                                                                                                                                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resources`                              | Pitches, subdivisions (always with a parent), rooms, other spaces: dimensions, formats, default buffers, equipment, staffing, status `active/restricted/closed`                                                                               |
+| `resource_configurations` (+ `_members`) | A physical arrangement: the set of resources that may operate simultaneously ("full pitch", "two halves")                                                                                                                                     |
+| `conflict_units`                         | Atomic physical areas; `resource_conflict_units` maps a whole pitch to all of its subdivisions' units and a subdivision to its own                                                                                                            |
+| `operating_hours`                        | Local windows per weekday for a resource or (resource null) the whole facility                                                                                                                                                                |
+| `closures`                               | Facility- or resource-level `tstzrange` closures with impact preview, resolution and lifecycle `pending → active → lifted` (`withdrawn` from pending)                                                                                         |
+| `event_series`                           | Recurrence rule in facility-local wall-clock time + IANA zone, DST policies, exceptions                                                                                                                                                       |
+| `events`                                 | Scheduled instants in UTC with the facility zone, buffers, `dst_resolution`, lifecycle `draft → published → canceled`, `published_revision`, owning record                                                                                    |
+| `reservations` / `reservation_units`     | Holds per resource / per conflict unit for the occupied interval (scheduled ± buffers). `EXCLUDE USING gist (organization_id, conflict_unit_id, occupied) WHERE status = 'active'` is invariant 4                                             |
+| `event_commitments`                      | Teams, people (officials, coaches, participants) and equipment committed to an event; exclusion on `(organization_id, party_type, party_id, occupied)`                                                                                        |
+| `schedule_drafts` / `draft_changes`      | Autosaved drafts with base revisions (autosave keeps the base a target already holds, so a draft never re-bases silently, SPK-SCHED-005), author, validation results, publication status; changes `create/move/cancel/resize/resource_change` |
+| `publications`                           | Append-only publication groups: actor, committed events, enqueued notices, remaining fixture obligations                                                                                                                                      |
 
 Every table carries `organization_id`; references use composite `(organization_id, id)` keys.
 
@@ -62,11 +62,22 @@ Every POST/PATCH/DELETE is `@Idempotent()` and validated with zod; every write r
   (SPK-FIX-005).
 - `AVAILABILITY_PORT` → `findAvailableSlots(resource, interval, duration, buffers)`.
 - `CLOSURE_PORT` → `previewImpact`, `createClosure`, `applyClosure`, `liftClosure` (facilities, SPK-FAC-003/004/005).
+- `ClosureLiftGuards`: a module that backs closures with its own authority registers a guard that
+  `liftClosure` runs inside its transaction before the lift; facilities refuses lifting a closure
+  that backs an unreleased restriction outside its release (SPK-FAC-004).
 - `RESERVATION_QUERY_PORT` → `listReservations` by facility or resource and interval (reporting, facilities).
 - `FIXTURE_OBLIGATION_PORT` (step 4 of publication). Competition registers its implementation under
   `FIXTURE_OBLIGATION_IMPL`; without one, no obligations exist. Blocking obligations fail the group,
   the rest are recorded as `remainingObligations` on the publication (SPK-FIX-002).
 - `SCHEDULING_POLICY` (`scheduling.policy.ts`): required rest per party kind and series limits.
+- `PartyCommitmentSources` (`conflicts/party-commitment-sources.ts`): a module that holds party
+  commitments in its own tables registers a source (workforce registers `workforce.assignments`
+  for persons, its accepted and completed assignments). Detection and the post-lock re-check in
+  `EventWriter.reserve` report overlaps and too-short rest against them as `party_overlap` /
+  `insufficient_rest` with `externalCommitments: [{ source, id }]`, so scheduling never commits a
+  person another module already holds (SPK-SCHED-004 official and assigned-coach overlap,
+  SPK-STAFF-003). The owning module takes the same per-party advisory lock (`lockParty`) before it
+  writes; scheduling never reads its tables (§4.2).
 
 Test fixtures for downstream modules: `testing/scheduling-fixtures.ts` (`seedPitchWithHalves`,
 `seedResource`, `seedOperatingHours`, `createScheduledEvent`, `createAppliedClosure`, `at`).
@@ -75,7 +86,9 @@ Test fixtures for downstream modules: `testing/scheduling-fixtures.ts` (`seedPit
 
 - `scheduling.event_changed` — one per changed event: `change` (created, published, moved, resized,
   resource_changed, updated, canceled), `before` and `after` practical details (title, kind,
-  instants, zone, facility, resources, status), owning record, parties, publication or closure id.
+  instants, zone, facility, resources, status), owning record, parties, publication or closure id,
+  and the event's `revision` after the change, so consumers order changes exactly (the outbox does
+  not order events per aggregate, §4.12).
 - `scheduling.schedule_published` — publication group with event ids, changes and remaining obligations.
 - `scheduling.closure_applied` / `scheduling.closure_lifted`.
 
@@ -98,7 +111,9 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
     requested subdivision (`FOR NO KEY UPDATE`) before reading sibling reservations, so bookings of
     sibling subdivisions are serialized;
   - required rest (SPK-SCHED-004): `EventWriter.reserve` takes a transaction-scoped advisory lock
-    per committed party that needs rest and re-checks the gap after it (`insufficient_rest`).
+    per committed party that needs rest (or that a registered `PartyCommitmentSources` source
+    covers) and re-checks the gap, and the source's commitments, after it (`insufficient_rest`,
+    `party_overlap`).
     Commands that reserve several events (publication, series edit) take these locks up front in
     one order (`EventWriter.lockHolds`); a deadlock that still occurs (40P01) is retried by
     `UnitOfWork`. Verified by `__tests__/concurrency.spec.ts` under PGlite and `TEST_DATABASE_URL`.
@@ -120,6 +135,26 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   nothing is partially published.
 - Series store local time + zone; nonexistent local times shift forward (or skip) and ambiguous ones
   take the first occurrence (or second) per the series, recorded as `dst_resolution` on the event.
+  SPK-SCHED-008 "require resolution": when the rule's local start time falls in a gap or an overlap
+  on some date and the matching `nonexistentPolicy` / `ambiguousPolicy` was not sent, the series is
+  refused (`VALIDATION_FAILED`, `details.code = dst_resolution_required` with the local dates); the
+  defaults are never applied silently (`event-series.spec.ts`).
+- Operating hours (SPK-SCHED-001/008) compare the local wall-clock start and end
+  (`localMinuteSpan`), never the start plus elapsed minutes: a fall-back event 00:30 PDT to
+  01:30 PST fits a 00:00-02:00 window, a spring-forward event 01:30 PST to 03:30 PDT does not fit
+  one closing at 03:00. An event may end at 24:00 of its start day; one that runs past local
+  midnight never fits (windows never span midnight). Conflict detection and the slot search share
+  the rule (`events.spec.ts`).
+- A revision-matched event write that matches no row (another command changed the event after it
+  was read) answers `STALE_REVISION`, never an internal error (`EventWriter.cancel`, series edit).
+- Facility boundaries (§4.3, migration `0301`): resources, events and closures carry
+  `unique (organization_id, facility_id, id)`; a subdivision's parent, a closure's resource, an
+  operating-hours window's resource, and a reservation's event and resource (reservations carry
+  `facility_id`) belong to the row's own facility (`schema-invariants.spec.ts`).
+- Concurrent publication (SPK-AT-008): drafts racing for the same pitch and halves commit a
+  non-overlapping set (the whole pitch alone, or at most one booking of each half) with one event,
+  publication and succeeded operation per committed draft and every other draft `failed`
+  (`concurrency.spec.ts`, under PGlite and `TEST_DATABASE_URL`).
   Occurrence indexes are stable, and occurrences that already ended are never changed by an edit.
 - Closure application either cancels affected published events (notices carry the closure id) or
   leaves them for staff resolution as an operational exception in the `scheduler` queue.

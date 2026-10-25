@@ -69,7 +69,8 @@ export interface RefundEvidence {
  * reserved BEFORE execution with a conditional UPDATE (`refunded + reserved + x <= captured`
  * under the row lock), so concurrent requests cannot reserve the same funds; the database check
  * is the final guarantee. The provider is called outside any transaction. An unknown result keeps
- * its reservation until authoritative evidence (webhook or reconciliation) settles or releases it.
+ * its reservation until authoritative evidence (webhook or reconciliation) settles or releases it;
+ * the provider's "no record" counts as evidence only `reconcileAfterMinutes` after submission.
  */
 @Injectable()
 export class RefundsService {
@@ -155,6 +156,13 @@ export class RefundsService {
   ): Promise<Refund> {
     const organizationId = organizationOf(principal);
     const refund = await this.uow.run(async ({ trx }) => {
+      // §4.10: a finance-only command is authorized before the record is read, so a caller
+      // without the role gets the same answer whether or not the payment exists.
+      await this.authorization.require(principal, FinanceActions.refund, {
+        type: 'payment_attempt',
+        id: paymentAttemptId,
+        organizationId,
+      });
       const payment = await trx
         .selectFrom('payment_attempts')
         .select(['id', 'status', 'payer_person_id', 'currency'])
@@ -162,12 +170,16 @@ export class RefundsService {
         .where('id', '=', paymentAttemptId)
         .executeTakeFirst();
       if (!payment) throw errors.protectedNotFound('payment');
-      await this.authorization.require(principal, FinanceActions.refund, {
-        type: 'payment_attempt',
-        id: paymentAttemptId,
-        organizationId,
-      });
-      if (payment.status !== 'succeeded') {
+      // Refundable means captured money is recorded for the attempt (SPK-PAY-008): normally a
+      // succeeded attempt, also a capture the provider reported after the attempt was recorded as
+      // failed or canceled (§4.11, PaymentsService.recordCaptureAfterResolution).
+      const captured = await trx
+        .selectFrom('payment_refundables')
+        .select('payment_attempt_id')
+        .where('organization_id', '=', organizationId)
+        .where('payment_attempt_id', '=', paymentAttemptId)
+        .executeTakeFirst();
+      if (!captured) {
         throw errors.invalidTransition('PaymentAttempt', payment.status, 'refund');
       }
       const operationId = await this.operations.create(trx, {
@@ -177,6 +189,8 @@ export class RefundsService {
         correlationId,
         input: { paymentAttemptId, amountMinor: input.amountMinor },
         status: 'running',
+        // §4.14: a refund outcome is read by finance operators, not by every staff role.
+        readScope: { action: FinanceActions.refund },
       });
       const row = await this.reserveInTrx(trx, {
         organizationId,
@@ -561,17 +575,26 @@ export class RefundsService {
     correlationId: string | null,
   ): Promise<Refund> {
     const organizationId = organizationOf(principal);
-    const row = await this.load(this.db, organizationId, id);
-    if (!row) throw errors.protectedNotFound('refund');
+    // §4.10: authorized before the record is read (no existence oracle for non-finance callers).
     await this.authorization.require(principal, FinanceActions.reconcilePayment, {
       type: 'refund_attempt',
       id,
       organizationId,
     });
+    const row = await this.load(this.db, organizationId, id);
+    if (!row) throw errors.protectedNotFound('refund');
     const updated = await this.reconcile(organizationId, id, correlationId);
     return this.view(this.db, updated);
   }
 
+  /**
+   * Reconciles one submitted refund from the provider's record (SPK-PAY-008, SPK-AT-007). A record
+   * the provider has is applied at any time (forced by staff or swept). "No record" means the
+   * provider never received the refund only once it was last handed to it (submitted, or gone
+   * unknown) at least `reconcileAfterMinutes` ago: before that the call may still be in flight, or
+   * the provider may not show a just-timed-out request yet, so the refund and its reservation stay
+   * as they are (§4.7 invariant 6: releasing them early would let a second refund over-refund).
+   */
   async reconcile(
     organizationId: string,
     id: string,
@@ -581,10 +604,15 @@ export class RefundsService {
     if (!row) throw errors.notFound('refund', id);
     if (RefundMachine.isTerminal(row.status) || row.status === 'requested') return row;
     const found = await this.provider.retrieveRefund(row.id);
-    if (!found) {
-      // The provider never received it: nothing left, so the reservation is released.
-      return this.uow.run(({ trx }) =>
-        this.applyEvidence(
+    return this.uow.run(async ({ trx }) => {
+      if (!found) {
+        const current = await this.load(trx, organizationId, id, true);
+        if (!current) throw errors.notFound('refund', id);
+        if (RefundMachine.isTerminal(current.status) || !this.absenceIsAuthoritative(current)) {
+          return current;
+        }
+        // The provider never received it: nothing left, so the reservation is released.
+        return this.applyEvidence(
           trx,
           organizationId,
           id,
@@ -595,11 +623,9 @@ export class RefundsService {
             source: 'reconciliation',
           },
           correlationId,
-        ),
-      );
-    }
-    return this.uow.run(({ trx }) =>
-      this.applyEvidence(
+        );
+      }
+      return this.applyEvidence(
         trx,
         organizationId,
         id,
@@ -610,8 +636,21 @@ export class RefundsService {
           source: 'reconciliation',
         },
         correlationId,
-      ),
+      );
+    });
+  }
+
+  /** "No record" is conclusive only `reconcileAfterMinutes` after the refund was last handed over. */
+  private absenceIsAuthoritative(row: RefundRow): boolean {
+    const threshold = minutesFrom(
+      this.clock.now(),
+      -this.policy.configuration.reconcileAfterMinutes,
     );
+    const instants = [row.submitted_at, row.unknown_since]
+      .filter((v): v is Date => v !== null && v !== undefined)
+      .map((v) => new Date(v).getTime());
+    if (instants.length === 0) return false;
+    return Math.max(...instants) <= threshold.getTime();
   }
 
   /** Worker sweep: execute requested refunds, reconcile stale processing/unknown ones. */

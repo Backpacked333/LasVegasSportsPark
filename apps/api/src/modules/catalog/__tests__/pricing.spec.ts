@@ -22,6 +22,9 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
   let customer: { Authorization: string };
   let pricing: PricingPort;
   let uow: UnitOfWork;
+  /** Published offerings the previews price from their rules (SPK-PAY-001). */
+  let termOffering: string;
+  let campOffering: string;
 
   beforeAll(async () => {
     t = await createTestApp({
@@ -39,6 +42,20 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
     customer = await authHeaderForPerson(t, people.adult.personId);
     pricing = t.app.get<PricingPort>(PRICING_PORT);
     uow = t.app.get(UnitOfWork);
+    termOffering = (
+      await createOfferingFixture(t, {
+        responsibleManagerPersonId: managerPersonId,
+        kind: 'term',
+        basePriceMinor: 15_000,
+      })
+    ).offeringId;
+    campOffering = (
+      await createOfferingFixture(t, {
+        responsibleManagerPersonId: managerPersonId,
+        kind: 'camp',
+        basePriceMinor: 30_000,
+      })
+    ).offeringId;
   });
   afterAll(async () => {
     await t.close();
@@ -258,9 +275,10 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
       .send({
         currency: 'USD',
         codes: [code.toLowerCase(), 'NOSUCHCODE'],
+        // SPK-PAY-001: the submitted kind and amount are ignored; the server prices each line
         lines: [
-          { lineId: 'a', offeringId: newId(), offeringKind: 'term', baseAmountMinor: 15_000 },
-          { lineId: 'b', offeringId: newId(), offeringKind: 'camp', baseAmountMinor: 30_000 },
+          { lineId: 'a', offeringId: termOffering, offeringKind: 'camp', baseAmountMinor: 1 },
+          { lineId: 'b', offeringId: campOffering },
         ],
       });
     expect(evaluation.status).toBe(200);
@@ -324,10 +342,122 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
       .send({
         currency: 'USD',
         codes: [code],
-        lines: [{ lineId: 'a', offeringId: newId(), offeringKind: 'term', baseAmountMinor: 1_000 }],
+        lines: [{ lineId: 'a', offeringId: termOffering }],
       });
     expect(afterRetire.body.totalDiscountMinor).toBe(0);
     expect(afterRetire.body.unknownCodes).toEqual([]);
+  });
+
+  it('SPK-PAY-001: a discount preview prices lines from the offering and its rule, never from the client; customers preview only now and only discoverable offerings', async () => {
+    const id = await createDiscountFixture(t, {
+      code: null,
+      amountKind: 'percentage',
+      amountValue: 1000,
+      stackingRule: 'stackable',
+      eligibilityRules: { offeringKinds: ['camp'], minLineAmountMinor: 20_000 },
+    });
+    const evaluate = (body: Record<string, unknown>, headers = customer) =>
+      t.http
+        .post('/v1/discounts/evaluate')
+        .set(headers)
+        .send({ currency: 'USD', ...body });
+    // a term line dressed up as an expensive camp line does not qualify
+    const forged = await evaluate({
+      lines: [
+        {
+          lineId: 'a',
+          offeringId: termOffering,
+          offeringKind: 'camp',
+          programId: null,
+          baseAmountMinor: 99_000,
+        },
+      ],
+    });
+    expect(forged.status).toBe(200);
+    expect(forged.body.lines).toEqual([
+      { lineId: 'a', baseAmountMinor: 15_000, discountMinor: 0, netAmountMinor: 15_000 },
+    ]);
+    expect(
+      forged.body.discounts.find(
+        (d: { discountDefinitionId: string }) => d.discountDefinitionId === id,
+      )?.applied ?? false,
+    ).toBe(false);
+    const real = await evaluate({ lines: [{ lineId: 'b', offeringId: campOffering }] });
+    expect(real.body.lines).toEqual([
+      { lineId: 'b', baseAmountMinor: 30_000, discountMinor: 3_000, netAmountMinor: 27_000 },
+    ]);
+    // another instant is a staff preview only
+    const atByCustomer = await evaluate({
+      at: '2027-06-01T00:00:00Z',
+      lines: [{ lineId: 'b', offeringId: campOffering }],
+    });
+    expect(atByCustomer.status).toBe(403);
+    expect(atByCustomer.body.code).toBe('ACCESS_DENIED');
+    const atByStaff = await evaluate(
+      { at: '2026-10-24T00:00:00Z', lines: [{ lineId: 'b', offeringId: campOffering }] },
+      finance,
+    );
+    expect(atByStaff.status).toBe(200);
+    // a draft offering does not exist for a customer; an unknown one for anybody
+    const draft = await createOfferingFixture(t, {
+      responsibleManagerPersonId: managerPersonId,
+      publicationState: 'draft',
+    });
+    const hidden = await evaluate({ lines: [{ lineId: 'c', offeringId: draft.offeringId }] });
+    expect(hidden.status).toBe(404);
+    expect(
+      (await evaluate({ lines: [{ lineId: 'c', offeringId: draft.offeringId }] }, finance)).status,
+    ).toBe(200);
+    expect(
+      (await evaluate({ lines: [{ lineId: 'd', offeringId: newId() }] }, finance)).status,
+    ).toBe(404);
+  });
+
+  it('SPK-PAY-003: redemption enforces the effective window, not only the status', async () => {
+    const actor = {
+      kind: 'system' as const,
+      organizationId: t.organizationId,
+      accountId: null,
+      personId: null,
+      staffRoles: [],
+      facilityIds: [],
+      sessionId: null,
+      actorLabel: 'test',
+    };
+    const redeemOf = (discountDefinitionId: string) =>
+      uow.run((ctx) =>
+        pricing.redeemDiscount(ctx.trx, t.organizationId, {
+          discountDefinitionId,
+          referenceType: 'order',
+          referenceId: newId(),
+          actor,
+        }),
+      );
+    const now = t.clock.now().getTime();
+    const ended = await createDiscountFixture(t, {
+      effectiveFrom: new Date(now - 10 * 86_400_000),
+      effectiveTo: new Date(now - 86_400_000),
+    });
+    const upcoming = await createDiscountFixture(t, {
+      effectiveFrom: new Date(now + 86_400_000),
+    });
+    for (const id of [ended, upcoming]) {
+      await expect(redeemOf(id)).rejects.toMatchObject({
+        code: 'RESOURCE_CONFLICT',
+        details: { code: 'DISCOUNT_NOT_EFFECTIVE', discountDefinitionId: id },
+      });
+    }
+    const counters = await t.db
+      .selectFrom('discount_redemptions')
+      .select('redeemed_count')
+      .where('discount_definition_id', 'in', [ended, upcoming])
+      .execute();
+    expect(counters.map((c) => c.redeemed_count)).toEqual([0, 0]);
+    const current = await createDiscountFixture(t, {
+      effectiveFrom: new Date(now - 86_400_000),
+      effectiveTo: new Date(now + 86_400_000),
+    });
+    await expect(redeemOf(current)).resolves.toMatchObject({ redeemedCount: 1 });
   });
 
   it('§4.7 invariant 7: redemptions are counted in the database, replay-safe and bounded by the limit', async () => {
@@ -402,7 +532,7 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
       .send({
         currency: 'USD',
         codes: [code],
-        lines: [{ lineId: 'a', offeringId: newId(), offeringKind: 'term', baseAmountMinor: 1_000 }],
+        lines: [{ lineId: 'a', offeringId: termOffering }],
       });
     expect(exhausted.body.discounts[0]).toMatchObject({ applied: false });
     expect(exhausted.body.discounts[0].explanation.join(' ')).toMatch(/redemption limit 2 reached/);

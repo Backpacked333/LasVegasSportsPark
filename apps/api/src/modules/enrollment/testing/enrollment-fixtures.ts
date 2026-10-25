@@ -120,6 +120,7 @@ export async function createEnrollmentFixture(
       transferred_at: null,
       transferred_to_enrollment_id: null,
       transferred_from_enrollment_id: null,
+      transfer_consequence: null,
       completed_at: status === 'completed' ? now : null,
     })
     .execute();

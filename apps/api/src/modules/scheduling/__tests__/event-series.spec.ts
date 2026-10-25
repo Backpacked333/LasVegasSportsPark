@@ -107,12 +107,12 @@ describe('recurring series across daylight-saving changes and recurrence edits (
   });
 
   it('SPK-SCHED-008: nonexistent and ambiguous local times are resolved explicitly and recorded on the event', async () => {
-    const shifted = await series.createSeries(programManager, {
+    const gapRule = {
       facilityId: facility,
-      kind: 'maintenance',
+      kind: 'maintenance' as const,
       title: 'Overnight cleaning',
       recurrence: {
-        frequency: 'weekly',
+        frequency: 'weekly' as const,
         interval: 1,
         byWeekday: [0],
         startDate: '2026-03-01',
@@ -121,6 +121,36 @@ describe('recurring series across daylight-saving changes and recurrence edits (
       localStartTime: '02:30',
       durationMinutes: 30,
       resourceIds: [pitch.southHalfId],
+    };
+    // "require resolution": without a chosen policy the series is refused, naming the dates
+    const seriesBefore = await t.db.selectFrom('event_series').select('id').execute();
+    await expect(series.createSeries(programManager, gapRule)).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: {
+        code: 'dst_resolution_required',
+        nonexistentLocalDates: ['2026-03-08'],
+        ambiguousLocalDates: [],
+        options: { nonexistentPolicy: ['shift_forward', 'skip'], ambiguousPolicy: [] },
+      },
+    });
+    expect(await t.db.selectFrom('event_series').select('id').execute()).toHaveLength(
+      seriesBefore.length,
+    );
+    await expect(
+      series.createSeries(programManager, {
+        ...gapRule,
+        title: 'Fall-back block without a policy',
+        recurrence: { frequency: 'daily', interval: 1, startDate: '2026-11-01', count: 1 },
+        localStartTime: '01:30',
+        resourceIds: [pitch.northHalfId],
+      }),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { nonexistentLocalDates: [], ambiguousLocalDates: ['2026-11-01'] },
+    });
+    const shifted = await series.createSeries(programManager, {
+      ...gapRule,
+      nonexistentPolicy: 'shift_forward',
     });
     const shiftedRows = await t.db
       .selectFrom('events')
@@ -261,6 +291,7 @@ describe('recurring series across daylight-saving changes and recurrence edits (
         occurrenceIndex: 2,
         preview: true,
         changes: { localStartTime: '10:00', resourceIds: [pitch.pitchId] },
+        expectedRevision: created.revision,
       });
     expect(preview.status, JSON.stringify(preview.body)).toBe(200);
     expect(preview.body.committed).toBe(false);
@@ -279,6 +310,14 @@ describe('recurring series across daylight-saving changes and recurrence edits (
     expect(preview.body.unchangedEventIds.sort()).toEqual([rows[0]!.id, rows[1]!.id].sort());
     const untouched = await events.getEvent(programManager, rows[2]!.id);
     expect(untouched).toMatchObject({ revision: 1, scheduledStart: at('2026-05-16', '09:00') });
+    // §4.9: a series edit names the revision it was made against
+    const blind = await t.http
+      .post(`/v1/event-series/${created.id}/edits`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ scope: 'entire_series', preview: false, changes: { title: 'blind rename' } });
+    expect(blind.status).toBe(400);
+    expect(blind.body.code).toBe('VALIDATION_FAILED');
 
     const committed = await series.editSeries(programManager, created.id, {
       scope: 'this_and_future',
@@ -328,12 +367,15 @@ describe('recurring series across daylight-saving changes and recurrence edits (
     });
 
     // editing a played occurrence is refused; editing one future occurrence touches only it
+    const seriesRevision = async () =>
+      (await series.getSeries(programManager, created.id)).revision;
     await expect(
       series.editSeries(programManager, created.id, {
         scope: 'one',
         occurrenceIndex: 0,
         preview: false,
         changes: { title: 'late' },
+        expectedRevision: await seriesRevision(),
       }),
     ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
     const one = await series.editSeries(programManager, created.id, {
@@ -342,6 +384,7 @@ describe('recurring series across daylight-saving changes and recurrence edits (
       preview: false,
       changes: { cancel: true },
       reason: 'holiday',
+      expectedRevision: await seriesRevision(),
     });
     expect(one.affected.map((a) => a.eventId)).toEqual([rows[1]!.id]);
     expect(one.affected[0]?.after).toBeNull();
@@ -352,6 +395,7 @@ describe('recurring series across daylight-saving changes and recurrence edits (
       scope: 'entire_series',
       preview: false,
       changes: { title: 'Saturday academy (renamed)', durationMinutes: 60 },
+      expectedRevision: await seriesRevision(),
     });
     expect(entire.affected.map((a) => a.eventId).sort()).toEqual([rows[2]!.id, rows[3]!.id].sort());
     const view = await series.getSeries(programManager, created.id);

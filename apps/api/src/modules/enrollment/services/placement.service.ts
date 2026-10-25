@@ -333,8 +333,14 @@ export class PlacementService {
           source: { type: 'division', id: entry.divisionId },
         });
       }
-      const pool = await this.teamPool(this.db, organizationId, entry.id);
-      if (pool && pool.capacity - pool.committed - pool.held < 1) {
+      // SPK-REG-005: every roster-place pool of the team counts (join_team registrations hold them too).
+      const pools = await this.capacity.teamEntryPools(this.db, organizationId, entry.id);
+      const free = (p: PoolRow) => p.capacity - p.committed - p.held;
+      const pool = pools.reduce<PoolRow | undefined>(
+        (tightest, p) => (!tightest || free(p) < free(tightest) ? p : tightest),
+        undefined,
+      );
+      if (pool && free(pool) < 1) {
         reasons.push({
           code: 'roster_capacity_full',
           severity: 'blocking',
@@ -379,24 +385,6 @@ export class PlacementService {
     const best = out[0];
     if (best?.eligible) best.recommended = true;
     return out;
-  }
-
-  /** The enrollment-side roster-place pool of a team entry, when staff configured one. */
-  private async teamPool(
-    db: Reader,
-    organizationId: string,
-    teamEntryId: string,
-  ): Promise<PoolRow | undefined> {
-    return db
-      .selectFrom('capacity_pools')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .where('scope_type', '=', 'team_entry')
-      .where('scope_id', '=', teamEntryId)
-      .where('unit', '=', 'roster_places')
-      .where('status', '=', 'active')
-      .orderBy('id')
-      .executeTakeFirst();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -518,8 +506,25 @@ export class PlacementService {
     input: AssignPlacementInput,
     correlationId: string | null,
   ): Promise<PlacementRequest> {
+    // §4.7 invariants 3 and 12, §4.11, SPK-AT-023: every step runs in ONE transaction. The step
+    // units below and competition's roster command join it (UnitOfWork.run is reentrant; each
+    // joined unit is a savepoint), so the hold, the roster row, the committed place and the
+    // operation commit together: a stop or an unexpected error between steps leaves nothing
+    // half-applied and no operation `running`. A refused roster change is recorded (holds released,
+    // operation failed, audit) and committed before it is reported.
+    const outcome = await this.uow.run(() => this.assignSteps(principal, id, input, correlationId));
+    if ('failure' in outcome) throw outcome.failure;
+    return outcome.placement;
+  }
+
+  private async assignSteps(
+    principal: Principal,
+    id: string,
+    input: AssignPlacementInput,
+    correlationId: string | null,
+  ): Promise<{ placement: PlacementRequest } | { failure: DomainError }> {
     const organizationId = organizationOf(principal);
-    // Step 1 (enrollment transaction): guards, current eligibility, capacity hold, operation.
+    // Step 1: guards, current eligibility, capacity hold, operation.
     const prepared = await this.uow.run(async ({ trx }) => {
       const now = this.clock.now();
       const row = await this.load(trx, organizationId, id, true);
@@ -552,10 +557,11 @@ export class PlacementService {
           reasons: evaluation.reasons,
         });
       }
-      const pool = await this.teamPool(trx, organizationId, teamEntryId);
-      const holds = pool
+      // SPK-REG-005: the team's roster-place pools, the same ones a join_team registration holds.
+      const pools = await this.capacity.teamEntryPools(trx, organizationId, teamEntryId);
+      const holds = pools.length
         ? await this.capacity.acquireHolds(trx, organizationId, {
-            pools: [{ poolId: pool.id, quantity: 1 }],
+            pools: pools.map((p) => ({ poolId: p.id, quantity: 1 })),
             ownerKind: 'placement',
             ownerId: row.id,
             actor: principal,
@@ -585,11 +591,12 @@ export class PlacementService {
         revision: row.revision + 1,
         participantPersonId: row.participant_person_id,
         reasons: reasonsOf(evaluation),
-        poolId: pool?.id ?? null,
+        poolId: pools[0]?.id ?? null,
+        holdPools: new Map(holds.map((h) => [h.id, h.poolId] as const)),
       };
     });
 
-    // Step 2 (competition's own command and transaction): the roster membership.
+    // Step 2 (competition's command, joined to this transaction): the roster membership.
     let membershipId: string | null = null;
     let failure: DomainError | null = null;
     try {
@@ -611,6 +618,7 @@ export class PlacementService {
                 organizationId,
                 prepared.teamEntryId,
                 this.clock.now(),
+                this.uow.current(),
               )
             ).find((m) => m.personId === prepared.participantPersonId)
           : undefined;
@@ -619,7 +627,7 @@ export class PlacementService {
     }
 
     if (failure) {
-      // Step 3a: record the failure durably, give the held place back, then report it.
+      // Step 3a: record the failure, give the held place back; the caller reports it after commit.
       const reported = failure;
       await this.uow.run(async ({ trx }) => {
         for (const holdId of prepared.holdIds) {
@@ -646,11 +654,11 @@ export class PlacementService {
           details: { teamEntryId: prepared.teamEntryId, code: reported.code },
         });
       });
-      throw reported;
+      return { failure: reported };
     }
 
-    // Step 3b (enrollment transaction): commit the place and record the assignment.
-    return this.uow.run(async ({ trx }) => {
+    // Step 3b: commit the place and record the assignment.
+    const placement = await this.uow.run(async ({ trx }) => {
       const now = this.clock.now();
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.internal('placement request vanished');
@@ -667,13 +675,14 @@ export class PlacementService {
             correlationId,
           );
         } catch (error) {
-          if (!DomainError.is(error) || error.code !== 'CAPACITY_UNAVAILABLE' || !prepared.poolId)
+          const heldPoolId = prepared.holdPools.get(holdId);
+          if (!DomainError.is(error) || error.code !== 'CAPACITY_UNAVAILABLE' || !heldPoolId)
             throw error;
           try {
             await this.capacity.acquireCommitted(
               trx,
               organizationId,
-              [{ poolId: prepared.poolId, quantity: 1 }],
+              [{ poolId: heldPoolId, quantity: 1 }],
               {
                 placementRequestId: id,
               },
@@ -687,7 +696,7 @@ export class PlacementService {
               severity: 'warning',
               message:
                 'The roster place was taken before the assignment completed; staff must resolve the capacity.',
-              source: { type: 'capacity_pool', id: prepared.poolId },
+              source: { type: 'capacity_pool', id: heldPoolId },
             });
             await this.exceptions.raise(trx, {
               organizationId,
@@ -698,7 +707,7 @@ export class PlacementService {
               affectedId: id,
               ownerQueue: 'league_manager',
               dedupeKey: `placement_capacity:${id}`,
-              details: { teamEntryId: prepared.teamEntryId, poolId: prepared.poolId },
+              details: { teamEntryId: prepared.teamEntryId, poolId: heldPoolId },
             });
           }
         }
@@ -768,6 +777,7 @@ export class PlacementService {
       });
       return toPlacementRequest((await this.load(trx, organizationId, id))!);
     });
+    return { placement };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -780,6 +790,20 @@ export class PlacementService {
     input: ReleasePlacementInput,
     correlationId: string | null,
   ): Promise<PlacementRequest> {
+    // §4.7 invariants 3 and 12: one transaction, as in assign (competition's command joins it).
+    const outcome = await this.uow.run(() =>
+      this.releaseSteps(principal, id, input, correlationId),
+    );
+    if ('failure' in outcome) throw outcome.failure;
+    return outcome.placement;
+  }
+
+  private async releaseSteps(
+    principal: Principal,
+    id: string,
+    input: ReleasePlacementInput,
+    correlationId: string | null,
+  ): Promise<{ placement: PlacementRequest } | { failure: DomainError }> {
     const organizationId = organizationOf(principal);
     const prepared = await this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
@@ -819,20 +843,20 @@ export class PlacementService {
         correlationId,
       );
     } catch (error) {
+      // An unexpected error rolls the whole release back (nothing half-applied).
+      if (!DomainError.is(error)) throw error;
       // Already off the roster (removed by the captain or staff): nothing left to remove.
-      if (!DomainError.is(error) || error.code !== 'NOT_FOUND') {
+      if (error.code !== 'NOT_FOUND') {
         const reported = error;
         await this.uow.run(async ({ trx }) => {
           await this.operations.transition(trx, prepared.operationId, 'failed', {
-            error: DomainError.is(reported)
-              ? { code: reported.code, message: reported.message }
-              : { code: 'INTERNAL_ERROR', message: 'roster removal failed' },
+            error: { code: reported.code, message: reported.message },
           });
         });
-        throw reported;
+        return { failure: reported };
       }
     }
-    return this.uow.run(async ({ trx }) => {
+    const placement = await this.uow.run(async ({ trx }) => {
       const now = this.clock.now();
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.internal('placement request vanished');
@@ -880,6 +904,7 @@ export class PlacementService {
       });
       return toPlacementRequest((await this.load(trx, organizationId, id))!);
     });
+    return { placement };
   }
 
   // -------------------------------------------------------------------------------------------

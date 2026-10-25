@@ -28,4 +28,8 @@ export { CashTendersService } from './services/cash-tenders.service';
 export { ReconciliationService } from './services/reconciliation.service';
 export { FinanceWorker, type FinanceWorkerSummary } from './services/finance-worker';
 export { FinancePolicyAdapter } from './services/finance-policy.adapter';
+export {
+  ParticipationStandingService,
+  type ParticipationStanding,
+} from './services/participation-standing.service';
 export * from './testing/finance-fixtures';

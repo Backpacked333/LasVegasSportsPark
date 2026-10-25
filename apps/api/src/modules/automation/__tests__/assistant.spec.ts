@@ -6,7 +6,7 @@ import {
   createSeasonFixture,
   createTeamEntryFixture,
 } from '../../competition';
-import { createCapturedPaymentFixture } from '../../finance';
+import { createCapturedPaymentFixture, createObligationFixture } from '../../finance';
 import { seedPitchWithHalves, at, type PitchFixture } from '../../scheduling';
 import type { FakeAssistantProvider } from '../providers/fake-assistant.provider';
 import {
@@ -76,6 +76,14 @@ describe('assistant requests (SPK-AUTO-001, SPK-AUTO-002, SPK-AUTO-004)', () => 
 
   it('SPK-AUTO-001 / SPK-AUTO-002: explains readiness blockers from the fixture read with the caller’s principal, with freshness, and keeps unknown checks visible as missing evidence', async () => {
     const fixtureId = await fixture();
+    // Evidence that is genuinely unknown: an open team obligation, whose effect on play awaits the
+    // participation policy (POL-017), keeps the finance check `unknown`.
+    const { home_entry_id: homeEntryId } = await t.db
+      .selectFrom('fixtures')
+      .select('home_entry_id')
+      .where('id', '=', fixtureId)
+      .executeTakeFirstOrThrow();
+    await createObligationFixture(t, { debtorTeamEntryId: homeEntryId, amountMinor: 10_000 });
     fake.script('readiness', [
       {
         type: 'tool_calls',

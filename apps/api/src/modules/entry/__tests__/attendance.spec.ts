@@ -320,6 +320,29 @@ describe('attendance observations and corrections (§4.8, SPK-ENTRY-005, §4.5)'
     expect(assignedCoach.body.people.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('§4.14 field-level: a guardian reads the history of their child without staff or device identifiers; staff see them', async () => {
+    const path = `/v1/attendance?activityType=session&activityId=${p.sessionId}&offeringId=${p.offering.offeringId}&personId=${fam.childA}`;
+    const own = await t.http.get(path).set(fam.guardian.header);
+    expect(own.status, JSON.stringify(own.body)).toBe(200);
+    const history = own.body.people[0].history as Array<Record<string, unknown>>;
+    expect(history.length).toBeGreaterThan(0);
+    for (const row of history) {
+      expect(row['recordedBy']).toMatchObject({
+        accountId: null,
+        personId: null,
+        sessionId: null,
+        staffRoles: [],
+      });
+      expect(row).toMatchObject({ deviceId: null, syncBatchId: null, snapshotReference: null });
+    }
+    const staff = await t.http.get(path).set(desk.header);
+    expect(staff.status).toBe(200);
+    const recordedBy = (staff.body.people[0].history as Array<{ recordedBy: { personId: string } }>)
+      .map((h) => h.recordedBy.personId)
+      .filter((id) => id !== null);
+    expect(recordedBy.length).toBeGreaterThan(0);
+  });
+
   it('event activities: an assigned official records attendance; a committed player is admitted at check-in', async () => {
     const pitch = await seedPitchWithHalves(t.db, {
       organizationId: t.organizationId,

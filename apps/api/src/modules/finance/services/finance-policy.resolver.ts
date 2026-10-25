@@ -39,6 +39,39 @@ export class FinancePolicyResolver {
     const installment = await this.current(organizationId, 'installment', at, trx);
     const overpayment = await this.current(organizationId, 'overpayment', at, trx);
     const refund = await this.current(organizationId, 'refund', at, trx);
+    return this.build(installment, overpayment, refund);
+  }
+
+  /**
+   * SPK-PAY-002: the policy basis a quote recorded, for everything that happens to that purchase
+   * later (checkout, recovery, compensation). The recorded versions apply even if a newer version
+   * was approved since (or the recorded one was retired); where the quote recorded none, the
+   * engineering default applies, as it did when the quote was made.
+   */
+  async resolveRecorded(
+    organizationId: string,
+    references: QuotePolicyReferences,
+    trx?: Trx,
+  ): Promise<ResolvedFinancePolicy> {
+    const installment = await this.recorded(
+      organizationId,
+      references.installmentPolicyVersionId,
+      trx,
+    );
+    const overpayment = await this.recorded(
+      organizationId,
+      references.overpaymentPolicyVersionId,
+      trx,
+    );
+    const refund = await this.recorded(organizationId, references.refundPolicyVersionId, trx);
+    return this.build(installment, overpayment, refund);
+  }
+
+  private build(
+    installment: PolicyVersion | null,
+    overpayment: PolicyVersion | null,
+    refund: PolicyVersion | null,
+  ): ResolvedFinancePolicy {
     const defaults: string[] = [];
     const config: FinancePolicyConfig = {
       ...this.defaults,
@@ -82,6 +115,15 @@ export class FinancePolicyResolver {
         defaults,
       },
     };
+  }
+
+  private async recorded(
+    organizationId: string,
+    id: string | null | undefined,
+    trx?: Trx,
+  ): Promise<PolicyVersion | null> {
+    if (!id) return null;
+    return this.policies.getPolicyVersion(organizationId, id, trx);
   }
 
   private async current(

@@ -21,6 +21,7 @@ import {
   snapshotActor,
   type Clock,
 } from '../../../kernel';
+import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { FinanceActions } from '../finance.actions';
 import {
   isStaffLike,
@@ -49,6 +50,7 @@ export class CreditsService {
     private readonly outbox: Outbox,
     private readonly ledger: LedgerService,
     private readonly facts: MoneyFacts,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly people: PersonDirectoryPort,
   ) {}
 
   async view(db: Reader, row: CreditRow): Promise<Credit> {
@@ -115,13 +117,21 @@ export class CreditsService {
       throw errors.validation('A credit cannot expire in the past.');
     }
     return this.uow.run(async ({ trx }) => {
-      const owner = await trx
-        .selectFrom('persons')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', input.ownerPersonId)
-        .executeTakeFirst();
+      // §4.2: identity's person directory, never its tables. SPK-IAM-007: a merged record no
+      // longer owns money (the survivor's credit list and checkout would never see the credit), so
+      // the credit is refused with the surviving record named, never moved silently.
+      const owner = await this.people.findPerson(organizationId, input.ownerPersonId, trx);
       if (!owner) throw errors.notFound('person', input.ownerPersonId);
+      if (owner.status === 'merged' || owner.canonicalPersonId !== owner.id) {
+        throw errors.validation(
+          'This person record was merged; issue the credit to the surviving record.',
+          {
+            code: 'person_merged',
+            ownerPersonId: owner.id,
+            canonicalPersonId: owner.canonicalPersonId,
+          },
+        );
+      }
       const id = await this.facts.insertCredit(trx, {
         organizationId,
         ownerPersonId: input.ownerPersonId,
@@ -182,13 +192,15 @@ export class CreditsService {
   ): Promise<Credit> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const credit = await this.facts.loadCredit(trx, organizationId, id, true);
-      if (!credit) throw errors.protectedNotFound('credit');
+      // §4.10: a finance-only command is authorized before the record is read, so a caller
+      // without the role gets the same answer whether or not the credit exists.
       await this.authorization.require(principal, FinanceActions.approveCredit, {
         type: 'credit',
         id,
         organizationId,
       });
+      const credit = await this.facts.loadCredit(trx, organizationId, id, true);
+      if (!credit) throw errors.protectedNotFound('credit');
       assertExpectedRevision(input.expectedRevision, credit.revision);
       if (credit.status !== 'pending_approval') {
         throw errors.invalidTransition('Credit', credit.status, 'approve');
@@ -268,22 +280,25 @@ export class CreditsService {
       if (!obligation) throw errors.protectedNotFound('obligation');
       if (!isStaffLike(principal)) {
         // The credit's owner must also be entitled to pay this obligation (no paying into
-        // another household's debt by guessing an id, §4.10).
+        // another household's debt by guessing an id, §4.10, §4.14). The same subject as
+        // ObligationsService.pay: the debtor of an individual obligation, otherwise the
+        // responsible payer, and for the contributions model the team captain; never the
+        // credit's owner by default. Refused as not-found before any balance is revealed.
+        const subject =
+          obligation.mode === 'individual'
+            ? obligation.debtor_person_id
+            : obligation.responsible_payer_person_id;
         await this.authorization.require(principal, FinanceActions.payObligation, {
           type: 'obligation',
           id: obligation.id,
           organizationId,
-          subjectPersonIds: [
-            obligation.debtor_person_id ??
-              obligation.responsible_payer_person_id ??
-              credit.owner_person_id,
-          ],
+          subjectPersonIds: subject ? [subject] : [],
           teamEntryId:
             obligation.mode === 'team_with_contributions' ? obligation.debtor_team_entry_id : null,
           protected: true,
         });
       }
-      await this.facts.redeemCredit(trx, {
+      const { replayed } = await this.facts.redeemCredit(trx, {
         organizationId,
         creditId: id,
         amountMinor: input.amountMinor,
@@ -296,6 +311,16 @@ export class CreditsService {
         actor: principal,
         correlationId,
       });
+      if (replayed) {
+        // SPK-PAY-009, §4.9: a credit is applied to a given obligation once (one redemption per
+        // credit and reference; whether repeated partial use is allowed is pending POL-010 /
+        // DEC-058). A true replay never reaches here (the Idempotency-Key returns the stored
+        // response), so this is a second, distinct command: refused, nothing audited.
+        throw errors.resourceConflict('This credit has already been applied to this obligation.', {
+          code: 'CREDIT_ALREADY_APPLIED',
+        });
+      }
+      const row = (await this.facts.loadCredit(trx, organizationId, id)) as CreditRow;
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -303,12 +328,11 @@ export class CreditsService {
         targetType: 'credit',
         targetId: id,
         beforeRevision: credit.revision,
-        afterRevision: credit.revision + 1,
+        afterRevision: row.revision,
         correlationId,
         details: { obligationId: input.obligationId, amountMinor: input.amountMinor },
       });
-      const row = await this.facts.loadCredit(trx, organizationId, id);
-      return this.view(trx, row as CreditRow);
+      return this.view(trx, row);
     });
   }
 }
