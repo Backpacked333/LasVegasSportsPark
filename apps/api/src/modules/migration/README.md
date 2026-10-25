@@ -156,7 +156,8 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
 - **Refunds in-process (§5.6, verified):** `RefundsService.request` (finance) checks the record
   authority itself through finance's `RECORD_AUTHORITY_PORT`, which this module implements
   (`RECORD_AUTHORITY_IMPL`), so support's refund helper and automation's refund proposal are
-  refused exactly like `POST /payments/{id}/refunds` (`__tests__/record-authority.spec.ts`).
+  refused exactly like `POST /payments/{id}/refunds` (`__tests__/record-authority.spec.ts`;
+  the automation proposal in `automation/__tests__/record-authority.spec.ts`).
 - **Reconciliation (§5.5, verified):** four levels — control totals (declared against staged, and
   declared opening-balance amounts against what finance holds after the apply:
   `loaded_total_mismatch`); record identity (every row has an outcome, every mapping reaches an
