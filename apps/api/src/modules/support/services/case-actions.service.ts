@@ -6,6 +6,8 @@ import {
   systemPrincipal,
   type CaseAction,
   type CaseActionOutcome,
+  type DomainEvent,
+  type EventPayload,
   type LinkCaseActionInput,
   type Principal,
   type RequestRefundInput,
@@ -16,7 +18,9 @@ import { isUniqueViolation, json, type CaseActionStatus } from '@sportspark/db';
 import { sql, type SqlBool } from 'kysely';
 import {
   AuditWriter,
+  AuthorizationService,
   CLOCK,
+  ExceptionActions,
   OperationalExceptions,
   OperationsService,
   Outbox,
@@ -30,10 +34,44 @@ import { CommunicationsActions, NotificationsService } from '../../communication
 import { FinanceActions, RefundsService } from '../../finance';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { SupportActions } from '../support.actions';
-import { CaseActionRecorded } from '../support.events';
+import { CaseActionRecorded, HelperOutcomeDue } from '../support.events';
 import { CaseActionMachine } from '../support.machines';
-import { organizationOf, toCaseAction, type CaseActionRow, type CaseRow } from '../support.shared';
+import { SUPPORT_POLICY, type SupportPolicy } from '../support.policy';
+import {
+  organizationOf,
+  toCaseAction,
+  type CaseActionRow,
+  type CaseRow,
+  type Reader,
+} from '../support.shared';
 import { CasesService } from './cases.service';
+import { ExceptionQueuesService } from './exception-queues.service';
+
+/** The queue that owns the question "what happened to this refund?" (finance, §5.11). */
+const REFUND_OUTCOME_QUEUE = 'finance_operator';
+
+/** Finance refund states in which a refund moved no money and holds no reservation. */
+const REFUND_NO_EFFECT: readonly string[] = ['failed', 'canceled'];
+
+/** What a refund helper asked finance for, as recorded with its intent (case_actions.input). */
+interface RefundRequestOf {
+  organizationId: string;
+  caseActionId: string;
+  accountId: string | null;
+  paymentAttemptId: string;
+  amountMinor: string;
+  requestedAt: Date;
+  correlationId: string | null;
+}
+
+/** The audit record that evidences a command, as verifyEvidence found it. */
+interface EvidenceAudit {
+  id: string;
+  targetType: string;
+  targetId: string;
+  operationId: string | null;
+  occurredAt: Date;
+}
 
 interface RecordActionInput {
   row: CaseRow;
@@ -74,6 +112,9 @@ export class CaseActionsService {
     private readonly notifications: NotificationsService,
     private readonly refunds: RefundsService,
     @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
+    private readonly authorization: AuthorizationService,
+    private readonly queues: ExceptionQueuesService,
+    @Inject(SUPPORT_POLICY) private readonly policy: SupportPolicy,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -109,6 +150,9 @@ export class CaseActionsService {
           });
         }
         const evidence = await this.verifyEvidence(trx, principal.accountId, organizationId, input);
+        if (definition.id === FinanceActions.refund.id && evidence.audit) {
+          await this.assertNotAnOutstandingHelpersRefund(trx, organizationId, evidence.audit);
+        }
         const action = await this.record(trx, {
           row,
           actor: principal,
@@ -148,10 +192,13 @@ export class CaseActionsService {
     auditRecordId: string | null;
     record: { type: string; id: string } | null;
     summary: Record<string, unknown>;
+    /** The audit record of the action that evidences the command (named, or the operation's). */
+    audit: EvidenceAudit | null;
   }> {
     const summary: Record<string, unknown> = {};
     let auditRecordId: string | null = null;
     let record: { type: string; id: string } | null = null;
+    let audit: EvidenceAudit | null = null;
     if (input.operationId) {
       const operation = await trx
         .selectFrom('operations')
@@ -175,7 +222,7 @@ export class CaseActionsService {
       }
       const audited = await trx
         .selectFrom('audit_records')
-        .select(['id', 'target_type', 'target_id'])
+        .select(['id', 'target_type', 'target_id', 'operation_id', 'occurred_at'])
         .where('organization_id', '=', organizationId)
         .where('operation_id', '=', operation.id)
         .where('action', '=', input.actionId)
@@ -190,6 +237,7 @@ export class CaseActionsService {
       summary['operationKind'] = operation.kind;
       summary['operationStatus'] = operation.status;
       record = { type: audited.target_type, id: audited.target_id };
+      audit = evidenceAudit(audited);
     }
     if (input.auditRecordId) {
       const audited = await trx
@@ -202,6 +250,7 @@ export class CaseActionsService {
           'target_type',
           'target_id',
           'operation_id',
+          'occurred_at',
         ])
         .where('id', '=', input.auditRecordId)
         .executeTakeFirst();
@@ -227,8 +276,9 @@ export class CaseActionsService {
       }
       auditRecordId = audited.id;
       record = { type: audited.target_type, id: audited.target_id };
+      audit = evidenceAudit(audited);
     }
-    return { auditRecordId, record, summary };
+    return { auditRecordId, record, summary, audit };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -354,11 +404,13 @@ export class CaseActionsService {
   /**
    * Finance's refund command reserves funds in its own transaction and then calls the payment
    * provider outside any transaction (§4.11), so it cannot run inside support's unit of work.
-   * Support records the intent first (case action `requested`, support operation `running`),
-   * calls finance with the operator's principal, then records the outcome. If the outcome cannot
-   * be learned (the process failed between the steps) the action stays `unknown`, an owned
-   * exception asks finance to check, and a retry with the same idempotency key is refused rather
-   * than requesting a second refund (§4.7 invariant 5).
+   * Support records the intent first (case action `requested`, support operation `running`) with
+   * a delayed `support.helper_outcome_due` follow-up in the same transaction, calls finance with
+   * the operator's principal, then records the outcome. If finance gives no answer the action is
+   * `unknown` at once; if the process fails before any outcome is recorded, the follow-up moves the
+   * action to `unknown` after the grace period (§4.7 invariant 12). Either way an owned exception
+   * asks finance to check, and a retry with the same idempotency key is refused rather than
+   * requesting a second refund (§4.7 invariant 5).
    */
   async requestRefund(
     principal: Principal,
@@ -422,6 +474,20 @@ export class CaseActionsService {
         correlationId,
         operationId: supportOperationId,
         details: { helper: 'request_refund', caseActionId: pending.id, status: 'requested' },
+      });
+      // support-migration-06 (§4.7 invariant 12, §4.11 "record durable follow-up"): committed with
+      // the intent, so an outcome that is never recorded still reaches an owner.
+      await this.outbox.enqueue(trx, HelperOutcomeDue, {
+        organizationId,
+        aggregateType: 'support_case',
+        aggregateId: caseId,
+        payload: { caseId, caseActionId: pending.id, supportOperationId },
+        correlationId,
+        operationId: supportOperationId,
+        availableAt: new Date(
+          this.clock.now().getTime() + this.policy.helperOutcomeGraceMinutes * 60_000,
+        ),
+        failureOwner: 'support_operator',
       });
       return { kind: 'pending' as const, pending, supportOperationId };
     });
@@ -506,6 +572,17 @@ export class CaseActionsService {
       return await this.uow.run(async ({ trx }) => {
         const row = await this.cases.loadForUpdate(trx, organizationId, caseId);
         if (!row) throw errors.internal('case vanished');
+        const current = await this.loadAction(trx, organizationId, pending.id);
+        // The overdue follow-up (markOverdue) or a reviewer may have recorded the outcome while
+        // finance was still answering (support-migration-06): a reviewed outcome stands, and a
+        // second `unknown` changes nothing.
+        if (current.status === 'succeeded' || current.status === 'failed') {
+          return toCaseAction(current);
+        }
+        if (current.status === 'unknown' && outcome.status === 'unknown') {
+          return toCaseAction(current);
+        }
+        const wasUnknown = current.status === 'unknown';
         const action = await this.complete(trx, organizationId, pending, {
           status: outcome.status,
           commandOperationId: outcome.commandOperationId ?? null,
@@ -526,25 +603,27 @@ export class CaseActionsService {
             : { error: outcome.error ?? { code: 'UNKNOWN', message: 'unknown' } },
         );
         if (outcome.status === 'unknown') {
-          await this.exceptions.raise(trx, {
+          await this.raiseUnknownOutcome(trx, row, action, supportOperationId);
+        } else if (wasUnknown) {
+          // Finance's own answer settles the question support raised; no person asserts it.
+          await this.resolveUnknownOutcome(
+            trx,
+            systemPrincipal(organizationId, 'support.case_actions'),
             organizationId,
-            facilityId: row.facility_id,
-            category: 'support.helper_outcome_unknown',
-            severity: 'high',
-            title: `A refund requested from support case "${row.title.slice(0, 80)}" has no recorded outcome`,
-            affectedType: 'case_action',
-            affectedId: action.id,
-            ownerQueue: 'finance_operator',
-            dedupeKey: unknownOutcomeKey(action.id),
-            details: { caseId, caseActionId: action.id, supportOperationId },
-          });
+            action.id,
+            `Outcome recorded from finance's response: ${outcome.status}`,
+            outcome.status,
+            correlationId,
+          );
         }
         await this.afterRecord(trx, row, action, principal, correlationId, null);
         return action;
       });
     } catch (error) {
-      // The outcome could not be recorded: the action stays `requested` (never assumed), the
-      // support operation stays running, and a retry with the same key is refused above.
+      // The outcome could not be recorded: the action stays `requested` (never assumed) and a
+      // retry with the same key is refused above; the `support.helper_outcome_due` follow-up
+      // committed with the intent makes it `unknown` with an owned exception after the grace
+      // period (§4.7 invariant 12).
       this.logger.error(
         `could not record the outcome of case action ${pending.id}: ${String(error)}`,
       );
@@ -553,14 +632,132 @@ export class CaseActionsService {
   }
 
   // -------------------------------------------------------------------------------------------
+  // support.helper_outcome_due: a helper request whose outcome was never recorded
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * support-migration-06 (§4.7 invariant 12, §4.11): handles the follow-up enqueued with a
+   * helper's intent. An action still `requested` after the grace period lost its outcome (the
+   * process failed before recording it): CaseActionMachine `requested → unknown`, the support
+   * operation `running → recovery_required`, and the owning module's queue gets the same exception
+   * as an outcome that was never reported, so a reviewer can settle it. Any other state means the
+   * outcome was recorded: nothing happens (idempotent under replay).
+   */
+  async markOverdue(trx: Trx, event: DomainEvent<EventPayload<typeof HelperOutcomeDue>>) {
+    const organizationId = event.organizationId;
+    const { caseId, caseActionId, supportOperationId } = event.payload;
+    // Same lock order as settleHelper and settleUnknown: the case, then the action.
+    const row = await this.cases.loadForUpdate(trx, organizationId, caseId);
+    if (!row) return;
+    const current = await trx
+      .selectFrom('case_actions')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('case_id', '=', caseId)
+      .where('id', '=', caseActionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!current || current.status !== 'requested') return;
+    const error = {
+      code: 'OUTCOME_NOT_RECORDED',
+      message:
+        'No outcome was recorded for this helper request within the grace period; the owning module must confirm what happened.',
+    };
+    const action = await this.complete(trx, organizationId, toCaseAction(current), {
+      status: 'unknown',
+      error,
+    });
+    const operation = await trx
+      .selectFrom('operations')
+      .select('status')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', supportOperationId)
+      .executeTakeFirst();
+    if (operation?.status === 'running' || operation?.status === 'pending') {
+      await this.operations.transition(trx, supportOperationId, 'recovery_required', { error });
+    }
+    await this.raiseUnknownOutcome(trx, row, action, supportOperationId);
+    await this.afterRecord(
+      trx,
+      row,
+      action,
+      systemPrincipal(organizationId, 'support.case_actions'),
+      event.correlationId,
+      null,
+    );
+  }
+
+  /** The exception that asks the owning module what happened to a helper request. */
+  private async raiseUnknownOutcome(
+    trx: Trx,
+    row: CaseRow,
+    action: CaseAction,
+    supportOperationId: string,
+  ): Promise<void> {
+    await this.exceptions.raise(trx, {
+      organizationId: row.organization_id,
+      facilityId: row.facility_id,
+      category: 'support.helper_outcome_unknown',
+      severity: 'high',
+      title: `A refund requested from support case "${row.title.slice(0, 80)}" has no recorded outcome`,
+      affectedType: 'case_action',
+      affectedId: action.id,
+      ownerQueue: REFUND_OUTCOME_QUEUE,
+      dedupeKey: unknownOutcomeKey(action.id),
+      details: { caseId: row.id, caseActionId: action.id, supportOperationId },
+    });
+  }
+
+  /** Resolves the open unknown-outcome exception of a case action, as `actor`. */
+  private async resolveUnknownOutcome(
+    trx: Trx,
+    actor: Principal,
+    organizationId: string,
+    caseActionId: string,
+    reason: string,
+    outcome: 'succeeded' | 'failed',
+    correlationId: string | null,
+  ): Promise<void> {
+    const open = await this.openUnknownOutcome(trx, organizationId, caseActionId);
+    if (!open) return;
+    // The kernel authorizes `exceptions.manage` for `actor`, enforces the lifecycle and audits.
+    await this.exceptions.transition(trx, actor, open.id, 'resolved', {
+      reason,
+      resolution: { caseActionId, outcome },
+      correlationId: correlationId ?? undefined,
+    });
+  }
+
+  private async openUnknownOutcome(trx: Trx, organizationId: string, caseActionId: string) {
+    return trx
+      .selectFrom('operational_exceptions')
+      .select(['id', 'owner_queue'])
+      .where('organization_id', '=', organizationId)
+      .where('dedupe_key', '=', unknownOutcomeKey(caseActionId))
+      .where('status', 'in', ['open', 'acknowledged'])
+      .executeTakeFirst();
+  }
+
+  // -------------------------------------------------------------------------------------------
   // POST /cases/{id}/actions/{actionId}/settle: record the outcome of an unknown helper action
   // -------------------------------------------------------------------------------------------
 
   /**
    * CaseActionMachine `unknown → succeeded | failed`: a reviewer records what the owning module
-   * reports. A succeeded outcome must be evidenced by the command the helper ran — its operation
-   * or audit record, by the same operator — so a note can never stand in for it; the support
-   * operation and the owned exception are settled with it (SPK-SUPPORT-003, §4.12).
+   * reports (SPK-SUPPORT-003, §4.12).
+   *
+   * - Recording the outcome answers the owning module's open question, so the reviewer needs the
+   *   kernel's `exceptions.manage` in the case's facility scope and must see that exception's queue;
+   *   the exception is resolved with the reviewer's own principal, which the kernel authorizes and
+   *   audits (support-migration-04, §4.14 least privilege, §5.11).
+   * - A succeeded outcome must be evidenced by the command this helper request ran — its operation
+   *   or audit record, by the same operator, recorded after the request and, for a refund, of the
+   *   same payment and amount under the request's correlation id — and not already linked to
+   *   another case action, so neither a note nor an unrelated command stands in for it
+   *   (support-migration-08).
+   * - A failed outcome of a refund is refused while finance holds a refund for this request that is
+   *   not failed or canceled (support-migration-04, §4.7 invariant 5): finance's record wins over a
+   *   reviewer's statement.
    */
   async settleUnknown(
     principal: Principal,
@@ -580,6 +777,11 @@ export class CaseActionsService {
         SupportActions.linkAction,
         { allowClosed: true },
       );
+      await this.authorization.require(principal, ExceptionActions.manage, {
+        type: 'operational_exception',
+        organizationId,
+        facilityId: row.facility_id,
+      });
       const current = await trx
         .selectFrom('case_actions')
         .selectAll()
@@ -589,10 +791,20 @@ export class CaseActionsService {
         .forUpdate()
         .executeTakeFirst();
       if (!current) throw errors.notFound('case action', caseActionId);
+      const open = await this.openUnknownOutcome(trx, organizationId, current.id);
+      const queue = open?.owner_queue ?? REFUND_OUTCOME_QUEUE;
+      const configured = await this.queues.configured(trx, organizationId);
+      if (!this.queues.visibleTo(principal, this.queues.resolve(queue, configured))) {
+        throw errors.accessDenied('This outcome belongs to a queue outside your scope.', {
+          queue,
+        });
+      }
       if (current.status !== 'unknown') {
         throw errors.invalidTransition('CaseAction', current.status, 'settle');
       }
+      const isRefund = current.via === 'helper' && current.action_id === FinanceActions.refund.id;
       let evidence: Awaited<ReturnType<CaseActionsService['verifyEvidence']>> | null = null;
+      let record: { type: string; id: string } | null = input.record ?? null;
       if (input.outcome === 'succeeded') {
         const helperActor = current.actor as { accountId?: string | null };
         evidence = await this.verifyEvidence(trx, helperActor.accountId ?? null, organizationId, {
@@ -600,12 +812,25 @@ export class CaseActionsService {
           operationId: input.operationId,
           auditRecordId: input.auditRecordId,
         });
+        if (current.via === 'helper') {
+          await this.assertEvidenceOfRequest(trx, current, evidence.audit, isRefund);
+          record = evidence.record;
+        } else {
+          record = input.record ?? evidence.record;
+        }
+      } else if (isRefund) {
+        record = await this.assertNoRefundRecorded(trx, current);
+      }
+      if (current.via === 'helper' && input.record && !sameRecord(input.record, record)) {
+        throw errors.validation('The record is not the one this helper request produced.', {
+          code: 'EVIDENCE_NOT_OF_THIS_REQUEST',
+        });
       }
       const action = await this.complete(trx, organizationId, toCaseAction(current), {
         status: input.outcome,
         commandOperationId: input.operationId ?? null,
         auditRecordId: evidence?.auditRecordId ?? null,
-        record: input.record ?? evidence?.record ?? null,
+        record,
         error:
           input.outcome === 'failed'
             ? { code: 'NO_EFFECT_CONFIRMED', message: input.reason }
@@ -621,30 +846,147 @@ export class CaseActionsService {
             : { error: { code: 'NO_EFFECT_CONFIRMED', message: input.reason } },
         );
       }
-      const open = await trx
-        .selectFrom('operational_exceptions')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('dedupe_key', '=', unknownOutcomeKey(current.id))
-        .where('status', 'in', ['open', 'acknowledged'])
-        .executeTakeFirst();
-      if (open) {
-        // The exception support raised is resolved because its underlying question is answered.
-        await this.exceptions.transition(
-          trx,
-          systemPrincipal(organizationId, 'support.case_actions'),
-          open.id,
-          'resolved',
-          {
-            reason: `Outcome recorded by review: ${input.outcome}`,
-            resolution: { caseActionId: current.id, outcome: input.outcome },
-            correlationId: correlationId ?? undefined,
-          },
-        );
-      }
+      // The exception support raised is resolved because its underlying question is answered,
+      // by the reviewer who answered it.
+      await this.resolveUnknownOutcome(
+        trx,
+        principal,
+        organizationId,
+        current.id,
+        `Outcome recorded by review: ${input.outcome}`,
+        input.outcome,
+        correlationId,
+      );
       await this.afterRecord(trx, row, action, principal, correlationId, input.reason);
       return { case: await this.cases.detail(trx, organizationId, caseId), action };
     });
+  }
+
+  /**
+   * support-migration-08 (SPK-SUPPORT-003): the evidence of a helper's succeeded outcome is the
+   * command this request ran — recorded after the request, for a refund the same payment and
+   * amount under the request's correlation id (finance's audit record of `finance.refund`), of a
+   * refund finance did not record as failed or canceled — and is not already another case
+   * action's evidence (one command settles one request).
+   */
+  private async assertEvidenceOfRequest(
+    trx: Trx,
+    current: CaseActionRow,
+    audit: EvidenceAudit | null,
+    isRefund: boolean,
+  ): Promise<void> {
+    const notOfThisRequest = () =>
+      errors.validation('The evidence is not the command this helper request ran.', {
+        code: 'EVIDENCE_NOT_OF_THIS_REQUEST',
+      });
+    if (!audit) throw notOfThisRequest();
+    if (audit.occurredAt.getTime() < new Date(current.requested_at).getTime()) {
+      throw notOfThisRequest();
+    }
+    if (isRefund) {
+      const matches = await this.refundAuditsOf(trx, await this.refundRequestOf(trx, current));
+      if (!matches.some((m) => m.id === audit.id)) throw notOfThisRequest();
+      const refund = await this.refunds.load(trx, current.organization_id, audit.targetId);
+      if (!refund || REFUND_NO_EFFECT.includes(refund.status)) {
+        throw errors.resourceConflict(
+          `Finance recorded this refund as ${refund?.status ?? 'missing'}: it is not a succeeded outcome.`,
+          { code: 'REFUND_NOT_EFFECTIVE', refundId: audit.targetId, status: refund?.status },
+        );
+      }
+    }
+    const elsewhere = await trx
+      .selectFrom('case_actions')
+      .select(['id', 'case_id'])
+      .where('organization_id', '=', current.organization_id)
+      .where('id', '<>', current.id)
+      .where((eb) =>
+        eb.or([
+          eb('audit_record_id', '=', audit.id),
+          ...(audit.operationId ? [eb('command_operation_id', '=', audit.operationId)] : []),
+        ]),
+      )
+      .executeTakeFirst();
+    if (elsewhere) {
+      throw errors.resourceConflict(
+        'This command outcome is already linked to another case action.',
+        {
+          code: 'EVIDENCE_ALREADY_LINKED',
+          caseActionId: elsewhere.id,
+        },
+      );
+    }
+  }
+
+  /**
+   * A refund that a refund helper request on some case ran (still `requested` or `unknown`) is
+   * that request's outcome: it is recorded by settling the request, never linked as a separate
+   * action, so the request can still be settled with it (support-migration-08: one command
+   * settles one request).
+   */
+  private async assertNotAnOutstandingHelpersRefund(
+    trx: Trx,
+    organizationId: string,
+    audit: EvidenceAudit,
+  ): Promise<void> {
+    const outstanding = await trx
+      .selectFrom('case_actions')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('via', '=', 'helper')
+      .where('action_id', '=', FinanceActions.refund.id)
+      .where('status', 'in', ['requested', 'unknown'])
+      .where('requested_at', '<=', audit.occurredAt)
+      .where(
+        sql<SqlBool>`input->>'paymentAttemptId' = (select a.details->>'paymentAttemptId' from audit_records a where a.id = ${audit.id})`,
+      )
+      .execute();
+    for (const helper of outstanding) {
+      const matches = await this.refundAuditsOf(trx, await this.refundRequestOf(trx, helper));
+      if (matches.some((m) => m.id === audit.id)) {
+        throw new DomainError(
+          'RESOURCE_CONFLICT',
+          'This refund is the outcome of a refund requested from a case; record it on that request.',
+          {
+            details: {
+              code: 'HELPER_REQUEST_OUTSTANDING',
+              caseId: helper.case_id,
+              caseActionId: helper.id,
+            },
+            nextAction: 'settle_case_action',
+          },
+        );
+      }
+    }
+  }
+
+  /**
+   * support-migration-04 (§4.7 invariant 5, SPK-SUPPORT-003): a refund helper may be settled
+   * `failed` only when finance holds no refund for this request, or only refunds it recorded as
+   * failed or canceled (read through finance's exported service). Returns that refund's reference.
+   */
+  private async assertNoRefundRecorded(
+    trx: Trx,
+    current: CaseActionRow,
+  ): Promise<{ type: string; id: string } | null> {
+    const matches = await this.refundAuditsOf(trx, await this.refundRequestOf(trx, current));
+    let record: { type: string; id: string } | null = null;
+    for (const match of matches) {
+      const refund = await this.refunds.load(trx, current.organization_id, match.target_id);
+      if (refund && !REFUND_NO_EFFECT.includes(refund.status)) {
+        throw errors.resourceConflict(
+          'Finance recorded a refund for this request: settle it with that refund, or wait for finance to reconcile it.',
+          {
+            code: 'REFUND_RECORDED_BY_FINANCE',
+            auditRecordId: match.id,
+            refundId: refund.id,
+            operationId: refund.operation_id,
+            status: refund.status,
+          },
+        );
+      }
+      record ??= { type: 'refund_attempt', id: match.target_id };
+    }
+    return record;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -779,41 +1121,83 @@ export class CaseActionsService {
     });
   }
 
-  /**
-   * The audit record of the `finance.refund` this helper call ran (the kernel audit table,
-   * read-only): the same operator, payment and amount, carried by this request's correlation id
-   * (or, without one, recorded since the intent and not yet linked). Evidence that finance executed it.
-   */
+  /** The audit record of the `finance.refund` this helper call ran, while it is running. */
   private async refundAuditFor(
     principal: Principal,
     input: RequestRefundInput,
     pending: CaseAction,
     correlationId: string | null,
   ): Promise<string | null> {
-    let q = this.uow
-      .reader()
+    const matches = await this.refundAuditsOf(this.uow.reader(), {
+      organizationId: organizationOf(principal),
+      caseActionId: pending.id,
+      accountId: principal.accountId,
+      paymentAttemptId: input.paymentAttemptId,
+      amountMinor: String(input.amountMinor),
+      requestedAt: new Date(pending.requestedAt),
+      correlationId,
+    });
+    return matches[0]?.id ?? null;
+  }
+
+  /** A refund helper's request as recorded with its intent and its support operation. */
+  private async refundRequestOf(trx: Trx, current: CaseActionRow): Promise<RefundRequestOf> {
+    const input = current.input as { paymentAttemptId?: unknown; amountMinor?: unknown };
+    const actor = current.actor as { accountId?: string | null };
+    const operation = current.support_operation_id
+      ? await trx
+          .selectFrom('operations')
+          .select('correlation_id')
+          .where('organization_id', '=', current.organization_id)
+          .where('id', '=', current.support_operation_id)
+          .executeTakeFirst()
+      : undefined;
+    return {
+      organizationId: current.organization_id,
+      caseActionId: current.id,
+      accountId: actor.accountId ?? null,
+      paymentAttemptId: String(input.paymentAttemptId ?? ''),
+      amountMinor: String(input.amountMinor ?? ''),
+      requestedAt: new Date(current.requested_at),
+      correlationId: operation?.correlation_id ?? null,
+    };
+  }
+
+  /**
+   * The audit records of the `finance.refund` a refund helper request ran (the kernel audit table,
+   * read-only): the same operator, payment and amount, recorded since the intent and carried by the
+   * request's correlation id (or, without one, not linked to another case action). Finance writes
+   * this record in the transaction that reserves the refund, so it is evidence that finance
+   * recorded a refund for this request.
+   */
+  private async refundAuditsOf(
+    db: Reader,
+    request: RefundRequestOf,
+  ): Promise<Array<{ id: string; target_id: string; operation_id: string | null }>> {
+    if (!request.accountId) return [];
+    let q = db
       .selectFrom('audit_records')
-      .select('id')
-      .where('organization_id', '=', organizationOf(principal))
+      .select(['id', 'target_id', 'operation_id'])
+      .where('organization_id', '=', request.organizationId)
       .where('action', '=', FinanceActions.refund.id)
       .where('target_type', '=', 'refund_attempt')
-      .where('occurred_at', '>=', new Date(pending.requestedAt))
-      .where(sql<SqlBool>`actor->>'accountId' = ${principal.accountId ?? ''}`)
-      .where(sql<SqlBool>`details->>'paymentAttemptId' = ${input.paymentAttemptId}`)
-      .where(sql<SqlBool>`details->>'amountMinor' = ${String(input.amountMinor)}`);
-    q = correlationId
-      ? q.where('correlation_id', '=', correlationId)
+      .where('occurred_at', '>=', request.requestedAt)
+      .where(sql<SqlBool>`actor->>'accountId' = ${request.accountId}`)
+      .where(sql<SqlBool>`details->>'paymentAttemptId' = ${request.paymentAttemptId}`)
+      .where(sql<SqlBool>`details->>'amountMinor' = ${request.amountMinor}`);
+    q = request.correlationId
+      ? q.where('correlation_id', '=', request.correlationId)
       : q.where(({ not, exists, selectFrom }) =>
           not(
             exists(
               selectFrom('case_actions')
                 .select('case_actions.id')
-                .whereRef('case_actions.audit_record_id', '=', 'audit_records.id'),
+                .whereRef('case_actions.audit_record_id', '=', 'audit_records.id')
+                .where('case_actions.id', '<>', request.caseActionId),
             ),
           ),
         );
-    const row = await q.orderBy('occurred_at').executeTakeFirst();
-    return row?.id ?? null;
+    return q.orderBy('occurred_at').orderBy('id').execute();
   }
 
   private async loadAction(trx: Trx, organizationId: string, id: string): Promise<CaseActionRow> {
@@ -846,4 +1230,27 @@ export class CaseActionsService {
 /** Dedupe key of the exception raised when a helper action's outcome is unknown. */
 function unknownOutcomeKey(caseActionId: string): string {
   return `support:case_action:${caseActionId}:unknown`;
+}
+
+function evidenceAudit(row: {
+  id: string;
+  target_type: string;
+  target_id: string;
+  operation_id: string | null;
+  occurred_at: Date | string;
+}): EvidenceAudit {
+  return {
+    id: row.id,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    operationId: row.operation_id,
+    occurredAt: new Date(row.occurred_at),
+  };
+}
+
+function sameRecord(
+  a: { type: string; id: string } | null,
+  b: { type: string; id: string } | null,
+): boolean {
+  return a?.type === b?.type && a?.id === b?.id;
 }

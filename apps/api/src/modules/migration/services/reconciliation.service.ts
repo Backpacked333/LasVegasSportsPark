@@ -19,7 +19,12 @@ import {
   type ReconciliationLevelValue,
   type StaffRole,
 } from '@sportspark/contracts';
-import { json, type Db, type ReconciliationReportsTable } from '@sportspark/db';
+import {
+  json,
+  type Db,
+  type MappedEntityType,
+  type ReconciliationReportsTable,
+} from '@sportspark/db';
 import type { Selectable } from 'kysely';
 import {
   AuditWriter,
@@ -38,6 +43,7 @@ import { MigrationEvents } from '../migration.events';
 import { ReconciliationApprovalMachine } from '../migration.machines';
 import { MIGRATION_POLICY, type MigrationPolicy } from '../migration.policy';
 import {
+  applyCorrelationId,
   importPrincipal,
   iso,
   organizationOf,
@@ -47,7 +53,7 @@ import {
   type RowRow,
 } from '../migration.shared';
 import { areasFor, CATEGORY_RULES } from '../staging/categories';
-import { compareControlTotals } from '../staging/control-totals';
+import { compareControlTotals, stagedAmount } from '../staging/control-totals';
 import { ImportBatchesService } from './import-batches.service';
 import { ImportContextBuilder } from './import-context';
 import { rowKey } from './import-planner';
@@ -71,6 +77,16 @@ interface Draft {
 }
 
 const APPLIED = new Set(['created', 'matched', 'updated']);
+/** Categories whose applied amounts finance holds (opening balances, §5.5). */
+const LOADED_MONEY: ReadonlySet<ImportEntityTypeValue> = new Set(['open_obligation', 'credit']);
+/** Categories the owning module audits a creation for, under the mapping's correlation id. */
+const AUDITED_CREATIONS: readonly Exclude<MappedEntityType, 'relationship_evidence'>[] = [
+  'person',
+  'household',
+  'program',
+  'open_obligation',
+  'credit',
+];
 const LEVELS: readonly ReconciliationLevelValue[] = [
   'control_totals',
   'record_identity',
@@ -80,13 +96,20 @@ const LEVELS: readonly ReconciliationLevelValue[] = [
 
 /**
  * Reconciliation of an applied batch at the four levels of §5.5:
- *   1. control totals — declared counts and amounts against what was staged;
+ *   1. control totals — declared counts and amounts against what was staged, and declared
+ *      opening-balance amounts against what finance holds after the apply (`loaded_total_mismatch`);
  *   2. record identity — every row has an outcome and every mapping reaches an existing record;
+ *      a row rejected in review is reported with its source amount (`rejected_in_review`), and a
+ *      record an apply created that no mapping links is reported (`unlinked_creation`);
  *   3. relationships — imported relationship evidence is effective authority in identity and
  *      households hold their staged members;
- *   4. operational outcomes — opening obligations and credits hold the approved amounts, and
- *      active operational records the owning modules cannot import yet (rosters, seasons, teams,
- *      future schedules, preferences) are reported, never assumed present.
+ *   4. operational outcomes — opening obligations and credits hold the approved amounts, an
+ *      amount re-valued in review is reported against the source amount (`revalued_in_review`),
+ *      and active operational records the owning modules cannot import yet (rosters, seasons,
+ *      teams, future schedules, preferences) are reported, never assumed present.
+ * So review decisions never make the totals appear correct: finance approves every difference
+ * between the source's opening balances and SportsPark's explicitly, with a reason
+ * (support-migration-07).
  * Every discrepancy is stored as its own row with its own currency: unrelated discrepancies are
  * never netted to make totals appear correct (§5.5). Each area the batch touches is approved by
  * its owners (§5.5: finance approves opening balances, program and league owners approve active
@@ -172,6 +195,15 @@ export class ReconciliationService {
     const exceptionsByRow = new Map<string, ExceptionRow[]>();
     for (const e of exceptions)
       exceptionsByRow.set(e.row_id, [...(exceptionsByRow.get(e.row_id) ?? []), e]);
+    const decidedAs = (row: RowRow, decision: 'accept' | 'reject'): ExceptionRow | undefined =>
+      (exceptionsByRow.get(row.id) ?? []).find((e) => e.decision === decision);
+    const decisionDetails = (e: ExceptionRow) => ({
+      exceptionId: e.id,
+      kind: e.kind,
+      decisionReason: e.decision_reason,
+      decidedByPersonId: e.decided_by_person_id,
+      decidedAt: e.decided_at ? iso(e.decided_at) : null,
+    });
     const accepted = (row: RowRow): ImportExceptionResolution =>
       Object.assign(
         {},
@@ -224,6 +256,34 @@ export class ReconciliationService {
         });
         continue;
       }
+      if (row.outcome === 'skipped') {
+        // A row rejected in review is a difference from the source, never silently dropped
+        // (§5.5); other skips (history, not supported, nothing owed) are reported elsewhere.
+        const rejected = decidedAs(row, 'reject');
+        if (rejected) {
+          const money = stagedAmount({
+            entityType: row.entity_type,
+            payload: row.payload as Record<string, unknown>,
+          });
+          drafts.push({
+            level: 'record_identity',
+            area,
+            entityType: row.entity_type,
+            code: 'rejected_in_review',
+            externalId: row.external_id,
+            ...(money
+              ? {
+                  expected: { amountMinor: money.amountMinor },
+                  actual: { amountMinor: 0 },
+                  currency: money.currency,
+                  differenceMinor: -money.amountMinor,
+                }
+              : {}),
+            details: decisionDetails(rejected),
+          });
+        }
+        continue;
+      }
       if (!row.outcome || !APPLIED.has(row.outcome)) continue;
       const mapping = row.mapping_id ? mappingsById.get(row.mapping_id) : undefined;
       if (!mapping || mapping.status !== 'linked' || !mapping.internal_id) {
@@ -246,6 +306,41 @@ export class ReconciliationService {
           externalId: row.external_id,
           internalId: mapping.internal_id,
         });
+      }
+    }
+
+    // Level 2 (continued) — creations no mapping links: an apply that lost its lock may have
+    // created a record the apply that took over did not link (support-migration-05).
+    const batchMappings = await this.contexts.mappingsFor(
+      organizationId,
+      batch.source_system,
+      rows
+        .filter((r) => (AUDITED_CREATIONS as readonly string[]).includes(r.entity_type))
+        .map((r) => ({ entityType: r.entity_type, externalId: r.external_id })),
+    );
+    for (const entityType of AUDITED_CREATIONS) {
+      const mappings = [...batchMappings.values()].filter((m) => m.entity_type === entityType);
+      const byCorrelation = new Map(mappings.map((m) => [applyCorrelationId(m.id), m]));
+      const ids = [...byCorrelation.keys()];
+      for (let i = 0; i < ids.length; i += 500) {
+        const creations = await this.targets.creationsFor(
+          organizationId,
+          entityType,
+          ids.slice(i, i + 500),
+        );
+        for (const creation of creations) {
+          const mapping = byCorrelation.get(creation.correlationId) as MappingRow;
+          if (mapping.status === 'linked' && mapping.internal_id === creation.targetId) continue;
+          drafts.push({
+            level: 'record_identity',
+            area: CATEGORY_RULES[entityType].area,
+            entityType,
+            code: 'unlinked_creation',
+            externalId: mapping.external_id,
+            internalId: creation.targetId,
+            details: { mappingId: mapping.id, linkedInternalId: mapping.internal_id },
+          });
+        }
       }
     }
 
@@ -312,6 +407,34 @@ export class ReconciliationService {
 
     // Level 4 — operational outcomes.
     const notApplied = new Map<ImportEntityTypeValue, string[]>();
+    // What finance holds for this batch's applied opening balances, per (category, currency).
+    const loaded = new Map<string, number>();
+    const addLoaded = (entityType: ImportEntityTypeValue, currency: string, amount: number) => {
+      const k = `${entityType}|${currency}`;
+      loaded.set(k, (loaded.get(k) ?? 0) + amount);
+    };
+    const revalued = (row: RowRow, internalId: string, source: number, currency: string): void => {
+      const decision = (exceptionsByRow.get(row.id) ?? []).find(
+        (e) =>
+          e.decision === 'accept' &&
+          (e.resolution as ImportExceptionResolution | null)?.amountMinor !== undefined,
+      );
+      const approved = accepted(row).amountMinor;
+      if (approved === undefined || approved === source) return;
+      drafts.push({
+        level: 'operational_outcomes',
+        area: 'finance',
+        entityType: row.entity_type,
+        code: 'revalued_in_review',
+        externalId: row.external_id,
+        internalId,
+        expected: { amountMinor: source },
+        actual: { amountMinor: approved },
+        currency,
+        differenceMinor: approved - source,
+        details: decision ? decisionDetails(decision) : {},
+      });
+    };
     for (const row of rows) {
       const rule = CATEGORY_RULES[row.entity_type];
       const mapping = row.mapping_id ? mappingsById.get(row.mapping_id) : undefined;
@@ -330,6 +453,8 @@ export class ReconciliationService {
           amountMinor: obligation.totals.amountMinor,
           currency: obligation.totals.currency,
         });
+        revalued(row, mapping.internal_id, staged.data.amountMinor, staged.data.currency);
+        addLoaded(row.entity_type, obligation.totals.currency, obligation.totals.amountMinor);
         if (obligation.status === 'canceled') {
           drafts.push({
             level: 'operational_outcomes',
@@ -355,6 +480,8 @@ export class ReconciliationService {
           amountMinor: credit.originalMinor,
           currency: credit.currency,
         });
+        revalued(row, mapping.internal_id, staged.data.amountMinor, staged.data.currency);
+        addLoaded(row.entity_type, credit.currency, credit.originalMinor);
       } else if (rule.class === 'not_supported') {
         checked.operational_outcomes += 1;
         const active = (row.payload as { active?: unknown }).active;
@@ -380,6 +507,26 @@ export class ReconciliationService {
           externalIds: externalIds.slice(0, 50),
           reason: CATEGORY_RULES[entityType].skip?.code,
         },
+      });
+    }
+
+    // Level 1 (continued) — declared opening-balance totals against what finance holds after the
+    // apply, per category and currency, never netted (§5.5 "verify control totals and
+    // operational outcomes"; support-migration-07).
+    for (const line of ControlTotalsSchema.parse(batch.control_totals).amounts) {
+      if (!LOADED_MONEY.has(line.entityType)) continue;
+      checked.control_totals += 1;
+      const held = loaded.get(`${line.entityType}|${line.currency}`) ?? 0;
+      if (held === line.totalMinor) continue;
+      drafts.push({
+        level: 'control_totals',
+        area: CATEGORY_RULES[line.entityType].area,
+        entityType: line.entityType,
+        code: 'loaded_total_mismatch',
+        expected: { amountMinor: line.totalMinor },
+        actual: { amountMinor: held },
+        currency: line.currency,
+        differenceMinor: held - line.totalMinor,
       });
     }
 

@@ -343,7 +343,7 @@ export class ImportApplyService {
       const actorPersonId = this.personId(ctx, values.actorExternalId);
       const subjectPersonId = this.personId(ctx, values.subjectExternalId);
       return this.uow.run(async ({ trx }) => {
-        const mapping = await this.reserveMapping(trx, batch, row);
+        const mapping = await this.reserveMapping(trx, batch, operationId, row);
         const tctx = this.targetContext(batch, mapping, row);
         const [actor, subject] = await Promise.all([
           this.targets.findPerson(batch.organization_id, actorPersonId, trx),
@@ -384,7 +384,11 @@ export class ImportApplyService {
       });
     }
 
-    const mapping = await this.uow.run(({ trx }) => this.reserveMapping(trx, batch, row));
+    // The reservation is fenced: an apply that lost its lock to another apply stops here, before
+    // it creates anything new (support-migration-05).
+    const mapping = await this.uow.run(({ trx }) =>
+      this.reserveMapping(trx, batch, operationId, row),
+    );
     const tctx = this.targetContext(batch, mapping, row);
     let internalId: string | null =
       mapping.status === 'linked'
@@ -417,11 +421,67 @@ export class ImportApplyService {
         ]
       : plan.reasons;
     const created = internalId;
-    await this.uow.run(async ({ trx }) => {
-      const linked = await this.linkMapping(trx, mapping, batch, row, created);
-      await this.record(trx, batch, operationId, row, 'created', reasons, linked.id);
-    });
+    try {
+      await this.uow.run(async ({ trx }) => {
+        await this.renewLease(trx, batch, operationId);
+        const linked = await this.linkMapping(trx, mapping, batch, row, created);
+        await this.record(trx, batch, operationId, row, 'created', reasons, linked.id);
+      });
+    } catch (error) {
+      // This apply created the record but cannot link it (it lost its lock, or another apply
+      // linked the mapping meanwhile): the record has no mapping. A database key refuses that for
+      // credits and obligations; for the rest an owned exception names it, so it is never silent
+      // (support-migration-05, §4.7 invariant 5, §5.11).
+      if (!recovered && lostToAnotherApply(error)) {
+        await this.reportOrphan(batch, mapping, row, created, error);
+      }
+      throw error;
+    }
     return { outcome: 'created', internalId: created };
+  }
+
+  private async reportOrphan(
+    batch: BatchRow,
+    mapping: MappingRow,
+    row: RowRow,
+    internalId: string,
+    error: unknown,
+  ): Promise<void> {
+    try {
+      await this.uow.run(async ({ trx }) => {
+        const current = await trx
+          .selectFrom('external_mappings')
+          .selectAll()
+          .where('organization_id', '=', batch.organization_id)
+          .where('id', '=', mapping.id)
+          .executeTakeFirst();
+        // The apply that took over found this creation (recover) and linked it: not an orphan.
+        if (current?.status === 'linked' && current.internal_id === internalId) return;
+        await this.operationalExceptions.raise(trx, {
+          organizationId: batch.organization_id,
+          category: 'migration.orphaned_creation',
+          severity: 'high',
+          title: `An import apply created a ${row.entity_type} it could not link to its mapping`,
+          affectedType: row.entity_type,
+          affectedId: internalId,
+          ownerQueue: 'migration',
+          dedupeKey: `migration.orphaned_creation:${mapping.id}:${internalId}`,
+          details: {
+            batchId: batch.id,
+            mappingId: mapping.id,
+            entityType: row.entity_type,
+            externalId: row.external_id,
+            internalId,
+            cause: DomainError.is(error) ? error.code : 'INTERNAL_ERROR',
+          },
+        });
+      });
+    } catch (raiseError) {
+      // Reconciliation still reports the creation no mapping links (record identity level).
+      this.logger.error(
+        `could not report the unlinked ${row.entity_type} ${internalId} of mapping ${mapping.id}: ${String(raiseError)}`,
+      );
+    }
   }
 
   private async createRecord(
@@ -448,6 +508,7 @@ export class ImportApplyService {
         });
       case 'credit':
         return this.targets.issueOpeningCredit(tctx, {
+          mappingId: mapping.id,
           ownerPersonId: this.personId(ctx, values.ownerExternalId),
           amountMinor: values.amountMinor,
           currency: values.currency,
@@ -534,7 +595,13 @@ export class ImportApplyService {
   // Mappings and row outcomes
   // -------------------------------------------------------------------------------------------
 
-  private async reserveMapping(trx: Trx, batch: BatchRow, row: RowRow): Promise<MappingRow> {
+  private async reserveMapping(
+    trx: Trx,
+    batch: BatchRow,
+    operationId: string,
+    row: RowRow,
+  ): Promise<MappingRow> {
+    await this.renewLease(trx, batch, operationId);
     const entityType = row.entity_type as MappedEntityType;
     const find = () =>
       trx
@@ -597,7 +664,7 @@ export class ImportApplyService {
       await this.touchMapping(trx, mapping, batch, row.payload_hash);
       return mapping;
     }
-    await trx
+    const updated = await trx
       .updateTable('external_mappings')
       .set({
         status: 'linked',
@@ -609,7 +676,17 @@ export class ImportApplyService {
       })
       .where('id', '=', mapping.id)
       .where('revision', '=', mapping.revision)
-      .execute();
+      .executeTakeFirst();
+    if (Number(updated.numUpdatedRows) === 0) {
+      // Another apply changed the mapping since this one reserved it (support-migration-05).
+      throw errors.resourceConflict(
+        'The mapping changed while this apply was creating its record.',
+        {
+          code: 'MAPPING_CHANGED',
+          mappingId: mapping.id,
+        },
+      );
+    }
     return (await trx
       .selectFrom('external_mappings')
       .selectAll()
@@ -629,16 +706,11 @@ export class ImportApplyService {
       .execute();
   }
 
-  /** Records a row's final outcome and renews the apply lease (refused if the lock was lost). */
-  private async record(
-    trx: Trx,
-    batch: BatchRow,
-    operationId: string,
-    row: RowRow,
-    outcome: ImportRowOutcomeValue,
-    reasons: ImportReason[],
-    mappingId: string | null,
-  ): Promise<void> {
+  /**
+   * Renews the apply lease, refused when another apply has taken the lock over: the fence every
+   * reservation and every row outcome passes (support-migration-05, §4.12).
+   */
+  private async renewLease(trx: Trx, batch: BatchRow, operationId: string): Promise<void> {
     const lease = await trx
       .updateTable('import_batches')
       .set({ apply_lock_until: this.leaseUntil() })
@@ -650,6 +722,19 @@ export class ImportApplyService {
         code: 'APPLY_LOCK_LOST',
       });
     }
+  }
+
+  /** Records a row's final outcome and renews the apply lease (refused if the lock was lost). */
+  private async record(
+    trx: Trx,
+    batch: BatchRow,
+    operationId: string,
+    row: RowRow,
+    outcome: ImportRowOutcomeValue,
+    reasons: ImportReason[],
+    mappingId: string | null,
+  ): Promise<void> {
+    await this.renewLease(trx, batch, operationId);
     const updated = await trx
       .updateTable('import_rows')
       .set({
@@ -766,4 +851,11 @@ export class ImportApplyService {
       return this.batches.view(trx, updated as BatchRow);
     });
   }
+}
+
+/** The apply lost its lock, or its reserved mapping, to another apply (support-migration-05). */
+function lostToAnotherApply(error: unknown): boolean {
+  if (!DomainError.is(error) || error.code !== 'RESOURCE_CONFLICT') return false;
+  const code = (error.details as { code?: unknown } | undefined)?.code;
+  return code === 'APPLY_LOCK_LOST' || code === 'MAPPING_CHANGED';
 }

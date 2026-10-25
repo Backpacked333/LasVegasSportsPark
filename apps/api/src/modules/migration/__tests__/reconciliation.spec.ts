@@ -9,12 +9,14 @@ import {
 } from '../testing/migration-fixtures';
 import {
   customer,
+  exceptionsOf,
   get,
   grantLegacyAuthority,
   importSnapshot,
   migrationTestApp,
   post,
   rowsOf,
+  stageAndValidate,
   staff,
   type Actor,
 } from './support';
@@ -60,6 +62,8 @@ describe('reconciliation (§5.5)', () => {
     ];
     // The source declares obligations of 30,000 and credits of 5,000 USD: +500 and -500, which
     // would cancel out if netted. It also declares one person fewer than it sent and no CAD total.
+    // The same differences hold between the declared totals and what finance holds after the
+    // apply (support-migration-07), and are reported again at that comparison.
     const applied = await importSnapshot(t, operator, rows, {
       controlTotals: {
         counts: { person: 1, open_obligation: 2, credit: 2 },
@@ -89,8 +93,10 @@ describe('reconciliation (§5.5)', () => {
     ).toEqual(
       [
         ['credit', 'amount_mismatch', 'USD', -500, null],
+        ['credit', 'loaded_total_mismatch', 'USD', -500, null],
         ['credit', 'undeclared_total', 'CAD', 1_000, null],
         ['open_obligation', 'amount_mismatch', 'USD', 500, null],
+        ['open_obligation', 'loaded_total_mismatch', 'USD', 500, null],
         ['person', 'count_mismatch', null, null, 1],
       ].sort(),
     );
@@ -98,7 +104,7 @@ describe('reconciliation (§5.5)', () => {
       report.levels.find((l: { level: string }) => l.level === 'control_totals'),
     ).toMatchObject({
       status: 'discrepancy',
-      discrepancyCount: 4,
+      discrepancyCount: 6,
     });
     // The applied records themselves reconcile: identities exist, balances hold staged amounts.
     for (const level of ['record_identity', 'relationships', 'operational_outcomes']) {
@@ -145,10 +151,10 @@ describe('reconciliation (§5.5)', () => {
     expect(approvedFinance.body.approvals[0]).toMatchObject({
       area: 'finance',
       approverRole: 'finance_operator',
-      acknowledgedDiscrepancies: 3,
+      acknowledgedDiscrepancies: 5,
     });
     // The accepted discrepancies stay listed (never netted away).
-    expect(approvedFinance.body.discrepancyCount).toBe(4);
+    expect(approvedFinance.body.discrepancyCount).toBe(6);
     const twice = await post(
       t,
       `/v1/import-reconciliation-reports/${report.id}/approvals`,
@@ -183,6 +189,115 @@ describe('reconciliation (§5.5)', () => {
       },
     );
     expect(late.status).toBe(409);
+  });
+
+  it('§5.5 (support-migration-07): opening balances rejected or re-valued in review are reported against the source amounts; finance must approve them with a reason', async () => {
+    const rows = [
+      stagedPerson('RV-1'),
+      stagedPerson('RV-2'),
+      // Its components disagree (10,000 - 6,000 is not 3,000): finance re-values it in review.
+      stagedObligation('RV-OB-1', {
+        debtorExternalId: 'RV-1',
+        amountMinor: 3_000,
+        originalAmountMinor: 10_000,
+        paidMinor: 6_000,
+      }),
+      stagedObligation('RV-OB-2', { debtorExternalId: 'RV-1', amountMinor: 9_000, disputed: true }),
+      stagedCredit('RV-CR-1', { ownerExternalId: 'RV-2', amountMinor: -200 }),
+    ];
+    const validated = await stageAndValidate(t, operator, rows, { sourceSystem: 'recon-review' });
+    const exceptions = new Map(
+      (await exceptionsOf(t, operator, validated.id)).map((e) => [e.externalId, e]),
+    );
+    const decide = (externalId: string, body: object) => {
+      const exception = exceptions.get(externalId);
+      expect(exception, externalId).toBeDefined();
+      return post(t, `/v1/import-exceptions/${exception?.id}/decide`, finance, {
+        expectedRevision: exception?.revision,
+        ...body,
+      });
+    };
+    expect(
+      (
+        await decide('RV-OB-1', {
+          decision: 'accept',
+          resolution: { amountMinor: 500 },
+          reason: 'Only 500 is still owed per the ledger',
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await decide('RV-OB-2', { decision: 'reject', reason: 'Disputed; written off' })).status,
+    ).toBe(200);
+    expect(
+      (await decide('RV-CR-1', { decision: 'reject', reason: 'A negative credit is a debt' }))
+        .status,
+    ).toBe(200);
+    const batch = await get(t, `/v1/import-batches/${validated.id}`, operator);
+    const reviewed = await post(t, `/v1/import-batches/${validated.id}/review`, operator, {
+      expectedRevision: batch.body.revision,
+    });
+    expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+    const applied = await post(t, `/v1/import-batches/${validated.id}/apply`, operator, {});
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    const generated = await post(
+      t,
+      `/v1/import-batches/${validated.id}/reconciliation-reports`,
+      operator,
+      {},
+    );
+    expect(generated.status, JSON.stringify(generated.body)).toBe(201);
+    const report = generated.body;
+    expect(report.status).toBe('discrepancy');
+    const money = (report.discrepancies as Discrepancy[])
+      .filter((d) => d.area === 'finance')
+      .map((d) => [d.level, d.entityType, d.code, d.externalId, d.currency, d.differenceMinor])
+      .sort();
+    expect(money).toEqual(
+      [
+        // Declared 12,000 of obligations and -200 of credits; finance holds 500 and nothing.
+        ['control_totals', 'open_obligation', 'loaded_total_mismatch', null, 'USD', -11_500],
+        ['control_totals', 'credit', 'loaded_total_mismatch', null, 'USD', 200],
+        ['record_identity', 'open_obligation', 'rejected_in_review', 'RV-OB-2', 'USD', -9_000],
+        ['record_identity', 'credit', 'rejected_in_review', 'RV-CR-1', 'USD', 200],
+        ['operational_outcomes', 'open_obligation', 'revalued_in_review', 'RV-OB-1', 'USD', -2_500],
+      ].sort(),
+    );
+    const revalued = (report.discrepancies as Discrepancy[]).find(
+      (d) => d.code === 'revalued_in_review',
+    );
+    expect(revalued).toMatchObject({
+      expected: { amountMinor: 3_000 },
+      actual: { amountMinor: 500 },
+    });
+    for (const level of ['control_totals', 'record_identity', 'operational_outcomes']) {
+      expect(report.levels.find((l: { level: string }) => l.level === level)).toMatchObject({
+        status: 'discrepancy',
+      });
+    }
+    // Finance approves those differences explicitly: never without a reason.
+    const noReason = await post(
+      t,
+      `/v1/import-reconciliation-reports/${report.id}/approvals`,
+      finance,
+      { area: 'finance', decision: 'approved' },
+    );
+    expect(noReason.status).toBe(400);
+    const approved = await post(
+      t,
+      `/v1/import-reconciliation-reports/${report.id}/approvals`,
+      finance,
+      {
+        area: 'finance',
+        decision: 'approved',
+        reason: 'Write-offs and the re-valued balance were agreed with the club treasurer.',
+      },
+    );
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body.approvals[0]).toMatchObject({
+      area: 'finance',
+      acknowledgedDiscrepancies: 5,
+    });
   });
 
   it('§5.5: a balanced import reconciles at all four levels; regenerating supersedes the pending report', async () => {

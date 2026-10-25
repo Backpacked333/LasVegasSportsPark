@@ -1,14 +1,16 @@
 import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createProgramFixture } from '../../catalog';
 import { PeopleService } from '../../identity';
 import { applyCorrelationId, importPrincipal } from '../migration.shared';
-import { stagedPerson } from '../testing/migration-fixtures';
+import { ImportTargets } from '../services/import-targets';
+import { stagedCredit, stagedPerson } from '../testing/migration-fixtures';
 import {
   countRows,
   exceptionsOf,
+  expectPgError,
   get,
   grantLegacyAuthority,
   migrationTestApp,
@@ -206,5 +208,145 @@ describe('apply recovery and the per-source apply lock (§4.7 invariants 5 and 1
       .where('id', '=', exceptions[0]?.id as string)
       .executeTakeFirstOrThrow();
     expect(raw.phase).toBe('apply');
+  });
+
+  /**
+   * Holds the first apply inside `method` (before the owning module opens its transaction), lets
+   * the lease run out, applies again, then releases the first apply.
+   */
+  async function takeOverWhileCreating(
+    method: 'issueOpeningCredit' | 'createPerson',
+    rows: Parameters<typeof stageAndValidate>[2],
+    sourceSystem: string,
+  ) {
+    const batch = await reviewed(rows, sourceSystem);
+    const targets = t.app.get(ImportTargets);
+    const original = (targets[method] as (...args: unknown[]) => Promise<string>).bind(targets);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    const spy = vi
+      .spyOn(targets, method as 'issueOpeningCredit')
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        entered();
+        await gate;
+        return original(...args);
+      });
+    const firstApply = post(t, `/v1/import-batches/${batch.id}/apply`, operator, {}).then(
+      (res) => res,
+    );
+    await inside;
+    // While the first apply's lease is valid, nobody else applies.
+    const early = await post(t, `/v1/import-batches/${batch.id}/apply`, operator, {});
+    expect(early.status).toBe(409);
+    expect(early.body.details).toMatchObject({ code: 'APPLY_IN_PROGRESS' });
+    // The first apply stalls past its lease; a second apply takes the batch over and finishes.
+    t.clock.advance(16 * 60_000);
+    const second = await post(t, `/v1/import-batches/${batch.id}/apply`, operator, {});
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(second.body.status).toBe('applied');
+    release();
+    const first = await firstApply;
+    spy.mockRestore();
+    return { batch, first, second, rows: await rowsOf(t, operator, batch.id) };
+  }
+
+  it('SPK-AT-024 / §4.7 invariants 5 and 7 (support-migration-05): an apply that lost its lock while creating never issues an opening credit twice', async () => {
+    const { first, rows } = await takeOverWhileCreating(
+      'issueOpeningCredit',
+      [
+        stagedPerson('TO-1'),
+        stagedCredit('TO-CR', { ownerExternalId: 'TO-1', amountMinor: 2_500 }),
+      ],
+      'takeover-credit',
+    );
+    // The stale apply stops; finance refused its second credit for the same imported balance.
+    expect(first.status).toBe(409);
+    expect(first.body.details).toMatchObject({ code: 'APPLY_LOCK_LOST' });
+    const owner = rows.find((r) => r.externalId === 'TO-1')?.internalId as string;
+    const credits = await t.db
+      .selectFrom('credits')
+      .selectAll()
+      .where('organization_id', '=', t.organizationId)
+      .where('owner_person_id', '=', owner)
+      .execute();
+    expect(credits).toHaveLength(1);
+    const credit = credits[0]!;
+    const mapping = await t.db
+      .selectFrom('external_mappings')
+      .select(['id', 'credit_id', 'status'])
+      .where('source_system', '=', 'takeover-credit')
+      .where('external_id', '=', 'TO-CR')
+      .executeTakeFirstOrThrow();
+    expect(mapping).toMatchObject({ status: 'linked', credit_id: credit.id });
+    expect(credit).toMatchObject({
+      original_minor: 2_500,
+      source_kind: 'adjustment',
+      source_id: mapping.id,
+    });
+    // The database itself refuses a second credit for the same source fact.
+    await expectPgError(
+      t.db
+        .insertInto('credits')
+        .values({
+          ...credit,
+          id: newId(),
+          permitted_uses: json(credit.permitted_uses),
+          issued_by: json(credit.issued_by),
+          approved_by: credit.approved_by === null ? null : json(credit.approved_by),
+        })
+        .execute(),
+      '23505',
+    );
+  });
+
+  it('SPK-AT-024 / §4.7 invariant 5 (support-migration-05): a person the stale apply created anyway is never silent — it is an owned exception and a reconciliation discrepancy', async () => {
+    const { batch, first, rows } = await takeOverWhileCreating(
+      'createPerson',
+      [stagedPerson('TO-P', { givenName: 'Taken', familyName: 'Over' })],
+      'takeover-person',
+    );
+    expect(first.status).toBe(409);
+    expect(first.body.details).toMatchObject({ code: 'APPLY_LOCK_LOST' });
+    const linked = rows.find((r) => r.externalId === 'TO-P')?.internalId as string;
+    const people = await t.db
+      .selectFrom('persons')
+      .select('id')
+      .where('organization_id', '=', t.organizationId)
+      .where('family_name', '=', 'Over')
+      .execute();
+    // Identity has no import key for persons: the stale apply's person exists, unlinked.
+    expect(people).toHaveLength(2);
+    const orphan = people.find((p) => p.id !== linked)?.id as string;
+    const exception = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'owner_queue', 'status', 'details'])
+      .where('organization_id', '=', t.organizationId)
+      .where('affected_id', '=', orphan)
+      .executeTakeFirstOrThrow();
+    expect(exception).toMatchObject({
+      category: 'migration.orphaned_creation',
+      owner_queue: 'migration',
+      status: 'open',
+      details: expect.objectContaining({ entityType: 'person', internalId: orphan }),
+    });
+    const report = await post(
+      t,
+      `/v1/import-batches/${batch.id}/reconciliation-reports`,
+      operator,
+      {},
+    );
+    expect(report.status, JSON.stringify(report.body)).toBe(201);
+    expect(report.body.status).toBe('discrepancy');
+    expect(report.body.discrepancies).toContainEqual(
+      expect.objectContaining({
+        level: 'record_identity',
+        entityType: 'person',
+        code: 'unlinked_creation',
+        externalId: 'TO-P',
+        internalId: orphan,
+      }),
+    );
   });
 });

@@ -61,6 +61,17 @@ export const CaseActionRecorded = defineEvent(
   }),
 );
 
+/**
+ * §4.7 invariant 12, §4.11 "record durable follow-up": enqueued, delayed by the grace period, in
+ * the transaction that records a helper request's intent. If the action is still `requested` when
+ * it is handled, the outcome was lost and the action becomes `unknown` with an owned exception;
+ * otherwise the handler does nothing.
+ */
+export const HelperOutcomeDue = defineEvent(
+  'support.helper_outcome_due',
+  z.object({ caseId: z.uuid(), caseActionId: z.uuid(), supportOperationId: z.uuid() }),
+);
+
 /** SPK-UX-006: an exception changed state through the workflow; the underlying record did not. */
 export const ExceptionTransitioned = defineEvent(
   'support.exception_transitioned',
@@ -84,6 +95,7 @@ export const SupportEvents = {
   caseStatusChanged: CaseStatusChanged,
   caseNoteAdded: CaseNoteAdded,
   caseActionRecorded: CaseActionRecorded,
+  helperOutcomeDue: HelperOutcomeDue,
   exceptionTransitioned: ExceptionTransitioned,
   exceptionQueueChanged: ExceptionQueueChanged,
 } as const;

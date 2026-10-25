@@ -120,6 +120,14 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
   committed before its mapping was linked is found through the owning module's audit record of
   the mapping's correlation id (`migration:<mappingId>`), never created twice
   (`apply-recovery.spec.ts`). A row the owning module refuses becomes an apply-phase exception.
+  Every reservation and every outcome is fenced by the lock: an apply whose lock another apply
+  took over (after the lease ran out while it stalled) stops before it reserves anything new, and
+  a mapping changed under it is refused (`MAPPING_CHANGED`). A creation already in flight cannot
+  be fenced, so the database keys what it can: an opening credit carries its mapping id as its
+  source (finance's `credits_source_idx`, as obligations already do), so a second credit for one
+  imported balance is refused; a person or household the stale apply created anyway raises an
+  owned `migration.orphaned_creation` exception and is reported by reconciliation
+  (`unlinked_creation`) — verified on PGlite and PostgreSQL (support-migration-05).
 - **Authority matrix (§5.6, verified):** assignments per category and scope; a transfer names the
   assignment in effect and its revision, ends it and starts the next one at the same instant;
   never retroactive. Without an assignment SportsPark is authoritative; importing a category needs
@@ -149,11 +157,17 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
   authority itself through finance's `RECORD_AUTHORITY_PORT`, which this module implements
   (`RECORD_AUTHORITY_IMPL`), so support's refund helper and automation's refund proposal are
   refused exactly like `POST /payments/{id}/refunds` (`__tests__/record-authority.spec.ts`).
-- **Reconciliation (§5.5, verified):** four levels — control totals; record identity (every row
-  has an outcome, every mapping reaches an existing record); relationships (imported permissions
-  are effective in identity; households hold their members); operational outcomes (opening
-  balances hold the approved amounts; active records not applied are counted). Each discrepancy is
-  reported on its own, per category and currency, never netted. Approval per area: finance
+- **Reconciliation (§5.5, verified):** four levels — control totals (declared against staged, and
+  declared opening-balance amounts against what finance holds after the apply:
+  `loaded_total_mismatch`); record identity (every row has an outcome, every mapping reaches an
+  existing record; a row rejected in review is `rejected_in_review` with its source amount; a
+  creation no mapping links is `unlinked_creation`); relationships (imported permissions are
+  effective in identity; households hold their members); operational outcomes (opening balances
+  hold the approved amounts; an amount re-valued in review is `revalued_in_review` against the
+  source amount; active records not applied are counted). Review decisions therefore never make
+  the totals appear correct: finance approves those differences with a reason
+  (support-migration-07). Each discrepancy is reported on its own, per category and currency,
+  never netted. Approval per area: finance
   (`finance_operator`, GM), participation (`program_manager`, `league_manager`, GM), schedule
   (`scheduler`, GM), identity (GM, `support_operator` — proposed); accepting discrepancies needs a
   reason and leaves them listed; regenerating supersedes the pending report; an owned operational
@@ -225,6 +239,11 @@ otherwise (finance, SPK-PAY-009). Accepting an expired credit issues it without 
   `migration.import:<batchId>`). Relationships and grants carry source `import`.
 - **Team obligations:** opening balances are imported for person debtors only (team entries are
   not imported).
+- **Import keys for persons and households:** identity has no unique import reference, so a person
+  or household an apply created after losing its lock (a stall longer than the lease) is not
+  refused by the database; it is reported (owned exception, `unlinked_creation`) and identity's
+  duplicate detection flags a duplicate person. A database key would need an identity schema
+  change (proposed follow-up).
 - **Guarded routes:** routes whose scope is only known from the record behind a path id
   (`PATCH /fixtures/{id}`, `/seasons/{id}`, team entries, rosters, results, checkouts,
   obligations, closures, offerings by id, …) cannot prove their scope before the owning module

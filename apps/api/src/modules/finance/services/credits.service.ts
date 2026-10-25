@@ -9,7 +9,7 @@ import {
   type Principal,
   type RedeemCreditInput,
 } from '@sportspark/contracts';
-import { json, type Db } from '@sportspark/db';
+import { isUniqueViolation, json, pgConstraintName, type Db } from '@sportspark/db';
 import {
   AuditWriter,
   AuthorizationService,
@@ -101,11 +101,19 @@ export class CreditsService {
     return { items, nextCursor: null };
   }
 
-  /** POST /credits: a goodwill or adjustment credit (finance staff, reason required, audited). */
+  /**
+   * POST /credits: a goodwill or adjustment credit (finance staff, reason required, audited).
+   *
+   * `options.sourceId` (in-process callers only, never the HTTP body) names the source fact the
+   * credit is issued for — for example the migration mapping of an imported opening balance — so
+   * the database refuses a second credit for the same fact (`credits_source_idx`, §4.7 invariants
+   * 5 and 7): RESOURCE_CONFLICT `CREDIT_ALREADY_ISSUED_FOR_SOURCE`.
+   */
   async issue(
     principal: Principal,
     input: IssueCreditInput,
     correlationId: string | null,
+    options: { sourceId?: string } = {},
   ): Promise<Credit> {
     const organizationId = organizationOf(principal);
     await this.authorization.require(principal, FinanceActions.issueCredit, {
@@ -116,6 +124,27 @@ export class CreditsService {
     if (input.expiresAt && new Date(input.expiresAt) <= now) {
       throw errors.validation('A credit cannot expire in the past.');
     }
+    try {
+      return await this.issueInUnitOfWork(principal, organizationId, input, correlationId, options);
+    } catch (error) {
+      if (isUniqueViolation(error) && pgConstraintName(error) === 'credits_source_idx') {
+        throw errors.resourceConflict('A credit was already issued for this source.', {
+          code: 'CREDIT_ALREADY_ISSUED_FOR_SOURCE',
+          sourceKind: input.sourceKind,
+          sourceId: options.sourceId ?? null,
+        });
+      }
+      throw error;
+    }
+  }
+
+  private issueInUnitOfWork(
+    principal: Principal,
+    organizationId: string,
+    input: IssueCreditInput,
+    correlationId: string | null,
+    options: { sourceId?: string },
+  ): Promise<Credit> {
     return this.uow.run(async ({ trx }) => {
       // §4.2: identity's person directory, never its tables. SPK-IAM-007: a merged record no
       // longer owns money (the survivor's credit list and checkout would never see the credit), so
@@ -139,7 +168,7 @@ export class CreditsService {
         amountMinor: input.amountMinor,
         permittedUses: input.permittedUses,
         sourceKind: input.sourceKind,
-        sourceId: null,
+        sourceId: options.sourceId ?? null,
         status: 'active',
         expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
         reason: input.reason,

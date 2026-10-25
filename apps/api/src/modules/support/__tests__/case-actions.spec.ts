@@ -1,10 +1,13 @@
-import { errors } from '@sportspark/contracts';
+import { CORRELATION_ID_HEADER, errors, newId } from '@sportspark/contracts';
+import { sql, type SqlBool } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing';
 import { createCapturedPaymentFixture, RefundsService } from '../../finance';
 import { createOrganizationPeople, type OrganizationPeople } from '../../identity';
 import { MigrationModule, createAuthorityAssignmentFixture } from '../../migration';
+import { CaseActionsService } from '../services/case-actions.service';
 import { SupportModule } from '../support.module';
+import { DEFAULT_SUPPORT_POLICY } from '../support.policy';
 import {
   CLOCK_START,
   drainOutbox,
@@ -408,6 +411,298 @@ describe('case actions (SPK-SUPPORT-003)', () => {
     });
   });
 
+  /** A refund helper whose refund finance executed, but whose answer was lost: `unknown`. */
+  const executedButLost = async (amountMinor: number) => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 5000,
+    });
+    const caseId = await openCase(manager);
+    const refunds = t.app.get(RefundsService);
+    const original = refunds.request.bind(refunds);
+    const spy = vi.spyOn(refunds, 'request').mockImplementationOnce(async (...args) => {
+      await original(...args);
+      throw new Error('socket hang up after finance committed');
+    });
+    const first = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor,
+      reason: 'Parking fee refund',
+    });
+    expect(first.status).toBe(500);
+    spy.mockRestore();
+    const action = (await get(t, `/v1/cases/${caseId}`, manager)).body.actions[0];
+    expect(action.status).toBe('unknown');
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'operation_id', 'status'])
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    expect(refund.status).toBe('succeeded');
+    const exception = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['id', 'status', 'owner_queue'])
+      .where('affected_id', '=', action.id)
+      .executeTakeFirstOrThrow();
+    expect(exception).toMatchObject({ status: 'open', owner_queue: 'finance_operator' });
+    return { payment, caseId, action, refund, exceptionId: exception.id };
+  };
+
+  const stateOf = async (
+    caseActionId: string,
+    supportOperationId: string,
+    exceptionId: string,
+  ) => ({
+    action: (
+      await t.db
+        .selectFrom('case_actions')
+        .select('status')
+        .where('id', '=', caseActionId)
+        .executeTakeFirstOrThrow()
+    ).status,
+    operation: (
+      await t.db
+        .selectFrom('operations')
+        .select('status')
+        .where('id', '=', supportOperationId)
+        .executeTakeFirstOrThrow()
+    ).status,
+    exception: (
+      await t.db
+        .selectFrom('operational_exceptions')
+        .select('status')
+        .where('id', '=', exceptionId)
+        .executeTakeFirstOrThrow()
+    ).status,
+  });
+
+  it('support-migration-04 / §4.14: a front-desk case worker cannot settle a helper refund outcome; the finance-owned exception stays open', async () => {
+    const { caseId, action, exceptionId } = await executedButLost(400);
+    const desk = await staffMember(t, ['front_desk']);
+    // The front desk works cases (support.link_action) but does not manage exceptions.
+    const settled = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, desk, {
+      outcome: 'failed',
+      reason: 'Customer says nothing arrived',
+    });
+    expect(settled.status).toBe(403);
+    expect(settled.body.code).toBe('ACCESS_DENIED');
+    expect(await stateOf(action.id, action.supportOperationId, exceptionId)).toEqual({
+      action: 'unknown',
+      operation: 'recovery_required',
+      exception: 'open',
+    });
+  });
+
+  it('SPK-SUPPORT-003 / §4.7 invariant 5 (support-migration-04): a refund finance executed cannot be settled failed; settling it succeeded resolves the exception as the reviewer', async () => {
+    const { caseId, action, refund, exceptionId } = await executedButLost(600);
+    const failed = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, manager, {
+      outcome: 'failed',
+      reason: 'Assumed nothing happened',
+    });
+    expect(failed.status).toBe(409);
+    expect(failed.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: {
+        code: 'REFUND_RECORDED_BY_FINANCE',
+        refundId: refund.id,
+        operationId: refund.operation_id,
+        status: 'succeeded',
+      },
+    });
+    expect(await stateOf(action.id, action.supportOperationId, exceptionId)).toEqual({
+      action: 'unknown',
+      operation: 'recovery_required',
+      exception: 'open',
+    });
+    // A new request (new key) would refund the customer again; the case still shows the question.
+    const settled = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, manager, {
+      outcome: 'succeeded',
+      operationId: refund.operation_id,
+      reason: 'Finance shows the refund settled',
+    });
+    expect(settled.status, JSON.stringify(settled.body)).toBe(200);
+    expect(await stateOf(action.id, action.supportOperationId, exceptionId)).toEqual({
+      action: 'succeeded',
+      operation: 'succeeded',
+      exception: 'resolved',
+    });
+    // The resolution is the reviewer's act, authorized and audited as them, not as the system.
+    const resolution = await t.db
+      .selectFrom('audit_records')
+      .select('actor')
+      .where('target_type', '=', 'operational_exception')
+      .where('target_id', '=', exceptionId)
+      .where('action', '=', 'exceptions.resolved')
+      .executeTakeFirstOrThrow();
+    expect(resolution.actor).toMatchObject({ kind: 'staff', accountId: manager.accountId });
+  });
+
+  it('SPK-SUPPORT-003 (support-migration-08): an unknown refund is settled succeeded only by the refund this request ran, never by another refund of the operator', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 3000,
+    });
+    // An earlier, smaller refund of the same payment by the same operator, outside the case.
+    const direct = await post(t, `/v1/payments/${payment.paymentAttemptId}/refunds`, manager, {
+      amountMinor: 300,
+      reason: 'Goodwill refund at the desk',
+    });
+    expect(direct.status, JSON.stringify(direct.body)).toBe(201);
+    const earlier = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'operation_id'])
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    // A refund of another household's payment by the same operator.
+    const stranger = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.staff.personId,
+      amountMinor: 2000,
+    });
+    const strangerRefund = await post(
+      t,
+      `/v1/payments/${stranger.paymentAttemptId}/refunds`,
+      manager,
+      {
+        amountMinor: 700,
+        reason: 'Unrelated refund',
+      },
+    );
+    expect(strangerRefund.status, JSON.stringify(strangerRefund.body)).toBe(201);
+    const strangerAudit = await t.db
+      .selectFrom('audit_records')
+      .select('id')
+      .where('action', '=', 'finance.refund')
+      .where(sql<SqlBool>`details->>'paymentAttemptId' = ${stranger.paymentAttemptId}`)
+      .executeTakeFirstOrThrow();
+    // The case's own request for 700 is refused before finance is reached, and its outcome lost.
+    const caseId = await openCase(manager);
+    const refunds = t.app.get(RefundsService);
+    const spy = vi
+      .spyOn(refunds, 'request')
+      .mockRejectedValueOnce(new Error('connection reset before the request was sent'));
+    const first = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 700,
+      reason: 'Parking fee refund',
+    });
+    expect(first.status).toBe(500);
+    spy.mockRestore();
+    const action = (await get(t, `/v1/cases/${caseId}`, manager)).body.actions[0];
+    expect(action.status).toBe('unknown');
+    const exception = await t.db
+      .selectFrom('operational_exceptions')
+      .select('id')
+      .where('affected_id', '=', action.id)
+      .executeTakeFirstOrThrow();
+    const byEarlier = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, operator, {
+      outcome: 'succeeded',
+      operationId: earlier.operation_id,
+      reason: 'Finance shows a refund',
+    });
+    expect(byEarlier.status).toBe(400);
+    expect(byEarlier.body.details).toMatchObject({ code: 'EVIDENCE_NOT_OF_THIS_REQUEST' });
+    const byStranger = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, operator, {
+      outcome: 'succeeded',
+      auditRecordId: strangerAudit.id,
+      reason: 'Finance shows a refund',
+    });
+    expect(byStranger.status).toBe(400);
+    expect(byStranger.body.details).toMatchObject({ code: 'EVIDENCE_NOT_OF_THIS_REQUEST' });
+    expect(await stateOf(action.id, action.supportOperationId, exception.id)).toEqual({
+      action: 'unknown',
+      operation: 'recovery_required',
+      exception: 'open',
+    });
+    // Finance never reached this request, so "no effect" is the truthful outcome.
+    const failed = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, operator, {
+      outcome: 'failed',
+      reason: 'Finance holds no refund for this request',
+    });
+    expect(failed.status, JSON.stringify(failed.body)).toBe(200);
+  });
+
+  it('SPK-SUPPORT-003 (support-migration-08): one refund settles one request — it cannot be linked to another case, nor settle a second request that reused its correlation id', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 5000,
+    });
+    const caseA = await openCase(manager);
+    const caseB = await openCase(manager);
+    const correlation = `corr-${newId()}`;
+    const body = {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 800,
+      reason: 'Parking fee refund',
+    };
+    const requestFrom = (caseId: string) =>
+      t.http
+        .post(`/v1/cases/${caseId}/request-refund`)
+        .set(manager.header)
+        .set('Idempotency-Key', key())
+        .set(CORRELATION_ID_HEADER, correlation)
+        .send(body);
+    const refunds = t.app.get(RefundsService);
+    const original = refunds.request.bind(refunds);
+    // A: finance executes the refund, and the answer is lost.
+    const spyA = vi.spyOn(refunds, 'request').mockImplementationOnce(async (...args) => {
+      await original(...args);
+      throw new Error('socket hang up after finance committed');
+    });
+    expect((await requestFrom(caseA)).status).toBe(500);
+    spyA.mockRestore();
+    // B: the same payment, amount and (client-supplied) correlation id; finance is never reached.
+    const spyB = vi
+      .spyOn(refunds, 'request')
+      .mockRejectedValueOnce(new Error('connection reset before the request was sent'));
+    expect((await requestFrom(caseB)).status).toBe(500);
+    spyB.mockRestore();
+    const actionA = (await get(t, `/v1/cases/${caseA}`, manager)).body.actions[0];
+    const actionB = (await get(t, `/v1/cases/${caseB}`, manager)).body.actions[0];
+    expect([actionA.status, actionB.status]).toEqual(['unknown', 'unknown']);
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'operation_id'])
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    // The refund is a helper request's outcome: it is not linked as another case's action.
+    const linked = await post(t, `/v1/cases/${caseB}/actions`, manager, {
+      actionId: 'finance.refund',
+      operationId: refund.operation_id,
+    });
+    expect(linked.status).toBe(409);
+    expect(linked.body).toMatchObject({
+      nextAction: 'settle_case_action',
+      details: { code: 'HELPER_REQUEST_OUTSTANDING' },
+    });
+    const settledA = await post(t, `/v1/cases/${caseA}/actions/${actionA.id}/settle`, manager, {
+      outcome: 'succeeded',
+      operationId: refund.operation_id,
+      reason: 'Finance shows the refund settled',
+    });
+    expect(settledA.status, JSON.stringify(settledA.body)).toBe(200);
+    // The same refund does not also settle B's request.
+    const reused = await post(t, `/v1/cases/${caseB}/actions/${actionB.id}/settle`, manager, {
+      outcome: 'succeeded',
+      operationId: refund.operation_id,
+      reason: 'Finance shows the refund settled',
+    });
+    expect(reused.status).toBe(409);
+    expect(reused.body.details).toMatchObject({
+      code: 'EVIDENCE_ALREADY_LINKED',
+      caseActionId: actionA.id,
+    });
+    const exceptionB = await t.db
+      .selectFrom('operational_exceptions')
+      .select('id')
+      .where('affected_id', '=', actionB.id)
+      .executeTakeFirstOrThrow();
+    expect(await stateOf(actionB.id, actionB.supportOperationId, exceptionB.id)).toEqual({
+      action: 'unknown',
+      operation: 'recovery_required',
+      exception: 'open',
+    });
+  });
+
   it('a refusal raised after finance already reserved the refund is recorded unknown, never failed', async () => {
     const payment = await createCapturedPaymentFixture(t, {
       payerPersonId: people.adult.personId,
@@ -662,5 +957,187 @@ describe('case actions under legacy refund authority (§4.7 invariant 11, §5.6)
       .where('id', '=', detail.body.actions[0].supportOperationId)
       .executeTakeFirstOrThrow();
     expect(op.status).toBe('failed');
+  });
+});
+
+/**
+ * §4.7 invariant 12, §4.11 (support-migration-06): a helper request's follow-up is durable — it is
+ * committed with the intent, so an outcome that is never recorded still becomes `unknown` with an
+ * owned exception and can be settled.
+ */
+describe('helper outcomes that are never recorded (§4.7 invariant 12)', () => {
+  let t: TestApp;
+  let manager: Actor;
+  let people: OrganizationPeople;
+  const GRACE_MS = DEFAULT_SUPPORT_POLICY.helperOutcomeGraceMinutes * 60_000;
+
+  beforeAll(async () => {
+    t = await supportTestApp();
+    manager = await staffMember(t, ['general_manager']);
+    people = await createOrganizationPeople(t);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  const openCase = async () => {
+    const res = await post(t, '/v1/cases', manager, {
+      category: 'payment',
+      title: 'Duplicate charge',
+      subjectPersonId: people.adult.personId,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return res.body.id as string;
+  };
+
+  const helperState = async (caseActionId: string) => {
+    const action = await t.db
+      .selectFrom('case_actions')
+      .select(['status', 'error', 'support_operation_id'])
+      .where('id', '=', caseActionId)
+      .executeTakeFirstOrThrow();
+    const operation = await t.db
+      .selectFrom('operations')
+      .select('status')
+      .where('id', '=', action.support_operation_id as string)
+      .executeTakeFirstOrThrow();
+    const exceptions = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'owner_queue', 'status'])
+      .where('affected_id', '=', caseActionId)
+      .execute();
+    return { action: action.status, error: action.error, operation: operation.status, exceptions };
+  };
+
+  it('§4.7 invariant 12 / SPK-SUPPORT-003: a refund whose outcome could not be recorded becomes unknown after the grace period with a finance-owned exception, and is settled with its refund', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 3000,
+    });
+    const caseId = await openCase();
+    const actions = t.app.get(CaseActionsService);
+    // Finance refunds; recording the outcome then fails (the process dies before it commits).
+    const spy = vi
+      .spyOn(actions as unknown as { complete: () => Promise<unknown> }, 'complete')
+      .mockRejectedValueOnce(new Error('connection lost while recording the outcome'));
+    const idem = key();
+    const body = {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 1000,
+      reason: 'Charged twice',
+    };
+    const first = await post(t, `/v1/cases/${caseId}/request-refund`, manager, body, idem);
+    expect(first.status).toBe(500);
+    spy.mockRestore();
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'operation_id', 'status'])
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    expect(refund.status).toBe('succeeded');
+    const action = (await get(t, `/v1/cases/${caseId}`, manager)).body.actions[0];
+    expect(await helperState(action.id)).toMatchObject({
+      action: 'requested',
+      operation: 'running',
+      exceptions: [],
+    });
+    // A same-key retry still never requests a second refund.
+    await t.db.deleteFrom('idempotency_keys').where('idempotency_key', '=', idem).execute();
+    const retry = await post(t, `/v1/cases/${caseId}/request-refund`, manager, body, idem);
+    expect(retry.status).toBe(409);
+    expect(retry.body.code).toBe('REFUND_PENDING');
+    // Within the grace period the request may still be answered: nothing changes.
+    await drainOutbox(t);
+    expect((await helperState(action.id)).action).toBe('requested');
+    t.clock.advance(GRACE_MS + 1000);
+    await drainOutbox(t);
+    expect(await helperState(action.id)).toEqual({
+      action: 'unknown',
+      error: expect.objectContaining({ code: 'OUTCOME_NOT_RECORDED' }),
+      operation: 'recovery_required',
+      exceptions: [
+        {
+          category: 'support.helper_outcome_unknown',
+          owner_queue: 'finance_operator',
+          status: 'open',
+        },
+      ],
+    });
+    // Replaying the follow-up changes nothing.
+    const due = await t.db
+      .selectFrom('outbox_events')
+      .select('id')
+      .where('event_type', '=', 'support.helper_outcome_due')
+      .where(sql<SqlBool>`payload->>'caseActionId' = ${action.id}`)
+      .executeTakeFirstOrThrow();
+    await t.db
+      .updateTable('outbox_events')
+      .set({ dispatched_at: null, available_at: t.clock.now() })
+      .where('id', '=', due.id)
+      .execute();
+    await drainOutbox(t);
+    expect((await helperState(action.id)).exceptions).toHaveLength(1);
+    // The question now has an owner and a settle path.
+    const settled = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, manager, {
+      outcome: 'succeeded',
+      operationId: refund.operation_id,
+      reason: 'Finance shows the refund settled',
+    });
+    expect(settled.status, JSON.stringify(settled.body)).toBe(200);
+    expect(await helperState(action.id)).toMatchObject({
+      action: 'succeeded',
+      operation: 'succeeded',
+      exceptions: [{ status: 'resolved' }],
+    });
+  });
+
+  it('§4.7 invariant 12: the follow-up of a request whose outcome was recorded does nothing', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 3000,
+    });
+    const caseId = await openCase();
+    const res = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 500,
+      reason: 'Late fee waived',
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    t.clock.advance(GRACE_MS + 1000);
+    await drainOutbox(t);
+    expect(await helperState(res.body.action.id)).toMatchObject({
+      action: 'succeeded',
+      operation: 'succeeded',
+      exceptions: [],
+    });
+  });
+
+  it('§4.7 invariant 12: a slow refund answered after the follow-up made it unknown records finance’s outcome and resolves the exception', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 3000,
+    });
+    const caseId = await openCase();
+    const refunds = t.app.get(RefundsService);
+    const original = refunds.request.bind(refunds);
+    const spy = vi.spyOn(refunds, 'request').mockImplementationOnce(async (...args) => {
+      // Finance answers only after the grace period, once the follow-up has run.
+      t.clock.advance(GRACE_MS + 1000);
+      await drainOutbox(t);
+      return original(...args);
+    });
+    const res = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 700,
+      reason: 'Locker fee',
+    });
+    spy.mockRestore();
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.action.status).toBe('succeeded');
+    expect(await helperState(res.body.action.id)).toMatchObject({
+      action: 'succeeded',
+      operation: 'succeeded',
+      exceptions: [{ category: 'support.helper_outcome_unknown', status: 'resolved' }],
+    });
   });
 });
