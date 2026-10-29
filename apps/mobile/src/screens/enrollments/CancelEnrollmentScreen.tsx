@@ -6,12 +6,16 @@
  * says: the existing participation, the affected dates, the capacity that is released, the refund,
  * credit or additional charge with the API's own explanation, and whether approval is required.
  * The customer gives a reason and confirms that they understand the money consequence; only then
- * `POST /v1/enrollments/{id}/cancel` is sent, with `expectedRevision` and one idempotency key per
- * intent (a retry after no answer reuses it and cannot cancel twice).
+ * `POST /v1/enrollments/{id}/cancel` is sent, with `expectedRevision`, the accepted consequence
+ * (`acceptedConsequence`: kind, amount and currency as previewed, ENR-03) and one idempotency key
+ * per intent (a retry after no answer reuses it and cannot cancel twice).
  *
  * Stale version: the preview is read again when the customer confirms; if the money consequence
- * changed, nothing is sent and the new consequence must be acknowledged. A STALE_REVISION answer
- * reloads the record and keeps the typed reason.
+ * changed, nothing is sent and the new consequence must be acknowledged. The API binds the
+ * acceptance too: a consequence that changed between that read and the commit is refused
+ * (RESOURCE_CONFLICT `CONSEQUENCE_CHANGED` or `CONSEQUENCE_ACCEPTANCE_REQUIRED`), nothing is
+ * canceled, and the screen asks for the new one to be accepted. A STALE_REVISION answer reloads
+ * the record and keeps the typed reason.
  *
  * States: loading; empty: not applicable; ready (preview); validation failure (reason missing:
  * field message, input kept); permission restriction (not available); stale version (re-preview);
@@ -20,7 +24,7 @@
  * required: a refund outcome cannot be shown (the API records the consequence on the enrollment
  * but exposes no refund for it to the customer; reported).
  */
-import type { ApiError } from '@sportspark/api-client';
+import type { ApiError, Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
@@ -56,6 +60,9 @@ import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { acceptedOf, consequenceConflict } from './participation';
+
+type CancelBody = Schema<'CancelEnrollmentRequest'>;
 
 function ConsequenceBlock({ consequence }: { consequence: FinancialConsequence }) {
   const summary = consequenceSummary(consequence);
@@ -136,14 +143,28 @@ function CancelForm({
   if (done) return <Canceled enrollment={done} />;
 
   const summary = consequenceSummary(preview.financialConsequence);
-  const send = async (body: { expectedRevision: number; reason: string }) => {
+  const send = async (body: CancelBody) => {
     setFailure(null);
     try {
       setDone(await cancel.submit({ path: { id: enrollment.id }, body }));
     } catch (error) {
-      setFailure(error as ApiError);
+      const apiError = error as ApiError;
+      if (consequenceConflict(apiError)) {
+        // ENR-03: the consequence changed after it was accepted; nothing was canceled.
+        setChanged(true);
+        setAcknowledged(null);
+        cancel.reset();
+        await refetchPreview();
+        return;
+      }
+      setFailure(apiError);
     }
   };
+  const bodyFor = (accepted: FinancialConsequence, trimmed: string): CancelBody => ({
+    expectedRevision: enrollment.revision,
+    reason: trimmed,
+    acceptedConsequence: acceptedOf(accepted),
+  });
 
   const confirm = async () => {
     const trimmed = reason.trim();
@@ -161,7 +182,7 @@ function CancelForm({
       setAcknowledged(null);
       return;
     }
-    await send({ expectedRevision: enrollment.revision, reason: trimmed });
+    await send(bodyFor(acknowledged, trimmed));
   };
 
   const reload = () => {
@@ -261,9 +282,9 @@ function CancelForm({
             <CommandFailure
               error={failure}
               what="the cancellation"
-              onRetry={() =>
-                void send({ expectedRevision: enrollment.revision, reason: reason.trim() })
-              }
+              onRetry={() => {
+                if (acknowledged) void send(bodyFor(acknowledged, reason.trim()));
+              }}
               onReload={reload}
             />
           ) : null}

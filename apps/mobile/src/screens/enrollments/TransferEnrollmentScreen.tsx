@@ -4,14 +4,19 @@
  * govern transfer money and are the API's policy, never the app's).
  *
  * 1. Choose the target among the published offerings of the same program (`GET /v1/offerings`).
- * 2. Preview: `commit: false` returns the existing and proposed participation, both date ranges
- *    and whether they overlap, the capacity required and whether anyone is waiting ahead, the
- *    eligibility result with its reasons, the refund, credit or additional charge with the API's
- *    explanation, and whether staff approval is required. Nothing changes.
- * 3. Confirm: the customer acknowledges the money consequence; the preview is asked again (a new
- *    intent) and, if the consequence changed, nothing is committed and the new one must be
- *    acknowledged. Then `commit: true, acceptConsequence: true` with `expectedRevision`; a retry
- *    after no answer reuses the same idempotency key and cannot transfer twice.
+ * 2. Preview: the read-only `GET /v1/enrollments/{id}/transfer-preview?targetOfferingId=` (ENR-03)
+ *    returns the existing and proposed participation, both date ranges and whether they overlap,
+ *    the capacity required and whether anyone is waiting ahead, the eligibility result with its
+ *    reasons, the refund, credit or additional charge with the API's explanation, and whether
+ *    staff approval is required. Nothing changes, and no command is sent to preview.
+ * 3. Confirm: the customer acknowledges the money consequence; the preview is read again and, if
+ *    the consequence changed, nothing is committed and the new one must be acknowledged. Then
+ *    `POST /v1/enrollments/{id}/transfer` with `commit: true`, the accepted consequence
+ *    (`acceptedConsequence`: kind, amount and currency) and `expectedRevision`. The API binds the
+ *    acceptance: a consequence that changed since is refused (RESOURCE_CONFLICT
+ *    `CONSEQUENCE_CHANGED` or `CONSEQUENCE_ACCEPTANCE_REQUIRED`, with the current consequence),
+ *    nothing is committed, and the new consequence is shown to accept. A retry after no answer
+ *    reuses the same idempotency key and cannot transfer twice.
  * 4. Success: "Transferred to <offering>" with the linked old and new enrollments.
  *
  * A transfer that needs approval is not committed by a customer (the API answers
@@ -51,6 +56,7 @@ import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { acceptedOf, consequenceConflict } from './participation';
 
 type PublicOffering = Schema<'PublicOffering'>;
 type TransferBody = Schema<'TransferEnrollmentRequest'>;
@@ -186,20 +192,27 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
     request: { query: { programId: programId ?? '', limit: 50 } },
     enabled: programId !== undefined && enrollment.status === 'confirmed',
   });
-  const previewCmd = useApiCommand('post', '/enrollments/{id}/transfer');
+  const [targetId, setTargetId] = useState<string | null>(null);
+  /** The target whose preview was asked for; the read runs only after "Preview transfer". */
+  const [previewTarget, setPreviewTarget] = useState<string | null>(null);
+  const previewQuery = useApiQuery({
+    path: '/enrollments/{id}/transfer-preview',
+    request: { path: { id: enrollment.id }, query: { targetOfferingId: previewTarget ?? '' } },
+    enabled: previewTarget !== null && enrollment.status === 'confirmed',
+    staleTime: 0,
+  });
   const commitCmd = useApiCommand('post', '/enrollments/{id}/transfer', {
     invalidate: [
       ['api', '/enrollments'],
       ['api', '/enrollments/{id}'],
     ],
   });
-  const [targetId, setTargetId] = useState<string | null>(null);
-  const [preview, setPreview] = useState<TransferPreview | null>(null);
   const [acknowledged, setAcknowledged] = useState<FinancialConsequence | null>(null);
   const [changed, setChanged] = useState(false);
-  const [failure, setFailure] = useState<{ error: ApiError; step: 'preview' | 'commit' } | null>(
-    null,
-  );
+  /** The consequence the API answered with a conflict, until the preview read catches up. */
+  const [conflicted, setConflicted] = useState<FinancialConsequence | null>(null);
+  const [failure, setFailure] = useState<ApiError | null>(null);
+  const [checking, setChecking] = useState(false);
   const [done, setDone] = useState<TransferPreview | null>(null);
 
   if (done) return <Transferred preview={done} />;
@@ -214,44 +227,36 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
     );
   }
 
-  const bodyFor = (target: string, commit: boolean): TransferBody => ({
-    targetOfferingId: target,
-    commit,
-    acceptConsequence: commit,
-    expectedRevision: enrollment.revision,
-  });
+  const read =
+    previewTarget === targetId ? (previewQuery.data as TransferPreview | undefined) : undefined;
+  const preview: TransferPreview | undefined =
+    read && conflicted ? { ...read, financialConsequence: conflicted } : read;
 
-  const runPreview = async (target: string) => {
+  const commit = async (target: string, accepted: FinancialConsequence) => {
     setFailure(null);
     try {
-      const result = (await previewCmd.submit({
-        path: { id: enrollment.id },
-        body: bodyFor(target, false),
-      })) as TransferPreview;
-      setPreview(result);
-      return result;
-    } catch (error) {
-      setFailure({ error: error as ApiError, step: 'preview' });
-      return null;
-    }
-  };
-
-  const commit = async (target: string) => {
-    setFailure(null);
-    try {
-      setDone(
-        (await commitCmd.submit({
-          path: { id: enrollment.id },
-          body: bodyFor(target, true),
-        })) as TransferPreview,
-      );
+      const body: TransferBody = {
+        targetOfferingId: target,
+        commit: true,
+        acceptedConsequence: acceptedOf(accepted),
+        expectedRevision: enrollment.revision,
+      };
+      setDone((await commitCmd.submit({ path: { id: enrollment.id }, body })) as TransferPreview);
     } catch (error) {
       const apiError = error as ApiError;
-      setFailure({ error: apiError, step: 'commit' });
-      if (conflictCode(apiError) === 'CONSEQUENCE_NOT_ACCEPTED') {
+      if (consequenceConflict(apiError)) {
+        // ENR-03: the consequence changed after it was accepted; nothing was committed. Show the
+        // current one (the API sends it) and ask for it to be accepted again.
+        const latest = (apiError.details as { consequence?: FinancialConsequence } | undefined)
+          ?.consequence;
+        setConflicted(latest ?? null);
         setAcknowledged(null);
         setChanged(true);
+        commitCmd.reset();
+        void previewQuery.refetch();
+        return;
       }
+      setFailure(apiError);
     }
   };
 
@@ -261,27 +266,34 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
     if (needsAck && !acknowledged) return;
     // The consequence the customer reviewed: the acknowledged one, or "no money changes".
     const reviewed = acknowledged ?? preview.financialConsequence;
-    // Stale version: ask for the preview again; a changed consequence is never committed unseen
+    // Stale version: read the preview again; a changed consequence is never committed unseen
     // (SPK-REG-010, SPK-PAY-008), including "no money changes" that became a charge.
-    const fresh = await runPreview(targetId);
+    setChecking(true);
+    setFailure(null);
+    const result = await previewQuery.refetch();
+    setChecking(false);
+    if (result.error) {
+      setFailure(result.error);
+      return;
+    }
+    const fresh = result.data?.data as TransferPreview | undefined;
     if (!fresh) return;
+    setConflicted(null);
     if (!sameConsequence(fresh.financialConsequence, reviewed)) {
       setAcknowledged(null);
       setChanged(true);
       return;
     }
-    if (fresh.financialConsequence.kind !== 'none' && !acknowledged) return;
     if (transferBlockers(fresh).length > 0) return;
-    await commit(targetId);
+    await commit(targetId, fresh.financialConsequence);
   };
 
   const choose = (id: string) => {
     setTargetId(id);
-    setPreview(null);
     setAcknowledged(null);
     setChanged(false);
+    setConflicted(null);
     setFailure(null);
-    previewCmd.reset();
     commitCmd.reset();
   };
 
@@ -291,14 +303,23 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
   const blockers = preview ? transferBlockers(preview) : [];
   const needsAck = preview ? preview.financialConsequence.kind !== 'none' : false;
   const summary = preview ? consequenceSummary(preview.financialConsequence) : null;
-  const approvalRefused = conflictCode(failure?.error ?? null) === 'APPROVAL_REQUIRED';
+  const approvalRefused = conflictCode(failure) === 'APPROVAL_REQUIRED';
+  const previewFailed =
+    previewTarget === targetId && preview === undefined ? previewQuery.error : null;
 
   return (
     <View>
       <Section title="Transfer">
         <Field label="Participant" value={nameOf(enrollment.participantPersonId)} />
-        <Field label="Now in" value={current.data?.name ?? 'Activity no longer listed'} />
-        <StatusBadge {...enrollmentStatus(enrollment, { offeringName: current.data?.name })} />
+        <Field
+          label="Now in"
+          value={enrollment.offering?.name ?? current.data?.name ?? 'Activity no longer listed'}
+        />
+        <StatusBadge
+          {...enrollmentStatus(enrollment, {
+            offeringName: enrollment.offering?.name ?? current.data?.name,
+          })}
+        />
       </Section>
 
       <Section title="Move to">
@@ -345,10 +366,33 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
             label="Preview transfer"
             variant="secondary"
             disabled={!targetId || offline}
-            busy={previewCmd.isProcessing && !commitCmd.isProcessing}
-            onPress={() => targetId && void runPreview(targetId)}
+            busy={
+              previewTarget === targetId &&
+              previewQuery.fetchStatus === 'fetching' &&
+              !checking &&
+              !commitCmd.isProcessing
+            }
+            onPress={() => {
+              if (!targetId) return;
+              setConflicted(null);
+              if (previewTarget === targetId) void previewQuery.refetch();
+              else setPreviewTarget(targetId);
+            }}
           />
         </ButtonRow>
+        {previewTarget === targetId &&
+        preview === undefined &&
+        previewQuery.fetchStatus === 'fetching' ? (
+          <StateView variant="loading" label="the transfer preview" />
+        ) : null}
+        {previewFailed ? (
+          <CommandFailure
+            error={previewFailed}
+            what="the transfer preview"
+            onRetry={() => void previewQuery.refetch()}
+            onReload={reload}
+          />
+        ) : null}
       </Section>
 
       {preview ? <PreviewView preview={preview} /> : null}
@@ -387,7 +431,7 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
                   label="Transfer"
                   onPress={() => void confirm()}
                   disabled={offline || (needsAck && acknowledged === null)}
-                  busy={commitCmd.isProcessing}
+                  busy={commitCmd.isProcessing || checking}
                   accessibilityHint="Moves the registration with the money consequence shown above"
                 />
               </ButtonRow>
@@ -404,18 +448,18 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
         />
       ) : failure ? (
         <CommandFailure
-          error={failure.error}
-          what={failure.step === 'commit' ? 'the transfer' : 'the transfer preview'}
+          error={failure}
+          what="the transfer"
           onRetry={() => {
-            if (!targetId) return;
-            void (failure.step === 'commit' ? commit(targetId) : runPreview(targetId));
+            if (targetId && acknowledged) void commit(targetId, acknowledged);
+            else if (targetId && preview && preview.financialConsequence.kind === 'none')
+              void commit(targetId, preview.financialConsequence);
           }}
           onReload={() => {
             setFailure(null);
-            setPreview(null);
             setAcknowledged(null);
-            previewCmd.reset();
             commitCmd.reset();
+            void previewQuery.refetch();
             reload();
           }}
         />
