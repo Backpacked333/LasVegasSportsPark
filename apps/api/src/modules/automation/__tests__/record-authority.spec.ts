@@ -7,7 +7,7 @@ import { MigrationModule, createAuthorityAssignmentFixture } from '../../migrati
 import { AutomationModule } from '../automation.module';
 import type { FakeAssistantProvider } from '../providers/fake-assistant.provider';
 import { enableAutomation, fakeAssistant } from '../testing/automation-fixtures';
-import { CLOCK_START, key, staffMember, type Actor } from './automation';
+import { ASSISTANT_CAPABILITIES, CLOCK_START, key, staffMember, type Actor } from './automation';
 
 /**
  * §5.6 "a synchronized copy does not become an independent writer", §4.7 invariant 11,
@@ -27,6 +27,7 @@ describe('automation refund proposals under legacy refund authority (§5.6, SPK-
       principalResolver: 'module',
       clockStart: CLOCK_START,
       configure: enableAutomation(),
+      capabilities: ASSISTANT_CAPABILITIES,
     });
     fake = fakeAssistant(t.app);
     financeOperator = await staffMember(t, ['finance_operator']);

@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   errors,
   newId,
+  systemPrincipal,
   type AssistantAttachment,
   type AssistantContextReference,
   type AssistantEvidence,
@@ -16,12 +17,16 @@ import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  CapabilityService,
   DATABASE,
   OperationsService,
   Outbox,
   UnitOfWork,
   snapshotActor,
   type Clock,
+  type PeriodicJobContext,
+  type PeriodicJobResult,
+  type Trx,
 } from '../../../kernel';
 import { AutomationActions } from '../automation.actions';
 import { AssistantRequestCompleted } from '../automation.events';
@@ -34,7 +39,6 @@ import {
   isoOrNull,
   organizationOf,
   requirePerson,
-  toRecommendation,
   toToolInvocation,
   type AssistantRequestRow,
   type Reader,
@@ -42,6 +46,9 @@ import {
 import type { AssistantAttachmentData } from '../ports/assistant-provider.port';
 import { AssistantEngine, type EngineResult } from './assistant-engine.service';
 import { RecommendationsService, type NewRecommendation } from './recommendations.service';
+
+/** AUT-03 (§4.12): fails requests left `processing` by a process that stopped mid-request. */
+export const FAIL_STALLED_REQUESTS_JOB = 'automation.fail_stalled_requests';
 
 interface StoredAttachment {
   name: string;
@@ -77,6 +84,7 @@ export class AssistantService {
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
     private readonly operations: OperationsService,
+    private readonly capabilities: CapabilityService,
     private readonly engine: AssistantEngine,
     private readonly recommendations: RecommendationsService,
   ) {}
@@ -111,6 +119,9 @@ export class AssistantService {
         facilityId: input.facilityId ?? null,
         subjectPersonIds: [person.personId],
       });
+      // AUT-02 (SPK-AUTO-005, §1.6, DEC-016): the organization decides whether it uses the
+      // assistant; off (the default), ACCESS_DENIED CAPABILITY_DISABLED and nothing is recorded.
+      await this.capabilities.require(organizationId, 'assistant', trx);
       if (input.facilityId) {
         const facility = await trx
           .selectFrom('facilities')
@@ -242,6 +253,124 @@ export class AssistantService {
     return this.detail(this.db, organizationId, id);
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Stalled requests (AUT-03; §4.12 durable, interruption-tolerant background work)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * Periodic job `automation.fail_stalled_requests` (failure owner: system administrator). A
+   * request is answered synchronously; if the process serving it stopped, the request stays
+   * `processing` with a running operation. Each request still `processing`
+   * `AUTOMATION_REQUEST_STALL_SECONDS` after it was received fails with its operation, in its own
+   * transaction, under `systemPrincipal(organization, job)`, with audit and the completion event.
+   * Nothing was proposed (recommendations are recorded only with an answer), so nothing else
+   * changes. Idempotent: a request already final, or locked by the process completing it, is
+   * skipped. Runs whatever the deployment flag and the capability say: it only ends this module's
+   * own records.
+   */
+  async failStalled(context: PeriodicJobContext): Promise<PeriodicJobResult> {
+    const stallSeconds = this.settings.requestStallSeconds;
+    const cutoff = new Date(context.now.getTime() - stallSeconds * 1000);
+    const due = await this.db
+      .selectFrom('assistant_requests')
+      .select(['organization_id', 'id'])
+      .where('status', '=', 'processing')
+      .where('received_at', '<=', cutoff)
+      .orderBy('received_at')
+      .orderBy('id')
+      .limit(context.batchSize + 1)
+      .execute();
+    const batch = due.slice(0, context.batchSize);
+    let processed = 0;
+    for (const request of batch) {
+      const failed = await this.uow.run(({ trx }) =>
+        this.failOneStalled(trx, request.organization_id, request.id, cutoff, stallSeconds),
+      );
+      if (failed) processed += 1;
+    }
+    return { processed, remaining: due.length - batch.length };
+  }
+
+  private async failOneStalled(
+    trx: Trx,
+    organizationId: string,
+    id: string,
+    cutoff: Date,
+    stallSeconds: number,
+  ): Promise<boolean> {
+    const row = await trx
+      .selectFrom('assistant_requests')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .where('status', '=', 'processing')
+      .where('received_at', '<=', cutoff)
+      .forUpdate()
+      .skipLocked()
+      .executeTakeFirst();
+    if (!row) return false;
+    const actor = systemPrincipal(organizationId, FAIL_STALLED_REQUESTS_JOB);
+    const status = AssistantRequestMachine.next(row.status, 'fail') as 'failed';
+    const error = {
+      code: 'REQUEST_STALLED',
+      message: 'The assistant did not finish this request. Ask again.',
+      details: { stalledAfterSeconds: stallSeconds },
+    };
+    const now = this.clock.now();
+    await trx
+      .updateTable('assistant_requests')
+      .set({
+        status,
+        error: json(error),
+        completed_at: now,
+        revision: row.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .where('revision', '=', row.revision)
+      .executeTakeFirstOrThrow();
+    await this.operations.transition(trx, row.operation_id, 'failed', { error });
+    const invocations = await trx
+      .selectFrom('tool_invocations')
+      .select('outcome')
+      .where('organization_id', '=', organizationId)
+      .where('assistant_request_id', '=', id)
+      .where('phase', '=', 'assist')
+      .execute();
+    const denied = invocations.filter((i) => i.outcome === 'denied').length;
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: 'automation.assistant_request_stalled',
+      targetType: 'assistant_request',
+      targetId: id,
+      beforeRevision: row.revision,
+      afterRevision: row.revision + 1,
+      operationId: row.operation_id,
+      details: {
+        status,
+        errorCode: error.code,
+        receivedAt: iso(row.received_at),
+        stalledAfterSeconds: stallSeconds,
+        toolInvocations: invocations.length,
+      },
+    });
+    await this.outbox.enqueue(trx, AssistantRequestCompleted, {
+      organizationId,
+      aggregateType: 'assistant_request',
+      aggregateId: id,
+      payload: {
+        assistantRequestId: id,
+        status,
+        toolInvocations: invocations.length,
+        deniedToolInvocations: denied,
+        recommendationIds: [],
+      },
+      operationId: row.operation_id,
+    });
+    return true;
+  }
+
   private async complete(
     principal: Principal,
     id: string,
@@ -253,6 +382,12 @@ export class AssistantService {
     await this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.internal('assistant request vanished');
+      if (row.status !== 'processing') {
+        // AUT-03: `automation.fail_stalled_requests` already ended it (this process outlived the
+        // stall window); its outcome stands and nothing is proposed after the fact.
+        this.logger.warn(`assistant request ${id} was already ${row.status}; outcome not recorded`);
+        return;
+      }
       const status = AssistantRequestMachine.next(
         row.status,
         result.status === 'answered' ? 'answer' : 'fail',
@@ -414,12 +549,7 @@ export class AssistantService {
       evidence: (row.evidence ?? []) as unknown as AssistantEvidence[],
       missingEvidence: (row.missing_evidence ?? []) as unknown as AssistantMissingEvidence[],
       // SPK-AUTO-002: a recommendation's evidence carries its freshness at this read.
-      recommendations: recommendations.map((r) =>
-        toRecommendation(r, {
-          now: this.clock.now(),
-          maxAgeMinutes: this.settings.evidenceMaxAgeMinutes,
-        }),
-      ),
+      recommendations: await this.recommendations.present(reader, recommendations),
       toolInvocations: invocations.map(toToolInvocation),
       error: row.error ?? null,
       operationId: row.operation_id,

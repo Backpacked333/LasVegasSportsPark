@@ -7,12 +7,16 @@ export * from './ports/assistant-provider.port';
 export {
   FakeAssistantProvider,
   FAKE_ASSISTANT_PROVIDER_NAME,
+  FAKE_ASSISTANT_SCENARIOS,
   type FakeAssistantStep,
   type FakeFailure,
 } from './providers/fake-assistant.provider';
 export { assistantProviderFor } from './providers/assistant-provider.factory';
-export { AssistantService } from './services/assistant.service';
-export { RecommendationsService } from './services/recommendations.service';
+export { AssistantService, FAIL_STALLED_REQUESTS_JOB } from './services/assistant.service';
+export {
+  APPLY_OUTCOME_UNKNOWN_CATEGORY,
+  RecommendationsService,
+} from './services/recommendations.service';
 export {
   evidenceItem,
   freshnessOf,
