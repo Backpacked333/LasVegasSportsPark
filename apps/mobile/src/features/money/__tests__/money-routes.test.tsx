@@ -94,8 +94,9 @@ describe('SCR-C-32 to SCR-C-38 routes', () => {
   });
 
   it.each([
-    ['/youth-feedback', 'Waiting on a decision'],
-    ['/support', 'Support requests in the app are not available yet'],
+    // SCR-C-37 and SCR-C-38 (stage 4): every capability starts off; the request form is labelled.
+    ['/youth-feedback', 'Youth assessments and progression turned off'],
+    ['/support', 'Send request'],
   ])('%s opens its screen', async (url, label) => {
     renderAt(url);
     expect(await screen.findByLabelText(label)).toBeOnTheScreen();
