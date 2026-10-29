@@ -201,6 +201,41 @@ describe('createApiClient (§4.8 to §4.10, §4.13)', () => {
     expect(onAuthenticationRequired).toHaveBeenCalledTimes(1);
   });
 
+  it('reports a turned-off capability (ACCESS_DENIED CAPABILITY_DISABLED) through onCapabilityDisabled only (K-12, DEC-016)', async () => {
+    const onCapabilityDisabled = vi.fn();
+    const onAuthenticationRequired = vi.fn();
+    const disabled = errorBody('ACCESS_DENIED', {
+      nextAction: 'contact_support_or_request_access',
+      details: {
+        code: 'CAPABILITY_DISABLED',
+        capability: 'rentals',
+        applicabilityReferences: ['DEC-016', 'DEC-076'],
+      },
+    });
+    const { api } = setup(() => jsonResponse(403, disabled), {
+      onCapabilityDisabled,
+      onAuthenticationRequired,
+    });
+    const error = (await api
+      .post('/bookings', { body: {} as never, intent: api.newIntent() })
+      .catch((e: unknown) => e)) as ApiError;
+    expect(error.isCapabilityDisabled).toBe(true);
+    expect(error.isPermissionRestriction).toBe(false);
+    expect(error.retryable).toBe(false);
+    expect(onCapabilityDisabled).toHaveBeenCalledTimes(1);
+    expect(onCapabilityDisabled).toHaveBeenCalledWith(error);
+    expect(onAuthenticationRequired).not.toHaveBeenCalled();
+
+    // A plain ACCESS_DENIED is a restriction of the principal and calls nothing.
+    const plain = setup(() => jsonResponse(403, errorBody('ACCESS_DENIED')), {
+      onCapabilityDisabled,
+    });
+    const denied = (await plain.api.get('/me').catch((e: unknown) => e)) as ApiError;
+    expect(denied.isCapabilityDisabled).toBe(false);
+    expect(denied.isPermissionRestriction).toBe(true);
+    expect(onCapabilityDisabled).toHaveBeenCalledTimes(1);
+  });
+
   it('turns a timeout into TIMEOUT with an unknown outcome, retryable with the same key', async () => {
     const { api } = setup(
       (_req, init) =>

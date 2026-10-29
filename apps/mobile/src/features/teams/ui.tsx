@@ -270,6 +270,14 @@ export function CommandFailure({
       </View>
     );
   }
+  if (presentation === 'turned_off') {
+    // ACCESS_DENIED CAPABILITY_DISABLED (K-12): StateView shows it as turned off (DEC-016).
+    return (
+      <View testID={testID}>
+        <StateView variant="error" error={error} />
+      </View>
+    );
+  }
   const recovery = recoveryActionFor(error);
   const reasons = error.code === 'ELIGIBILITY_FAILED' ? eligibilityReasonsOf(error) : [];
   const issues = error.code === 'VALIDATION_FAILED' ? fieldIssuesOf(error) : [];

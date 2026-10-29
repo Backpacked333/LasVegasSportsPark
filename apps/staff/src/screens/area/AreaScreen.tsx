@@ -23,13 +23,15 @@ export function AreaScreen({ area }: { area: StaffArea }) {
           </ul>
         </nav>
       ) : null}
-      {area.links && area.links.length > 0 && area.pending ? (
+      {area.links && area.links.length > 0 ? (
         // Only what is not built yet is named as such (the built screens are linked above).
-        <Placeholder
-          screenIds={area.pending.screenIds}
-          title={area.title}
-          purpose={area.pending.purpose}
-        />
+        area.pending ? (
+          <Placeholder
+            screenIds={area.pending.screenIds}
+            title={area.title}
+            purpose={area.pending.purpose}
+          />
+        ) : null
       ) : (
         <Placeholder screenIds={area.screenIds} title={area.title} purpose={area.purpose} />
       )}

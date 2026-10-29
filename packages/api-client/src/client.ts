@@ -56,6 +56,11 @@ export interface ApiClientOptions {
   onUpdateRequired?: (error: UpdateRequiredError) => void;
   /** Called when the API answers AUTHENTICATION_REQUIRED: the session expired or was revoked. */
   onAuthenticationRequired?: (error: ApiError) => void;
+  /**
+   * Called when a command answers ACCESS_DENIED `details.code: 'CAPABILITY_DISABLED'` (K-12): the
+   * apps refresh `GET /v1/me/permissions` so every gate shows the switch as it now is.
+   */
+  onCapabilityDisabled?: (error: ApiError) => void;
   /** Client clock for `receivedAt` (injected in tests). */
   now?: () => Date;
 }
@@ -206,6 +211,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       );
       if (error instanceof UpdateRequiredError) options.onUpdateRequired?.(error);
       else if (error.isAuthenticationRequired) options.onAuthenticationRequired?.(error);
+      else if (error.isCapabilityDisabled) options.onCapabilityDisabled?.(error);
       throw error;
     }
     if (!parsedOk) {

@@ -4,9 +4,18 @@
  *
  *   const app = createTestApp({ routes: { 'GET /today': { status: 200, body: feed } } });
  *   render(app.at('/today'));
+ *
+ * Defaults: `GET /me` (a general manager in two facilities), `GET /me/permissions` (every area
+ * visible, every capability off) and `GET /today` (no issues).
  */
 import { MemorySessionStore, type Session } from '@sportspark/api-client';
-import { createFakeFetch, sequentialKeys, type FakeHandler } from '@sportspark/api-client/testing';
+import {
+  createFakeFetch,
+  fakePermissions,
+  sequentialKeys,
+  type FakeHandler,
+  type FakePermissionsOptions,
+} from '@sportspark/api-client/testing';
 import { QueryClient, onlineManager } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
@@ -64,6 +73,15 @@ export function todayFeed(items: unknown[] = [], facilities = [FACILITY_A, FACIL
   };
 }
 
+/**
+ * `GET /v1/me/permissions` (K-05, K-12): by default every navigation area is visible and every
+ * capability switch is off, as the API starts (DEC-016). Override per test, e.g.
+ * `routes: { 'GET /me/permissions': mePermissions({ enabled: ['rentals'] }) }`.
+ */
+export function mePermissions(options: FakePermissionsOptions = {}) {
+  return { status: 200, body: fakePermissions(options) };
+}
+
 export interface TestAppOptions {
   routes?: Record<string, FakeHandler>;
   session?: Session | null;
@@ -75,6 +93,7 @@ export interface TestAppOptions {
 export function createTestApp(options: TestAppOptions = {}) {
   const fake = createFakeFetch({
     'GET /me': staffMe(),
+    'GET /me/permissions': mePermissions(),
     'GET /today': todayFeed(),
     ...options.routes,
   });

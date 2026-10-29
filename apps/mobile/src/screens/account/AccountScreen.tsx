@@ -6,7 +6,10 @@
  *
  * Sections whose screens are built open them; the others say "Not available yet" (their screen
  * groups add the route). Family shows how many people the API says this account may act for;
- * sections that need a linked participant record say so until setup is finished.
+ * sections that need a linked participant record say so until setup is finished. The conditional
+ * Package G sections (rentals and parties, memberships, session packages, point-of-sale receipts)
+ * always open their screens, which sit behind their capability switches; a switch
+ * `GET /v1/me/permissions` reports off is marked "Turned off" (DEC-016).
  *
  * States: loading; empty (new account: not linked yet, "Finish setting up"); ready; validation
  * failure: not applicable; permission restriction (sections depend on the person's record and
@@ -15,8 +18,11 @@
  * completion: not permitted; recovery required: an unresolved recovery-required registration
  * cannot be listed yet (the API has no read of a customer's checkouts; reported).
  */
+import type { CapabilityId } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
+import { packageGRoutes } from '../../features/package-g/routes';
 import { useApp } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -42,6 +48,73 @@ const SECTIONS: readonly {
   { screenId: 'SCR-C-36', title: 'Preferences', href: '/preferences', needsPerson: true },
   { screenId: 'SCR-C-38', title: 'Support', href: null, needsPerson: false },
 ];
+
+/**
+ * Conditional Package G sections (§3.16, §6.5; DEC-016): always listed and opened, each screen
+ * behind its capability switch; a switch the API reports off is marked "Turned off" here too.
+ */
+const CONDITIONAL_SECTIONS: readonly {
+  key: string;
+  title: string;
+  detail: string;
+  href: string;
+  capabilities: readonly CapabilityId[];
+}[] = [
+  {
+    key: 'bookings',
+    title: 'Rentals and parties',
+    detail: 'Your bookings',
+    href: packageGRoutes.bookings(),
+    capabilities: ['rentals', 'parties'],
+  },
+  {
+    key: 'memberships',
+    title: 'Memberships',
+    detail: "Your and your family's memberships",
+    href: packageGRoutes.memberships(),
+    capabilities: ['memberships'],
+  },
+  {
+    key: 'session-packages',
+    title: 'Session packages',
+    detail: 'Credits left and redemptions',
+    href: packageGRoutes.sessionPackages(),
+    capabilities: ['session_packages'],
+  },
+  {
+    key: 'pos-receipts',
+    title: 'Point-of-sale receipts',
+    detail: 'Purchases at the facility desk',
+    href: packageGRoutes.posReceipts(),
+    capabilities: ['point_of_sale'],
+  },
+];
+
+function ConditionalSections({ linked }: { linked: boolean }) {
+  const router = useRouter();
+  const permissions = usePermissions({ enabled: linked });
+  return (
+    <View accessibilityRole="list" accessibilityLabel="Bookings, memberships and packages">
+      {CONDITIONAL_SECTIONS.map((section) => {
+        // Known off only when the API answered and every capability of the section is off.
+        const off =
+          permissions.data !== undefined &&
+          section.capabilities.every((c) => permissions.isCapabilityEnabled(c) === false);
+        return (
+          <ListRow
+            key={section.key}
+            title={section.title}
+            detail={linked ? section.detail : 'Available after you finish setting up'}
+            status={linked && off ? { tone: 'neutral', label: 'Turned off' } : undefined}
+            onPress={linked ? () => router.push(section.href) : undefined}
+            accessibilityHint={linked ? `Opens ${section.title}` : undefined}
+            testID={`account-conditional-${section.key}`}
+          />
+        );
+      })}
+    </View>
+  );
+}
 
 function familyDetail(me: MeData): string {
   const n = me.authorities.length;
@@ -107,6 +180,7 @@ function AccountHub({ me }: { me: MeData }) {
           accessibilityHint="Opens account recovery"
         />
       </View>
+      <ConditionalSections linked={linked} />
       <StateView
         variant="pending-decision"
         subject="Account deletion and data requests"

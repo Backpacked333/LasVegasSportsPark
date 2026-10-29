@@ -23,6 +23,12 @@ export function RootNavigator() {
         <Stack.Screen name="family-calendar" options={{ title: 'Family calendar' }} />
         <Stack.Screen name="fixtures/[id]" options={{ title: 'Fixture' }} />
         <Stack.Screen name="sessions/[sessionId]" options={{ title: 'Activity' }} />
+        {/* Package G (conditional, behind their capability switches; reached from Account). */}
+        <Stack.Screen name="bookings/index" options={{ title: 'Rentals and parties' }} />
+        <Stack.Screen name="bookings/new/[offeringId]" options={{ title: 'Book' }} />
+        <Stack.Screen name="memberships/index" options={{ title: 'Memberships' }} />
+        <Stack.Screen name="session-packages/index" options={{ title: 'Session packages' }} />
+        <Stack.Screen name="pos-receipts/index" options={{ title: 'Point-of-sale receipts' }} />
         <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
       </Stack>
     </UpdateGate>

@@ -104,10 +104,10 @@ describe('area routes (SPK-UX-005)', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/Not built yet/)).toBeNull();
     const nav = screen.getByRole('navigation', { name: 'Main' });
-    expect(within(nav).getByRole('link', { name: 'Leagues and tournaments' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    // The areas come from GET /v1/me/permissions: wait for the link before checking it.
+    expect(
+      await within(nav).findByRole('link', { name: 'Leagues and tournaments' }),
+    ).toHaveAttribute('aria-current', 'page');
   });
 
   it('opens the Teams area home without a placeholder', async () => {
@@ -117,11 +117,14 @@ describe('area routes (SPK-UX-005)', () => {
     expect(screen.queryByText(/Not built yet/)).toBeNull();
   });
 
-  it('keeps the placeholder only for what is not built: Administration names SCR-S-56 alone', async () => {
+  it('keeps no placeholder on Administration: SCR-S-56 is linked to its own page (Package G)', async () => {
     const app = createTestApp();
     render(app.at('/admin'));
-    expect(await screen.findByText('Not built yet (SCR-S-56).')).toBeInTheDocument();
-    expect(screen.queryByText(/Not built yet \(SCR-S-46/)).toBeNull();
+    const nav = await screen.findByRole('navigation', { name: 'Administration screens' });
+    expect(
+      within(nav).getByRole('link', { name: 'Access hardware (conditional)' }),
+    ).toHaveAttribute('href', '/admin/access-hardware');
+    expect(screen.queryByText(/Not built yet/)).toBeNull();
   });
 });
 

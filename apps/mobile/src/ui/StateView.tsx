@@ -8,10 +8,21 @@
  * - offline-stale: no connection or old data; shows the age of what is shown and what is unavailable.
  * - unavailable: protected NOT_FOUND or a permission restriction; never implies the record exists.
  * - pending-decision: the screen or value waits on an operator decision (DEC-###); nothing invented.
+ * - turned-off: a conditional capability the organization has switched off (K-12): names the
+ *   decisions that may turn it on (DEC-016 and its own record). An `error` that is the API's
+ *   ACCESS_DENIED `CAPABILITY_DISABLED` answer renders this state too, so every screen shows it
+ *   the same way, never as "not available" or a failure.
  *
  * Every variant is announced politely to screen readers and carries text, never colour alone.
  */
-import { formatAge, recoveryActionFor, type ApiError } from '@sportspark/api-client';
+import {
+  formatAge,
+  recoveryActionFor,
+  turnedOffFromError,
+  turnedOffLabel,
+  turnedOffMessage,
+  type ApiError,
+} from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Button } from './Button';
@@ -48,16 +59,40 @@ export type StateViewProps =
       decisions: string[];
       /** Owner wording from the decision register, when known. */
       owner?: string;
+    }
+  | {
+      variant: 'turned-off';
+      /** What is turned off, e.g. "Rentals" (CAPABILITY_PRESENTATION labels). */
+      subject: string;
+      /** The decisions that may turn it on (DEC-016 and the capability's own record). */
+      decisions: readonly string[];
+      owner?: string;
+      /** For a screen of existing records the API keeps available while the switch is off. */
+      stillAvailable?: string;
+      /** The refused command, when this state answers one (code and reference for support). */
+      error?: ApiError;
     };
 
 export function StateView(props: StateViewProps) {
+  // A command refused because its capability is turned off is not a failure (K-12, DEC-016).
+  const turnedOff = props.variant === 'error' ? turnedOffFromError(props.error) : null;
+  const shown: StateViewProps =
+    turnedOff && props.variant === 'error'
+      ? {
+          variant: 'turned-off',
+          subject: turnedOff.label,
+          decisions: turnedOff.decisions,
+          owner: turnedOff.owner,
+          error: props.error,
+        }
+      : props;
   return (
     <View
       style={styles.container}
       accessibilityLiveRegion="polite"
-      testID={`state-${props.variant}`}
+      testID={`state-${shown.variant}`}
     >
-      {renderBody(props)}
+      {renderBody(shown)}
     </View>
   );
 }
@@ -154,6 +189,21 @@ function renderBody(props: StateViewProps): ReactNode {
             {props.decisions.length === 1 ? ' has' : ' have'} not been decided
             {props.owner ? ` (owner: ${props.owner})` : ''}.
           </Text>
+        </>
+      );
+    case 'turned-off':
+      return (
+        <>
+          <StatusBadge tone="neutral" label={turnedOffLabel(props.subject)} />
+          <Text style={styles.body}>{turnedOffMessage(props.decisions, props.owner)}</Text>
+          {props.stillAvailable ? <Text style={styles.body}>{props.stillAvailable}</Text> : null}
+          {props.error ? (
+            <Text style={styles.caption} selectable>
+              {`Error code: ${props.error.code} (CAPABILITY_DISABLED)${
+                props.error.correlationId ? `. Reference: ${props.error.correlationId}` : ''
+              }`}
+            </Text>
+          ) : null}
         </>
       );
   }

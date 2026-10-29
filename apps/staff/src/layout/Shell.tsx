@@ -1,17 +1,19 @@
 /**
- * SCR-S-01 shell: header with the facility switcher, the fourteen SPK-UX-005 areas with Today as
- * the operating home, the coach and referee workspace link (SPK-UX-007), and the connectivity
- * banner. Responsive: below 768 px the navigation collapses behind a menu button so the workspace
- * works on a phone beside a field. A skip link and visible focus serve keyboard users (SPK-UX-009).
+ * SCR-S-01 shell: header with the facility switcher, the SPK-UX-005 areas the API lists for this
+ * principal (`GET /v1/me/permissions`, AreaNav) with Today as the operating home, the coach and
+ * referee workspace link (SPK-UX-007), and the connectivity banner. Responsive: below 768 px the
+ * navigation collapses behind a menu button so the workspace works on a phone beside a field. A
+ * skip link and visible focus serve keyboard users (SPK-UX-009).
  */
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
 import { OfflineQueueProvider } from '../features/operations/offline/OfflineQueueProvider';
-import { STAFF_AREAS, WORKSPACE_PATH } from '../navigation/areas';
+import { WORKSPACE_PATH } from '../navigation/areas';
 import { useApp } from '../providers/AppProviders';
 import { Button } from '../ui/Button';
 import { UpdateRequiredNotice } from '../ui/UpdateRequiredNotice';
+import { AreaNav } from './AreaNav';
 import { FacilitySwitcher } from './FacilitySwitcher';
 
 export function Shell() {
@@ -46,15 +48,7 @@ export function Shell() {
           </Button>
         </header>
         <nav id="main-nav" className="shell-nav" aria-label="Main" data-open={menuOpen}>
-          <ul>
-            {STAFF_AREAS.map((area) => (
-              <li key={area.id}>
-                <NavLink to={area.path} onClick={() => setMenuOpen(false)}>
-                  {area.title}
-                </NavLink>
-              </li>
-            ))}
-          </ul>
+          <AreaNav onNavigate={() => setMenuOpen(false)} />
           <ul aria-label="Workspace">
             <li>
               <NavLink to={WORKSPACE_PATH} onClick={() => setMenuOpen(false)}>

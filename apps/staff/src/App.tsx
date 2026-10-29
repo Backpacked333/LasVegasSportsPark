@@ -1,6 +1,8 @@
 /**
- * Staff dashboard routes (SPK-UX-005): Today is the operating home, the fourteen areas, the coach
- * and referee workspace (SPK-UX-007), sign-in, and a not-available page for unknown paths.
+ * Staff dashboard routes (SPK-UX-005): Today is the operating home, the fourteen areas, the
+ * conditional Package G screens in their areas (SCR-S-51 to SCR-S-57, behind their capability
+ * switches), the coach and referee workspace (SPK-UX-007), sign-in, and a not-available page for
+ * unknown paths.
  */
 import { Navigate, Route, Routes } from 'react-router';
 import { competitionRoutes } from './features/competition/routes';
@@ -9,6 +11,7 @@ import { operationsRoutes } from './features/operations/routes';
 import { registrationFinanceRoutes } from './features/registration-finance/routes';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS } from './navigation/areas';
+import { packageGRoutes } from './screens/package-g/routes';
 import { AreaScreen } from './screens/area/AreaScreen';
 import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
 import { NotFoundScreen } from './screens/not-found/NotFoundScreen';
@@ -46,6 +49,7 @@ export function AppRoutes() {
         {competitionRoutes()}
         {operationsRoutes()}
         {insightAdminRoutes()}
+        {packageGRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />

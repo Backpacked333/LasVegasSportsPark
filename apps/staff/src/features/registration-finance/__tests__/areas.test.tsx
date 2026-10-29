@@ -57,18 +57,29 @@ describe('registration and finance areas', () => {
       'page',
     );
     const main = screen.getByRole('navigation', { name: 'Main' });
-    expect(within(main).getByRole('link', { name: 'Registrations and waitlists' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    // The areas come from GET /v1/me/permissions: wait for the link before checking it.
+    expect(
+      await within(main).findByRole('link', { name: 'Registrations and waitlists' }),
+    ).toHaveAttribute('aria-current', 'page');
   });
 
-  it('the Finance home lists SCR-S-35 to SCR-S-38 and keeps SCR-S-53 to SCR-S-55 and SCR-S-57 marked as not built', async () => {
+  it('the Finance home lists SCR-S-35 to SCR-S-38 and links the conditional SCR-S-53 to SCR-S-55 and SCR-S-57 pages', async () => {
     const app = createTestApp();
     render(app.at('/finance'));
     const list = await screen.findByRole('list', { name: 'Finance screens' });
     expect(within(list).getAllByRole('link')).toHaveLength(4);
-    expect(screen.getByText('Not built yet (SCR-S-53 to SCR-S-55, SCR-S-57).')).toBeInTheDocument();
+    const conditional = screen.getByRole('list', { name: 'Conditional capabilities' });
+    expect(
+      within(conditional)
+        .getAllByRole('link')
+        .map((a) => [a.textContent, a.getAttribute('href')]),
+    ).toEqual([
+      ['Memberships', '/finance/memberships'],
+      ['Session packages', '/finance/session-packages'],
+      ['Point of sale', '/finance/point-of-sale'],
+      ['Accounting export batches', '/finance/accounting-exports'],
+    ]);
+    expect(screen.queryByText(/Not built yet/)).toBeNull();
     expect(screen.getByText(/depends on DEC-022/)).toBeInTheDocument();
   });
 

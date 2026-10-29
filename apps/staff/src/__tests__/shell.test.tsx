@@ -3,13 +3,20 @@
  * the operating home, the coach and referee workspace (SPK-UX-007), keyboard access (SPK-UX-009),
  * session handling (§4.13) and the facility switcher limited to the API's facility scope.
  */
-import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
+import { apiErrorBody, fakePermissions, fakeResponse } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 import { STAFF_AREAS } from '../navigation/areas';
-import { FACILITY_A, FACILITY_B, createTestApp, staffMe, todayFeed } from '../testing/test-app';
+import {
+  FACILITY_A,
+  FACILITY_B,
+  createTestApp,
+  mePermissions,
+  staffMe,
+  todayFeed,
+} from '../testing/test-app';
 
 const SPEC_ORDER = [
   'Today',
@@ -33,6 +40,7 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
     const app = createTestApp();
     render(app.at('/today'));
     const nav = await screen.findByRole('navigation', { name: 'Main' });
+    await within(nav).findByRole('link', { name: 'Today' });
     const links = within(nav)
       .getAllByRole('link')
       .map((a) => a.textContent);
@@ -44,7 +52,10 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
     const app = createTestApp();
     render(app.at('/'));
     expect(await screen.findByRole('heading', { name: 'Today' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Today' })).toHaveAttribute('aria-current', 'page');
+    expect(await screen.findByRole('link', { name: 'Today' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
   });
 
   it('every area opens with its inventory screen ids, reachable by keyboard', async () => {
@@ -52,11 +63,11 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
     const app = createTestApp();
     render(app.at('/today'));
     await screen.findByRole('heading', { name: 'Today' });
-    const finance = screen.getByRole('link', { name: 'Finance' });
+    const finance = await screen.findByRole('link', { name: 'Finance' });
     finance.focus();
     await user.keyboard('{Enter}');
     expect(await screen.findByRole('heading', { level: 2, name: 'Finance' })).toBeInTheDocument();
-    expect(screen.getByText(/Not built yet \(SCR-S-53 to SCR-S-55, SCR-S-57/)).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Conditional capabilities' })).toBeInTheDocument();
   });
 
   it('offers a skip link and a menu button that exposes its state for narrow screens', async () => {
@@ -77,6 +88,95 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
     const app = createTestApp();
     render(app.at('/finance/unknown-thing'));
     expect(await screen.findByText('Page not available')).toBeInTheDocument();
+  });
+});
+
+describe('navigation from GET /v1/me/permissions (SPK-UX-005, K-05)', () => {
+  async function mainLinks() {
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    await within(nav).findByRole('link', { name: 'My assignments' });
+    return within(nav);
+  }
+
+  it('lists only the areas the API marks visible, in specification order, then the workspace', async () => {
+    const app = createTestApp({
+      routes: { 'GET /me/permissions': mePermissions({ areas: ['finance', 'today', 'arrival'] }) },
+    });
+    render(app.at('/today'));
+    const nav = await mainLinks();
+    await nav.findByRole('link', { name: 'Today' });
+    expect(nav.getAllByRole('link').map((a) => a.textContent)).toEqual([
+      'Today',
+      'Arrival and attendance',
+      'Finance',
+      'My assignments',
+    ]);
+    expect(nav.getByRole('list', { name: 'Areas' })).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/me/permissions')).toHaveLength(1);
+  });
+
+  it('a page of an area not listed still opens by address and renders ACCESS_DENIED as not available', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ areas: ['today'] }),
+        'GET /people/{id}': { status: 403, body: apiErrorBody('ACCESS_DENIED') },
+        'GET /people/{id}/timeline': { status: 403, body: apiErrorBody('ACCESS_DENIED') },
+        'GET /people/{id}/authority': { status: 403, body: apiErrorBody('ACCESS_DENIED') },
+      },
+    });
+    render(app.at('/people/0192f1a0-0000-7000-8000-0000000000d1'));
+    const nav = await mainLinks();
+    await nav.findByRole('link', { name: 'Today' });
+    expect(nav.queryByRole('link', { name: 'People and families' })).toBeNull();
+    expect((await screen.findAllByTestId('state-unavailable')).length).toBeGreaterThan(0);
+  });
+
+  it('while the areas load, says so; the workspace link is there already', async () => {
+    const app = createTestApp({
+      routes: { 'GET /me/permissions': () => new Promise<Response>(() => undefined) },
+    });
+    render(app.at('/workspace'));
+    expect(await screen.findByTestId('nav-loading')).toHaveTextContent('Loading your areas…');
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    expect(within(nav).getByRole('link', { name: 'My assignments' })).toBeInTheDocument();
+    expect(within(nav).queryByRole('link', { name: 'Today' })).toBeNull();
+  });
+
+  it('a failed read shows its code and "Load areas again", which recovers the list', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { correlationId: 'corr-nav' }))
+            : fakeResponse(200, fakePermissions());
+        },
+      },
+    });
+    render(app.at('/workspace'));
+    expect(await screen.findByTestId('nav-error')).toHaveTextContent(
+      'Your areas could not be loaded. Error code: INTERNAL_ERROR. Reference: corr-nav.',
+    );
+    await user.click(screen.getByRole('button', { name: 'Load areas again' }));
+    expect(await screen.findByRole('link', { name: 'Today' })).toBeInTheDocument();
+  });
+
+  it('offline with nothing loaded says the areas need a connection', async () => {
+    const app = createTestApp({ online: false });
+    render(app.at('/workspace'));
+    expect(await screen.findByTestId('nav-offline')).toHaveTextContent(
+      'No connection: your areas load when you are connected.',
+    );
+  });
+
+  it('says when no area is available to the account', async () => {
+    const app = createTestApp({ routes: { 'GET /me/permissions': mePermissions({ areas: [] }) } });
+    render(app.at('/workspace'));
+    expect(await screen.findByTestId('nav-none')).toHaveTextContent(
+      'No dashboard areas are available to your account.',
+    );
   });
 });
 

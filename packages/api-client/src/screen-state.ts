@@ -8,6 +8,12 @@ import { ApiError } from './errors';
 export type ErrorPresentation =
   /** Protected NOT_FOUND, ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED: "not available". */
   | 'unavailable'
+  /**
+   * ACCESS_DENIED with `details.code: 'CAPABILITY_DISABLED'`: the organization has turned the
+   * capability off (K-12, DEC-016). Shown as "turned off", naming the decision that may turn it on
+   * (`turnedOffFromError`), never as "not available to you" or as a failure.
+   */
+  | 'turned_off'
   /** No connection or no response: show what is cached with its age. */
   | 'offline'
   /** This build is below the minimum supported version (SCR-C-39). */
@@ -21,6 +27,7 @@ export function presentationForError(error: unknown): ErrorPresentation {
   if (!(error instanceof ApiError)) return 'error';
   if (error.kind === 'update_required') return 'update_required';
   if (error.isAuthenticationRequired) return 'session_expired';
+  if (error.isCapabilityDisabled) return 'turned_off';
   if (error.isNotFound || error.isPermissionRestriction) return 'unavailable';
   if (error.isOffline) return 'offline';
   return 'error';
