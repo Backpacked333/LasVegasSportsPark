@@ -1,34 +1,50 @@
 /**
  * SCR-S-21 Household, relationships and grants (SPK-IAM-001, SPK-IAM-003, SPK-IAM-004,
- * SPK-IAM-006, SPK-AT-017, DEC-004).
+ * SPK-IAM-005, SPK-IAM-006, SPK-AT-017, DEC-004).
  *
+ * - The person's authority from `GET /v1/people/{id}/authority`: every relationship in both
+ *   directions with its parties (names from `GET /v1/person-names`), source and dates; each grant
+ *   on it with the API's state at its clock (effective, scheduled, suspended, revoked, ended) and
+ *   whether a disputed-access review restricts it ("under review"); the households the person
+ *   belongs to (grouping only, never authority) and the pending invitations that concern them.
+ *   An empty authority says so.
+ * - Every grant is revoked individually with a reason and the grant's expected revision;
+ *   revocation affects every later check (SPK-IAM-006). STALE_REVISION offers "Reload", which
+ *   re-reads the authority. One more permission is granted on a relationship one at a time.
  * - Relationships are recorded with each permission chosen on its own; nothing is pre-selected and
- *   no permission implies another (SPK-IAM-003). Every grant is shown and revoked individually,
- *   with a reason and the grant's expected revision; revocation affects every later check
- *   (SPK-IAM-006). All of these are privileged, audited commands the API authorizes.
- * - A household only groups people; it never gives anyone authority (SPK-IAM-001).
- * - Invitations show their full record: inviter, recipient, scope, requested and granted
- *   permissions, expiry, status (SPK-IAM-004). The expiry is the API's; none is invented here.
+ *   no permission implies another (SPK-IAM-003). All of these are privileged, audited commands
+ *   the API authorizes; after each, the authority is read again.
+ * - Invitations show their full record (SPK-IAM-004, `InvitationCard`); the expiry is the API's.
+ *   The invitations covering the person, in any state, are listed from `GET /v1/invitations`.
  * - Guardian verification is DEC-004 (pending): the screen says so and records relationships with
- *   the staff source the API assigns.
- * - The API cannot yet list a person's existing relationships, grants, households or invitations;
- *   that list is shown as not available, and the people this person holds `view` over are taken
- *   from the customer timeline's scope. Offline, every change is unavailable (§4.15: no guardian
- *   changes offline).
+ *   the staff source the API assigns. Offline, every change is unavailable (§4.15).
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { withServerDefaults } from '../../api/server-defaults';
+import {
+  INVITATION_LIST_KEYS,
+  InvitationCard,
+  revokedMessage,
+  type Invitation,
+} from '../../features/people/InvitationCard';
+import { PersonName, usePeopleNames, type PeopleNames } from '../../features/people/names';
 import { PeopleNav } from '../../features/people/PeopleNav';
 import { PersonReferenceField, referenceError } from '../../features/people/PersonReferenceField';
 import {
   GRANT_PERMISSIONS,
+  GRANT_STATUS_TONE,
+  INVITATION_STATUSES,
   RELATIONSHIP_KINDS,
-  personName,
+  displayName,
   type GrantPermission,
+  type InvitationStatus,
   type RelationshipKind,
 } from '../../features/people/people';
 import { useApp } from '../../providers/AppProviders';
@@ -42,40 +58,38 @@ import {
   TextAreaField,
   TextField,
 } from '../../ui/FormFields';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
+import { StatusBadge } from '../../ui/StatusBadge';
 import { formatDateTime, localInputToIso } from '../../ui/time';
+import { AUTHORITY_KEY } from './PersonRecordScreen';
 
 /** The OpenAPI component is nullable (it is reused as a nullable field elsewhere); a created one is not. */
 type Relationship = NonNullable<Schema<'Relationship'>>;
-type AccessGrant = Schema<'AccessGrant'>;
+type GrantView = Schema<'GrantView'>;
 type Household = Schema<'Household'>;
-type Invitation = Schema<'Invitation'>;
+type PersonAuthority = Schema<'PersonAuthority'>;
 
-interface RecordedRelationship {
-  relationship: Relationship;
-  grants: AccessGrant[];
+export const INVITATION_HISTORY_PAGE = 20;
+const ENDED_GRANT_STATES: ReadonlySet<GrantView['status']> = new Set(['revoked', 'ended']);
+
+/** Re-read the person's authority after a change (or to load a newer version). */
+function useRefreshAuthority() {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: AUTHORITY_KEY });
 }
 
-/** The status glyph agrees with the status text (SPK-UX-009). */
-const INVITATION_TONE: Readonly<Record<string, StatusTone>> = {
-  pending: 'pending',
-  accepted: 'success',
-  revoked: 'neutral',
-  expired: 'neutral',
-};
-
-function PersonLink({ id, self }: { id: string; self: string }) {
-  return id === self ? <span>this person</span> : <Link to={`/people/${id}`}>{id}</Link>;
-}
-
-function GrantRow({ grant, onChange }: { grant: AccessGrant; onChange: (g: AccessGrant) => void }) {
+function GrantRow({ grant }: { grant: GrantView }) {
   const { online } = useApp();
+  const refresh = useRefreshAuthority();
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
-  const revoke = useApiCommand('post', '/access-grants/{id}/revoke');
+  const [success, setSuccess] = useState<string | null>(null);
+  const revoke = useApiCommand('post', '/access-grants/{id}/revoke', {
+    invalidate: [AUTHORITY_KEY],
+  });
   const submit = () => {
     if (!reason.trim()) {
       setReasonError('Write why this permission is revoked.');
@@ -84,13 +98,21 @@ function GrantRow({ grant, onChange }: { grant: AccessGrant; onChange: (g: Acces
     setReasonError(null);
     void revoke
       .submit({
-        path: { id: grant.id },
+        path: { id: grant.grantId },
         body: { expectedRevision: grant.revision, reason: reason.trim() },
       })
-      .then(onChange)
+      .then(() => {
+        setSuccess(`Permission ${grant.permission} revoked.`);
+        setReason('');
+      })
       .catch(() => undefined);
   };
-  const revoked = grant.revokedAt !== null;
+  // STALE_REVISION or INVALID_TRANSITION: re-read the authority; the reason stays typed.
+  const reload = () => {
+    revoke.reset();
+    void refresh();
+  };
+  const revocable = !ENDED_GRANT_STATES.has(grant.status);
   return (
     <li aria-label={`Permission ${grant.permission}`}>
       <div className="row-text">
@@ -98,26 +120,17 @@ function GrantRow({ grant, onChange }: { grant: AccessGrant; onChange: (g: Acces
         <span className="caption">
           source {grant.source} · from {formatDateTime(grant.effectiveFrom)}
           {grant.effectiveTo ? ` to ${formatDateTime(grant.effectiveTo)}` : ''}
-          {grant.suspendedAt ? ` · suspended ${formatDateTime(grant.suspendedAt)}` : ''}
           {grant.revokedAt ? ` · revoked ${formatDateTime(grant.revokedAt)}` : ''}
-          {grant.revocationReason ? ` (${grant.revocationReason})` : ''}
         </span>
-        <StatusBadge
-          tone={grant.effective ? 'success' : 'neutral'}
-          label={grant.effective ? 'Effective now' : 'Not effective'}
-        />
+        <span className="actions-row">
+          <StatusBadge tone={GRANT_STATUS_TONE[grant.status]} label={`State: ${grant.status}`} />
+          {grant.underReview ? (
+            <StatusBadge tone="warning" label="Under review: restricted by an access review" />
+          ) : null}
+        </span>
       </div>
-      {!revoked && revoke.error?.isStale ? (
-        // No read of a grant exists, so a newer version cannot be loaded here: say so and stop
-        // offering a revoke that the API would refuse again (SPK-UX-008 stale version).
-        <div className="form" data-testid="grant-changed-elsewhere">
-          <StatusBadge tone="warning" label="Changed elsewhere" />
-          <p>
-            This permission changed since this page was loaded, and its current state cannot be read
-            here. Reopen the person to see it. Error code: {revoke.error.code}.
-          </p>
-        </div>
-      ) : !revoked ? (
+      <CommandSuccess message={success} />
+      {revocable && online ? (
         <div className="form">
           <TextField
             label={`Reason to revoke ${grant.permission}`}
@@ -128,15 +141,14 @@ function GrantRow({ grant, onChange }: { grant: AccessGrant; onChange: (g: Acces
           <Button
             variant="secondary"
             busy={revoke.isProcessing}
-            disabled={!online}
             aria-label={`Revoke permission ${grant.permission}`}
             onClick={submit}
           >
             Revoke
           </Button>
-          <CommandError error={revoke.error} onRetry={submit} />
         </div>
       ) : null}
+      <CommandError error={revoke.error} onRetry={submit} onReload={reload} />
     </li>
   );
 }
@@ -144,16 +156,15 @@ function GrantRow({ grant, onChange }: { grant: AccessGrant; onChange: (g: Acces
 function AddGrant({
   relationship,
   held,
-  onAdded,
 }: {
   relationship: Relationship;
   held: readonly GrantPermission[];
-  onAdded: (grant: AccessGrant) => void;
 }) {
   const { online } = useApp();
   const [permission, setPermission] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const grant = useApiCommand('post', '/access-grants');
+  const [success, setSuccess] = useState<string | null>(null);
+  const grant = useApiCommand('post', '/access-grants', { invalidate: [AUTHORITY_KEY] });
   const options = GRANT_PERMISSIONS.filter((p) => !held.includes(p.value));
   if (options.length === 0) return null;
   const submit = () => {
@@ -167,7 +178,7 @@ function AddGrant({
         body: { relationshipId: relationship.id, permission: permission as GrantPermission },
       })
       .then((g) => {
-        onAdded(g);
+        setSuccess(`Permission ${g.permission} granted.`);
         setPermission('');
       })
       .catch(() => undefined);
@@ -185,31 +196,32 @@ function AddGrant({
       <Button variant="secondary" busy={grant.isProcessing} disabled={!online} onClick={submit}>
         Grant permission
       </Button>
+      <CommandSuccess message={success} />
       <CommandError error={grant.error} onRetry={submit} />
     </div>
   );
 }
 
-function RecordedRelationshipCard({
+function RelationshipCard({
   personId,
-  item,
-  onChange,
+  relationship: r,
+  grants,
+  names,
 }: {
   personId: string;
-  item: RecordedRelationship;
-  onChange: (next: RecordedRelationship) => void;
+  relationship: Relationship;
+  grants: readonly GrantView[];
+  names: PeopleNames;
 }) {
-  const r = item.relationship;
-  const replaceGrant = (g: AccessGrant) =>
-    onChange({ ...item, grants: item.grants.map((x) => (x.id === g.id ? g : x)) });
+  const { online } = useApp();
   return (
     <li className="panel" aria-label={`Relationship ${r.kind}`}>
       <h4>
         {r.kind} · <StatusBadge tone="info" label={`Status: ${r.status}`} />
       </h4>
       <p>
-        <PersonLink id={r.actorPersonId} self={personId} /> holds this relationship over{' '}
-        <PersonLink id={r.subjectPersonId} self={personId} />.
+        <PersonName id={r.actorPersonId} names={names} self={personId} /> holds this relationship
+        over <PersonName id={r.subjectPersonId} names={names} self={personId} />.
       </p>
       <Facts
         items={[
@@ -219,31 +231,119 @@ function RecordedRelationshipCard({
           ['Reference', <code key="id">{r.id}</code>],
         ]}
       />
-      {item.grants.length === 0 ? (
+      {grants.length === 0 ? (
         <p>No permissions are granted on this relationship.</p>
       ) : (
         <ul className="list" aria-label="Permissions granted">
-          {item.grants.map((g) => (
-            <GrantRow key={g.id} grant={g} onChange={replaceGrant} />
+          {grants.map((g) => (
+            <GrantRow key={g.grantId} grant={g} />
           ))}
         </ul>
       )}
-      <AddGrant
-        relationship={r}
-        held={item.grants.filter((g) => g.revokedAt === null).map((g) => g.permission)}
-        onAdded={(g) => onChange({ ...item, grants: [...item.grants, g] })}
-      />
+      {r.status === 'active' && online ? (
+        <AddGrant
+          relationship={r}
+          held={grants.filter((g) => !ENDED_GRANT_STATES.has(g.status)).map((g) => g.permission)}
+        />
+      ) : null}
     </li>
   );
 }
 
-function RelationshipForm({
-  personId,
-  onRecorded,
-}: {
-  personId: string;
-  onRecorded: (r: RecordedRelationship) => void;
-}) {
+function AuthorityView({ personId, authority }: { personId: string; authority: PersonAuthority }) {
+  // Announced here: a revoked invitation leaves the pending list on the next read.
+  const [invitationOutcome, setInvitationOutcome] = useState<string | null>(null);
+  const relationships = authority.relationships.filter((r): r is Relationship => r !== null);
+  const names = usePeopleNames(
+    relationships
+      .flatMap((r) => [r.actorPersonId, r.subjectPersonId])
+      .filter((id) => id !== personId),
+  );
+  return (
+    <>
+      <section className="panel" aria-labelledby="existing-title">
+        <h3 id="existing-title">Recorded relationships and permissions</h3>
+        {relationships.length === 0 ? (
+          <StateView
+            variant="empty"
+            title="No relationships"
+            description="No relationship is recorded for this person, in either direction."
+          />
+        ) : (
+          <ul className="list" aria-label="Relationships">
+            {relationships.map((r) => (
+              <RelationshipCard
+                key={r.id}
+                personId={personId}
+                relationship={r}
+                grants={authority.grants.filter((g) => g.relationshipId === r.id)}
+                names={names}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+      <section className="panel" aria-labelledby="households-title">
+        <h3 id="households-title">Households</h3>
+        <p className="caption">
+          A household groups people. It never gives anyone authority over another person.
+        </p>
+        {authority.households.length === 0 ? (
+          <p>This person is not a member of any household.</p>
+        ) : (
+          <ul className="list" aria-label="Households of this person">
+            {authority.households.map((h) => (
+              <li key={h.id}>
+                <span>
+                  {h.name} · {h.memberCount} member(s)
+                </span>
+                <code>{h.id}</code>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <section className="panel" aria-labelledby="pending-invitations-title">
+        <h3 id="pending-invitations-title">Pending invitations</h3>
+        <CommandSuccess message={invitationOutcome} />
+        {authority.pendingInvitations.length === 0 ? (
+          <p>No pending invitation concerns this person.</p>
+        ) : (
+          <ul className="list" aria-label="Pending invitations">
+            {authority.pendingInvitations.map((i) => (
+              <li key={i.id}>
+                <InvitationCard
+                  invitation={i}
+                  self={personId}
+                  onRevoked={(next) => setInvitationOutcome(revokedMessage(next))}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+function AuthoritySection({ personId }: { personId: string }) {
+  const authority = useApiQuery({
+    path: '/people/{id}/authority',
+    request: { path: { id: personId } },
+  });
+  return (
+    <QueryBoundary
+      query={authority}
+      label="the person’s relationships, permissions and households"
+      empty={{ title: '', description: '' }}
+      unavailableOffline={['revoking and granting permissions']}
+    >
+      {(data) => <AuthorityView personId={personId} authority={data} />}
+    </QueryBoundary>
+  );
+}
+
+function RelationshipForm({ personId }: { personId: string }) {
   const { online } = useApp();
   const [direction, setDirection] = useState<'actor' | 'subject'>('subject');
   const [other, setOther] = useState('');
@@ -254,7 +354,7 @@ function RelationshipForm({
   const [reason, setReason] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [success, setSuccess] = useState<string | null>(null);
-  const create = useApiCommand('post', '/relationships');
+  const create = useApiCommand('post', '/relationships', { invalidate: [AUTHORITY_KEY] });
   const apiErrors = fieldErrorsOf(create.error);
 
   const submit = () => {
@@ -289,7 +389,6 @@ function RelationshipForm({
       .then((result) => {
         const relationship = result.relationship;
         if (!relationship) return;
-        onRecorded({ relationship, grants: result.grants });
         setSuccess(
           `Relationship recorded. State: ${relationship.status}, ${result.grants.length} permission(s) granted.`,
         );
@@ -396,7 +495,9 @@ function HouseholdSection({ personId }: { personId: string }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [household, setHousehold] = useState<Household | null>(null);
   const create = useApiCommand('post', '/households');
-  const addMember = useApiCommand('post', '/households/{id}/members');
+  const addMember = useApiCommand('post', '/households/{id}/members', {
+    invalidate: [AUTHORITY_KEY],
+  });
 
   /** The household the last add was for, so "Try again" re-sends that same add (same intent). */
   const [addTarget, setAddTarget] = useState<string | null>(null);
@@ -442,10 +543,7 @@ function HouseholdSection({ personId }: { personId: string }) {
 
   return (
     <section className="panel" aria-labelledby="household-title">
-      <h3 id="household-title">Household</h3>
-      <p className="caption">
-        A household groups people. It never gives anyone authority over another person.
-      </p>
+      <h3 id="household-title">Add to a household</h3>
       <div className="form">
         <TextField
           label="New household name"
@@ -501,7 +599,11 @@ function HouseholdSection({ personId }: { personId: string }) {
           <ul className="list" aria-label="Household members">
             {household.members.map((m) => (
               <li key={m.personId}>
-                <PersonLink id={m.personId} self={personId} />
+                {m.personId === personId ? (
+                  <span>this person</span>
+                ) : (
+                  <Link to={`/people/${m.personId}`}>Open the member’s record</Link>
+                )}
                 <span className="caption">{m.label ?? 'No label'}</span>
               </li>
             ))}
@@ -509,120 +611,6 @@ function HouseholdSection({ personId }: { personId: string }) {
         </div>
       ) : null}
     </section>
-  );
-}
-
-function InvitationRecord({
-  invitation,
-  token,
-  personId,
-  onChange,
-}: {
-  invitation: Invitation;
-  token: string | null;
-  personId: string;
-  onChange: (i: Invitation) => void;
-}) {
-  const { online } = useApp();
-  const [reason, setReason] = useState('');
-  const [reasonError, setReasonError] = useState<string | null>(null);
-  const revoke = useApiCommand('post', '/invitations/{id}/revoke');
-  const submit = () => {
-    if (!reason.trim()) {
-      setReasonError('Write why the invitation is revoked.');
-      return;
-    }
-    setReasonError(null);
-    void revoke
-      .submit({
-        path: { id: invitation.id },
-        body: { expectedRevision: invitation.revision, reason: reason.trim() },
-      })
-      .then(onChange)
-      .catch(() => undefined);
-  };
-  return (
-    <div className="panel" aria-label="Invitation record">
-      <StatusBadge
-        tone={INVITATION_TONE[invitation.status] ?? 'neutral'}
-        label={`Status: ${invitation.status}`}
-      />
-      <Facts
-        items={[
-          [
-            'Inviter',
-            invitation.invitedByPersonId ? (
-              <PersonLink key="inviter" id={invitation.invitedByPersonId} self={personId} />
-            ) : (
-              'Staff'
-            ),
-          ],
-          [
-            'Recipient',
-            invitation.recipientPersonId ? (
-              <PersonLink key="recipient" id={invitation.recipientPersonId} self={personId} />
-            ) : invitation.recipientContact ? (
-              `${invitation.recipientContact.kind}: ${invitation.recipientContact.value}`
-            ) : (
-              'Not named'
-            ),
-          ],
-          [
-            'Scope',
-            invitation.scope.type === 'person'
-              ? 'this person'
-              : `household ${invitation.scope.householdId}`,
-          ],
-          ['Relationship', invitation.relationshipKind],
-          ['Requested permissions', invitation.requestedPermissions.join(', ')],
-          [
-            'Granted permissions',
-            invitation.grantedPermissions.length > 0
-              ? invitation.grantedPermissions.join(', ')
-              : 'None until accepted',
-          ],
-          ['Open until', formatDateTime(invitation.expiresAt)],
-          [
-            'Accepted',
-            invitation.acceptedAt ? formatDateTime(invitation.acceptedAt) : 'Not accepted',
-          ],
-          ['Revoked', invitation.revokedAt ? formatDateTime(invitation.revokedAt) : 'No'],
-        ]}
-      />
-      {token ? (
-        <p>
-          One-time invitation code, shown only now. Give it only to the recipient:{' '}
-          <code>{token}</code>
-        </p>
-      ) : null}
-      {invitation.status === 'pending' && revoke.error?.isStale ? (
-        <div className="form" data-testid="invitation-changed-elsewhere">
-          <StatusBadge tone="warning" label="Changed elsewhere" />
-          <p>
-            This invitation changed since it was shown (it may have been accepted or revoked), and
-            its current state cannot be read here. Error code: {revoke.error.code}.
-          </p>
-        </div>
-      ) : invitation.status === 'pending' ? (
-        <div className="form">
-          <TextField
-            label="Reason to revoke the invitation"
-            value={reason}
-            onChange={setReason}
-            error={reasonError}
-          />
-          <Button
-            variant="secondary"
-            busy={revoke.isProcessing}
-            disabled={!online}
-            onClick={submit}
-          >
-            Revoke invitation
-          </Button>
-          <CommandError error={revoke.error} onRetry={submit} />
-        </div>
-      ) : null}
-    </div>
   );
 }
 
@@ -638,7 +626,8 @@ function InvitationSection({ personId }: { personId: string }) {
   const [issued, setIssued] = useState<{ invitation: Invitation; token: string | null } | null>(
     null,
   );
-  const invite = useApiCommand('post', '/invitations');
+  const [issuedOutcome, setIssuedOutcome] = useState<string | null>(null);
+  const invite = useApiCommand('post', '/invitations', { invalidate: INVITATION_LIST_KEYS });
   const submit = () => {
     const problems: Record<string, string> = {};
     if (recipientMode === 'person') {
@@ -750,53 +739,96 @@ function InvitationSection({ personId }: { personId: string }) {
         </Button>
       </form>
       <CommandError error={invite.error} onRetry={submit} />
+      <CommandSuccess message={issuedOutcome} />
       {issued ? (
-        <InvitationRecord
+        <InvitationCard
           invitation={issued.invitation}
           token={issued.token}
-          personId={personId}
-          onChange={(invitation) => setIssued({ invitation, token: null })}
+          self={personId}
+          onRevoked={(invitation) => {
+            setIssued({ invitation, token: null });
+            setIssuedOutcome(revokedMessage(invitation));
+          }}
         />
       ) : null}
     </section>
   );
 }
 
-function ViewScope({ personId }: { personId: string }) {
-  const timeline = useApiQuery({
-    path: '/customers/{personId}/timeline',
-    request: { path: { personId }, query: { limit: 1 } },
+function InvitationHistoryList({ personId, status }: { personId: string; status: string }) {
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const pages = useApiPages({
+    path: '/invitations',
+    request: {
+      query: {
+        scopePersonId: personId,
+        limit: INVITATION_HISTORY_PAGE,
+        ...(status ? { status: status as InvitationStatus } : {}),
+      },
+    },
   });
   return (
-    <QueryBoundary
-      query={timeline}
-      label="the people this person may view"
-      empty={{ title: '', description: '' }}
-    >
-      {(data) =>
-        data.scope.dependents.length === 0 ? (
-          <p>This person holds view over no one else right now.</p>
-        ) : (
-          <ul className="list" aria-label="People this person may view">
-            {data.scope.dependents.map((d) => (
-              <li key={d.id}>
-                <Link to={`/people/${d.id}`}>{d.displayName}</Link>
-                <span className="caption">
-                  {d.kind} · status {d.status}
-                </span>
+    <>
+      <CommandSuccess message={outcome} />
+      <QueryBoundary
+        query={pages}
+        label="the invitations covering this person"
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No invitations',
+          description: status
+            ? `No ${status} invitation covers this person.`
+            : 'No invitation has covered this person.',
+        }}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Invitations covering this person">
+            {items.map((i) => (
+              <li key={i.id}>
+                <InvitationCard
+                  invitation={i}
+                  self={personId}
+                  onRevoked={(next) => setOutcome(revokedMessage(next))}
+                />
               </li>
             ))}
           </ul>
-        )
-      }
-    </QueryBoundary>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={pages} label="invitations" />
+    </>
+  );
+}
+
+/** Every invitation that covers the person, in any state (`GET /v1/invitations?scopePersonId`). */
+function InvitationHistory({ personId }: { personId: string }) {
+  const permissions = usePermissions();
+  const [status, setStatus] = useState('');
+  const permitted = permissions.isPermitted('identity.read_invitations');
+  return (
+    <section className="panel" aria-labelledby="invitation-history-title">
+      <h3 id="invitation-history-title">Invitations covering this person</h3>
+      {permitted === false ? (
+        <p className="caption">The invitation history is not available to you.</p>
+      ) : (
+        <>
+          <SelectField
+            label="Invitation status"
+            placeholder="Any status"
+            options={INVITATION_STATUSES.map((s) => ({ value: s, label: s }))}
+            value={status}
+            onChange={setStatus}
+          />
+          <InvitationHistoryList key={status} personId={personId} status={status} />
+        </>
+      )}
+    </section>
   );
 }
 
 function RelationshipsForPerson({ personId }: { personId: string }) {
   const { online } = useApp();
   const person = useApiQuery({ path: '/people/{id}', request: { path: { id: personId } } });
-  const [recorded, setRecorded] = useState<RecordedRelationship[]>([]);
   return (
     <QueryBoundary
       query={person}
@@ -807,7 +839,7 @@ function RelationshipsForPerson({ personId }: { personId: string }) {
       {(data) => (
         <>
           <h3>
-            <Link to={`/people/${personId}`}>{personName(data)}</Link>
+            <Link to={`/people/${personId}`}>{displayName(data)}</Link>
           </h3>
           {!online ? (
             <p className="caption">
@@ -815,38 +847,11 @@ function RelationshipsForPerson({ personId }: { personId: string }) {
               reconnect.
             </p>
           ) : null}
-          <section className="panel" aria-labelledby="existing-title">
-            <h3 id="existing-title">Recorded relationships and permissions</h3>
-            <StateView
-              variant="unavailable"
-              title="The full list is not available yet"
-              description="The API cannot list a person’s relationships, permissions, households or invitations yet. What you record here is shown below with its full record."
-            />
-            <h4>People this person may view</h4>
-            <ViewScope personId={personId} />
-          </section>
-          {recorded.length > 0 ? (
-            <ul className="list" aria-label="Recorded in this session">
-              {recorded.map((item) => (
-                <RecordedRelationshipCard
-                  key={item.relationship.id}
-                  personId={personId}
-                  item={item}
-                  onChange={(next) =>
-                    setRecorded((list) =>
-                      list.map((x) => (x.relationship.id === next.relationship.id ? next : x)),
-                    )
-                  }
-                />
-              ))}
-            </ul>
-          ) : null}
-          <RelationshipForm
-            personId={personId}
-            onRecorded={(r) => setRecorded((list) => [r, ...list])}
-          />
+          <AuthoritySection personId={personId} />
+          <RelationshipForm personId={personId} />
           <HouseholdSection personId={personId} />
           <InvitationSection personId={personId} />
+          <InvitationHistory personId={personId} />
         </>
       )}
     </QueryBoundary>
