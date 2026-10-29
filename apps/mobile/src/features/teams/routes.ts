@@ -28,6 +28,8 @@ export const teamRoutes = {
   /** SCR-C-29 */
   dispute: (entryId: string, fixtureId: string) =>
     `/team/${entryId}/disputes/${fixtureId}` as const,
+  /** SCR-C-28, a tournament pool's table (CMP-15) */
+  pool: (entryId: string, poolId: string) => `/team/${entryId}/pools/${poolId}` as const,
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

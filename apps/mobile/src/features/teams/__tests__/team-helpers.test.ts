@@ -1,20 +1,22 @@
 /**
  * Helpers of the team screens: status vocabulary from journeys.md section 3 (SPK-UX-004,
  * SPK-UX-010), money display and input in minor units (SPK-PAY-001), route ids (§4.14), the
- * presentation-only viewer (SPK-CAP-002), the session list of opened teams, and the
- * development-only payment methods (DEC-019).
+ * presentation-only viewer from the workspace's `viewer` (SPK-CAP-002, CMP-02), facility time
+ * zones (SPK-SCHED-008), and the development-only payment methods (DEC-019).
  */
 import { DEV_CONTRIBUTION_PAYMENT_METHODS } from '../dev';
-import { formatDateOnly, formatMoney, ordinal, parseMoneyInput, roleWords } from '../format';
+import {
+  formatDateOnly,
+  formatInstant,
+  formatMoney,
+  ordinal,
+  parseMoneyInput,
+  roleWords,
+} from '../format';
 import { teamInvitationLink } from '../InvitationIssued';
 import { totalsLabel } from '../ObligationTotals';
-import {
-  forgetTeamEntry,
-  openedTeamEntries,
-  rememberTeamEntry,
-  resetOpenedTeamEntries,
-} from '../opened-teams';
-import { respondableChildren, viewerOf } from '../queries';
+import { currentLeaders, TEAM_ACTIONS, viewerOf } from '../queries';
+import { handoverCandidates } from '../RoleHandover';
 import { idParam, teamRoutes } from '../routes';
 import {
   availabilitySummaryText,
@@ -28,7 +30,7 @@ import {
   rsvpStatus,
   teamEntryStatus,
 } from '../status';
-import { IDS, me, obligation, result, workspace } from '../testing/fixtures';
+import { IDS, obligation, playerWorkspace, result, workspace } from '../testing/fixtures';
 
 const NOW = new Date('2026-10-24T12:00:00.000Z');
 
@@ -164,6 +166,20 @@ describe('money and formatting (SPK-PAY-001)', () => {
     expect(roleWords('league_manager')).toBe('League manager');
     expect(roleWords('unknown_role')).toBe('unknown role');
   });
+
+  it('SPK-SCHED-008: times in the facility’s zone when the API gives one, always named', () => {
+    expect(formatInstant('2026-10-31T17:00:00.000Z', 'America/Los_Angeles')).toMatch(
+      /^Sat, Oct 31, 10:00\sAM PDT$/,
+    );
+    // After the DST change the same zone is named PST.
+    expect(formatInstant('2026-11-07T17:00:00.000Z', 'America/Los_Angeles')).toMatch(
+      /9:00\sAM PST$/,
+    );
+    // An unknown zone falls back to the device's zone, still named, instead of failing.
+    expect(formatInstant('2026-10-31T17:00:00.000Z', 'Not/AZone')).toBe(
+      formatInstant('2026-10-31T17:00:00.000Z'),
+    );
+  });
 });
 
 describe('routes (§4.14)', () => {
@@ -176,6 +192,7 @@ describe('routes (§4.14)', () => {
     expect(teamRoutes.dispute(IDS.entry, IDS.fixture)).toBe(
       `/team/${IDS.entry}/disputes/${IDS.fixture}`,
     );
+    expect(teamRoutes.pool(IDS.entry, IDS.pool)).toBe(`/team/${IDS.entry}/pools/${IDS.pool}`);
   });
 
   it('builds the team invitation link for the link landing', () => {
@@ -185,77 +202,46 @@ describe('routes (§4.14)', () => {
   });
 });
 
-describe('viewer (presentation only, SPK-CAP-002)', () => {
-  it('follows the API role records and roster for the signed-in person', () => {
+describe('viewer (presentation only, SPK-CAP-002, CMP-02)', () => {
+  it('follows the workspace’s viewer and the roster for the signed-in person', () => {
     const ws = workspace();
-    expect(viewerOf(ws, IDS.me, NOW)).toEqual({
-      personId: IDS.me,
-      captainView: true,
-      onRoster: true,
-    });
-    expect(viewerOf(ws, IDS.player2, NOW)).toEqual({
-      personId: IDS.player2,
-      captainView: false,
-      onRoster: true,
-    });
+    const captain = viewerOf(ws, IDS.me, NOW);
+    expect(captain).toMatchObject({ personId: IDS.me, captainView: true, onRoster: true });
+    expect(captain.can(TEAM_ACTIONS.handoverRole)).toBe(true);
+    const player = viewerOf(playerWorkspace(), IDS.player2, NOW);
+    expect(player).toMatchObject({ captainView: false, onRoster: true });
+    expect(player.can(TEAM_ACTIONS.invite)).toBe(false);
     // A pending join request is not on the roster.
     expect(viewerOf(ws, IDS.player3, NOW).onRoster).toBe(false);
-    expect(viewerOf(ws, null, NOW).captainView).toBe(false);
   });
 
-  it('an ended captain role no longer shows captain tools', () => {
-    const ws = workspace({
-      roles: [
-        {
-          id: IDS.operation,
-          teamEntryId: IDS.entry,
-          personId: IDS.me,
-          role: 'captain',
-          effectiveFrom: '2026-09-01T12:00:00.000Z',
-          effectiveTo: '2026-10-01T12:00:00.000Z',
-        },
-      ],
+  it('the management view follows the API, never a role record the app reads itself', () => {
+    // The API says the viewer no longer acts as captain and fills no management lists.
+    const ended = workspace({
+      viewer: { roles: [], actingAsCaptain: false, availableActions: [] },
+      pendingInvitations: null,
+      pendingJoinRequests: null,
     });
-    expect(viewerOf(ws, IDS.me, NOW).captainView).toBe(false);
+    expect(viewerOf(ended, IDS.me, NOW).captainView).toBe(false);
+    // A co-captain the rule set does not let act as captain still manages what the API lists.
+    const coCaptain = workspace({
+      viewer: { roles: ['co_captain'], actingAsCaptain: false, availableActions: [] },
+    });
+    expect(viewerOf(coCaptain, IDS.me, NOW).captainView).toBe(true);
+    expect(viewerOf(coCaptain, IDS.me, NOW).can(TEAM_ACTIONS.manageRoster)).toBe(false);
   });
 
-  it('a guardian may answer only for children on the roster they hold register over', () => {
+  it('CMP-13: current leaders, and who could take a role (active roster members now)', () => {
     const ws = workspace();
-    expect(respondableChildren(ws, me(), NOW)).toEqual([]);
-    expect(
-      respondableChildren(
-        ws,
-        me({ authorities: [{ subjectPersonId: IDS.child, permissions: ['view'] }] }),
-        NOW,
-      ),
-    ).toEqual([]);
-    expect(
-      respondableChildren(
-        ws,
-        me({ authorities: [{ subjectPersonId: IDS.child, permissions: ['register'] }] }),
-        NOW,
-      ).map((m) => m.personId),
-    ).toEqual([IDS.child]);
-  });
-});
-
-describe('opened teams (session list, SCR-C-21)', () => {
-  beforeEach(() => resetOpenedTeamEntries());
-
-  it('keeps ids per account, most recent first, and forgets on request', () => {
-    rememberTeamEntry('account-a', IDS.entry);
-    rememberTeamEntry('account-a', IDS.priorEntry);
-    expect(openedTeamEntries('account-a')).toEqual([IDS.priorEntry, IDS.entry]);
-    rememberTeamEntry('account-a', IDS.entry);
-    expect(openedTeamEntries('account-a')).toEqual([IDS.entry, IDS.priorEntry]);
-    rememberTeamEntry('account-b', IDS.newEntry);
-    // Another account never sees these entries.
-    expect(openedTeamEntries('account-b')).toEqual([IDS.newEntry]);
-    forgetTeamEntry('account-a', IDS.priorEntry);
-    forgetTeamEntry('account-a', IDS.priorEntry);
-    expect(openedTeamEntries('account-a')).toEqual([IDS.entry]);
-    // The same list object is returned while nothing changes (stable snapshot).
-    expect(openedTeamEntries('account-a')).toBe(openedTeamEntries('account-a'));
+    expect(currentLeaders(ws, NOW).map((r) => r.role)).toEqual(['captain']);
+    expect(handoverCandidates(ws, 'captain', IDS.me, NOW).map((m) => m.displayName)).toEqual([
+      'Pat Player',
+      'Kim Junior',
+    ]);
+    const ended = workspace({
+      roles: [{ ...ws.roles[0]!, effectiveTo: '2026-10-01T12:00:00.000Z' }],
+    });
+    expect(currentLeaders(ended, NOW)).toEqual([]);
   });
 });
 

@@ -1,8 +1,9 @@
 /**
  * SCR-C-27 Create or renew team entry (SPK-REG-001, SPK-COMP-001, SPK-CAP-005, SPK-AT-003): a new
  * team in an open season with no division chosen by the customer, renewal that leaves the prior
- * season untouched, charges nothing and suggests prior players for invitation, and the empty,
- * validation, refused and offline states.
+ * season untouched, charges nothing and suggests prior players for invitation, renewal offered
+ * only when the API lists it for the viewer (CMP-02), the new entry listed on SCR-C-21, and the
+ * empty, validation, refused and offline states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
@@ -210,6 +211,44 @@ describe('SCR-C-27 TeamEntryScreen', () => {
       ),
     ).toBeOnTheScreen();
     expect(screen.queryByText(/ACCESS_DENIED/)).toBeNull();
+  });
+
+  it('CMP-02: renewal is not offered when the prior entry’s workspace does not list it', async () => {
+    const app = renderEntry(IDS.priorEntry, {
+      'GET /team-entries/{id}': {
+        status: 200,
+        body: {
+          ...prior,
+          viewer: { roles: ['member'], actingAsCaptain: false, availableActions: [] },
+        },
+      },
+    });
+    expect(
+      await screen.findByText(
+        'Renewing this team is not available to you. Only a captain of the prior entry can renew it.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Renew the team entry' })).toBeNull();
+    expect(app.requestsTo('GET', '/seasons')).toHaveLength(0);
+  });
+
+  it('SCR-C-21: a created entry refreshes the person’s team list', async () => {
+    const app = renderEntry(null, {
+      'POST /team-entries': { status: 201, body: created() },
+      'GET /me/team-entries': { status: 200, body: [] },
+    });
+    // The Teams list was read before (cached); creating an entry invalidates it.
+    await app.queryClient.fetchQuery({
+      queryKey: ['api', '/me/team-entries', null, null],
+      queryFn: () => [],
+    });
+    fireEvent.changeText(await screen.findByLabelText('Team name'), 'Desert Foxes');
+    fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
+    fireEvent.press(screen.getByRole('button', { name: 'Create the team entry' }));
+    expect(await screen.findByLabelText('Team entry awaiting approval')).toBeOnTheScreen();
+    expect(
+      app.queryClient.getQueryState(['api', '/me/team-entries', null, null])?.isInvalidated,
+    ).toBe(true);
   });
 
   it('empty: no season is open for team entries', async () => {

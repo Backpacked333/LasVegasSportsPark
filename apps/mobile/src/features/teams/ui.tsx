@@ -45,6 +45,15 @@ export function Title({ children }: { children: string }) {
   );
 }
 
+/** A heading inside a section (announced as a header, one level below the section's). */
+export function Subheading({ children }: { children: string }) {
+  return (
+    <Text style={styles.subheading} accessibilityRole="header">
+      {children}
+    </Text>
+  );
+}
+
 export function Body({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
   return <Text style={muted ? styles.caption : styles.body}>{children}</Text>;
 }
@@ -345,6 +354,7 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
   },
   body: { ...type.body, color: colors.text },
+  subheading: { ...type.body, color: colors.text, fontWeight: '700' },
   caption: { ...type.caption, color: colors.textMuted },
   detail: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   detailLabel: { ...type.body, color: colors.textMuted, minWidth: 120 },

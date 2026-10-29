@@ -1,14 +1,17 @@
 /**
- * SCR-C-22 Team workspace overview (SPK-CAP-001, SPK-CAP-002, SPK-COMP-004): the captain's
- * readiness indicators and tools, the reduced player view, upcoming games, the standing, and the
- * SPK-UX-008 states (loading, error with code, not available, offline with age).
+ * SCR-C-22 Team workspace overview (SPK-CAP-001, SPK-CAP-002, SPK-COMP-004, SPK-SUPPORT-002): the
+ * captain's readiness indicators and the tools the API lists for this viewer (CMP-02
+ * `viewer.availableActions`), the reduced player view, upcoming games, the standing, contacting
+ * the operating team (SUP-01), and the SPK-UX-008 states (loading, error with code, not
+ * available, offline with age).
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import { resetOpenedTeamEntries } from '../../../features/teams/opened-teams';
 import {
+  CAPTAIN_ACTIONS,
   IDS,
   baseRoutes,
+  customerCase,
   me,
   playerWorkspace,
   standings,
@@ -33,7 +36,6 @@ function routes(overrides = {}) {
 describe('SCR-C-22 TeamWorkspaceScreen', () => {
   beforeEach(() => {
     mockRouter.push.mockClear();
-    resetOpenedTeamEntries();
   });
 
   it('SPK-CAP-001: the captain sees upcoming games, the standing and the captain tools', async () => {
@@ -123,10 +125,138 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
     ).toBeOnTheScreen();
   });
 
-  it('contacting the operating team is shown as not available (no customer case command)', async () => {
-    const app = createTestApp({ routes: routes() });
+  it('CMP-02: a captain tool the API does not list for this viewer is not offered', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /team-entries/{id}': {
+          status: 200,
+          body: workspace({
+            viewer: {
+              roles: ['captain'],
+              actingAsCaptain: true,
+              availableActions: CAPTAIN_ACTIONS.filter(
+                (a) => a !== 'competition.manage_roster' && a !== 'competition.renew_team_entry',
+              ),
+            },
+          }),
+        },
+      }),
+    });
     render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Not available in the app yet')).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: 'Roster and invitations' })).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Roster change or substitute' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Renew for a new season' })).toBeNull();
+  });
+
+  describe('contact the operating team (SUP-01, SPK-SUPPORT-002)', () => {
+    it('the captain sends a team request and sees its status only', async () => {
+      const app = createTestApp({
+        routes: routes({ 'POST /me/support-requests': { status: 201, body: customerCase() } }),
+      });
+      render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      const form = await screen.findByTestId('contact-operations');
+      fireEvent.changeText(within(form).getByLabelText('Title'), '  Field 2 lights  ');
+      fireEvent.changeText(
+        within(form).getByLabelText('What you need'),
+        'The lights on Field 2 were out on Saturday.',
+      );
+      fireEvent.press(within(form).getByRole('button', { name: 'Send to the operating team' }));
+      const sent = await screen.findByTestId('support-request-sent');
+      expect(within(sent).getByLabelText('Request open')).toBeOnTheScreen();
+      expect(app.fake.requests.filter((r) => r.route === '/me/support-requests')).toHaveLength(1);
+      const post = app.fake.requests.find((r) => r.route === '/me/support-requests');
+      expect(post?.body).toEqual({
+        category: 'team',
+        title: 'Field 2 lights',
+        description: 'The lights on Field 2 were out on Saturday.',
+        teamEntryId: IDS.entry,
+      });
+      expect(post?.headers['idempotency-key']).toMatch(/^key-/);
+      fireEvent.press(within(sent).getByRole('button', { name: 'See your support requests' }));
+      expect(mockRouter.push).toHaveBeenCalledWith('/support');
+    });
+
+    it('asks for a title and a description before sending anything', async () => {
+      const app = createTestApp({ routes: routes() });
+      render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      fireEvent.press(await screen.findByRole('button', { name: 'Send to the operating team' }));
+      expect(await screen.findByLabelText('Title. Enter a short title.')).toBeOnTheScreen();
+      expect(screen.getByLabelText('What you need. Enter what you need.')).toBeOnTheScreen();
+      expect(app.fake.requests.filter((r) => r.route === '/me/support-requests')).toHaveLength(0);
+    });
+
+    it('a refused request is "not available" and the draft is kept', async () => {
+      const app = createTestApp({
+        routes: routes({
+          'POST /me/support-requests': () =>
+            fakeResponse(
+              403,
+              apiErrorBody('ACCESS_DENIED', { nextAction: 'contact_support_or_request_access' }),
+            ),
+        }),
+      });
+      render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      fireEvent.changeText(await screen.findByLabelText('Title'), 'Lights');
+      fireEvent.changeText(screen.getByLabelText('What you need'), 'Field 2');
+      fireEvent.press(screen.getByRole('button', { name: 'Send to the operating team' }));
+      expect(
+        await screen.findByText(
+          'Contacting the operating team about this team is not available to you. Use Support for a request about yourself.',
+        ),
+      ).toBeOnTheScreen();
+      expect(screen.getByLabelText('Title').props.value).toBe('Lights');
+    });
+
+    it('shows a failed request with its code and retries under the same key', async () => {
+      let attempt = 0;
+      const app = createTestApp({
+        routes: routes({
+          'POST /me/support-requests': () => {
+            attempt += 1;
+            return attempt === 1
+              ? fakeResponse(
+                  503,
+                  apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+                )
+              : fakeResponse(201, customerCase());
+          },
+        }),
+      });
+      render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      fireEvent.changeText(await screen.findByLabelText('Title'), 'Lights');
+      fireEvent.changeText(screen.getByLabelText('What you need'), 'Field 2');
+      fireEvent.press(screen.getByRole('button', { name: 'Send to the operating team' }));
+      expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      expect(await screen.findByTestId('support-request-sent')).toBeOnTheScreen();
+      const keys = app.fake.requests
+        .filter((r) => r.route === '/me/support-requests')
+        .map((r) => r.headers['idempotency-key']);
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).toBe(keys[0]);
+    });
+
+    it('offline: sending is disabled and the draft kept', async () => {
+      const app = createTestApp({ routes: routes() });
+      render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      fireEvent.changeText(await screen.findByLabelText('Title'), 'Lights');
+      act(() => app.sources.setReachable(false));
+      expect(screen.getByRole('button', { name: 'Send to the operating team' })).toBeDisabled();
+      expect(
+        screen.getByLabelText('Contacting the operating team needs a connection'),
+      ).toBeOnTheScreen();
+      expect(screen.getByLabelText('Title').props.value).toBe('Lights');
+    });
+
+    it('a roster player is pointed to Support instead', async () => {
+      const app = createTestApp({
+        routes: routes({ 'GET /team-entries/{id}': { status: 200, body: playerWorkspace() } }),
+      });
+      render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      fireEvent.press(await screen.findByRole('button', { name: 'Open Support' }));
+      expect(mockRouter.push).toHaveBeenCalledWith('/support');
+      expect(screen.queryByTestId('contact-operations')).toBeNull();
+    });
   });
 
   it('§4.10: a team the person may not see is "not available", with no hint it exists', async () => {

@@ -8,23 +8,25 @@
  * (SPK-COMP-004).
  *
  * Roster players get the reduced view: no captain sections, teammates' names and playing status
- * without eligibility indicators. Which view is shown follows the API's role records (see
- * features/teams/queries.ts); the API authorizes every command behind the captain tools.
+ * without eligibility indicators. Which view is shown follows the workspace's `viewer` (CMP-02,
+ * see features/teams/queries.ts), and each captain tool is offered only when its action is in
+ * `viewer.availableActions`; the API still authorizes every command behind them.
  *
- * Not available from the API (reported): contacting the operating team (`POST /v1/cases` is staff
- * only), a forms-outstanding indicator, and a player's list of their own contribution requests.
+ * The captain contacts the operating team about the team with `POST /v1/me/support-requests`
+ * (features/teams/ContactOperations.tsx, SPK-SUPPORT-002); players are pointed to Support. A
+ * forms-outstanding indicator is not built: stage 3 left it pending DEC-002 and DEC-028.
  * What captains may see beyond the API's indicators is DEC-012 (pending).
  *
  * States: loading; empty (no fixtures yet); ready; permission restriction (captain-only sections
  * hidden for players; NOT_FOUND is "not available"); stale (refetch on focus, "Updated <time>");
- * offline (cached with age); processing and success: not applicable here (commands live on the
- * linked screens).
+ * offline (cached with age, sending a request disabled); processing and success: the request to
+ * the operating team (other commands live on the linked screens).
  */
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateRange, ordinal, plural } from '../../features/teams/format';
-import type { Viewer, Workspace } from '../../features/teams/queries';
+import { TEAM_ACTIONS, type Viewer, type Workspace } from '../../features/teams/queries';
 import { idParam, teamRoutes } from '../../features/teams/routes';
 import {
   availabilitySummaryText,
@@ -34,6 +36,7 @@ import {
   rsvpStatus,
   teamEntryStatus,
 } from '../../features/teams/status';
+import { ContactOperations, ContactThroughSupport } from '../../features/teams/ContactOperations';
 import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, ButtonRow, Detail, ReasonList, Section, Title } from '../../features/teams/ui';
 import { useNow } from '../../providers/AppProviders';
@@ -101,7 +104,10 @@ function CaptainReadiness({ workspace }: { workspace: Workspace }) {
           r.financialStatusRef ? 'Recorded: see Team contributions' : 'No obligation recorded yet'
         }
       />
-      <Detail label="Forms outstanding" value="Not shown: not available from the service yet" />
+      <Detail
+        label="Forms outstanding"
+        value="Not shown: waiting on a decision (DEC-002, DEC-028)"
+      />
       {r.issues.length > 0 ? (
         <ReasonList reasons={r.issues} testID="readiness-issues" />
       ) : (
@@ -194,6 +200,7 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
               label="Roster and invitations"
               onPress={() => router.push(teamRoutes.roster(entryId))}
               variant="secondary"
+              accessibilityHint="Invitations, join requests, the roster and the captain role"
             />
             <Button
               label="Availability"
@@ -205,17 +212,21 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
               onPress={() => router.push(teamRoutes.contributions(entryId))}
               variant="secondary"
             />
-            <Button
-              label="Roster change or substitute"
-              onPress={() => router.push(teamRoutes.rosterChange(entryId))}
-              variant="secondary"
-            />
-            <Button
-              label="Renew for a new season"
-              onPress={() => router.push(teamRoutes.renewEntry(entryId))}
-              variant="secondary"
-              accessibilityHint="Starts a new season entry; this season's records stay as they are"
-            />
+            {viewer.can(TEAM_ACTIONS.manageRoster) ? (
+              <Button
+                label="Roster change or substitute"
+                onPress={() => router.push(teamRoutes.rosterChange(entryId))}
+                variant="secondary"
+              />
+            ) : null}
+            {viewer.can(TEAM_ACTIONS.renew) ? (
+              <Button
+                label="Renew for a new season"
+                onPress={() => router.push(teamRoutes.renewEntry(entryId))}
+                variant="secondary"
+                accessibilityHint="Starts a new season entry; this season's records stay as they are"
+              />
+            ) : null}
           </ButtonRow>
         </Section>
       ) : (
@@ -239,11 +250,11 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
       )}
 
       <Section title="Contact the operating team">
-        <StateView
-          variant="unavailable"
-          title="Not available in the app yet"
-          description="Opening a support request from the app is not available yet. Contact the front desk."
-        />
+        {viewer.captainView ? (
+          <ContactOperations workspace={workspace} />
+        ) : (
+          <ContactThroughSupport />
+        )}
       </Section>
     </View>
   );

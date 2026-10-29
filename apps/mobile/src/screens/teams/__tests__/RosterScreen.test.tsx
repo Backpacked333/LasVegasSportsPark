@@ -1,22 +1,31 @@
 /**
  * SCR-C-23 Roster and invitations (SPK-IAM-004, SPK-CAP-001, SPK-CAP-002, SPK-COMP-005): roster
  * history with effective dates, invitations per recipient with their own idempotency keys
- * (partial completion), sharing the link once, revoking, join request decisions, and the
- * permission, stale and offline states.
+ * (partial completion), sharing the link once, revoking, join request decisions, handing over the
+ * captain or co-captain role (CMP-13), tools offered only when the API lists them (CMP-02), and
+ * the permission, stale and offline states.
  */
 import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { Share } from 'react-native';
 import {
+  CAPTAIN_ACTIONS,
   IDS,
   ROSTER,
   baseRoutes,
   invitation,
   member,
   playerWorkspace,
+  workspace,
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { REVOKE_REASON, RosterScreen } from '../RosterScreen';
+
+const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
+jest.mock('expo-router', () => ({
+  ...jest.requireActual('expo-router'),
+  useRouter: () => mockRouter,
+}));
 
 const roster = {
   teamEntryId: IDS.entry,
@@ -335,5 +344,212 @@ describe('SCR-C-23 RosterScreen', () => {
     expect(screen.getByLabelText('Recipient 1: email address').props.value).toBe(
       'sam@example.test',
     );
+  });
+
+  it('CMP-02: tools the API does not list for this viewer are not offered', async () => {
+    renderRoster({
+      routes: routes({
+        'GET /team-entries/{id}': {
+          status: 200,
+          body: workspace({
+            viewer: { roles: ['co_captain'], actingAsCaptain: false, availableActions: [] },
+          }),
+        },
+      }),
+    });
+    expect(
+      await screen.findByText('Inviting players is not available for this team now.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('invite-form')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Revoke the invitation/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve Riley Requester' })).toBeNull();
+    expect(screen.queryByTestId('leaders')).toBeNull();
+    // The management lists the API filled stay readable.
+    expect(screen.getByText('sam@example.test')).toBeOnTheScreen();
+  });
+
+  describe('role handover (CMP-13, SPK-COMP-005)', () => {
+    const handover = (overrides = {}) => ({
+      teamEntryId: IDS.entry,
+      role: 'captain',
+      fromPersonId: IDS.me,
+      toPersonId: IDS.player2,
+      effectiveAt: '2026-10-24T12:00:00.000Z',
+      roles: [],
+      entryRevision: 5,
+      ...overrides,
+    });
+
+    async function chooseCaptainToPat(reason = 'Moving away for the season') {
+      const section = await screen.findByTestId('role-handover');
+      fireEvent.press(within(section).getByRole('radio', { name: 'Captain, held by you' }));
+      fireEvent.press(within(section).getByRole('radio', { name: 'Pat Player' }));
+      fireEvent.changeText(within(section).getByLabelText('Reason'), reason);
+      fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
+      expect(
+        within(section).getByText('Hand the captain role from you to Pat Player?'),
+      ).toBeOnTheScreen();
+      fireEvent.press(within(section).getByRole('button', { name: 'Hand over to Pat Player' }));
+    }
+
+    it('hands the captain role to an active roster member with the entry revision', async () => {
+      mockRouter.replace.mockClear();
+      const app = renderRoster({
+        routes: routes({
+          'POST /team-entries/{id}/roles/handover': { status: 200, body: handover() },
+        }),
+      });
+      const section = await screen.findByTestId('role-handover');
+      // Only active roster members now are offered; a pending request and the holder are not.
+      expect(within(section).queryByRole('radio', { name: 'Riley Requester' })).toBeNull();
+      fireEvent.press(within(section).getByRole('radio', { name: 'Captain, held by you' }));
+      expect(within(section).queryByRole('radio', { name: 'Casey Captain' })).toBeNull();
+      expect(within(section).getByRole('radio', { name: 'Kim Junior' })).toBeOnTheScreen();
+      await chooseCaptainToPat();
+      const done = await screen.findByTestId('handover-done');
+      expect(
+        within(done).getByLabelText(/^Pat Player is captain from Sat, Oct 24/),
+      ).toBeOnTheScreen();
+      expect(
+        within(done).getByText(
+          'You no longer hold the captain role. Earlier role records are kept as history.',
+        ),
+      ).toBeOnTheScreen();
+      expect(app.bodiesOf('POST', '/team-entries/{id}/roles/handover')).toEqual([
+        {
+          role: 'captain',
+          fromPersonId: IDS.me,
+          toPersonId: IDS.player2,
+          reason: 'Moving away for the season',
+          expectedRevision: 4,
+        },
+      ]);
+      expect(app.keysOf('POST', '/team-entries/{id}/roles/handover')[0]).toMatch(/^key-/);
+      fireEvent.press(within(done).getByRole('button', { name: 'Show the team' }));
+      expect(mockRouter.replace).toHaveBeenCalledWith(`/team/${IDS.entry}`);
+      await app.settle();
+    });
+
+    it('asks for the role, the new holder and a reason before sending', async () => {
+      const app = renderRoster();
+      const section = await screen.findByTestId('role-handover');
+      fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
+      expect(within(section).getByText('▲ Choose the role to hand over.')).toBeOnTheScreen();
+      expect(
+        within(section).getByLabelText('Reason. Give the reason for the handover.'),
+      ).toBeOnTheScreen();
+      expect(app.requestsTo('POST', '/team-entries/{id}/roles/handover')).toHaveLength(0);
+    });
+
+    it('SPK-AT-013: a new holder the rule set refuses shows the API reasons and code', async () => {
+      renderRoster({
+        routes: routes({
+          'POST /team-entries/{id}/roles/handover': () =>
+            fakeResponse(
+              422,
+              apiErrorBody('ELIGIBILITY_FAILED', {
+                message: 'The new holder is not eligible under the rule set.',
+                nextAction: 'review_eligibility_reasons',
+                details: {
+                  personId: IDS.player2,
+                  reasons: [
+                    {
+                      code: 'suspended',
+                      severity: 'blocking',
+                      message: 'The player is suspended.',
+                      responsibleRole: 'league_manager',
+                      requiredAction: 'Wait until the suspension is served.',
+                    },
+                  ],
+                },
+              }),
+            ),
+        }),
+      });
+      await chooseCaptainToPat();
+      expect(await screen.findByText('The player is suspended.')).toBeOnTheScreen();
+      expect(
+        screen.getByText('League manager: Wait until the suspension is served.'),
+      ).toBeOnTheScreen();
+      expect(screen.getByText(/Error code: ELIGIBILITY_FAILED/)).toBeOnTheScreen();
+    });
+
+    it('§4.9: a changed entry (STALE_REVISION) reloads the workspace', async () => {
+      const app = renderRoster({
+        routes: routes({
+          'POST /team-entries/{id}/roles/handover': () =>
+            fakeResponse(
+              409,
+              apiErrorBody('STALE_REVISION', { nextAction: 'reload_current_state' }),
+            ),
+        }),
+      });
+      await chooseCaptainToPat();
+      expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+      const reads = app.requestsTo('GET', '/team-entries/{id}').length;
+      fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+      await screen.findByTestId('role-handover');
+      expect(app.requestsTo('GET', '/team-entries/{id}').length).toBeGreaterThan(reads);
+      await app.settle();
+    });
+
+    it('a refused handover is "not available"', async () => {
+      renderRoster({
+        routes: routes({
+          'POST /team-entries/{id}/roles/handover': () =>
+            fakeResponse(
+              403,
+              apiErrorBody('ACCESS_DENIED', { nextAction: 'contact_support_or_request_access' }),
+            ),
+        }),
+      });
+      await chooseCaptainToPat();
+      expect(
+        await screen.findByText('Handing over this role is not available to you.'),
+      ).toBeOnTheScreen();
+      expect(screen.queryByText(/ACCESS_DENIED/)).toBeNull();
+    });
+
+    it('lists a co-captain role held by someone else, and offline disables the handover', async () => {
+      const app = renderRoster({
+        routes: routes({
+          'GET /team-entries/{id}': {
+            status: 200,
+            body: workspace({
+              roles: [
+                ...workspace().roles,
+                {
+                  id: IDS.coCaptainRole,
+                  teamEntryId: IDS.entry,
+                  personId: IDS.player2,
+                  role: 'co_captain',
+                  effectiveFrom: '2026-09-01T12:00:00.000Z',
+                  effectiveTo: null,
+                },
+              ],
+              viewer: {
+                roles: ['captain'],
+                actingAsCaptain: true,
+                availableActions: CAPTAIN_ACTIONS,
+              },
+            }),
+          },
+        }),
+      });
+      const section = await screen.findByTestId('role-handover');
+      fireEvent.press(
+        within(section).getByRole('radio', { name: 'Co-captain, held by Pat Player' }),
+      );
+      fireEvent.press(within(section).getByRole('radio', { name: 'Kim Junior' }));
+      fireEvent.changeText(within(section).getByLabelText('Reason'), 'Rotation');
+      fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
+      act(() => app.sources.setReachable(false));
+      expect(
+        within(section).getByRole('button', { name: 'Hand over to Kim Junior' }),
+      ).toBeDisabled();
+      expect(
+        within(section).getByLabelText('Handing over a role needs a connection'),
+      ).toBeOnTheScreen();
+    });
   });
 });

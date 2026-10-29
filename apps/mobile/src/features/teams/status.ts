@@ -38,9 +38,13 @@ export function teamEntryStatus(
   }
 }
 
-/** Fixture states (journeys.md): a scheduled fixture shows its time; readiness is separate. */
+/**
+ * Fixture states (journeys.md): a scheduled fixture shows its time, in the facility's zone when
+ * the caller has it (`venue.timezone`, SPK-SCHED-008); readiness is separate.
+ */
 export function fixtureStatus(
   fixture: Pick<Fixture, 'status' | 'scheduledStart'>,
+  timeZone?: string | null,
 ): StatusBadgeProps {
   switch (fixture.status) {
     case 'unscheduled':
@@ -48,7 +52,9 @@ export function fixtureStatus(
     case 'scheduled':
       return {
         tone: 'info',
-        label: fixture.scheduledStart ? formatInstant(fixture.scheduledStart) : 'Scheduled',
+        label: fixture.scheduledStart
+          ? formatInstant(fixture.scheduledStart, timeZone)
+          : 'Scheduled',
       };
     case 'postponed':
       return { tone: 'warning', label: 'Postponed' };

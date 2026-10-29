@@ -5,10 +5,8 @@
  */
 import { waitFor } from '@testing-library/react-native';
 import { createTestApp, type TestAppOptions } from '../../../testing/test-app';
-import { resetOpenedTeamEntries } from '../opened-teams';
 
 export function createTeamsTestApp(options: TestAppOptions = {}) {
-  resetOpenedTeamEntries();
   const app = createTestApp(options);
   const requestsTo = (method: string, route: string) =>
     app.fake.requests.filter((r) => r.method === method && r.route === route);

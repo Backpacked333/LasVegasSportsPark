@@ -8,6 +8,11 @@
  * narratives are never requested or shown (SPK-DISC-004). Sharing standings publicly depends on
  * the public information policy (DEC-012, pending) and is not offered.
  *
+ * Tournament pools (CMP-15, §3.16, capability `tournaments`, DEC-078): a pool's table is
+ * PoolStandingsScreen. Where the organization has tournaments turned on, this screen says that the
+ * API does not yet name the pool a team plays in (no pool list for a division or an entry,
+ * reported), so no pool table can be listed here; with tournaments off nothing is shown.
+ *
  * States: loading; empty (no official results yet); ready; permission restriction (not
  * available); stale version (the standings revision changed: "Calculated <time>" and refetch on
  * focus); offline (cached with its calculation time and age); processing and success: not
@@ -16,6 +21,7 @@
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay, formatInstant, ordinal, plural } from '../../features/teams/format';
 import type { Workspace } from '../../features/teams/queries';
@@ -25,6 +31,7 @@ import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, Section, Title } from '../../features/teams/ui';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { colors, spacing, type } from '../../ui/theme';
 
 /** The published component is nullable (reported); a null answer reads as "no official results". */
@@ -70,7 +77,14 @@ export function standingsRowLabel(row: StandingsRow, ours: boolean): string {
 /** Above this text scale the table's fixed columns no longer fit: rows are stacked instead. */
 export const LARGE_TEXT_SCALE = 1.3;
 
-function StandingsTable({ standings, entryId }: { standings: Standings; entryId: string }) {
+/** The table of a division or a pool (SPK-RESULT-003): the rows as the API ordered them. */
+export function StandingsTable({
+  standings,
+  entryId,
+}: {
+  standings: Pick<Standings, 'rows'>;
+  entryId: string;
+}) {
   const { fontScale } = useWindowDimensions();
   if (fontScale > LARGE_TEXT_SCALE) {
     // SPK-UX-009 large text: one readable row per team instead of clipped numeric cells.
@@ -132,7 +146,7 @@ function StandingsTable({ standings, entryId }: { standings: Standings; entryId:
   );
 }
 
-function TiebreakList({
+export function TiebreakList({
   explanations,
   names,
 }: {
@@ -299,7 +313,23 @@ function StandingsContent({ workspace }: { workspace: Workspace }) {
       ) : null}
       <Results workspace={workspace} names={names} />
       <Bracket workspace={workspace} names={names} />
+      <TournamentPools />
     </View>
+  );
+}
+
+/** Shown only while the organization has tournaments on (DEC-016, DEC-078). */
+function TournamentPools() {
+  const tournaments = usePermissions().isCapabilityEnabled('tournaments');
+  if (tournaments !== true) return null;
+  return (
+    <Section title="Tournament pools" testID="tournament-pools">
+      <StateView
+        variant="unavailable"
+        title="Pool tables not listed yet"
+        description="This league can run tournament pools, but the service does not yet say which pool a team plays in, so pool tables cannot be listed here."
+      />
+    </Section>
   );
 }
 
