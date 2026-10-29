@@ -2,7 +2,7 @@
   "name": "@sportspark/api",
   "version": "0.1.0",
   "private": true,
-  "description": "Sportspark operating API \u2014 NestJS modular monolith and durable workers",
+  "description": "Sportspark operating API — NestJS modular monolith and durable workers",
   "main": "./dist/main.js",
   "scripts": {
     "build": "tsc -b",
