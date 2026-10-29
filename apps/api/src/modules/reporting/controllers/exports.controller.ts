@@ -2,14 +2,16 @@ import { Controller, Get, Headers, HttpCode, Post, Res } from '@nestjs/common';
 import {
   CreateExportBody,
   EXPORT_TOKEN_HEADER,
+  ListReportExportsQuery,
   RevokeExportBody,
   z,
+  type Page,
   type Principal,
   type ReportExport,
   type ReportExportCreated,
 } from '@sportspark/contracts';
 import type { Response } from 'express';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
 import { ExportsService } from '../services/exports.service';
 import { CorrelationId } from './correlation.decorator';
 
@@ -32,12 +34,23 @@ export class ExportsController {
     return this.exports.create(principal, body, correlationId);
   }
 
+  /** REP-01: the caller's own exports, newest first; never a token or download path. */
+  @Get()
+  list(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListReportExportsQuery) query: ListReportExportsQuery,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<Page<ReportExport>> {
+    return this.exports.list(principal, query, correlationId);
+  }
+
   @Get(':id')
   get(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: IdParams,
+    @CorrelationId() correlationId: string | null,
   ): Promise<ReportExport> {
-    return this.exports.get(principal, params.id);
+    return this.exports.get(principal, params.id, correlationId);
   }
 
   /** Single-use download; the response is the file itself (never cached). */

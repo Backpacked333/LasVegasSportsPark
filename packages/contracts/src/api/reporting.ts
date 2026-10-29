@@ -158,6 +158,31 @@ export type ReportColumn = z.infer<typeof ReportColumnSchema>;
 export const ReportRowSchema = z.record(z.string(), Scalar).openapi('ReportRow');
 export type ReportRow = z.infer<typeof ReportRowSchema>;
 
+/**
+ * A module setting a report used (REP-03, K-15): its environment variable, whether it is
+ * configured, the value, the pending decision that sets it, and what the report did with it.
+ */
+export const ReportSettingUseSchema = z
+  .object({
+    setting: z.string(),
+    configured: z.boolean(),
+    value: z.string().nullable(),
+    pendingDecision: z.string(),
+    effect: z.string(),
+  })
+  .openapi('ReportSettingUse');
+export type ReportSettingUse = z.infer<typeof ReportSettingUseSchema>;
+
+/**
+ * How the figures were read (REP-03): `snapshot` — every source read in one read-only
+ * repeatable-read transaction; `owner_reads` — the owning module's query service reads through its
+ * own connection, so its figures are read at the request instant outside the snapshot.
+ */
+export const ReportConsistencySchema = z
+  .enum(['snapshot', 'owner_reads'])
+  .openapi('ReportingConsistency');
+export type ReportConsistency = z.infer<typeof ReportConsistencySchema>;
+
 export const ReportResponseSchema = z
   .object({
     report: z.object({
@@ -182,7 +207,11 @@ export const ReportResponseSchema = z
       class: FreshnessClassSchema,
       pointInTime: PointInTimeSchema,
       note: z.string(),
+      /** Absent on runs stored before REP-03 (they were not read in one snapshot). */
+      consistency: ReportConsistencySchema.optional(),
     }),
+    /** The module settings this report used (empty on runs stored before REP-03). */
+    settings: z.array(ReportSettingUseSchema).default([]),
     metrics: z.array(MetricDefinitionSchema),
     disclosures: z.array(z.string()),
     values: z.array(MetricValueSchema),
@@ -460,6 +489,12 @@ export const ReportExportSchema = z
   .openapi('ReportExport');
 export type ReportExport = z.infer<typeof ReportExportSchema>;
 
+/** GET /reports/exports: the caller's own exports, newest first (REP-01, SCR-S-45). */
+export const ListReportExportsQuery = PageRequestSchema.extend({
+  status: ExportStatusSchema.optional(),
+});
+export type ListReportExportsQuery = z.infer<typeof ListReportExportsQuery>;
+
 export const ReportExportCreatedSchema = ReportExportSchema.extend({
   /** Returned once; only its SHA-256 is stored. Send it as `X-Export-Token` on the download. */
   downloadToken: z.string(),
@@ -675,6 +710,12 @@ command(
   'Create an expiring, single-use export of a stored run (independent export permission, audited); the secret is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   CreateExportBody,
   ReportExportCreatedSchema,
+);
+query(
+  '/reports/exports',
+  "List the caller's own exports, newest first, with their expiry (an export past its expiry lists as expired); never a token or download path (REP-01, SPK-REPORT-007, §4.14)",
+  ListReportExportsQuery,
+  pageSchema(ReportExportSchema),
 );
 query('/reports/exports/{id}', 'Read an export you requested', null, ReportExportSchema);
 openApiRegistry.registerPath({

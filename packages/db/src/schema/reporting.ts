@@ -457,6 +457,8 @@ export interface ReportingAssignmentRequirementsView {
   must_be_accepted: V<boolean>;
   target_start: V<Date | null>;
   target_title: V<string | null>;
+  /** Migration 1303 (WRK-02): when the requirement was retired; null while it is in force. */
+  retired_at: V<Date | null>;
 }
 
 export interface ReportingAttendanceView {

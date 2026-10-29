@@ -19,16 +19,31 @@ export const DAY = 86_400_000;
 
 export const key = (): string => `k-${newId()}`;
 
+/**
+ * Reporting policy settings the API tests configure explicitly (REP-03): test values only, never a
+ * default of the module (an absent setting is the conservative behaviour, tested on its own).
+ */
+export const TEST_REPORTING_SETTINGS: NodeJS.ProcessEnv = {
+  REPORTING_EXPORT_LIFETIME_MINUTES: '1440',
+  REPORTING_AGING_BANDS_DAYS: '30,60,90',
+  REPORTING_UNKNOWN_DELIVERY_MINUTES: '60',
+};
+
 export function reportingTestApp(
   options: {
     clockStart?: string;
     imports?: NonNullable<Parameters<typeof createTestApp>[0]>['imports'];
+    providers?: NonNullable<Parameters<typeof createTestApp>[0]>['providers'];
+    /** Replaces TEST_REPORTING_SETTINGS (pass `{}` for an unconfigured module). */
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<TestApp> {
   return createTestApp({
     imports: [ReportingModule, ...(options.imports ?? [])],
+    providers: options.providers,
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
+    env: options.env ?? TEST_REPORTING_SETTINGS,
   });
 }
 

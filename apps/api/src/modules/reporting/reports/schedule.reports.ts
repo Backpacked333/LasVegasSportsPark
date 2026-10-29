@@ -3,6 +3,7 @@ import type { ReportRow } from '@sportspark/contracts';
 import { currentHeads, effectiveState, attended as isAttended } from '../../entry';
 import { column, type ReportDefinition } from '../engine/report-definition';
 import { ReportingActions } from '../reporting.actions';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import {
   localDay,
   localDays,
@@ -15,6 +16,7 @@ import {
 import { loadExpectedActivities } from './participation';
 
 const UNAVAILABILITY = new Set(['maintenance', 'block']);
+const DAY_SETTINGS = [REPORTING_SETTING_NAMES.operatingDayStart] as const;
 
 /**
  * R01 daily schedule, R02 expected arrivals and R03 attendance (SPK-REPORT-002), read through the
@@ -32,9 +34,10 @@ export class ScheduleReports {
     pointInTime: 'partial',
     pointInTimeNote:
       'Cancellations after the as-of instant are ignored (their instant is recorded); publication and moves are taken as they stand now. The stored run is the reproducible record.',
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
-      const day = localDay(facility.timezone, params.date);
+      const day = localDay(facility.timezone, params.date, ctx.dayStart);
       const rows = await ctx.db
         .selectFrom('reporting_events_v')
         .select([
@@ -142,7 +145,7 @@ export class ScheduleReports {
         ],
         rows: out,
         disclosures: [
-          `Operating day: ${params.date} from local midnight to midnight in ${facility.timezone} (DEC-001 pending).`,
+          `Operating day: ${params.date} from ${ctx.dayStart} to ${ctx.dayStart} the next day, local time in ${facility.timezone} (${ctx.policy.operatingDayStart === null ? 'the calendar day: no operating day start is configured' : 'REPORTING_OPERATING_DAY_START'}; DEC-001).`,
           'Maintenance and block events are unavailability, not scheduled activities (rule U4).',
         ],
       };
@@ -159,9 +162,10 @@ export class ScheduleReports {
     pointInTime: 'partial',
     pointInTimeNote:
       'Enrollment and booking confirmations, cancellations, transfers and expiries are applied as of the as-of instant; roster memberships are taken as they stand now.',
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
-      const day = localDay(facility.timezone, params.date);
+      const day = localDay(facility.timezone, params.date, ctx.dayStart);
       const activities = await loadExpectedActivities(ctx, day);
       let expected = 0;
       let children = 0;
@@ -175,6 +179,9 @@ export class ScheduleReports {
         return {
           activityType: a.sourceType,
           activityId: a.activityId,
+          // REP-01 (SCR-S-28): a catalog session is addressed by its offering and session.
+          offeringId: a.offeringId,
+          sessionId: a.sourceType === 'session' ? a.sourceId : null,
           title: a.title,
           start: iso(a.start),
           localStart: localTimeLabel(facility.timezone, a.start),
@@ -199,6 +206,8 @@ export class ScheduleReports {
         columns: [
           column('activityType', 'Activity type'),
           column('activityId', 'Activity', 'id'),
+          column('offeringId', 'Offering', 'id'),
+          column('sessionId', 'Session', 'id'),
           column('title', 'Title'),
           column('start', 'Scheduled start', 'instant'),
           column('localStart', 'Local start'),
@@ -231,9 +240,16 @@ export class ScheduleReports {
     pointInTime: 'partial',
     pointInTimeNote:
       'Attendance observations are append-only and stamped with their receipt instant: a correction received after the as-of instant does not change the figures (SPK-ENTRY-005, SPK-REPORT-007). Expected participants follow the expected-arrivals rules.',
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
-      const days = localDays(facility.timezone, params.from, params.to, ctx.policy.maxPeriodDays);
+      const days = localDays(
+        facility.timezone,
+        params.from,
+        params.to,
+        ctx.policy.maxPeriodDays,
+        ctx.dayStart,
+      );
       const window = { start: days[0]!.start, end: days[days.length - 1]!.end };
       const expectedActivities = await loadExpectedActivities(ctx, window);
 

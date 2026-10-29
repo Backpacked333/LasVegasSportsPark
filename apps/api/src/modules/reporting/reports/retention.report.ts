@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { errors, type ReportRow, type RetentionCohort } from '@sportspark/contracts';
+import { BOOKING_QUERY_PORT, type BookingOfPeriod, type BookingQueryPort } from '../../enrollment';
 import { cohortOutcome } from '../calculators/cohorts';
 import { column, type ReportContext, type ReportDefinition } from '../engine/report-definition';
 import { ReportingActions } from '../reporting.actions';
-import { metricValue } from '../reporting.shared';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
+import { iso, localDay, metricValue } from '../reporting.shared';
 
 interface RetentionParams {
   cohort: RetentionCohort;
@@ -38,6 +40,12 @@ const LABEL: Record<RetentionCohort, string> = {
   rental_customers: 'Rental customer return rate',
 };
 
+/** REP-02: the booking states that make a booker a rental customer (and a return). */
+const COUNTED_BOOKING_STATUSES: ReadonlySet<BookingOfPeriod['status']> = new Set([
+  'confirmed',
+  'completed',
+]);
+
 const heldAt = (asOf: Date, confirmedAt: Date | null, ended: ReadonlyArray<Date | null>) =>
   confirmedAt !== null &&
   new Date(confirmedAt) <= asOf &&
@@ -52,6 +60,8 @@ const heldAt = (asOf: Date, confirmedAt: Date | null, ended: ReadonlyArray<Date 
  */
 @Injectable()
 export class RetentionReport {
+  constructor(@Inject(BOOKING_QUERY_PORT) private readonly bookings: BookingQueryPort) {}
+
   readonly definition: ReportDefinition<'retention'> = {
     key: 'retention',
     title: 'Retention by cohort',
@@ -145,11 +155,22 @@ export class RetentionReport {
           'A household returned when a member paid a fulfilled order for an offering starting in the comparison period; this is a purchase metric, not a participation metric (SPK-REPORT-005).',
         );
       } else {
-        anchor = await this.rentalPayersOf(ctx, periods.anchor);
-        comparison = await this.rentalPayersOf(ctx, periods.comparison);
+        // REP-02 (SPK-REPORT-005, IF-36): bookers of rental and party bookings. Reads are never
+        // gated: the cohort is computed whether or not the rentals and parties capabilities are
+        // enabled (DEC-016, DEC-076, DEC-077).
+        anchor = await this.rentalBookersOf(ctx, periods.anchor);
+        comparison = await this.rentalBookersOf(ctx, periods.comparison);
         disclosures.push(
-          'Rental customers are the paying persons of confirmed rental enrollments (K5).',
+          'Rental customers are the bookers of rental and party bookings confirmed or completed whose first occurrence falls in the period, by facility-local operating day (K5); merged duplicates count once (G7).',
+          'A customer returned when they hold a confirmed or completed rental or party booking in the comparison period; a request that was never confirmed is not a return.',
+          'Booking status is read as it stands now: the booking record exposes no confirmation instant to this report.',
+          'Not offered is not computed for rental customers (DEC-076, DEC-077 pending).',
         );
+        if (anchor.size === 0) {
+          disclosures.push(
+            'No rental or party booking was confirmed or completed in the anchor period: the cohort is zero and its return rate is unavailable.',
+          );
+        }
       }
     }
 
@@ -176,6 +197,7 @@ export class RetentionReport {
     };
     return {
       scope: { from: null, to: null },
+      settings: cohort === 'rental_customers' ? [REPORTING_SETTING_NAMES.operatingDayStart] : [],
       values: [
         metricValue(metric, LABEL[cohort], 'ratio', row.returnRate as number | null, {
           dimensions: { cohort },
@@ -369,32 +391,40 @@ export class RetentionReport {
     return new Set(members.map((m) => m.household_id));
   }
 
-  private async rentalPayersOf(ctx: ReportContext, period: Period): Promise<Set<string>> {
-    const rows = await ctx.db
-      .selectFrom('reporting_enrollments_v as e')
-      .innerJoin('reporting_offerings_v as o', (j) =>
-        j
-          .onRef('o.organization_id', '=', 'e.organization_id')
-          .onRef('o.offering_id', '=', 'e.offering_id'),
-      )
-      .select([
-        'e.payer_person_id',
-        'e.participant_person_id',
-        'e.confirmed_at',
-        'e.canceled_at',
-        'e.transferred_at',
-      ])
-      .where('e.organization_id', '=', ctx.organizationId)
-      .where('o.offering_kind', '=', 'rental')
-      .where('o.starts_on', '>=', period.from)
-      .where('o.starts_on', '<=', period.to)
+  /**
+   * REP-02: canonical bookers of the organization's rental and party bookings confirmed or
+   * completed whose first occurrence falls in the period's operating days, facility by facility in
+   * each facility's own zone (SPK-SCHED-008). Read through BOOKING_QUERY_PORT (IF-36) in the
+   * report's snapshot; without bookings the port answers [] and the cohort is empty.
+   */
+  private async rentalBookersOf(ctx: ReportContext, period: Period): Promise<Set<string>> {
+    const facilities = await ctx.db
+      .selectFrom('facilities')
+      .select(['id', 'timezone'])
+      .where('organization_id', '=', ctx.organizationId)
+      .orderBy('id')
       .execute();
-    const payers = rows
-      .filter((r) => heldAt(ctx.asOf, r.confirmed_at, [r.canceled_at, r.transferred_at]))
-      .map((r) => r.payer_person_id ?? r.participant_person_id);
-    if (payers.length === 0) return new Set();
-    const canonical = await this.canonical(ctx, [...new Set(payers)]);
-    return new Set(payers.map((p) => canonical.get(p) ?? p));
+    const bookers = new Set<string>();
+    for (const facility of facilities) {
+      const from = localDay(facility.timezone, period.from, ctx.dayStart).start;
+      const to = localDay(facility.timezone, period.to, ctx.dayStart).end;
+      const bookings = await this.bookings.bookingsOfPeriod(
+        ctx.organizationId,
+        {
+          facilityId: facility.id,
+          from: iso(new Date(from)),
+          to: iso(new Date(to)),
+          kinds: ['rental', 'party'],
+        },
+        ctx.trx ?? undefined,
+      );
+      for (const b of bookings) {
+        if (COUNTED_BOOKING_STATUSES.has(b.status)) bookers.add(b.bookerPersonId);
+      }
+    }
+    if (bookers.size === 0) return new Set();
+    const canonical = await this.canonical(ctx, [...bookers]);
+    return new Set([...bookers].map((p) => canonical.get(p) ?? p));
   }
 
   private async canonical(ctx: ReportContext, personIds: string[]): Promise<Map<string, string>> {

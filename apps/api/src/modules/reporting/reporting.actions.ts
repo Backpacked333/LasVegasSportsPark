@@ -75,6 +75,20 @@ export const ReportingActions = defineActions({
     staffRoles: ['finance_operator', 'general_manager'],
     requirements: ['SPK-REPORT-007', '§4.14'],
   },
+  readExports: {
+    id: 'reporting.read_exports',
+    description:
+      "List and read one's own exports and their expiry (requester only, never a token or download path; re-checked on every request)",
+    staffRoles: [
+      'league_manager',
+      'program_manager',
+      'scheduler',
+      'finance_operator',
+      'general_manager',
+      'system_administrator',
+    ],
+    requirements: ['SPK-REPORT-007', '§4.14'],
+  },
   readMetricDefinitions: {
     id: 'reporting.read_metric_definitions',
     description: 'Read metric definitions (business question, grain, numerator and denominator …)',

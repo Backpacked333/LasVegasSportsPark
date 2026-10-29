@@ -1,6 +1,6 @@
 import { REPORT_KEYS, type ReportResponse } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
-import { csvCell, renderCsv, resultDigest } from './output/report-output';
+import { csvCell, renderCsv, renderJson, resultDigest } from './output/report-output';
 import { CostInputMachine, ExportMachine, MetricDefinitionMachine } from './reporting.machines';
 import { definitionHash, METRICS, metricsForReport } from './reporting.metrics';
 import { agingBand } from './reports/finance.reports';
@@ -98,7 +98,8 @@ describe('report output (SPK-REPORT-007)', () => {
     producedAt: '2027-02-01T16:00:00.000Z',
     scope: { facilityId: null, timezone: null, from: null, to: null },
     parameters: { date: '2027-02-03' },
-    freshness: { class: 'F1', pointInTime: 'partial', note: 'note' },
+    freshness: { class: 'F1', pointInTime: 'partial', note: 'note', consistency: 'snapshot' },
+    settings: [],
     metrics: [],
     disclosures: ['a disclosure'],
     values: [
@@ -149,19 +150,48 @@ describe('report output (SPK-REPORT-007)', () => {
     expect(resultDigest({ ...a, rows: [{ title: 'x', n: 2 }] })).not.toBe(resultDigest(a));
     expect(resultDigest({ ...a, asOf: '2027-02-01T17:00:00.000Z' })).not.toBe(resultDigest(a));
   });
+
+  it('REP-03: the settings a report used change its digest and are named in the CSV preamble', () => {
+    const a = result([{ title: 'x', n: 1 }]);
+    const withSetting: ReportResponse = {
+      ...a,
+      settings: [
+        {
+          setting: 'REPORTING_OPERATING_DAY_START',
+          configured: false,
+          value: null,
+          pendingDecision: 'DEC-001',
+          effect: 'Not configured: the calendar day.',
+        },
+      ],
+    };
+    expect(resultDigest(withSetting)).not.toBe(resultDigest(a));
+    expect(renderCsv(withSetting)).toContain(
+      '# setting REPORTING_OPERATING_DAY_START: not configured (DEC-001); Not configured: the calendar day.',
+    );
+    // A run stored before REP-03 names no settings: its JSON export renders without the field.
+    expect(JSON.parse(renderJson(a))).not.toHaveProperty('settings');
+    expect(JSON.parse(renderJson(withSetting)).settings).toHaveLength(1);
+  });
 });
 
 describe('report policy helpers', () => {
-  it('aging bands by days past due (DEC-007 placeholder bands)', () => {
+  it('aging bands by days past due, from configured upper bounds (DEC-007)', () => {
     const asOf = new Date('2027-02-01T00:00:00Z');
     const days = (n: number) => new Date(asOf.getTime() - n * 86_400_000);
-    const edges = [0, 30, 60, 90];
+    const edges = [30, 60, 90];
     expect(agingBand(new Date(asOf.getTime() + 1), asOf, edges)).toBe('not_due');
     expect(agingBand(days(0), asOf, edges)).toBe('0-30');
     expect(agingBand(days(30), asOf, edges)).toBe('0-30');
     expect(agingBand(days(31), asOf, edges)).toBe('31-60');
     expect(agingBand(days(90), asOf, edges)).toBe('61-90');
     expect(agingBand(days(91), asOf, edges)).toBe('over_90');
+  });
+
+  it('REP-03: without configured aging bands every balance is unbanded (DEC-007)', () => {
+    const asOf = new Date('2027-02-01T00:00:00Z');
+    expect(agingBand(new Date(asOf.getTime() - 40 * 86_400_000), asOf, null)).toBe('unbanded');
+    expect(agingBand(new Date(asOf.getTime() + 1), asOf, null)).toBe('unbanded');
   });
 
   it('custom weights parse as resourceId:weight and refuse malformed or repeated entries', () => {

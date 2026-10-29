@@ -402,7 +402,7 @@ describe('operating reports (SPK-REPORT-002) and demand (SPK-REPORT-006)', () =>
     ]);
   });
 
-  it('SPK-REPORT-002 expected arrivals: enrollments, bookings and rosters; supervised releases for children', async () => {
+  it('SPK-REPORT-002, REP-01 expected arrivals: enrollments, bookings and rosters; supervised releases for children; session rows name their offering', async () => {
     const res = await view('expected-arrivals', { ...facility(), date: DATE });
     expect(res.status).toBe(200);
     const rows = res.body.rows as Row[];
@@ -418,6 +418,12 @@ describe('operating reports (SPK-REPORT-002) and demand (SPK-REPORT-006)', () =>
     const fixture = rows.find((r) => r.activityType === 'fixture')!;
     expect(fixture).toMatchObject({ expected: 4, byRoster: 4 });
     expect(valueOf(res.body, 'MET-004', 'Expected arrivals')).toBe(8);
+    // REP-01 (SCR-S-28): a session row carries its offering and session ids (an ActivityRef).
+    expect(session).toMatchObject({ offeringId, sessionId, activityId: sessionId });
+    expect(fixture).toMatchObject({ offeringId: null, sessionId: null });
+    expect((res.body.columns as Array<{ key: string }>).map((c) => c.key)).toEqual(
+      expect.arrayContaining(['offeringId', 'sessionId']),
+    );
     expect(valueOf(res.body, 'MET-006')).toBe(2);
     expect(JSON.stringify(res.body.rows)).not.toMatch(/Child\d|Adult\d/);
   });
