@@ -10,6 +10,7 @@ import {
   type PeriodicJobResult,
 } from '../../../kernel';
 import type { EnrollmentSettingsValue } from '../enrollment.settings';
+import { BookingsService } from './bookings.service';
 import { MembershipsService } from './memberships.service';
 import { PackageEntitlementsService } from './package-entitlements.service';
 import { ASSIGN_PLACEMENT_KIND, PlacementService } from './placement.service';
@@ -17,6 +18,7 @@ import { ASSIGN_PLACEMENT_KIND, PlacementService } from './placement.service';
 export const RECONCILE_PLACEMENTS_JOB = 'enrollment.reconcile_placements';
 export const EXPIRE_PACKAGES_JOB = 'enrollment.expire_package_entitlements';
 export const MEMBERSHIP_LIFECYCLE_JOB = 'enrollment.membership_lifecycle';
+export const BOOKING_LIFECYCLE_JOB = 'enrollment.booking_lifecycle';
 
 /**
  * Enrollment's periodic jobs (K-06, IF-24; §4.12 durable, interruption-tolerant background work
@@ -29,6 +31,8 @@ export const MEMBERSHIP_LIFECYCLE_JOB = 'enrollment.membership_lifecycle';
  * - enrollment.expire_package_entitlements (ENR-11, POL-039): active packages past their expiry.
  * - enrollment.membership_lifecycle (ENR-12): completes memberships whose term ended, ends
  *   elapsed suspensions and composes the one renewal notice a definition asks for.
+ * - enrollment.booking_lifecycle (ENR-13): undecided requests expire at their start, an unstaffed
+ *   booking that starts raises a critical exception for the scheduler, ended bookings complete.
  * Expiry and lifecycle work is never capability-gated (DEC-016).
  */
 @Injectable()
@@ -41,6 +45,7 @@ export class EnrollmentJobs implements OnModuleInit {
     private readonly placements: PlacementService,
     private readonly packages: PackageEntitlementsService,
     private readonly memberships: MembershipsService,
+    private readonly bookings: BookingsService,
   ) {}
 
   onModuleInit(): void {
@@ -62,6 +67,25 @@ export class EnrollmentJobs implements OnModuleInit {
       failureOwner: 'program_manager',
       run: (context) => this.membershipLifecycle(context),
     });
+    this.registry.register({
+      name: BOOKING_LIFECYCLE_JOB,
+      intervalSeconds: 300,
+      failureOwner: 'scheduler',
+      run: (context) => this.bookingLifecycle(context),
+    });
+  }
+
+  async bookingLifecycle({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {
+    const due = await this.bookings.lifecycleDue(now, batchSize);
+    let processed = 0;
+    for (const row of due) {
+      if (
+        await this.uow.run(({ trx }) => this.bookings.advance(trx, row.organization_id, row.id))
+      ) {
+        processed += 1;
+      }
+    }
+    return { processed, remaining: processed > 0 && due.length === batchSize ? 1 : 0 };
   }
 
   async expirePackages({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {

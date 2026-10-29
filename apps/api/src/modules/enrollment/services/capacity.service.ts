@@ -370,6 +370,39 @@ export class CapacityService implements CapacityPort {
       : rows;
   }
 
+  /**
+   * ENR-13: the one-place pool of a rental or party booking (scope `rental`, the booking id). The
+   * booking's basket line holds it like any other line, so the server-owned hold expiry
+   * (SPK-REG-006, POL-004) releases an unpaid booking; the physical guarantee is the scheduling
+   * reservation of its events, not this pool.
+   */
+  async ensureBookingPool(
+    trx: Trx,
+    organizationId: string,
+    input: { offeringId: string; bookingId: string; actor: Principal },
+  ): Promise<PoolRow> {
+    await this.insertPool(trx, organizationId, {
+      offeringId: input.offeringId,
+      scopeType: 'rental',
+      scopeId: input.bookingId,
+      unit: 'rental_resources',
+      constraintKind: 'space',
+      capacity: 1,
+      participantsPerStaff: null,
+      staffCount: null,
+      actor: input.actor,
+    });
+    const row = await trx
+      .selectFrom('capacity_pools')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('scope_type', '=', 'rental')
+      .where('scope_id', '=', input.bookingId)
+      .executeTakeFirst();
+    if (!row) throw errors.internal('booking pool vanished');
+    return row;
+  }
+
   private offeringPoolSpecs(units: readonly CapacityUnit[]): Array<{
     unit: CapacityPoolUnit;
     constraintKind: CapacityConstraintKind;

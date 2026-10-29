@@ -1417,39 +1417,52 @@ export class BasketsService implements BasketPort {
       evaluation: Evaluation;
       applicationId: string | null;
       trialParticipationId?: string | null;
+      /** ENR-13: an open, empty basket of the owner to use instead of a new one. */
+      existingBasketId?: string | null;
+      /** ENR-13: a booking line has no equivalence key (each booking is its own reservation). */
+      noEquivalence?: boolean;
       correlationId: string | null;
     },
   ): Promise<{ basket: BasketRow; lineId: string }> {
     const now = this.clock.now();
-    const basketId = newId();
+    const basketId = input.existingBasketId ?? newId();
     const price = await this.evaluator.priceSnapshot(
       trx,
       organizationId,
       input.snapshot.offering.id,
     );
-    await trx
-      .insertInto('baskets')
-      .values({
-        id: basketId,
-        organization_id: organizationId,
-        owner_person_id: input.owner.id,
-        payer_person_id: input.payerPersonId ?? input.owner.id,
-        created_by: json(actorSnapshot(input.actor)),
-        created_by_person_id: input.actor.personId,
-        assisted_by_person_id: isStaffLike(input.actor) ? input.actor.personId : null,
-        fulfillment_mode: 'all_or_nothing',
-        partial_accepted_at: null,
-        status: 'open',
-        hold_expires_at: null,
-        currency: price?.currency ?? null,
-        order_ref: null,
-        last_operation_id: null,
-        checkout_started_at: null,
-        fulfilled_at: null,
-        released_at: null,
-        release_reason: null,
-      })
-      .execute();
+    if (!input.existingBasketId)
+      await trx
+        .insertInto('baskets')
+        .values({
+          id: basketId,
+          organization_id: organizationId,
+          owner_person_id: input.owner.id,
+          payer_person_id: input.payerPersonId ?? input.owner.id,
+          created_by: json(actorSnapshot(input.actor)),
+          created_by_person_id: input.actor.personId,
+          assisted_by_person_id: isStaffLike(input.actor) ? input.actor.personId : null,
+          fulfillment_mode: 'all_or_nothing',
+          partial_accepted_at: null,
+          status: 'open',
+          hold_expires_at: null,
+          currency: price?.currency ?? null,
+          order_ref: null,
+          last_operation_id: null,
+          checkout_started_at: null,
+          fulfilled_at: null,
+          released_at: null,
+          release_reason: null,
+        })
+        .execute();
+    if (input.existingBasketId && price) {
+      await trx
+        .updateTable('baskets')
+        .set((eb) => ({ currency: eb.fn.coalesce('currency', eb.val(price.currency)) }))
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', basketId)
+        .execute();
+    }
     const lineId = newId();
     await trx
       .insertInto('basket_lines')
@@ -1467,11 +1480,9 @@ export class BasketsService implements BasketPort {
         application_id: input.applicationId,
         trial_participation_id: input.trialParticipationId ?? null,
         entitlement_definition_id: input.snapshot.entitlementDefinition?.id ?? null,
-        equivalence_key: this.evaluator.equivalence(
-          input.snapshot,
-          input.participant.id,
-          input.sessionId,
-        ),
+        equivalence_key: input.noEquivalence
+          ? null
+          : this.evaluator.equivalence(input.snapshot, input.participant.id, input.sessionId),
         eligibility_result: json(input.evaluation.result),
         price_snapshot: price ? json(price) : null,
         policy_references: json(

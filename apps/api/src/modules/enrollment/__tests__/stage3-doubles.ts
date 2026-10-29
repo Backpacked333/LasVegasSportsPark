@@ -1,3 +1,4 @@
+import { ModuleRef } from '@nestjs/core';
 import type { TestingModuleBuilder } from '@nestjs/testing';
 import {
   DomainError,
@@ -7,7 +8,7 @@ import {
   type PolicyVersion,
   type Principal,
 } from '@sportspark/contracts';
-import type { Db, GrantPermissionValue } from '@sportspark/db';
+import { json, type Db, type GrantPermissionValue } from '@sportspark/db';
 import { sql } from 'kysely';
 import {
   DATABASE,
@@ -34,8 +35,9 @@ import {
 import {
   ASSIGNMENT_COVERAGE_PORT,
   CoverageService,
-  RequirementsService,
+  WORKFORCE_STAFFING_IMPL,
   WORKFORCE_STAFFING_PORT,
+  unavailableWorkforceStaffing,
   type AssignmentCoveragePort,
   type WorkforceStaffingPort,
 } from '../../workforce';
@@ -306,47 +308,84 @@ export function withStage3Doubles(builder: TestingModuleBuilder): TestingModuleB
           return port;
         },
       })
-      // IF-32 (WRK-02): must-be-accepted requirements on booking events.
+      // IF-32 (WRK-02): must-be-accepted requirements on booking events, written in the caller's
+      // unit of work (a repeat for the same target and role is a no-op, as declared); withdrawal
+      // reports the event's requirements (WRK-02 retires them).
       .overrideProvider(WORKFORCE_STAFFING_PORT)
       .useFactory({
-        inject: [RequirementsService, DATABASE],
-        factory: (requirements: RequirementsService, db: Db): WorkforceStaffingPort => ({
-          declareRequirements: async (principal, input) => {
-            const ids: string[] = [];
-            for (const requirement of input.requirements) {
-              try {
-                const created = await requirements.create(
-                  principal,
-                  {
-                    targetType: 'event',
-                    targetId: input.targetId,
-                    kind: requirement.kind,
-                    role: requirement.role,
-                    requiredCount: requirement.requiredCount,
-                    mustBeAccepted: true,
-                    requiredQualifications: requirement.requiredQualifications,
-                  },
-                  null,
-                );
-                ids.push(created.id);
-              } catch (error) {
-                if (!DomainError.is(error) || error.code !== 'RESOURCE_CONFLICT') throw error;
-              }
+        inject: [DATABASE, ModuleRef],
+        factory: (db: Db, moduleRef: ModuleRef): WorkforceStaffingPort => {
+          // The implementation WRK-02 registers, when merged; otherwise the declared stub.
+          const implementation = (): WorkforceStaffingPort => {
+            try {
+              return moduleRef.get<WorkforceStaffingPort>(WORKFORCE_STAFFING_IMPL, {
+                strict: false,
+              });
+            } catch {
+              return unavailableWorkforceStaffing;
             }
-            return { requirementIds: ids };
-          },
-          withdrawRequirements: async (_principal, input) => {
-            // The double records the withdrawal by zeroing nothing (WRK-02 retires them); it
-            // reports which requirements the event had.
-            const rows = await reader(db)
-              .selectFrom('assignment_requirements')
-              .select('id')
-              .where('target_type', '=', 'event')
-              .where('target_id', '=', input.targetId)
-              .execute();
-            return { withdrawnAssignmentIds: [], retiredRequirementIds: rows.map((r) => r.id) };
-          },
-        }),
+          };
+          const real = {
+            declareRequirements: (
+              ...args: Parameters<WorkforceStaffingPort['declareRequirements']>
+            ) => implementation().declareRequirements(...args),
+            withdrawRequirements: (
+              ...args: Parameters<WorkforceStaffingPort['withdrawRequirements']>
+            ) => implementation().withdrawRequirements(...args),
+          };
+          return {
+            declareRequirements: (principal, input) =>
+              realOr(
+                () => real.declareRequirements(principal, input),
+                async () => {
+                  const ids: string[] = [];
+                  for (const requirement of input.requirements) {
+                    const id = newId();
+                    const inserted = await reader(db)
+                      .insertInto('assignment_requirements')
+                      .values({
+                        id,
+                        organization_id: principal.organizationId as string,
+                        facility_id: input.facilityId,
+                        target_type: 'event',
+                        target_id: input.targetId,
+                        fixture_id: null,
+                        scheduling_event_id: input.targetId,
+                        offering_session_id: null,
+                        offering_id: null,
+                        kind: requirement.kind,
+                        role: requirement.role,
+                        required_count: requirement.requiredCount,
+                        must_be_accepted: true,
+                        required_qualifications: requirement.requiredQualifications,
+                        created_by: json({ kind: 'system', label: 'stage3-double' }),
+                      })
+                      .onConflict((oc) => oc.doNothing())
+                      .returning('id')
+                      .executeTakeFirst();
+                    if (inserted) ids.push(inserted.id);
+                  }
+                  return { requirementIds: ids };
+                },
+              ),
+            withdrawRequirements: (principal, input) =>
+              realOr(
+                () => real.withdrawRequirements(principal, input),
+                async () => {
+                  const rows = await reader(db)
+                    .selectFrom('assignment_requirements')
+                    .select('id')
+                    .where('target_type', '=', 'event')
+                    .where('target_id', '=', input.targetId)
+                    .execute();
+                  return {
+                    withdrawnAssignmentIds: [],
+                    retiredRequirementIds: rows.map((r) => r.id),
+                  };
+                },
+              ),
+          };
+        },
       })
       // IF-34 (WRK-03): an accepted or completed assignment on any session of the offering.
       .overrideProvider(ASSIGNMENT_COVERAGE_PORT)

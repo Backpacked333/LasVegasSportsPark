@@ -6,9 +6,12 @@ import { CatalogEvents, CatalogModule } from '../catalog';
 import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
 import { CommunicationsModule, SESSION_AUDIENCE_IMPL } from '../communications';
 import { IdentityEvents, IdentityModule } from '../identity';
+import { FacilitiesModule } from '../facilities';
 import { ClosureImpactContributors, SchedulingModule } from '../scheduling';
+import { WorkforceEvents, WorkforceModule } from '../workforce';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
+import { BookingsController } from './controllers/bookings.controller';
 import { CapacityController } from './controllers/capacity.controller';
 import { EnrollmentsController } from './controllers/enrollments.controller';
 import { MeRegistrationsController } from './controllers/me.controller';
@@ -18,9 +21,11 @@ import { RegistrationOptionsController } from './controllers/registration-option
 import { SessionBookingsController } from './controllers/session-bookings.controller';
 import { WaitlistController } from './controllers/waitlist.controller';
 import { YouthController } from './controllers/youth.controller';
+import { YouthProgressionController } from './controllers/youth-progression.controller';
 import {
   CapacityReleased,
   EnrollmentEvents,
+  EnrollmentPackageGEvents,
   HoldExpiryDue,
   MakeupExpiryDue,
 } from './enrollment.events';
@@ -43,6 +48,7 @@ import {
 import { enrollmentSystem } from './enrollment.shared';
 import { ApplicationsService } from './services/applications.service';
 import { BasketsService } from './services/baskets.service';
+import { BookingsService } from './services/bookings.service';
 import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
 import { CompetitionFormsCheck } from './services/competition-forms-check';
@@ -66,6 +72,7 @@ import { SessionBookingsService } from './services/session-bookings.service';
 import { SessionParticipants } from './services/session-participants';
 import { TrialsService } from './services/trials.service';
 import { WaitlistService } from './services/waitlist.service';
+import { YouthProgressionService } from './services/youth-progression.service';
 
 const providers: Provider[] = [
   // Policy values the specification leaves to operators (DEC-006, DEC-026..029): proposed defaults.
@@ -85,7 +92,7 @@ const providers: Provider[] = [
         'no FINANCE_POLICY_IMPL registered: transfers and cancellations carry no financial consequence',
       ),
   },
-  // IF-36: declared by stage 3; ENR-13 registers BOOKING_QUERY_IMPL (until then: no bookings).
+  // IF-36: BOOKING_QUERY_PORT resolves BOOKING_QUERY_IMPL, which BookingsService provides (ENR-13).
   {
     provide: BOOKING_QUERY_PORT,
     inject: [ModuleRef],
@@ -96,6 +103,9 @@ const providers: Provider[] = [
   MembershipLedger,
   PackageEntitlementsService,
   MembershipsService,
+  BookingsService,
+  { provide: BOOKING_QUERY_IMPL, useExisting: BookingsService },
+  YouthProgressionService,
   CatalogSessions,
   EnrollmentFacilityScope,
   EnrollmentViews,
@@ -146,6 +156,8 @@ const providers: Provider[] = [
     CompetitionModule,
     SchedulingModule,
     CommunicationsModule,
+    WorkforceModule,
+    FacilitiesModule,
   ],
   providers,
   controllers: [
@@ -160,6 +172,8 @@ const providers: Provider[] = [
     MeRegistrationsController,
     RegistrationOptionsController,
     PackagesMembershipsController,
+    BookingsController,
+    YouthProgressionController,
   ],
   exports: [
     RegistrationEvaluator,
@@ -175,6 +189,7 @@ const providers: Provider[] = [
     FamilyCalendarService,
     PackageEntitlementsService,
     MembershipsService,
+    BookingsService,
     ENROLLMENT_POLICY,
     FINANCE_POLICY_PORT,
     ENROLLMENT_PORT,
@@ -198,6 +213,8 @@ export class EnrollmentModule implements OnModuleInit {
     private readonly notices: EnrollmentNotices,
     private readonly packages: PackageEntitlementsService,
     private readonly memberships: MembershipsService,
+    private readonly bookingsG: BookingsService,
+    private readonly youthProgression: YouthProgressionService,
   ) {}
 
   onModuleInit(): void {
@@ -376,6 +393,72 @@ export class EnrollmentModule implements OnModuleInit {
             event.payload.enrollmentId,
             event.correlationId,
           ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    // ENR-13 (SPK-COND-003): a paid booking is confirmed only when fully staffed; a canceled or
+    // expired line ends its booking; staffing changes re-evaluate it both ways.
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
+      EnrollmentEvents.enrollmentConfirmed.type,
+      'enrollment.booking_follow_confirmation',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.bookingsG.onEnrollmentConfirmed(
+            ctx.trx,
+            event.organizationId,
+            event.payload.enrollmentId,
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'scheduler' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentCanceled>>(
+      EnrollmentEvents.enrollmentCanceled.type,
+      'enrollment.booking_follow_cancellation',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.bookingsG.onEnrollmentCanceled(
+            ctx.trx,
+            event.organizationId,
+            event.payload.enrollmentId,
+            event.payload.reason,
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'scheduler' },
+    );
+    this.registry.on<EventPayload<typeof WorkforceEvents.assignmentChanged>>(
+      WorkforceEvents.assignmentChanged.type,
+      'enrollment.booking_staffing',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.bookingsG.onAssignmentChanged(
+            ctx.trx,
+            event.organizationId,
+            event.payload.targetType,
+            event.payload.targetId,
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'scheduler' },
+    );
+    // ENR-14 (SPK-YOUTH-005, SPK-COMMS-002): one youth_feedback notice per published assessment
+    // or shared recommendation, with no staff content.
+    this.registry.on<EventPayload<typeof EnrollmentPackageGEvents.assessmentPublished>>(
+      EnrollmentPackageGEvents.assessmentPublished.type,
+      'enrollment.notify_assessment_published',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.youthProgression.notifyAssessmentPublished(ctx.trx, event),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentPackageGEvents.recommendationShared>>(
+      EnrollmentPackageGEvents.recommendationShared.type,
+      'enrollment.notify_recommendation_shared',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.youthProgression.notifyRecommendationShared(ctx.trx, event),
         ),
       { failureOwner: 'program_manager' },
     );
