@@ -26,6 +26,7 @@ import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  CapabilityService,
   DATABASE,
   Outbox,
   UnitOfWork,
@@ -95,6 +96,7 @@ export class SessionBookingsService {
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
     private readonly scope: EnrollmentFacilityScope,
+    private readonly capabilities: CapabilityService,
   ) {}
 
   async load(
@@ -142,6 +144,9 @@ export class SessionBookingsService {
           { path: 'offeringId' },
         );
       }
+      // ENR-10 (DEC-016, DEC-082): a new pickup booking needs the pickup_sessions switch; its
+      // cancellation, expiry and payment outcomes never check it.
+      await this.capabilities.require(organizationId, 'pickup_sessions', trx);
       const evaluation = await this.evaluator.evaluate(trx, organizationId, {
         snapshot,
         person,
