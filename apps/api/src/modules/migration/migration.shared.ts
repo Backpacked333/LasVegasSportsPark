@@ -1,6 +1,9 @@
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   systemPrincipal,
+  z,
   type ActorSnapshot,
   type AuthorityAssignment,
   type AuthorityScope,
@@ -17,12 +20,13 @@ import type {
   AuthorityAssignmentsTable,
   Db,
   ExternalMappingsTable,
+  MappedEntityType,
   ImportBatchesTable,
   ImportExceptionsTable,
   ImportRowOutcome,
   ImportRowsTable,
 } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type RawBuilder, type Selectable } from 'kysely';
 import type { Trx } from '../../kernel';
 
 export type Reader = Db | Trx;
@@ -80,9 +84,61 @@ function actorOf(value: unknown): ActorSnapshot {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Keyset paging (MIG-01): created_at desc, id desc
+// ---------------------------------------------------------------------------------------------
+
+const KeysetCursorSchema = z.object({
+  /** created_at at full (microsecond) precision, UTC: `2027-01-16T17:00:00.123456Z`. */
+  at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/),
+  id: z.uuid(),
+});
+export type KeysetCursor = z.infer<typeof KeysetCursorSchema>;
+
+/** The decoded cursor, null without one; an unreadable cursor is VALIDATION_FAILED. */
+export function readKeysetCursor(cursor: string | undefined): KeysetCursor | null {
+  const parsed = decodeCursor(cursor, KeysetCursorSchema);
+  if (cursor && !parsed) throw errors.validation('The cursor is not valid.', { path: 'cursor' });
+  return parsed;
+}
+
+/**
+ * `created_at` as UTC text with microseconds, selected next to each row so the next cursor is
+ * exact (a JavaScript Date keeps milliseconds only, which would skip rows created in the same
+ * millisecond).
+ */
+export function createdAtText(column: string): RawBuilder<string> {
+  return sql<string>`to_char(${sql.ref(column)} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/** Rows strictly after the cursor in (created_at desc, id desc) order. */
+export function afterKeyset(
+  createdAt: string,
+  id: string,
+  cursor: KeysetCursor,
+): RawBuilder<boolean> {
+  return sql<boolean>`(${sql.ref(createdAt)}, ${sql.ref(id)}) < (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+}
+
+/** The page of `limit` rows (the query read `limit + 1`) and the cursor after its last row. */
+export function keysetPage<T extends { id: string; created_at_text: string }>(
+  rows: readonly T[],
+  limit: number,
+): { rows: T[]; nextCursor: string | null } {
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    nextCursor:
+      rows.length > limit && last ? encodeCursor({ at: last.created_at_text, id: last.id }) : null,
+  };
+}
+
 export interface BatchViewExtras {
   exceptions: { open: number; decided: number; withdrawn: number };
   sameChecksumBatchIds: string[];
+  /** MIG-01 (§5.5): the batch's most recent reconciliation report, null until one exists. */
+  latestReconciliationReportId: string | null;
 }
 
 export function toImportBatch(row: BatchRow, extras: BatchViewExtras): ImportBatch {
@@ -112,6 +168,7 @@ export function toImportBatch(row: BatchRow, extras: BatchViewExtras): ImportBat
     validationSummary: row.validation_summary,
     exceptions: extras.exceptions,
     sameChecksumBatchIds: extras.sameChecksumBatchIds,
+    latestReconciliationReportId: extras.latestReconciliationReportId,
     validatedAt: isoOrNull(row.validated_at),
     reviewedAt: isoOrNull(row.reviewed_at),
     applyStartedAt: isoOrNull(row.apply_started_at),
@@ -144,11 +201,44 @@ export function toImportRow(row: RowRow, internalId: string | null): ImportRow {
   };
 }
 
+/** Entity types whose staged row states a money balance (amount in minor units + currency). */
+const BALANCE_TYPES: ReadonlySet<ImportRow['entityType']> = new Set([
+  'open_obligation',
+  'credit',
+  'refund',
+]);
+
+/**
+ * MIG-01 (§5.5 "do not net", SPK-PAY-001): the staged amount and its currency when the exception
+ * concerns a balance, read from the staged row as the source stated it; null otherwise (and when
+ * the row does not state both, e.g. a validation error on the amount itself).
+ */
+export function stagedBalanceOf(
+  entityType: ImportRow['entityType'],
+  payload: unknown,
+): { stagedAmountMinor: number | null; currency: string | null } {
+  const none = { stagedAmountMinor: null, currency: null };
+  if (!BALANCE_TYPES.has(entityType) || !payload || typeof payload !== 'object') return none;
+  const p = payload as Record<string, unknown>;
+  const raw = p['amountMinor'];
+  const amount =
+    typeof raw === 'number'
+      ? raw
+      : typeof raw === 'string' && /^-?\d+$/.test(raw.trim())
+        ? Number(raw.trim())
+        : NaN;
+  const currency = p['currency'];
+  if (!Number.isSafeInteger(amount) || typeof currency !== 'string') return none;
+  if (!/^[A-Z]{3}$/.test(currency)) return none;
+  return { stagedAmountMinor: amount, currency };
+}
+
 export function toImportException(
   row: ExceptionRow,
-  staged: { entityType: ImportRow['entityType']; externalId: string },
+  staged: { entityType: ImportRow['entityType']; externalId: string; payload: unknown },
 ): ImportException {
   return {
+    ...stagedBalanceOf(staged.entityType, staged.payload),
     id: row.id,
     batchId: row.batch_id,
     rowId: row.row_id,
@@ -218,7 +308,26 @@ export function toAuthorityAssignment(row: AssignmentRow): AuthorityAssignment {
   };
 }
 
-/** The typed mapping column of an entity type (exactly one per mapped type, migration 1200). */
+/** A typed target column of external_mappings (migrations 1200 and 1201). */
+export type MappingColumn =
+  | 'person_id'
+  | 'household_id'
+  | 'relationship_id'
+  | 'program_id'
+  | 'obligation_id'
+  | 'credit_id'
+  | 'season_id'
+  | 'team_id'
+  | 'team_entry_id'
+  | 'roster_membership_id'
+  | 'event_id'
+  | 'preference_import_id';
+
+/**
+ * The typed mapping column of an entity type (one per mapped record; the database checks the
+ * column matches the entity type). A staged `team` row is a team or, with `record: 'entry'`, a
+ * team's entry in a season (TEAM_ENTRY_COLUMN).
+ */
 export const MAPPING_COLUMN = {
   person: 'person_id',
   household: 'household_id',
@@ -226,4 +335,26 @@ export const MAPPING_COLUMN = {
   program: 'program_id',
   open_obligation: 'obligation_id',
   credit: 'credit_id',
-} as const;
+  season: 'season_id',
+  team: 'team_id',
+  roster: 'roster_membership_id',
+  future_schedule: 'event_id',
+  communication_preference: 'preference_import_id',
+} as const satisfies Record<MappedEntityType, MappingColumn>;
+export const TEAM_ENTRY_COLUMN = 'team_entry_id' satisfies MappingColumn;
+
+/** Every target column, null (a new reservation, or a fixture filling one of them). */
+export const NO_TARGETS: Record<MappingColumn, null> = {
+  person_id: null,
+  household_id: null,
+  relationship_id: null,
+  program_id: null,
+  obligation_id: null,
+  credit_id: null,
+  season_id: null,
+  team_id: null,
+  team_entry_id: null,
+  roster_membership_id: null,
+  event_id: null,
+  preference_import_id: null,
+};

@@ -1,5 +1,7 @@
 import {
+  CommunicationPreferenceImportPayloadSchema,
   CreditImportPayloadSchema,
+  FutureScheduleImportPayloadSchema,
   HouseholdImportPayloadSchema,
   IMPORT_PAYLOAD_SCHEMAS,
   OpenObligationImportPayloadSchema,
@@ -7,6 +9,9 @@ import {
   ProgramImportPayloadSchema,
   RefundImportPayloadSchema,
   RelationshipEvidenceImportPayloadSchema,
+  RosterImportPayloadSchema,
+  SeasonImportPayloadSchema,
+  TeamImportPayloadSchema,
   z,
   type AuthorityResolution,
   type GrantPermissionValue,
@@ -28,6 +33,29 @@ export type RelationshipPayload = z.infer<typeof RelationshipEvidenceImportPaylo
 export type ProgramPayload = z.infer<typeof ProgramImportPayloadSchema>;
 export type ObligationPayload = z.infer<typeof OpenObligationImportPayloadSchema>;
 export type CreditPayload = z.infer<typeof CreditImportPayloadSchema>;
+export type SeasonPayload = z.infer<typeof SeasonImportPayloadSchema>;
+export type TeamPayload = z.infer<typeof TeamImportPayloadSchema>;
+export type RosterPayload = z.infer<typeof RosterImportPayloadSchema>;
+export type SchedulePayload = z.infer<typeof FutureScheduleImportPayloadSchema>;
+export type PreferencePayload = z.infer<typeof CommunicationPreferenceImportPayloadSchema>;
+
+/** What a staged season or team row stands for: a season, a team or a team's season entry. */
+export type RecordKind = 'season' | 'team' | 'entry';
+
+/**
+ * A reference to a season, team or team entry (MIG-02), staged in this batch or mapped by an
+ * earlier one, keyed by `${entityType}:${externalId}`.
+ */
+export interface RecordRef {
+  internalId: string | null;
+  kind: RecordKind;
+  resolvable: boolean;
+}
+
+/** The record kind a staged `team` row stands for (`record: 'entry'`, or a team by default). */
+export function teamRecordKind(payload: unknown): 'team' | 'entry' {
+  return (payload as { record?: unknown } | null)?.record === 'entry' ? 'entry' : 'team';
+}
 
 /** A person reference as the batch sees it: staged in this batch or mapped by an earlier one. */
 export interface PersonRef {
@@ -57,6 +85,8 @@ export interface PlanningContext {
   persons: Map<string, PersonRef>;
   /** Existing SportsPark program names (lower case) → program id. */
   programNames: Map<string, string>;
+  /** Season, team and team-entry references by `${entityType}:${externalId}` (MIG-02). */
+  records: Map<string, RecordRef>;
 }
 
 export type PlannedAction =
@@ -93,7 +123,92 @@ export type CreateValues =
       currency: string;
       expiresAt?: string;
       permittedUses: ('registration' | 'obligation')[];
+    }
+  // MIG-02: created through the owning modules' import commands (IF-40).
+  | {
+      entityType: 'season';
+      season: {
+        competitionId: string;
+        ruleSetId: string;
+        name: string;
+        startsOn: string;
+        endsOn: string;
+        status: SeasonPayload['status'];
+        registrationOpensAt: string | null;
+        registrationClosesAt: string | null;
+      };
+    }
+  | {
+      entityType: 'team';
+      record: 'team';
+      team: {
+        name: string;
+        colors: { primary?: string; secondary?: string };
+        status: 'active' | 'inactive' | 'archived';
+      };
+    }
+  | {
+      entityType: 'team';
+      record: 'entry';
+      entry: {
+        teamExternalId: string;
+        seasonExternalId: string;
+        divisionId: string | null;
+        status: 'applied' | 'approved';
+        appliedAt: string;
+        approvedAt: string | null;
+        captainExternalId: string | null;
+      };
+    }
+  | {
+      entityType: 'roster';
+      roster: {
+        entryExternalId: string;
+        personExternalId: string;
+        status: RosterPayload['status'];
+        effectiveFrom: string;
+        effectiveTo: string | null;
+        jerseyNumber: number | null;
+      };
+    }
+  | {
+      entityType: 'future_schedule';
+      event: {
+        facilityId: string;
+        resourceIds: string[];
+        kind: SchedulePayload['kind'];
+        title: string;
+        format: string | null;
+        scheduledStart: string;
+        scheduledEnd: string;
+        setupMinutes?: number;
+        cleanupMinutes?: number;
+      };
+    }
+  | {
+      entityType: 'communication_preference';
+      personExternalId: string;
+      preferences: PreferencePayload['preferences'];
     };
+
+/** Entity types whose records are created only through an owning module's import command. */
+export const IMPORT_COMMAND_TYPES: ReadonlySet<ImportEntityTypeValue> = new Set([
+  'person',
+  'program',
+  'season',
+  'team',
+  'roster',
+  'future_schedule',
+  'communication_preference',
+]);
+/** Of those, the ones whose import command creates only: a changed source row is a conflict. */
+const CREATE_ONLY_TYPES: ReadonlySet<ImportEntityTypeValue> = new Set([
+  'season',
+  'team',
+  'roster',
+  'future_schedule',
+  'communication_preference',
+]);
 
 export interface RowPlan {
   outcome: ImportRowOutcomeValue;
@@ -263,6 +378,16 @@ export class ImportPlanner {
         return this.planObligation(data as ObligationPayload, acceptedKinds, resolution);
       case 'credit':
         return this.planCredit(data as CreditPayload, acceptedKinds, resolution);
+      case 'season':
+        return this.planSeason(data as SeasonPayload);
+      case 'team':
+        return this.planTeam(data as TeamPayload);
+      case 'roster':
+        return this.planRoster(data as RosterPayload);
+      case 'future_schedule':
+        return this.planSchedule(data as SchedulePayload);
+      case 'communication_preference':
+        return this.planPreferences(data as PreferencePayload);
       default:
         return skipped([reason('no_import_command', 'Not applied by this module.')]);
     }
@@ -274,6 +399,16 @@ export class ImportPlanner {
     acceptedKinds: Set<ImportExceptionKindValue>,
     resolution: ImportExceptionResolution,
   ): RowPlan {
+    if (CREATE_ONLY_TYPES.has(row.entity_type)) {
+      // The owning module's import command creates only (IMPORT_CONTENT_MISMATCH on different
+      // content): a change the legacy system made after the import is reviewed, never forced.
+      return exception('conflict', [
+        reason(
+          'imported_record_changed',
+          'The source changed a record already imported; import commands only create, so the change is made in SportsPark after review or the row is rejected.',
+        ),
+      ]);
+    }
     switch (row.entity_type) {
       case 'person':
         return this.planPerson(data as PersonPayload, 'update');
@@ -411,6 +546,174 @@ export class ImportPlanner {
       });
     }
     return null;
+  }
+
+  private requireRecord(
+    entityType: 'season' | 'team',
+    externalId: string,
+    kind: RecordKind,
+    role: string,
+  ): ImportReason | null {
+    const ref = this.ctx.records.get(key(entityType, externalId));
+    if (!ref) {
+      return reason(
+        'reference_not_found',
+        `${role} ${externalId} is neither staged nor imported.`,
+        { externalId },
+      );
+    }
+    if (ref.kind !== kind) {
+      return reason('reference_wrong_kind', `${role} ${externalId} is not a ${kind}.`, {
+        externalId,
+        kind: ref.kind,
+      });
+    }
+    if (!ref.resolvable) {
+      return reason(
+        'dependency_unresolved',
+        `${role} ${externalId} is not imported (its own row is skipped or awaits review).`,
+        { externalId },
+      );
+    }
+    return null;
+  }
+
+  private created(values: CreateValues): RowPlan {
+    return { outcome: 'created', reasons: [], action: { type: 'create', values } };
+  }
+
+  private planSeason(data: SeasonPayload): RowPlan {
+    if (data.startsOn > data.endsOn) {
+      return exception('validation', [
+        reason('invalid_period', 'startsOn must not be after endsOn.'),
+      ]);
+    }
+    return this.created({
+      entityType: 'season',
+      season: {
+        competitionId: data.competitionId,
+        ruleSetId: data.ruleSetId,
+        name: data.name,
+        startsOn: data.startsOn,
+        endsOn: data.endsOn,
+        status: data.status,
+        registrationOpensAt: data.registrationOpensAt ?? null,
+        registrationClosesAt: data.registrationClosesAt ?? null,
+      },
+    });
+  }
+
+  private planTeam(data: TeamPayload): RowPlan {
+    if (data.record === 'team') {
+      const colors: { primary?: string; secondary?: string } = {};
+      if (data.primaryColor) colors.primary = data.primaryColor;
+      if (data.secondaryColor) colors.secondary = data.secondaryColor;
+      return this.created({
+        entityType: 'team',
+        record: 'team',
+        team: { name: data.name, colors, status: data.status ?? 'active' },
+      });
+    }
+    const problems = [
+      this.requireRecord('team', data.teamExternalId, 'team', 'Team'),
+      this.requireRecord('season', data.seasonExternalId, 'season', 'Season'),
+      data.captainExternalId ? this.requirePerson(data.captainExternalId, 'Captain') : null,
+    ].filter((p): p is ImportReason => p !== null);
+    if ((data.status === 'approved') !== (data.approvedAt !== undefined)) {
+      problems.push(
+        reason(
+          'approval_date',
+          'An approved entry states its approval date (approvedAt), and only an approved one.',
+        ),
+      );
+    }
+    if (problems.length > 0) return exception('validation', problems);
+    return this.created({
+      entityType: 'team',
+      record: 'entry',
+      entry: {
+        teamExternalId: data.teamExternalId,
+        seasonExternalId: data.seasonExternalId,
+        divisionId: data.divisionId ?? null,
+        status: data.status,
+        appliedAt: data.appliedAt,
+        approvedAt: data.approvedAt ?? null,
+        captainExternalId: data.captainExternalId ?? null,
+      },
+    });
+  }
+
+  private planRoster(data: RosterPayload): RowPlan {
+    const problems = [
+      this.requireRecord('team', data.entryExternalId, 'entry', 'Team entry'),
+      this.requirePerson(data.personExternalId, 'Player'),
+    ].filter((p): p is ImportReason => p !== null);
+    if (data.effectiveTo && new Date(data.effectiveTo) < new Date(data.effectiveFrom)) {
+      problems.push(reason('invalid_period', 'effectiveTo must not be before effectiveFrom.'));
+    }
+    if (problems.length > 0) return exception('validation', problems);
+    return this.created({
+      entityType: 'roster',
+      roster: {
+        entryExternalId: data.entryExternalId,
+        personExternalId: data.personExternalId,
+        status: data.status,
+        effectiveFrom: data.effectiveFrom,
+        effectiveTo: data.effectiveTo ?? null,
+        jerseyNumber: data.jerseyNumber ?? null,
+      },
+    });
+  }
+
+  private planSchedule(data: SchedulePayload): RowPlan {
+    if (new Date(data.scheduledStart) >= new Date(data.scheduledEnd)) {
+      return exception('validation', [
+        reason('invalid_period', 'scheduledStart must be before scheduledEnd.'),
+      ]);
+    }
+    if (new Date(data.scheduledEnd) <= this.ctx.now) {
+      // §5.3 "future schedules": a past event is attendance or result history, not a schedule.
+      return skipped([
+        reason(
+          'not_a_future_event',
+          'The event ended before the import; it is retained as staged history, not scheduled.',
+        ),
+      ]);
+    }
+    return this.created({
+      entityType: 'future_schedule',
+      event: {
+        facilityId: data.facilityId,
+        resourceIds: [...new Set(data.resourceIds)],
+        kind: data.kind,
+        title: data.title,
+        format: data.format ?? null,
+        scheduledStart: data.scheduledStart,
+        scheduledEnd: data.scheduledEnd,
+        ...(data.setupMinutes !== undefined ? { setupMinutes: data.setupMinutes } : {}),
+        ...(data.cleanupMinutes !== undefined ? { cleanupMinutes: data.cleanupMinutes } : {}),
+      },
+    });
+  }
+
+  private planPreferences(data: PreferencePayload): RowPlan {
+    const problem = this.requirePerson(data.personExternalId, 'Person');
+    if (problem) return exception('validation', [problem]);
+    const seen = new Set<string>();
+    for (const pref of data.preferences) {
+      const k = `${pref.category}.${pref.channel}`;
+      if (seen.has(k)) {
+        return exception('validation', [
+          reason('duplicate_preference', `The preference ${k} is stated twice.`),
+        ]);
+      }
+      seen.add(k);
+    }
+    return this.created({
+      entityType: 'communication_preference',
+      personExternalId: data.personExternalId,
+      preferences: data.preferences,
+    });
   }
 
   private planHousehold(data: HouseholdPayload, mode: 'create' | 'update'): RowPlan {
@@ -568,8 +871,8 @@ export class ImportPlanner {
       };
     }
     const name = data.name.trim().toLowerCase();
-    // A reserved (pending) mapping means an interrupted apply may already have created this
-    // program; the apply recovers it, and catalog refuses a genuine duplicate name anyway.
+    // A reserved (pending) mapping means an interrupted apply reserved this program's id; the
+    // resumed apply creates exactly that record, and catalog refuses a genuine duplicate name.
     const pending = this.ctx.mappings.get(key('program', row.external_id))?.status === 'pending';
     if (!pending && this.ctx.programNames.has(name)) {
       return exception('conflict', [

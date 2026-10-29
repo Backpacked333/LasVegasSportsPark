@@ -20,10 +20,13 @@ export type { AuthorityScopeSource, DeclaredScope, ScopeSourceField };
  * second, conflicting version of a record the legacy system still owns. Paths are the routes the
  * owning modules register (without the `/v1` prefix).
  *
- * Every served POST/PATCH/PUT/DELETE route is classified exactly once, either here or in
- * AUTHORITY_EXEMPT_ROUTES with the reason it changes no record of an authority category; a test
- * (`__tests__/authority.spec.ts`) fails on an unclassified route, so a new write route is never
- * allowed by default.
+ * Every served POST/PATCH/PUT/DELETE route is classified exactly once (MIG-00): by its handler's
+ * K-11 decorator (`@RecordAuthority(category, scope)` or `@NoRecordAuthority(reason)`, read first
+ * by AuthorityWriteInterceptor), or by one entry here or in AUTHORITY_EXEMPT_ROUTES with the
+ * reason it changes no record of an authority category. These lists keep the routes built before
+ * the decorators existed; new routes classify themselves in their own module. A test
+ * (`__tests__/authority.spec.ts`, `classifyWriteRoutes`) fails on an unclassified route and on a
+ * route classified twice, so a new write route is never allowed by default.
  */
 export interface AuthorityRoute {
   method: 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -226,19 +229,8 @@ export const AUTHORITY_EXEMPT_ROUTES: readonly AuthorityExemptRoute[] = [
     '/recovery/resume',
     'Ends recovery mode after a restore once provider facts are reconciled (§5.8, SPK-AT-028); resolves an operational exception, no record of an authority category.',
   ),
-  // Kernel capability switches (K-12). The handlers also carry @NoRecordAuthority; these two
-  // entries leave this list when MIG-00 counts the decorators (a route listed and decorated then
-  // fails the classification test).
-  x(
-    'POST',
-    '/admin/capabilities/:capability/enable',
-    'Not a §5.3 record category: changes an organization capability switch (DEC-016).',
-  ),
-  x(
-    'POST',
-    '/admin/capabilities/:capability/disable',
-    'Not a §5.3 record category: changes an organization capability switch (DEC-016).',
-  ),
+  // Kernel capability switches (K-12, DEC-016) classify themselves with @NoRecordAuthority
+  // (MIG-00): a route listed here and decorated fails the classification test.
   // identity
   x('POST', '/duplicate-candidates', 'Flags a possible duplicate for review; changes no person.'),
   x('POST', '/duplicate-candidates/:id/dismiss', 'Dismisses a flag; changes no person.'),
@@ -393,4 +385,107 @@ export function matchAuthorityRoute(
   if (!routePath) return undefined;
   const path = routePath.replace(/^\/v1(?=\/)/, '').replace(/\/+$/, '');
   return BY_KEY.get(`${method.toUpperCase()} ${path}`);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Classification check (MIG-00, §5.6, §4.7 invariant 11): deny-by-default over every served write
+// ---------------------------------------------------------------------------------------------
+
+const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
+
+/** `/people/:id` → `/people/{id}` (the route-facts form, K-02). */
+export function toRouteFactPath(path: string): string {
+  return path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+}
+
+/** The part of a K-02 route fact the classification needs (IF-07). */
+export interface ClassifiedRouteFact {
+  method: string;
+  /** OpenAPI form without the `/v1` prefix: `/people/{id}`. */
+  path: string;
+  recordAuthority:
+    | { kind: 'guarded'; category: string; scope: unknown }
+    | { kind: 'exempt'; reason: string }
+    | null;
+}
+
+export interface RouteClassificationReport {
+  /** Served write routes neither decorated nor listed: a new write route is never allowed by default. */
+  unclassified: string[];
+  /** Routes classified more than once (listed and decorated, listed twice, or in both lists). */
+  classifiedTwice: string[];
+  /** Static-list entries no served route matches (stale entries). */
+  listedNotServed: string[];
+  /** Guarded routes, from the decorators and the static list, with their category and scope. */
+  guarded: Array<{
+    method: string;
+    path: string;
+    category: string;
+    scope: unknown;
+    source: 'decorator' | 'list';
+  }>;
+}
+
+/**
+ * Checks that every served POST/PATCH/PUT/DELETE route is classified exactly once (§5.6): by its
+ * handler's K-11 decorator (`@RecordAuthority` / `@NoRecordAuthority`) or by one entry of
+ * AUTHORITY_ROUTES / AUTHORITY_EXEMPT_ROUTES. Pure: the caller passes the served route facts
+ * (`collectRouteFacts`) and, for tests, other lists.
+ */
+export function classifyWriteRoutes(
+  facts: readonly ClassifiedRouteFact[],
+  lists: {
+    guarded: readonly AuthorityRoute[];
+    exempt: readonly AuthorityExemptRoute[];
+  } = { guarded: AUTHORITY_ROUTES, exempt: AUTHORITY_EXEMPT_ROUTES },
+): RouteClassificationReport {
+  const counts = new Map<string, number>();
+  const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
+  const served = new Set<string>();
+  const guarded: RouteClassificationReport['guarded'] = [];
+  for (const fact of facts) {
+    const method = fact.method.toUpperCase();
+    if (!WRITE_METHODS.has(method)) continue;
+    const key = `${method} ${fact.path}`;
+    served.add(key);
+    if (fact.recordAuthority) {
+      bump(key);
+      if (fact.recordAuthority.kind === 'guarded') {
+        guarded.push({
+          method,
+          path: fact.path,
+          category: fact.recordAuthority.category,
+          scope: fact.recordAuthority.scope,
+          source: 'decorator',
+        });
+      }
+    }
+  }
+  const listed: string[] = [];
+  for (const route of lists.guarded) {
+    const key = `${route.method} ${toRouteFactPath(route.path)}`;
+    bump(key);
+    listed.push(key);
+    guarded.push({
+      method: route.method,
+      path: toRouteFactPath(route.path),
+      category: route.category,
+      scope: route.scope,
+      source: 'list',
+    });
+  }
+  for (const route of lists.exempt) {
+    const key = `${route.method} ${toRouteFactPath(route.path)}`;
+    bump(key);
+    listed.push(key);
+  }
+  return {
+    unclassified: [...served].filter((key) => !counts.has(key)).sort(),
+    classifiedTwice: [...counts]
+      .filter(([, n]) => n > 1)
+      .map(([key]) => key)
+      .sort(),
+    listedNotServed: [...new Set(listed)].filter((key) => !served.has(key)).sort(),
+    guarded,
+  };
 }
