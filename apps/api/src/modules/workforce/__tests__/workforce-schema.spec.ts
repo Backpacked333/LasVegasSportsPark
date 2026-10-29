@@ -1,5 +1,5 @@
 import { newId } from '@sportspark/contracts';
-import { json, seedOrganization } from '@sportspark/db';
+import { json, pgConstraintName, seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
@@ -405,6 +405,63 @@ describe('workforce schema invariants (migration 0700)', () => {
       .insertInto('assignments')
       .values(assignmentRow(game.eventId, game.eventId))
       .execute();
+  });
+
+  it('SPK-PAY-001 / SPK-STAFF-006 (migration 0703): a fee adjustment carries its submission’s currency', async () => {
+    const p = await person();
+    const assignmentId = await createAssignmentFixture(t, {
+      ...fixtureTarget(game),
+      personId: p,
+      status: 'completed',
+      role: 'timekeeper',
+    });
+    const submissionId = newId();
+    await t.db
+      .insertInto('fee_submissions')
+      .values({
+        id: submissionId,
+        organization_id: t.organizationId,
+        assignment_id: assignmentId,
+        person_id: p,
+        rate_basis: json({ kind: 'flat', amountMinor: 5000 }),
+        computed_amount_minor: 5000,
+        submitted_amount_minor: 5000,
+        currency: 'USD',
+        note: null,
+        submitted_by: json({ kind: 'system', actorLabel: 'test' }),
+        submitted_at: new Date(),
+        status: 'submitted',
+        approved_amount_minor: null,
+        approver: null,
+        approver_person_id: null,
+        approved_at: null,
+        rejected_at: null,
+        rejection_reason: null,
+        export_batch_id: null,
+        exported_at: null,
+      })
+      .execute();
+    const adjustment = (currency: string) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      fee_submission_id: submissionId,
+      sequence: 1,
+      previous_amount_minor: 5000,
+      adjusted_amount_minor: 4500,
+      currency,
+      reason: 'Rate card',
+      adjusted_by: json({ kind: 'system', actorLabel: 'test' }),
+      adjusted_by_person_id: null,
+      adjusted_at: new Date(),
+    });
+    let refused: unknown;
+    try {
+      await t.db.insertInto('fee_adjustments').values(adjustment('EUR')).execute();
+    } catch (error) {
+      refused = error;
+    }
+    expect(pgConstraintName(refused)).toBe('fee_adjustments_submission_currency_fk');
+    await t.db.insertInto('fee_adjustments').values(adjustment('USD')).execute();
   });
 
   it('SPK-STAFF-006: fee adjustments and export batches are append-only; a submission exports only in its batch currency and once live per assignment', async () => {

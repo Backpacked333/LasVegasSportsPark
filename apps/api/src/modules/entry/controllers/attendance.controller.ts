@@ -21,6 +21,7 @@ import {
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import {
+  APP_CONFIG,
   CurrentPrincipal,
   DATABASE,
   Idempotent,
@@ -30,6 +31,7 @@ import {
   ZodParams,
   ZodQuery,
   ZodValidationPipe,
+  type AppConfig,
 } from '../../../kernel';
 import {
   FAKE_ACCESS_CONTROL_PROVIDER,
@@ -150,13 +152,18 @@ const accessEventPipe = new ZodValidationPipe(AccessControlEventBody);
 /**
  * Access hardware webhooks (§4.11 pattern, SPK-COND-004): authenticate the event, record it
  * durably and idempotently in the kernel inbox, and let the inbox worker apply it. Only the fake
- * provider exists until a hardware vendor is selected (DEC-023).
+ * provider exists until a hardware vendor is selected (DEC-023). Its signing secret is a published
+ * test constant, so its events are accepted only outside production (like `/v1/dev/tokens` and the
+ * fake messaging receipts): in production the endpoint answers NOT_FOUND and records nothing, so
+ * no one who has read the source can record a facility arrival for any person (§4.11, §4.14,
+ * §5.2).
  */
 @Controller('webhooks/access-control')
 export class AccessControlWebhooksController {
   constructor(
     private readonly inbox: Inbox,
     @Inject(DATABASE) private readonly db: Db,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   @Public()
@@ -167,7 +174,7 @@ export class AccessControlWebhooksController {
     @Body() raw: unknown,
     @Headers(FAKE_ACCESS_CONTROL_SIGNATURE_HEADER) signature: string | undefined,
   ): Promise<{ inboxEventId: string; duplicate: boolean }> {
-    if (provider !== FAKE_ACCESS_CONTROL_PROVIDER) {
+    if (provider !== FAKE_ACCESS_CONTROL_PROVIDER || this.config.NODE_ENV === 'production') {
       throw errors.notFound('access control provider', provider);
     }
     if (!FakeAccessControlProvider.verify(raw, signature)) {

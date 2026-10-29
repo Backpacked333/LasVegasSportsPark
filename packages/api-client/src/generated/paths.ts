@@ -12612,7 +12612,47 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List the reconciliation reports of a batch (§5.5) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MigrationReconciliationReport"][];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
         put?: never;
         /** Reconcile an applied batch at the four §5.5 levels (discrepancies are never netted) */
         post: {
@@ -31099,7 +31139,7 @@ export type components = {
         };
         AdjustFeeRequest: {
             amountMinor: number;
-            expectedRevision?: number;
+            expectedRevision: number;
             policyReferences?: string[];
             reason: string;
         };
@@ -34303,7 +34343,7 @@ export type components = {
         ExtendInstallmentRequest: {
             /** Format: date-time */
             dueAt: string;
-            expectedRevision?: number;
+            expectedRevision: number;
             policyReferences?: string[];
             reason: string;
         };
