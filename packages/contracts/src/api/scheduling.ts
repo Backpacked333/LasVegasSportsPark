@@ -583,6 +583,9 @@ export const ClosureSchema = z
       .nullable(),
     appliedAt: Instant.nullable(),
     liftedAt: Instant.nullable(),
+    /** SCH-01 (SPK-FAC-003): set when a pending closure was withdrawn; it never applied. */
+    withdrawnAt: Instant.nullable(),
+    withdrawalReason: z.string().nullable(),
     revision: Revision,
     createdAt: Instant,
     updatedAt: Instant,
@@ -615,6 +618,30 @@ export const ListClosuresQuery = z.object({
   facilityId: z.uuid(),
   status: ClosureStatus.optional(),
 });
+
+/**
+ * SCH-01 (SPK-FAC-003, ClosureMachine `withdraw`): withdraw a pending closure before it applies.
+ * The reason is required and stored on the closure and its audit record.
+ */
+export const WithdrawClosureBody = z
+  .object({
+    ...CommandMetaSchema.shape,
+    reason: z.string().min(1).max(2000),
+  })
+  .openapi('WithdrawClosureBody');
+export type WithdrawClosureBody = z.infer<typeof WithdrawClosureBody>;
+
+/**
+ * SCH-01 (SPK-SCHED-009): the impact a closure of this area and interval would have, computed
+ * without creating a closure. `resourceId` absent means the whole facility.
+ */
+export const ClosureImpactQuery = z.object({
+  facilityId: z.uuid(),
+  resourceId: z.uuid().optional(),
+  start: Instant,
+  end: Instant,
+});
+export type ClosureImpactQuery = z.infer<typeof ClosureImpactQuery>;
 
 // ---------------------------------------------------------------------------------------------
 // Drafts and publication (SPK-SCHED-005/006)
@@ -958,6 +985,20 @@ command(
   LiftClosureBody,
   ClosureSchema,
   200,
+);
+command(
+  'post',
+  '/closures/{id}/withdraw',
+  'Withdraw a pending closure before it applies (SPK-FAC-003); a restriction-owned closure is withdrawn through its restriction',
+  WithdrawClosureBody,
+  ClosureSchema,
+  200,
+);
+query(
+  '/closure-impact',
+  'Preview the impact of a closure of an area and interval without creating one (SPK-SCHED-009)',
+  ClosureImpactQuery,
+  ClosureImpactSchema,
 );
 
 query('/events', 'List events in a facility window', ListEventsQuery, pageSchema(EventSchema));

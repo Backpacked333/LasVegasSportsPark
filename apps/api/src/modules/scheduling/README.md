@@ -11,9 +11,16 @@ SPK-AT-008/009/021, SPK-COMMS-005 (old and new practical details on every schedu
 **Migration range:** `packages/db/migrations/0300_scheduling_*.sql` … `0399`
 
 **Status: implemented** (verified by `apps/api/src/modules/scheduling/__tests__` and
-`time/recurrence.spec.ts`). Pending decisions are listed at the end.
+`time/recurrence.spec.ts`). Pending decisions are listed at the end. Labels follow §6.7:
+**verified** (implemented and covered by the named test), **proposed** (implemented with a value or
+reading that awaits a decision) and **pending** (not built until a decision is made).
 
-## Tables (migration `0300_scheduling_core.sql`; facility-scoped keys `0301`)
+**Capability switches:** none. Scheduling's own commands are core capabilities and are never behind
+a per-organization switch. The Package G bookings that call the port's series methods (rentals
+DEC-076, parties DEC-077) are switched off by default in the modules that own them (enrollment,
+catalog; DEC-016); scheduling only accepts their `sourceType 'enrollment.booking'` events.
+
+## Tables (migration `0300_scheduling_core.sql`; facility-scoped keys `0301`; closure withdrawal `0302`)
 
 | Table                                    | Purpose                                                                                                                                                                                                                                       |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -21,7 +28,7 @@ SPK-AT-008/009/021, SPK-COMMS-005 (old and new practical details on every schedu
 | `resource_configurations` (+ `_members`) | A physical arrangement: the set of resources that may operate simultaneously ("full pitch", "two halves")                                                                                                                                     |
 | `conflict_units`                         | Atomic physical areas; `resource_conflict_units` maps a whole pitch to all of its subdivisions' units and a subdivision to its own                                                                                                            |
 | `operating_hours`                        | Local windows per weekday for a resource or (resource null) the whole facility                                                                                                                                                                |
-| `closures`                               | Facility- or resource-level `tstzrange` closures with impact preview, resolution and lifecycle `pending → active → lifted` (`withdrawn` from pending)                                                                                         |
+| `closures`                               | Facility- or resource-level `tstzrange` closures with impact preview, resolution and lifecycle `pending → active → lifted` (`withdrawn` from pending, with `withdrawn_at`, `withdrawn_by`, `withdrawal_reason`, migration 0302)               |
 | `event_series`                           | Recurrence rule in facility-local wall-clock time + IANA zone, DST policies, exceptions                                                                                                                                                       |
 | `events`                                 | Scheduled instants in UTC with the facility zone, buffers, `dst_resolution`, lifecycle `draft → published → canceled`, `published_revision`, owning record                                                                                    |
 | `reservations` / `reservation_units`     | Holds per resource / per conflict unit for the occupied interval (scheduled ± buffers). `EXCLUDE USING gist (organization_id, conflict_unit_id, occupied) WHERE status = 'active'` is invariant 4                                             |
@@ -42,6 +49,8 @@ Every table carries `organization_id`; references use composite `(organization_i
 | POST/GET/DELETE | `/operating-hours[/{id}]`                     | manage / read inventory                                                                    |
 | POST/GET        | `/closures`, `/closures/{id}`                 | `scheduling.manage_closures` / read                                                        |
 | POST            | `/closures/{id}/apply`, `/closures/{id}/lift` | `scheduling.manage_closures`                                                               |
+| POST            | `/closures/{id}/withdraw`                     | `scheduling.manage_closures`; `{ reason, expectedRevision? }` (SCH-01)                     |
+| GET             | `/closure-impact`                             | `scheduling.manage_closures`; `facilityId`, `resourceId?`, `start`, `end`; creates nothing |
 | GET             | `/events`, `/events/{id}`, `/reservations`    | `read_schedule`; `read_event` allows a committed participant or a guardian with `view`     |
 | POST/GET        | `/event-series`, `/event-series/{id}`         | `scheduling.manage_events`                                                                 |
 | POST            | `/event-series/{id}/edits`                    | one / this and future / entire series, `preview: true` returns exactly which events change |
@@ -55,13 +64,34 @@ Every POST/PATCH/DELETE is `@Idempotent()` and validated with zod; every write r
 
 ## Ports (`ports.ts`, provided by `SchedulingModule`)
 
-- `EVENT_SCHEDULING_PORT` → `EventsService.createEvent/moveEvent/cancelEvent/getEvent` for owning
-  records (fixtures, sessions, rentals). Conflicts are `RESOURCE_CONFLICT` with
-  `details.conflicts[]` (code, resource/unit, `conflictingEventIds`) and `details.conflictingEventIds`.
-  `status: 'draft'` creates a placeholder that holds no space until a schedule draft publishes it
-  (SPK-FIX-005).
+- `EVENT_SCHEDULING_PORT` (IF-31) → `EventsService.createEvent/moveEvent/cancelEvent/getEvent` for
+  owning records (fixtures, sessions, rentals), plus `createEventSeries`, `cancelEventSeries`
+  (`EventSeriesService`) and `importEvent` (`EventImportService`). Every method joins the caller's
+  unit of work (IF-28), so an owning record and its events commit or roll back together. Conflicts
+  are `RESOURCE_CONFLICT` with `details.conflicts[]` (code, resource/unit, `conflictingEventIds`) and
+  `details.conflictingEventIds`. `status: 'draft'` creates a placeholder that holds no space until a
+  schedule draft publishes it (SPK-FIX-005).
+  - `createEventSeries` (SCH-02, SPK-COND-003): weekly only, `count <= 52` or an `until` that
+    produces at most 52 occurrences, expanded in the facility zone with the SPK-SCHED-008
+    resolution rules. Detection runs once over every occurrence; any conflict answers
+    `RESOURCE_CONFLICT { conflicts: [{ occurrenceIndex, occurrenceStart, conflictingEventIds,
+details }] }` and writes nothing. A concurrent winner fails a reservation (exclusion
+    constraint) and the same grouped error rolls the whole joined unit back.
+  - `cancelEventSeries` (SCH-02): cancels the occurrences starting at or after `fromInstant`
+    (default the Clock's now), releases their holds, one `scheduling.event_changed` per published
+    occurrence, and ends the series; a replay cancels nothing more.
+  - `sourceType 'enrollment.booking'` (`BOOKING_SOURCE_TYPE`) is for kinds `rental` and `party`;
+    enrollment calls with `systemPrincipal(org, 'enrollment.booking')`, which schedules booking
+    events only; staff need `scheduling.manage_events`.
+  - §5.6 (K-11, IF-42): `createEvent`, `createEventSeries`, `moveEvent`, `cancelEvent` and
+    `cancelEventSeries` assert `RECORD_AUTHORITY_PORT 'future_schedule'` for the facility inside
+    the unit (ACCESS_DENIED `LEGACY_AUTHORITY`); `importEvent` never does.
+  - `importEvent` (SCH-04, IF-40): see "Import" below.
 - `AVAILABILITY_PORT` → `findAvailableSlots(resource, interval, duration, buffers)`.
-- `CLOSURE_PORT` → `previewImpact`, `createClosure`, `applyClosure`, `liftClosure` (facilities, SPK-FAC-003/004/005).
+- `CLOSURE_PORT` → `previewImpact`, `createClosure`, `applyClosure`, `liftClosure`,
+  `withdrawClosure` (facilities, SPK-FAC-003/004/005). `withdrawClosure` (IF-11) withdraws a pending
+  closure of any source, including the `maintenance` closure of a withdrawn restriction, and joins
+  the caller's unit of work.
 - `ClosureLiftGuards`: a module that backs closures with its own authority registers a guard that
   `liftClosure` runs inside its transaction before the lift; facilities refuses lifting a closure
   that backs an unreleased restriction outside its release (SPK-FAC-004).
@@ -91,6 +121,8 @@ Test fixtures for downstream modules: `testing/scheduling-fixtures.ts` (`seedPit
   not order events per aggregate, §4.12).
 - `scheduling.schedule_published` — publication group with event ids, changes and remaining obligations.
 - `scheduling.closure_applied` / `scheduling.closure_lifted`.
+- `scheduling.closure_withdrawn` (IF-12) — closureId, facilityId, resourceId, interval, source,
+  reason. No handler: a withdrawn closure never affected availability.
 
 Draft events and drafts themselves never produce customer notices (SPK-SCHED-005).
 
@@ -159,6 +191,57 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
 - Closure application either cancels affected published events (notices carry the closure id) or
   leaves them for staff resolution as an operational exception in the `scheduler` queue.
 
+### Closure withdrawal and preview (SCH-01: SPK-FAC-003, SPK-SCHED-009) — verified
+
+- `POST /v1/closures/{id}/withdraw` moves a pending closure to `withdrawn` (ClosureMachine
+  `withdraw`) with the reason, actor and instant (the injected Clock), audit
+  `scheduling.closure_withdrawn` and the `scheduling.closure_withdrawn` event. An active closure is
+  `INVALID_TRANSITION` (it is lifted instead); a withdrawn closure is never applied, lifted or
+  withdrawn again. A `maintenance` closure answers `RESOURCE_CONFLICT` `OWNED_BY_RESTRICTION` over
+  HTTP: facilities withdraws it with its restriction through `CLOSURE_PORT` (§4.2). The route is
+  classified `@RecordAuthority('future_schedule', 'unproven')`, like apply and lift.
+- Database (migration 0302): a closure is `withdrawn` exactly when `withdrawn_at` is set; a
+  withdrawn closure names its actor and a 1..2000-character reason and was never applied; the
+  `closures_terminal_guard` trigger refuses any rewrite of a `lifted` or `withdrawn` closure
+  (status, interval, area, facts, impact, resolution, revision).
+- `GET /v1/closure-impact?facilityId&resourceId&start&end` returns the `ClosureImpact` that
+  `POST /closures` stores (affected events, owning records, parties, and the customers, obligations
+  and messages the contributors add) and writes nothing (no closure, audit or outbox row).
+- Tests: `__tests__/closure-withdrawal.spec.ts` ("SPK-FAC-003: a pending closure is withdrawn and
+  can never be applied", "the database rejects a withdrawn closure without withdrawal facts and a
+  status change out of withdrawn", the preview and the `OWNED_BY_RESTRICTION` cases), under PGlite
+  and `TEST_DATABASE_URL`.
+
+### Port series, cancellation and authority (SCH-02, SCH-03) — verified
+
+`__tests__/event-scheduling-port.spec.ts`: "SPK-COND-003: a series with one conflicting occurrence
+writes nothing and lists that occurrence", "SPK-SCHED-008: weekly occurrences keep their local start
+time across a daylight-saving change", "§5.6: a port reservation at a facility whose schedule
+authority is legacy answers LEGACY_AUTHORITY" (with a deterministic `RECORD_AUTHORITY_IMPL` fake;
+the migration module provides the real one), the joined-unit rollback, cancellation, the booking
+rules, two racing series (one wins, the other writes nothing; PGlite and `TEST_DATABASE_URL`) and
+"reservation and event created_at follow FixedClock". SCH-03: `EventWriter.insertEvent`,
+`EventWriter.reserve` and series creation stamp `created_at`/`updated_at` of events, event series,
+reservations, reservation units and event commitments from the injected Clock (the column defaults
+remain for other writers; later updates still use the `touch_updated_at` trigger's `now()`).
+
+### Import of future schedules (SCH-04: §5.3, §5.4, SPK-AT-024) — verified
+
+`EventSchedulingPort.importEvent` runs only for `systemPrincipal(org, 'migration.import:<batchId>')`
+(`assertImportPrincipal`). It creates the event if absent with `id = recordId` as a `draft`, with
+`source_type 'import'` and `source_id = batchId` (the owning record type of the legacy row is not
+kept on the event), audited `scheduling.event_imported` with the import actor. The same record and
+content returns the existing event with no effect; different content is `RESOURCE_CONFLICT`
+`IMPORT_CONTENT_MISMATCH`. A draft holds no space, so the import runs conflict detection for its
+interval, resources and buffers against current reservations, closures and conflict units and
+refuses with `RESOURCE_CONFLICT { code: 'IMPORT_SCHEDULE_CONFLICT', conflicts }`, writing nothing
+(the migration module records the import exception, MIG-02). Importing publishes nothing (no
+reservation, commitment or notice); the draft is published only through a schedule draft whose
+`create` change names it, whose validation and publication re-detect later conflicts. Tests:
+`__tests__/event-import.spec.ts` ("SPK-AT-024: importing the same event twice creates one draft
+event", "an import that conflicts with an existing reservation or closure answers
+IMPORT_SCHEDULE_CONFLICT and writes nothing", "§5.6: importing publishes nothing").
+
 ### Closure impact contributors (SPK-SCHED-009, SPK-AT-009) — verified
 
 `ClosureImpactContributors` (exported) lets the modules that own participation, money and messages
@@ -170,6 +253,19 @@ executor. **Verified**: `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`. An
 adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009).
 
 ## Known gaps / pending decisions
+
+- Pending (DEC-001): the roles allowed to create, apply, lift and withdraw closures
+  (`scheduling.manage_closures`: scheduler, facilities operator, general manager, system
+  administrator) are placeholders until the physical-inventory and approval decision.
+- Proposed: a series through the scheduling port holds at most 52 occurrences
+  (`PORT_SERIES_MAX_OCCURRENCES`); longer bookings are split by the owning module. The HTTP series
+  keeps `maxSeriesOccurrences` (366).
+- Proposed: an imported event keeps only its batch as `source_id`; linking it back to the owning
+  module's imported record (fixture, session) is that module's mapping (external mappings, MIG).
+- Integration (not this module): the committed `docs/api/openapi.json` and the generated
+  `packages/api-client` paths need regeneration for `POST /closures/{id}/withdraw` and
+  `GET /closure-impact`, and the migration module's authority classification test must count the
+  `@RecordAuthority` decorator on the withdraw route (MIG-00).
 
 - Required rest minutes (team/person 60, equipment 0) and the availability step are proposed
   defaults pending the league-manager and operations decisions (§6.6); facilities override them via
