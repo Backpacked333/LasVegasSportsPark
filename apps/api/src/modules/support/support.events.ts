@@ -17,6 +17,8 @@ export const CaseOpened = defineEvent(
     ownerPersonId: z.uuid().nullable(),
     ownerQueue: z.string().nullable(),
     origin: z.object({ type: z.string(), id: z.uuid() }).nullable(),
+    /** SUP-01: staff, customer (the customer's own request) or hook (an origin record). */
+    openedVia: z.enum(['staff', 'customer', 'hook']).optional(),
   }),
 );
 

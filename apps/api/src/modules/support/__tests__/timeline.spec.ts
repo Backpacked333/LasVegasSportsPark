@@ -1,9 +1,8 @@
 import { newId, systemPrincipal, type TimelineEntry } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Outbox } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createCreditFixture, createObligationFixture } from '../../finance';
-import { IdentityEvents, authHeaderForPerson, createPersonFixture } from '../../identity';
+import { authHeaderForPerson, createPersonFixture } from '../../identity';
 import { EventsService, at, createScheduledEvent, seedPitchWithHalves } from '../../scheduling';
 import {
   adultCustomer,
@@ -312,9 +311,13 @@ describe('customer timeline (SPK-SUPPORT-001)', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('SPK-IAM-007: after a merge the surviving person keeps the merged person’s indexed history and live cases', async () => {
+  it('SPK-IAM-007: the survivor’s timeline and case search include the merged person’s records', async () => {
     const duplicate = await createPersonFixture(t, { kind: 'adult' });
-    await createObligationFixture(t, { debtorPersonId: duplicate, amountMinor: 700 });
+    await createObligationFixture(t, {
+      debtorPersonId: duplicate,
+      amountMinor: 700,
+      description: 'Locker rental',
+    });
     const composed = await post(t, '/v1/notifications', operator, {
       kind: 'payment_attention',
       title: 'Balance reminder',
@@ -327,29 +330,70 @@ describe('customer timeline (SPK-SUPPORT-001)', () => {
       title: 'Duplicate record',
       subjectPersonId: duplicate,
     });
+    expect(dupCase.status, JSON.stringify(dupCase.body)).toBe(201);
     await drainOutbox(t);
     const survivor = await createPersonFixture(t, { kind: 'adult' });
-    // identity emits identity.persons_merged when a merge commits; support follows it.
-    await t.db.transaction().execute((trx) =>
-      t.app.get(Outbox).enqueue(trx, IdentityEvents.personsMerged, {
-        organizationId: t.organizationId,
-        aggregateType: 'person_merge',
-        aggregateId: newId(),
-        payload: {
-          mergeId: newId(),
-          survivorPersonId: survivor,
-          mergedPersonId: duplicate,
-          operationId: newId(),
-        },
-      }),
-    );
-    await drainOutbox(t);
+    const indexBefore = await t.db
+      .selectFrom('timeline_references')
+      .selectAll()
+      .where('person_id', 'in', [duplicate, survivor])
+      .orderBy('id')
+      .execute();
+    const caseBefore = await t.db
+      .selectFrom('cases')
+      .selectAll()
+      .where('id', '=', dupCase.body.id)
+      .executeTakeFirstOrThrow();
+    // What identity's merge does to the persons table (identity owns it; a fixture here). SUP-05:
+    // support follows no merge event and rewrites nothing.
+    await t.db
+      .updateTable('persons')
+      .set({ status: 'merged', merged_into_person_id: survivor })
+      .where('id', '=', duplicate)
+      .execute();
+
     const res = await timelineOf(operator, survivor, '?limit=200');
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.scope.personIds).toEqual([survivor]);
     const entries = res.body.entries as TimelineEntry[];
-    expect(entries.some((e) => e.record.id === composed.body.id)).toBe(true);
-    expect(entries.some((e) => e.record.id === dupCase.body.id)).toBe(true);
-    const moved = await get(t, `/v1/cases/${dupCase.body.id}`, operator);
-    expect(moved.body.subject.personId).toBe(survivor);
+    const message = entries.find((e) => e.record.id === composed.body.id);
+    expect(message).toMatchObject({ category: 'message', personId: survivor });
+    const opened = entries.find((e) => e.record.id === dupCase.body.id);
+    expect(opened).toMatchObject({ kind: 'case.opened', personId: survivor });
+    expect(entries.find((e) => e.title === 'Locker rental')).toMatchObject({
+      kind: 'obligation.created',
+      personId: survivor,
+    });
+    // The merged person's id reads the survivor's timeline.
+    const viaMerged = await timelineOf(operator, duplicate, '?limit=200');
+    expect(viaMerged.body.person.id).toBe(survivor);
+    expect((viaMerged.body.entries as TimelineEntry[]).map((e) => e.id)).toEqual(
+      entries.map((e) => e.id),
+    );
+
+    // Case search by the survivor finds the merged person's case; its subject keeps the original
+    // person id and the view names the surviving person.
+    const search = await get(t, `/v1/cases?subjectPersonId=${survivor}`, operator);
+    expect(search.status, JSON.stringify(search.body)).toBe(200);
+    expect(search.body.items.map((c: { id: string }) => c.id)).toContain(dupCase.body.id);
+    const view = await get(t, `/v1/cases/${dupCase.body.id}`, operator);
+    expect(view.body.subject).toMatchObject({ personId: duplicate, canonicalPersonId: survivor });
+
+    // No support row was rewritten or copied.
+    expect(
+      await t.db
+        .selectFrom('timeline_references')
+        .selectAll()
+        .where('person_id', 'in', [duplicate, survivor])
+        .orderBy('id')
+        .execute(),
+    ).toEqual(indexBefore);
+    expect(
+      await t.db
+        .selectFrom('cases')
+        .selectAll()
+        .where('id', '=', dupCase.body.id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual(caseBefore);
   });
 });

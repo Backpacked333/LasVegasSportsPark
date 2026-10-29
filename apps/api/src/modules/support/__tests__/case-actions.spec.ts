@@ -308,6 +308,8 @@ describe('case actions (SPK-SUPPORT-003)', () => {
     const detail = await get(t, `/v1/cases/${caseId}`, manager);
     const action = detail.body.actions[0];
     expect(action.status).toBe('unknown');
+    // SUP-04: the helper's coordinating operation is recovery_required, so resolving the case
+    // acknowledges the open recovery with a reason.
     const resolved = await post(t, `/v1/cases/${caseId}/transition`, manager, {
       event: 'resolve',
       expectedRevision: detail.body.revision,
@@ -315,6 +317,8 @@ describe('case actions (SPK-SUPPORT-003)', () => {
         kind: 'information_provided',
         summary: 'Told the customer finance is checking',
       },
+      acknowledgeOpenRecovery: true,
+      reason: 'Finance is reconciling the refund; the customer has been told',
     });
     expect(resolved.status, JSON.stringify(resolved.body)).toBe(200);
     const close = await post(t, `/v1/cases/${caseId}/transition`, manager, {

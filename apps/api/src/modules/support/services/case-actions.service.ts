@@ -14,41 +14,48 @@ import {
   type ResendNotificationInput,
   type SettleCaseActionInput,
 } from '@sportspark/contracts';
-import { isUniqueViolation, json, type CaseActionStatus } from '@sportspark/db';
+import { isUniqueViolation, json, type CaseActionStatus, type Db } from '@sportspark/db';
 import { sql, type SqlBool } from 'kysely';
 import {
+  AuditReader,
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  DATABASE,
   ExceptionActions,
   OperationalExceptions,
   OperationsService,
   Outbox,
+  OutboxHistory,
   UnitOfWork,
   actionRegistry,
   snapshotActor,
+  type AuditRecord,
   type Clock,
   type Trx,
 } from '../../../kernel';
 import { CommunicationsActions, NotificationsService } from '../../communications';
-import { FinanceActions, RefundsService } from '../../finance';
+import { FinanceActions, RefundRequested, RefundsService } from '../../finance';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { SupportActions } from '../support.actions';
 import { CaseActionRecorded, HelperOutcomeDue } from '../support.events';
 import { CaseActionMachine } from '../support.machines';
 import { SUPPORT_POLICY, type SupportPolicy } from '../support.policy';
-import {
-  organizationOf,
-  toCaseAction,
-  type CaseActionRow,
-  type CaseRow,
-  type Reader,
-} from '../support.shared';
+import { organizationOf, toCaseAction, type CaseActionRow, type CaseRow } from '../support.shared';
+import { AuditEvidence } from './audit-evidence';
 import { CasesService } from './cases.service';
 import { ExceptionQueuesService } from './exception-queues.service';
 
 /** The queue that owns the question "what happened to this refund?" (finance, §5.11). */
 const REFUND_OUTCOME_QUEUE = 'finance_operator';
+
+/** SUP-04: the periodic job that settles helper requests left `requested`. */
+export const SETTLE_STALE_CASE_ACTIONS_JOB = 'support.settle_stale_case_actions';
+/** SUP-04: the exception raised once per helper request whose outcome no module reports yet. */
+export const CASE_ACTION_STALE_CATEGORY = 'support.case_action_stale';
+const HELPER_OUTCOME_UNKNOWN_CATEGORY = 'support.helper_outcome_unknown';
+/** Keyset bound above every UUID, for the exclusive outbox-history position just before an instant. */
+const MAX_UUID = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
 
 /** Finance refund states in which a refund moved no money and holds no reservation. */
 const REFUND_NO_EFFECT: readonly string[] = ['failed', 'canceled'];
@@ -71,6 +78,22 @@ interface EvidenceAudit {
   targetId: string;
   operationId: string | null;
   occurredAt: Date;
+  details: Record<string, unknown>;
+}
+
+/** What the kernel reports of an operation (SUP-02: read through OperationsService). */
+interface OperationFacts {
+  kind: string;
+  status: string;
+}
+
+/** The owning module's outcome of a helper request, as support records it. */
+interface OwnerOutcome {
+  status: 'succeeded' | 'failed';
+  commandOperationId?: string | null;
+  auditRecordId?: string | null;
+  record?: { type: string; id: string } | null;
+  error?: { code: string; message: string; details?: unknown } | null;
 }
 
 interface RecordActionInput {
@@ -101,7 +124,11 @@ interface RecordActionInput {
 export class CaseActionsService {
   private readonly logger = new Logger(CaseActionsService.name);
 
+  /** SUP-04: the job's keyset position across passes (in memory; restarts when exhausted). */
+  private staleAfter: { requestedAt: Date; id: string } | null = null;
+
   constructor(
+    @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly uow: UnitOfWork,
     private readonly cases: CasesService,
@@ -115,6 +142,9 @@ export class CaseActionsService {
     private readonly authorization: AuthorizationService,
     private readonly queues: ExceptionQueuesService,
     @Inject(SUPPORT_POLICY) private readonly policy: SupportPolicy,
+    private readonly auditReader: AuditReader,
+    private readonly auditEvidence: AuditEvidence,
+    private readonly outboxHistory: OutboxHistory,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -128,6 +158,10 @@ export class CaseActionsService {
     correlationId: string | null,
   ): Promise<CaseActionOutcome> {
     const organizationId = organizationOf(principal);
+    // The kernel's operation read uses the root database: read it before support's transaction.
+    const operation = input.operationId
+      ? await this.operationFacts(organizationId, input.operationId)
+      : null;
     try {
       return await this.uow.run(async ({ trx }) => {
         const row = await this.cases.loadWorkable(
@@ -149,7 +183,13 @@ export class CaseActionsService {
             code: 'SUPPORT_ACTION_NOT_LINKABLE',
           });
         }
-        const evidence = await this.verifyEvidence(trx, principal.accountId, organizationId, input);
+        const evidence = await this.verifyEvidence(
+          trx,
+          principal.accountId,
+          organizationId,
+          input,
+          operation,
+        );
         if (definition.id === FinanceActions.refund.id && evidence.audit) {
           await this.assertNotAnOutstandingHelpersRefund(trx, organizationId, evidence.audit);
         }
@@ -181,13 +221,16 @@ export class CaseActionsService {
   /**
    * The evidence must be the operator's own command in this organization: an audit record of the
    * named action, or an operation whose audit trail records that action. A failed or compensated
-   * operation produced no outcome to link.
+   * operation produced no outcome to link. Kernel records are read through the kernel's APIs
+   * (SUP-02): who requested the operation through `OperationsService.requestedBy`, its status as
+   * prefetched by `operationFacts`, the audit record through `AuditEvidence`.
    */
   private async verifyEvidence(
     trx: Trx,
     expectedAccountId: string | null,
     organizationId: string,
     input: { actionId: string; operationId?: string; auditRecordId?: string },
+    operation: OperationFacts | null,
   ): Promise<{
     auditRecordId: string | null;
     record: { type: string; id: string } | null;
@@ -200,15 +243,8 @@ export class CaseActionsService {
     let record: { type: string; id: string } | null = null;
     let audit: EvidenceAudit | null = null;
     if (input.operationId) {
-      const operation = await trx
-        .selectFrom('operations')
-        .select(['id', 'organization_id', 'kind', 'status', 'requested_by'])
-        .where('id', '=', input.operationId)
-        .executeTakeFirst();
-      if (!operation || operation.organization_id !== organizationId) {
-        throw errors.notFound('operation', input.operationId);
-      }
-      const requester = operation.requested_by as { accountId?: string | null };
+      const requester = await this.operations.requestedBy(organizationId, input.operationId, trx);
+      if (!requester || !operation) throw errors.notFound('operation', input.operationId);
       if (!expectedAccountId || requester.accountId !== expectedAccountId) {
         throw errors.accessDenied('Only the operator who ran a command may link it to a case.', {
           code: 'NOT_OPERATORS_COMMAND',
@@ -220,14 +256,12 @@ export class CaseActionsService {
           { code: 'OPERATION_NOT_EFFECTIVE', status: operation.status },
         );
       }
-      const audited = await trx
-        .selectFrom('audit_records')
-        .select(['id', 'target_type', 'target_id', 'operation_id', 'occurred_at'])
-        .where('organization_id', '=', organizationId)
-        .where('operation_id', '=', operation.id)
-        .where('action', '=', input.actionId)
-        .orderBy('occurred_at')
-        .executeTakeFirst();
+      const audited = await this.auditEvidence.ofOperation(
+        organizationId,
+        input.operationId,
+        input.actionId,
+        trx,
+      );
       if (!audited) {
         throw errors.validation(
           `The operation has no audit record of ${input.actionId}; link the command it actually ran.`,
@@ -236,29 +270,13 @@ export class CaseActionsService {
       }
       summary['operationKind'] = operation.kind;
       summary['operationStatus'] = operation.status;
-      record = { type: audited.target_type, id: audited.target_id };
+      record = { type: audited.targetType, id: audited.targetId };
       audit = evidenceAudit(audited);
     }
     if (input.auditRecordId) {
-      const audited = await trx
-        .selectFrom('audit_records')
-        .select([
-          'id',
-          'organization_id',
-          'action',
-          'actor',
-          'target_type',
-          'target_id',
-          'operation_id',
-          'occurred_at',
-        ])
-        .where('id', '=', input.auditRecordId)
-        .executeTakeFirst();
-      if (!audited || audited.organization_id !== organizationId) {
-        throw errors.notFound('audit record', input.auditRecordId);
-      }
-      const actor = audited.actor as { accountId?: string | null };
-      if (!expectedAccountId || actor.accountId !== expectedAccountId) {
+      const audited = await this.auditEvidence.byId(organizationId, input.auditRecordId, trx);
+      if (!audited) throw errors.notFound('audit record', input.auditRecordId);
+      if (!expectedAccountId || audited.actor.accountId !== expectedAccountId) {
         throw errors.accessDenied('Only the operator who ran a command may link it to a case.', {
           code: 'NOT_OPERATORS_COMMAND',
         });
@@ -269,16 +287,37 @@ export class CaseActionsService {
           { code: 'ACTION_MISMATCH' },
         );
       }
-      if (input.operationId && audited.operation_id && audited.operation_id !== input.operationId) {
+      if (input.operationId && audited.operationId && audited.operationId !== input.operationId) {
         throw errors.validation('The audit record belongs to another operation.', {
           code: 'OPERATION_MISMATCH',
         });
       }
       auditRecordId = audited.id;
-      record = { type: audited.target_type, id: audited.target_id };
+      record = { type: audited.targetType, id: audited.targetId };
       audit = evidenceAudit(audited);
     }
     return { auditRecordId, record, summary, audit };
+  }
+
+  /**
+   * An operation's kind and status through the kernel (`OperationsService.find`, which reads the
+   * root database, so this runs before support's transaction). The lookup is attributed to the
+   * system: the caller's own authority is decided on the case and by the requester check.
+   */
+  private async operationFacts(
+    organizationId: string,
+    operationId: string,
+  ): Promise<OperationFacts | null> {
+    try {
+      const operation = await this.operations.find(
+        systemPrincipal(organizationId, 'support.case_actions'),
+        operationId,
+      );
+      return { kind: operation.kind, status: operation.status };
+    } catch (error) {
+      if (DomainError.is(error) && error.code === 'NOT_FOUND') return null;
+      throw error;
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -356,14 +395,15 @@ export class CaseActionsService {
         reason: input.reason,
         correlationId,
       });
-      const composedAudit = await trx
-        .selectFrom('audit_records')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('target_type', '=', 'notification')
-        .where('target_id', '=', resent.id)
-        .where('action', '=', CommunicationsActions.compose.id)
-        .executeTakeFirstOrThrow();
+      // SUP-02: the compose's audit record through the kernel's AuditReader (IF-44).
+      const [composedAudit] = await this.auditReader.forTarget(
+        organizationId,
+        'notification',
+        resent.id,
+        { actions: [CommunicationsActions.compose.id], limit: 1 },
+        trx,
+      );
+      if (!composedAudit) throw errors.internal('the resend left no compose audit record');
       const suppressed = resent.status === 'suppressed';
       const action = await this.complete(trx, organizationId, pending, {
         status: suppressed ? 'failed' : 'succeeded',
@@ -604,7 +644,16 @@ export class CaseActionsService {
         );
         if (outcome.status === 'unknown') {
           await this.raiseUnknownOutcome(trx, row, action, supportOperationId);
-        } else if (wasUnknown) {
+        } else {
+          await this.resolveStale(
+            trx,
+            systemPrincipal(organizationId, 'support.case_actions'),
+            organizationId,
+            action.id,
+            `Outcome recorded from finance's response: ${outcome.status}`,
+          );
+        }
+        if (outcome.status !== 'unknown' && wasUnknown) {
           // Finance's own answer settles the question support raised; no person asserts it.
           await this.resolveUnknownOutcome(
             trx,
@@ -667,16 +716,18 @@ export class CaseActionsService {
       status: 'unknown',
       error,
     });
-    const operation = await trx
-      .selectFrom('operations')
-      .select('status')
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', supportOperationId)
-      .executeTakeFirst();
-    if (operation?.status === 'running' || operation?.status === 'pending') {
-      await this.operations.transition(trx, supportOperationId, 'recovery_required', { error });
-    }
+    // While the action is `requested` its coordinating operation is still running (both are
+    // recorded together); a terminal operation is left as it is (SUP-02: no read of the table).
+    await this.transitionUnlessTerminal(trx, supportOperationId, 'recovery_required', { error });
     await this.raiseUnknownOutcome(trx, row, action, supportOperationId);
+    // The unknown-outcome exception now owns the question a stale-request exception asked.
+    await this.resolveStale(
+      trx,
+      systemPrincipal(organizationId, 'support.case_actions'),
+      organizationId,
+      action.id,
+      'Superseded: the request is now unknown with the finance-owned exception',
+    );
     await this.afterRecord(
       trx,
       row,
@@ -685,6 +736,177 @@ export class CaseActionsService {
       event.correlationId,
       null,
     );
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // support.settle_stale_case_actions (SUP-04): helper requests left `requested`
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * SUP-04 (SPK-SUPPORT-002, §4.11 "unknown kept explicit until reconciled", §4.12): one pass of
+   * the periodic job. Every helper request still `requested` `staleSeconds` after its intent has
+   * its owning module's outcome read — for a refund, the `finance.refund` that request ran (by
+   * the request's correlation id, through finance's RefundsService and the kernel's audit and
+   * outbox reads) — and recorded: `succeeded` with that command's evidence, or `failed` when
+   * finance recorded only failed or canceled refunds for it. Without an outcome the request stays
+   * `requested` (never assumed) and one `support.case_action_stale` exception asks its owner;
+   * the next run reads again. Each request is one small transaction under the job's system
+   * principal; the keyset position survives passes and restarts once every due request was read.
+   */
+  async settleStale(context: {
+    now: Date;
+    batchSize: number;
+    staleSeconds: number;
+  }): Promise<{ processed: number; remaining: number }> {
+    const cutoff = new Date(context.now.getTime() - context.staleSeconds * 1000);
+    let q = this.db
+      .selectFrom('case_actions')
+      .select(['id', 'organization_id', 'case_id', 'requested_at'])
+      .where('via', '=', 'helper')
+      .where('status', '=', 'requested')
+      .where('requested_at', '<=', cutoff)
+      .orderBy('requested_at')
+      .orderBy('id')
+      .limit(context.batchSize + 1);
+    const after = this.staleAfter;
+    if (after) {
+      q = q.where(
+        sql<SqlBool>`(requested_at, id) > (${after.requestedAt}::timestamptz, ${after.id}::uuid)`,
+      );
+    }
+    const due = await q.execute();
+    const batch = due.slice(0, context.batchSize);
+    let processed = 0;
+    for (const action of batch) {
+      const settled = await this.uow.run(({ trx }) =>
+        this.settleOneStale(trx, action.organization_id, action.case_id, action.id),
+      );
+      if (settled) processed += 1;
+    }
+    const last = batch[batch.length - 1];
+    const more = due.length > context.batchSize;
+    this.staleAfter =
+      more && last ? { requestedAt: new Date(last.requested_at), id: last.id } : null;
+    return { processed, remaining: more ? due.length - batch.length : 0 };
+  }
+
+  private async settleOneStale(
+    trx: Trx,
+    organizationId: string,
+    caseId: string,
+    caseActionId: string,
+  ): Promise<boolean> {
+    // Same lock order as settleHelper and markOverdue: the case, then the action.
+    const row = await this.cases.loadForUpdate(trx, organizationId, caseId);
+    if (!row) return false;
+    const current = await trx
+      .selectFrom('case_actions')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('case_id', '=', caseId)
+      .where('id', '=', caseActionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!current || current.status !== 'requested') return false;
+    const actor = systemPrincipal(organizationId, SETTLE_STALE_CASE_ACTIONS_JOB);
+    const outcome = await this.ownerOutcome(trx, current);
+    if (!outcome) {
+      await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: row.facility_id,
+        category: CASE_ACTION_STALE_CATEGORY,
+        severity: 'warning',
+        title: `A ${current.action_id} requested from support case "${row.title.slice(0, 80)}" has no recorded outcome yet`,
+        affectedType: 'case_action',
+        affectedId: current.id,
+        ownerQueue: this.outcomeQueue(current.action_id),
+        dedupeKey: staleKey(current.id),
+        details: {
+          caseId: row.id,
+          caseActionId: current.id,
+          actionId: current.action_id,
+          supportOperationId: current.support_operation_id,
+          requestedAt: new Date(current.requested_at).toISOString(),
+        },
+      });
+      return false;
+    }
+    const action = await this.complete(trx, organizationId, toCaseAction(current), outcome);
+    if (current.support_operation_id) {
+      await this.transitionUnlessTerminal(
+        trx,
+        current.support_operation_id,
+        outcome.status,
+        outcome.status === 'succeeded'
+          ? { result: { caseActionId: action.id, settledBy: SETTLE_STALE_CASE_ACTIONS_JOB } }
+          : { error: outcome.error ?? { code: 'NO_EFFECT', message: 'no effect' } },
+      );
+    }
+    await this.resolveStale(
+      trx,
+      actor,
+      organizationId,
+      current.id,
+      `Outcome recorded from the owning module: ${outcome.status}`,
+    );
+    await this.afterRecord(trx, row, action, actor, null, null);
+    return true;
+  }
+
+  /**
+   * The owning module's outcome of a helper request, or null while it reports none. A refund
+   * helper reads the refunds its request ran (RefundsService through the request's correlation
+   * id): an effective one is the outcome (unless it already evidences another case action, which
+   * a reviewer must untangle), and only failed or canceled ones mean `failed`. A resend is
+   * recorded with its request in one transaction, so no other helper is ever left `requested`
+   * with an outcome to read; communications exposes no lookup of a resend by correlation id.
+   */
+  private async ownerOutcome(trx: Trx, current: CaseActionRow): Promise<OwnerOutcome | null> {
+    if (current.action_id !== FinanceActions.refund.id) return null;
+    const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, current), trx);
+    if (matches.length === 0) return null;
+    let failed: { id: string; status: string } | null = null;
+    for (const match of matches) {
+      const refund = await this.refunds.load(trx, current.organization_id, match.targetId);
+      if (!refund) continue;
+      if (REFUND_NO_EFFECT.includes(refund.status)) {
+        failed ??= { id: refund.id, status: refund.status };
+        continue;
+      }
+      const elsewhere = await trx
+        .selectFrom('case_actions')
+        .select('id')
+        .where('organization_id', '=', current.organization_id)
+        .where('id', '<>', current.id)
+        .where((eb) =>
+          eb.or([
+            eb('audit_record_id', '=', match.id),
+            ...(refund.operation_id ? [eb('command_operation_id', '=', refund.operation_id)] : []),
+          ]),
+        )
+        .executeTakeFirst();
+      if (elsewhere) return null;
+      return {
+        status: 'succeeded',
+        commandOperationId: refund.operation_id,
+        auditRecordId: match.id,
+        record: { type: 'refund_attempt', id: refund.id },
+      };
+    }
+    if (!failed) return null;
+    return {
+      status: 'failed',
+      record: { type: 'refund_attempt', id: failed.id },
+      error: {
+        code: 'REFUND_NOT_EFFECTIVE',
+        message: `Finance recorded the refund this request ran as ${failed.status}.`,
+      },
+    };
+  }
+
+  /** The queue that owns the outcome of a helper's command (§5.11). */
+  private outcomeQueue(actionId: string): string {
+    return actionId === FinanceActions.refund.id ? REFUND_OUTCOME_QUEUE : 'support_operator';
   }
 
   /** The exception that asks the owning module what happened to a helper request. */
@@ -697,7 +919,7 @@ export class CaseActionsService {
     await this.exceptions.raise(trx, {
       organizationId: row.organization_id,
       facilityId: row.facility_id,
-      category: 'support.helper_outcome_unknown',
+      category: HELPER_OUTCOME_UNKNOWN_CATEGORY,
       severity: 'high',
       title: `A refund requested from support case "${row.title.slice(0, 80)}" has no recorded outcome`,
       affectedType: 'case_action',
@@ -729,13 +951,63 @@ export class CaseActionsService {
   }
 
   private async openUnknownOutcome(trx: Trx, organizationId: string, caseActionId: string) {
-    return trx
-      .selectFrom('operational_exceptions')
-      .select(['id', 'owner_queue'])
-      .where('organization_id', '=', organizationId)
-      .where('dedupe_key', '=', unknownOutcomeKey(caseActionId))
-      .where('status', 'in', ['open', 'acknowledged'])
-      .executeTakeFirst();
+    return this.openExceptionOf(trx, organizationId, caseActionId, HELPER_OUTCOME_UNKNOWN_CATEGORY);
+  }
+
+  /** The open exception of `category` about a case action (kernel list, K-10 / IF-29). */
+  private async openExceptionOf(
+    trx: Trx,
+    organizationId: string,
+    caseActionId: string,
+    category: string,
+  ) {
+    const page = await this.exceptions.list(
+      organizationId,
+      {
+        statuses: ['open', 'acknowledged'],
+        category,
+        affectedType: 'case_action',
+        affectedId: caseActionId,
+        limit: 1,
+      },
+      trx,
+    );
+    return page.items[0] ?? null;
+  }
+
+  /** Resolves the open stale-request exception of a case action, if any (SUP-04). */
+  private async resolveStale(
+    trx: Trx,
+    actor: Principal,
+    organizationId: string,
+    caseActionId: string,
+    reason: string,
+  ): Promise<void> {
+    const open = await this.openExceptionOf(
+      trx,
+      organizationId,
+      caseActionId,
+      CASE_ACTION_STALE_CATEGORY,
+    );
+    if (!open) return;
+    await this.exceptions.transition(trx, actor, open.id, 'resolved', {
+      reason,
+      resolution: { caseActionId },
+    });
+  }
+
+  private async transitionUnlessTerminal(
+    trx: Trx,
+    operationId: string,
+    to: 'succeeded' | 'failed' | 'recovery_required',
+    data: { result?: unknown; error?: { code: string; message: string; details?: unknown } },
+  ): Promise<void> {
+    try {
+      await this.operations.transition(trx, operationId, to, data);
+    } catch (error) {
+      if (DomainError.is(error) && error.code === 'INVALID_TRANSITION') return;
+      throw error;
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -767,6 +1039,9 @@ export class CaseActionsService {
     correlationId: string | null,
   ): Promise<CaseActionOutcome> {
     const organizationId = organizationOf(principal);
+    const operation = input.operationId
+      ? await this.operationFacts(organizationId, input.operationId)
+      : null;
     return this.uow.run(async ({ trx }) => {
       const row = await this.cases.loadWorkable(
         trx,
@@ -807,11 +1082,17 @@ export class CaseActionsService {
       let record: { type: string; id: string } | null = input.record ?? null;
       if (input.outcome === 'succeeded') {
         const helperActor = current.actor as { accountId?: string | null };
-        evidence = await this.verifyEvidence(trx, helperActor.accountId ?? null, organizationId, {
-          actionId: current.action_id,
-          operationId: input.operationId,
-          auditRecordId: input.auditRecordId,
-        });
+        evidence = await this.verifyEvidence(
+          trx,
+          helperActor.accountId ?? null,
+          organizationId,
+          {
+            actionId: current.action_id,
+            operationId: input.operationId,
+            auditRecordId: input.auditRecordId,
+          },
+          operation,
+        );
         if (current.via === 'helper') {
           await this.assertEvidenceOfRequest(trx, current, evidence.audit, isRefund);
           record = evidence.record;
@@ -884,7 +1165,7 @@ export class CaseActionsService {
       throw notOfThisRequest();
     }
     if (isRefund) {
-      const matches = await this.refundAuditsOf(trx, await this.refundRequestOf(trx, current));
+      const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, current), trx);
       if (!matches.some((m) => m.id === audit.id)) throw notOfThisRequest();
       const refund = await this.refunds.load(trx, current.organization_id, audit.targetId);
       if (!refund || REFUND_NO_EFFECT.includes(refund.status)) {
@@ -928,6 +1209,8 @@ export class CaseActionsService {
     organizationId: string,
     audit: EvidenceAudit,
   ): Promise<void> {
+    const paymentAttemptId = audit.details['paymentAttemptId'];
+    if (typeof paymentAttemptId !== 'string') return;
     const outstanding = await trx
       .selectFrom('case_actions')
       .selectAll()
@@ -936,12 +1219,10 @@ export class CaseActionsService {
       .where('action_id', '=', FinanceActions.refund.id)
       .where('status', 'in', ['requested', 'unknown'])
       .where('requested_at', '<=', audit.occurredAt)
-      .where(
-        sql<SqlBool>`input->>'paymentAttemptId' = (select a.details->>'paymentAttemptId' from audit_records a where a.id = ${audit.id})`,
-      )
+      .where(sql<SqlBool>`input->>'paymentAttemptId' = ${paymentAttemptId}`)
       .execute();
     for (const helper of outstanding) {
-      const matches = await this.refundAuditsOf(trx, await this.refundRequestOf(trx, helper));
+      const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, helper), trx);
       if (matches.some((m) => m.id === audit.id)) {
         throw new DomainError(
           'RESOURCE_CONFLICT',
@@ -968,10 +1249,10 @@ export class CaseActionsService {
     trx: Trx,
     current: CaseActionRow,
   ): Promise<{ type: string; id: string } | null> {
-    const matches = await this.refundAuditsOf(trx, await this.refundRequestOf(trx, current));
+    const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, current), trx);
     let record: { type: string; id: string } | null = null;
     for (const match of matches) {
-      const refund = await this.refunds.load(trx, current.organization_id, match.target_id);
+      const refund = await this.refunds.load(trx, current.organization_id, match.targetId);
       if (refund && !REFUND_NO_EFFECT.includes(refund.status)) {
         throw errors.resourceConflict(
           'Finance recorded a refund for this request: settle it with that refund, or wait for finance to reconcile it.',
@@ -984,7 +1265,7 @@ export class CaseActionsService {
           },
         );
       }
-      record ??= { type: 'refund_attempt', id: match.target_id };
+      record ??= { type: 'refund_attempt', id: match.targetId };
     }
     return record;
   }
@@ -1128,7 +1409,7 @@ export class CaseActionsService {
     pending: CaseAction,
     correlationId: string | null,
   ): Promise<string | null> {
-    const matches = await this.refundAuditsOf(this.uow.reader(), {
+    const matches = await this.refundAuditsOf({
       organizationId: organizationOf(principal),
       caseActionId: pending.id,
       accountId: principal.accountId,
@@ -1140,18 +1421,24 @@ export class CaseActionsService {
     return matches[0]?.id ?? null;
   }
 
-  /** A refund helper's request as recorded with its intent and its support operation. */
+  /**
+   * A refund helper's request as recorded with its intent: the input on the case action and the
+   * request's correlation id on support's own intent audit record (read through AuditReader,
+   * SUP-02).
+   */
   private async refundRequestOf(trx: Trx, current: CaseActionRow): Promise<RefundRequestOf> {
     const input = current.input as { paymentAttemptId?: unknown; amountMinor?: unknown };
     const actor = current.actor as { accountId?: string | null };
-    const operation = current.support_operation_id
-      ? await trx
-          .selectFrom('operations')
-          .select('correlation_id')
-          .where('organization_id', '=', current.organization_id)
-          .where('id', '=', current.support_operation_id)
-          .executeTakeFirst()
-      : undefined;
+    const intents = await this.auditReader.forTarget(
+      current.organization_id,
+      'support_case',
+      current.case_id,
+      { actions: [SupportActions.linkAction.id], limit: 200 },
+      trx,
+    );
+    const intent = intents.find(
+      (r) => r.details['caseActionId'] === current.id && r.details['status'] === 'requested',
+    );
     return {
       organizationId: current.organization_id,
       caseActionId: current.id,
@@ -1159,45 +1446,84 @@ export class CaseActionsService {
       paymentAttemptId: String(input.paymentAttemptId ?? ''),
       amountMinor: String(input.amountMinor ?? ''),
       requestedAt: new Date(current.requested_at),
-      correlationId: operation?.correlation_id ?? null,
+      correlationId: intent?.correlationId ?? null,
     };
   }
 
   /**
-   * The audit records of the `finance.refund` a refund helper request ran (the kernel audit table,
-   * read-only): the same operator, payment and amount, recorded since the intent and carried by the
-   * request's correlation id (or, without one, not linked to another case action). Finance writes
-   * this record in the transaction that reserves the refund, so it is evidence that finance
-   * recorded a refund for this request.
+   * The audit records of the `finance.refund` a refund helper request ran: the same operator,
+   * payment and amount, recorded since the intent and carried by the request's correlation id (or,
+   * without one, not linked to another case action). Finance writes this record and its
+   * `finance.refund_requested` event in the transaction that reserves the refund, so the refunds
+   * are found in the kernel's outbox history (OutboxHistory, IF-27) and their audit records
+   * through AuditReader (IF-44) — never the kernel's tables (SUP-02).
    */
-  private async refundAuditsOf(
-    db: Reader,
-    request: RefundRequestOf,
-  ): Promise<Array<{ id: string; target_id: string; operation_id: string | null }>> {
+  private async refundAuditsOf(request: RefundRequestOf, trx?: Trx): Promise<AuditRecord[]> {
     if (!request.accountId) return [];
-    let q = db
-      .selectFrom('audit_records')
-      .select(['id', 'target_id', 'operation_id'])
-      .where('organization_id', '=', request.organizationId)
-      .where('action', '=', FinanceActions.refund.id)
-      .where('target_type', '=', 'refund_attempt')
-      .where('occurred_at', '>=', request.requestedAt)
-      .where(sql<SqlBool>`actor->>'accountId' = ${request.accountId}`)
-      .where(sql<SqlBool>`details->>'paymentAttemptId' = ${request.paymentAttemptId}`)
-      .where(sql<SqlBool>`details->>'amountMinor' = ${request.amountMinor}`);
-    q = request.correlationId
-      ? q.where('correlation_id', '=', request.correlationId)
-      : q.where(({ not, exists, selectFrom }) =>
-          not(
-            exists(
-              selectFrom('case_actions')
-                .select('case_actions.id')
-                .whereRef('case_actions.audit_record_id', '=', 'audit_records.id')
-                .where('case_actions.id', '<>', request.caseActionId),
-            ),
-          ),
-        );
-    return q.orderBy('occurred_at').orderBy('id').execute();
+    const refundIds: string[] = [];
+    let after: { occurredAt: string; id: string } | null = {
+      occurredAt: new Date(request.requestedAt.getTime() - 1).toISOString(),
+      id: MAX_UUID,
+    };
+    while (after) {
+      const page: Awaited<ReturnType<OutboxHistory['page']>> = await this.outboxHistory.page(
+        {
+          organizationId: request.organizationId,
+          eventTypes: [RefundRequested.type],
+          after,
+          limit: 500,
+        },
+        trx,
+      );
+      for (const event of page.items) {
+        const payload = event.payload as { paymentAttemptId?: unknown; refundAttemptId?: unknown };
+        if (
+          payload.paymentAttemptId === request.paymentAttemptId &&
+          typeof payload.refundAttemptId === 'string'
+        ) {
+          refundIds.push(payload.refundAttemptId);
+        }
+      }
+      after = page.next;
+    }
+    const matches: AuditRecord[] = [];
+    for (const refundId of [...new Set(refundIds)]) {
+      const records = await this.auditReader.forTarget(
+        request.organizationId,
+        'refund_attempt',
+        refundId,
+        { actions: [FinanceActions.refund.id], limit: 200 },
+        trx,
+      );
+      for (const r of records) {
+        if (new Date(r.occurredAt).getTime() < request.requestedAt.getTime()) continue;
+        if (r.actor.accountId !== request.accountId) continue;
+        if (String(r.details['paymentAttemptId'] ?? '') !== request.paymentAttemptId) continue;
+        if (String(r.details['amountMinor'] ?? '') !== request.amountMinor) continue;
+        if (request.correlationId && r.correlationId !== request.correlationId) continue;
+        matches.push(r);
+      }
+    }
+    if (!request.correlationId && matches.length > 0) {
+      // Without a correlation id, a refund already evidencing another case action is not this one.
+      const linked = new Set(
+        (
+          await (trx ?? this.uow.reader())
+            .selectFrom('case_actions')
+            .select('audit_record_id')
+            .where('organization_id', '=', request.organizationId)
+            .where('id', '<>', request.caseActionId)
+            .where(
+              'audit_record_id',
+              'in',
+              matches.map((m) => m.id),
+            )
+            .execute()
+        ).map((r) => r.audit_record_id),
+      );
+      return sortByOccurrence(matches.filter((m) => !linked.has(m.id)));
+    }
+    return sortByOccurrence(matches);
   }
 
   private async loadAction(trx: Trx, organizationId: string, id: string): Promise<CaseActionRow> {
@@ -1232,20 +1558,26 @@ function unknownOutcomeKey(caseActionId: string): string {
   return `support:case_action:${caseActionId}:unknown`;
 }
 
-function evidenceAudit(row: {
-  id: string;
-  target_type: string;
-  target_id: string;
-  operation_id: string | null;
-  occurred_at: Date | string;
-}): EvidenceAudit {
+function evidenceAudit(record: AuditRecord): EvidenceAudit {
   return {
-    id: row.id,
-    targetType: row.target_type,
-    targetId: row.target_id,
-    operationId: row.operation_id,
-    occurredAt: new Date(row.occurred_at),
+    id: record.id,
+    targetType: record.targetType,
+    targetId: record.targetId,
+    operationId: record.operationId,
+    occurredAt: new Date(record.occurredAt),
+    details: record.details,
   };
+}
+
+function sortByOccurrence(records: AuditRecord[]): AuditRecord[] {
+  return [...records].sort((a, b) =>
+    a.occurredAt === b.occurredAt ? a.id.localeCompare(b.id) : a.occurredAt < b.occurredAt ? -1 : 1,
+  );
+}
+
+/** Dedupe key of the exception raised when a helper request stays `requested` (SUP-04). */
+function staleKey(caseActionId: string): string {
+  return `support:case_action:${caseActionId}:stale`;
 }
 
 function sameRecord(
