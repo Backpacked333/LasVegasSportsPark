@@ -8,7 +8,13 @@ import {
   type WorkspaceAssignment,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
-import { AuthorizationService, CLOCK, DATABASE, type Clock } from '../../../kernel';
+import {
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  FacilityDirectory,
+  type Clock,
+} from '../../../kernel';
 import { WorkforceActions } from '../workforce.actions';
 import { iso, organizationOf, toAssignment, type AssignmentRow } from '../workforce.shared';
 import { FeesService } from './fees.service';
@@ -34,6 +40,7 @@ export class WorkspaceService {
     private readonly authorization: AuthorizationService,
     private readonly targets: TargetResolver,
     private readonly fees: FeesService,
+    private readonly facilities: FacilityDirectory,
   ) {}
 
   async myAssignments(principal: Principal, query: MyAssignmentsQuery): Promise<MyAssignments> {
@@ -66,6 +73,12 @@ export class WorkspaceService {
       organizationId,
       rows.map((r) => r.id),
     );
+    // WRK-01, SPK-SCHED-008: the facility's name and IANA zone, one directory read per response.
+    const facilities = await this.facilities.describe(
+      organizationId,
+      rows.map((r) => r.facility_id),
+      this.db,
+    );
     const participantsByFixture = new Map<string, TargetParticipant[]>();
     const items: WorkspaceAssignment[] = [];
     for (const row of rows) {
@@ -76,6 +89,9 @@ export class WorkspaceService {
         participantsByFixture.set(row.fixture_id, participants);
       }
       const fee = fees.get(row.id) ?? null;
+      const facility = facilities.get(row.facility_id);
+      // The assignment's composite foreign key guarantees the facility exists in the organization.
+      if (!facility) throw errors.internal(`Facility ${row.facility_id} is not in the directory.`);
       items.push({
         assignment: toAssignment(row, now),
         activity: {
@@ -83,6 +99,7 @@ export class WorkspaceService {
           targetId: row.target_id,
           title: row.target_title,
           facilityId: row.facility_id,
+          facility: { id: facility.id, name: facility.name, timezone: facility.timezone },
           scheduledStart: iso(row.scheduled_start),
           scheduledEnd: iso(row.scheduled_end),
           participants,

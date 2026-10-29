@@ -22,6 +22,7 @@ import { PeopleService, STAFF_DIRECTORY_PORT, type StaffDirectoryPort } from '..
 import { WorkforceActions } from '../workforce.actions';
 import {
   CANDIDATE_ROLES,
+  turnaroundFor,
   WORKFORCE_POLICY,
   workforcePolicyForFacility,
   type WorkforcePolicy,
@@ -324,6 +325,14 @@ export class ReplacementsService {
     const target = await this.resolveTarget(principal, existing, body.engagement !== 'regular');
     const policy = workforcePolicyForFacility(this.policy, target.facilitySettings);
     const result = await this.uow.run(async ({ trx }) => {
+      // WRK-02: the requirement's share lock before the assignment's (a retirement's order).
+      await this.coverage.lockRequirementShared(
+        trx,
+        organizationId,
+        existing.target_type,
+        existing.target_id,
+        existing.role,
+      );
       const original = await this.assignments.lock(trx, organizationId, assignmentId);
       assertExpectedRevision(body.expectedRevision, original.revision);
       if (this.clock.now().getTime() >= target.scheduledEnd.getTime()) {
@@ -371,7 +380,7 @@ export class ReplacementsService {
         role: original.role,
         slot: original.slot,
         engagement: body.engagement,
-        turnaroundMinutes: policy.turnaroundMinutes[original.kind],
+        turnaroundMinutes: turnaroundFor(policy, original.kind),
         offer: body.offer,
         replacesAssignmentId: original.id,
         reason: body.reason,

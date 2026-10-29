@@ -334,6 +334,23 @@ export const AssignmentOutcomeSchema = z
   .openapi('AssignmentOutcome');
 export type AssignmentOutcome = z.infer<typeof AssignmentOutcomeSchema>;
 
+/** §4.6 Assignment machine events (AssignmentMachine in state-machines.ts). */
+export const AssignmentEventSchema = z
+  .enum(['offer', 'accept', 'decline', 'withdraw', 'complete'])
+  .openapi('AssignmentEvent');
+export type AssignmentEventValue = z.infer<typeof AssignmentEventSchema>;
+
+/**
+ * An assignment in the staff list (WRK-01, SCR-S-32/33, SPK-STAFF-001..004): the assignment and
+ * the machine events the caller may perform on it now — allowed from its current state (and, for
+ * offer and accept, before the activity ends; complete once it has started), and kept only when
+ * the caller holds the action that performs the event at the assignment's facility.
+ */
+export const StaffAssignmentSchema = AssignmentSchema.extend({
+  availableActions: z.array(AssignmentEventSchema),
+}).openapi('StaffAssignment');
+export type StaffAssignment = z.infer<typeof StaffAssignmentSchema>;
+
 export const ListAssignmentsQuery = PageRequestSchema.extend({
   targetType: AssignmentTargetTypeSchema.optional(),
   targetId: z.uuid().optional(),
@@ -557,6 +574,15 @@ export const WorkspaceParticipantSchema = z
   })
   .openapi('WorkspaceParticipant');
 
+/**
+ * The facility an activity takes place at (WRK-01, SPK-SCHED-008): its name and IANA time zone,
+ * the zone the activity's times are shown in.
+ */
+export const AssignmentFacilitySchema = z
+  .object({ id: z.uuid(), name: z.string(), timezone: z.string() })
+  .openapi('AssignmentFacility');
+export type AssignmentFacility = z.infer<typeof AssignmentFacilitySchema>;
+
 export const WorkspaceAssignmentSchema = z
   .object({
     assignment: AssignmentSchema,
@@ -565,6 +591,8 @@ export const WorkspaceAssignmentSchema = z
       targetId: z.uuid(),
       title: z.string(),
       facilityId: z.uuid(),
+      /** WRK-01, SPK-SCHED-008, SPK-UX-007: show the activity's times in this facility's zone. */
+      facility: AssignmentFacilitySchema,
       scheduledStart: Instant,
       scheduledEnd: Instant,
       /** Team names only for fixtures; never dates of birth, contacts or payment data (§4.14). */
@@ -746,7 +774,12 @@ command(
   CreateAssignmentBody,
   AssignmentOutcomeSchema,
 );
-query('/assignments', 'List assignments', ListAssignmentsQuery, pageSchema(AssignmentSchema));
+query(
+  '/assignments',
+  'List assignments with the machine events the caller may perform on each now (WRK-01)',
+  ListAssignmentsQuery,
+  pageSchema(StaffAssignmentSchema),
+);
 query('/assignments/{id}', 'Read an assignment (staff or the assignee)', null, AssignmentSchema);
 command(
   'post',

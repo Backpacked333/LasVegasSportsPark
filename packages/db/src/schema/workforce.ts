@@ -73,6 +73,14 @@ export interface AssignmentRequirementsTable {
   must_be_accepted: Generated<boolean>;
   required_qualifications: Generated<string[]>;
   created_by: Json<Record<string, unknown>>;
+  /**
+   * Retirement (migration 0704, WRK-02): when, why and by whom, all three or none. A retired
+   * requirement is final (trigger `assignment_requirements_retirement_guard`) and accepts no new
+   * live assignment (trigger `assignments_requirement_not_retired`).
+   */
+  retired_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  retired_reason: ColumnType<string | null, string | null | undefined, string | null>;
+  retired_by: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
