@@ -7,9 +7,14 @@
  *   protected notice on every read and leaves out any the person may no longer see (a grant was
  *   removed, SPK-IAM-006, SPK-AT-017), so such a notice simply disappears on the next refresh.
  * - Opening a notice marks it read (`POST /v1/me/inbox/{id}/read`); "Acknowledge" records it once
- *   (`POST /v1/me/inbox/{id}/acknowledge`). Both are idempotent commands with one key per intent.
+ *   (`POST /v1/me/inbox/{id}/acknowledge`). Both are idempotent commands with one key per intent
+ *   and send the delivery attempt's `revision` as `expectedRevision` (§4.9): the newest the screen
+ *   knows (the list's, or the one the read returned). STALE_REVISION (read or acknowledged
+ *   elsewhere meanwhile) reloads the list; acknowledging shows the code with "Reload".
  *   If the API answers NOT_FOUND the notice was withdrawn: the screen says it is no longer
  *   available and refreshes the list, without implying anything about it.
+ * - Each notice names the participants it concerns (`subjectPersonIds`, SPK-UX-003): "For: You,
+ *   Sam", names from `GET /v1/person-names` (given names only, §4.14).
  * - A notice replaced by a newer one says "Replaced by a newer update" and links to the newer
  *   notice, so an opened old notice never passes for the current state (§6.2 "Notification opened
  *   after its event changes"). Schedule notices show old and new details (SPK-COMMS-005).
@@ -28,7 +33,13 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { ChangeDetails } from '../../features/today/ChangeDetails';
 import { categoryLabel, scheduleChangeOf } from '../../features/today/notices';
-import { INBOX_PAGE_SIZE, useApiReads } from '../../features/today/queries';
+import {
+  INBOX_PAGE_SIZE,
+  nameOf,
+  useApiReads,
+  useMe,
+  usePersonNames,
+} from '../../features/today/queries';
 import { Caption, SectionQueryState } from '../../features/today/Section';
 import { noticeStatus } from '../../features/today/status';
 import { displayZone, formatWhen } from '../../features/today/time';
@@ -50,6 +61,18 @@ export function inboxStatus(item: InboxItem): StatusBadgeProps {
 }
 
 const INBOX_KEY = ['api', '/me/inbox'] as const;
+
+/** "For: You, Sam" for a notice about named participants; empty when it names none. */
+export function participantsLine(item: InboxItem, names: Map<string, string>): string {
+  const ids = item.subjectPersonIds ?? [];
+  return ids.length > 0 ? `For: ${ids.map((id) => nameOf(names, id)).join(', ')}` : '';
+}
+
+/** The body of a read or acknowledge: the newest revision known, when the API gave one. */
+function revisionBody(...revisions: (number | null | undefined)[]): { expectedRevision?: number } {
+  const known = revisions.filter((r): r is number => typeof r === 'number');
+  return known.length > 0 ? { expectedRevision: Math.max(...known) } : {};
+}
 
 function NoticeDetail({
   item,
@@ -79,13 +102,29 @@ function NoticeDetail({
   useEffect(() => {
     if (sentRead.current || item.readAt || item.acknowledgedAt || offline) return;
     sentRead.current = true;
-    read.submit({ path: { id: item.attemptId }, body: {} }).catch(() => undefined);
-  }, [item.attemptId, item.readAt, item.acknowledgedAt, offline, read]);
+    read
+      .submit({ path: { id: item.attemptId }, body: revisionBody(item.revision) })
+      .catch(() => undefined);
+  }, [item.attemptId, item.readAt, item.acknowledgedAt, item.revision, offline, read]);
 
-  // A notice the API no longer serves (SPK-IAM-006) leaves the list on refresh.
+  // A notice the API no longer serves (SPK-IAM-006) leaves the list on refresh; one changed
+  // elsewhere (STALE_REVISION: read on another device) is read again to show its state.
+  const readStale = read.error?.code === 'STALE_REVISION';
   useEffect(() => {
-    if (withdrawn) void queryClient.invalidateQueries({ queryKey: INBOX_KEY });
-  }, [withdrawn, queryClient]);
+    if (withdrawn || readStale) void queryClient.invalidateQueries({ queryKey: INBOX_KEY });
+  }, [withdrawn, readStale, queryClient]);
+
+  const acknowledgeNow = () =>
+    void acknowledge
+      .submit({
+        path: { id: item.attemptId },
+        body: revisionBody(item.revision, read.data?.revision),
+      })
+      .catch(() => undefined);
+  const reload = () => {
+    acknowledge.reset();
+    void queryClient.invalidateQueries({ queryKey: INBOX_KEY });
+  };
 
   if (withdrawn) {
     return (
@@ -140,11 +179,7 @@ function NoticeDetail({
           busy={acknowledge.isProcessing}
           disabled={offline}
           accessibilityHint="Records that you have seen this notice"
-          onPress={() =>
-            void acknowledge
-              .submit({ path: { id: item.attemptId }, body: {} })
-              .catch(() => undefined)
-          }
+          onPress={acknowledgeNow}
           testID={`notice-ack-${item.attemptId}`}
         />
       ) : null}
@@ -155,11 +190,8 @@ function NoticeDetail({
         <StateView
           variant="error"
           error={acknowledge.error}
-          onRetry={() =>
-            void acknowledge
-              .submit({ path: { id: item.attemptId }, body: {} })
-              .catch(() => undefined)
-          }
+          onRetry={acknowledgeNow}
+          onAction={acknowledge.error.isStale ? reload : undefined}
         />
       ) : null}
       {acknowledge.status === 'success' ? (
@@ -175,21 +207,24 @@ function NoticeRow({
   item,
   expanded,
   newer,
+  names,
   onToggle,
   onShowNewer,
 }: {
   item: InboxItem;
   expanded: boolean;
   newer: InboxItem | null;
+  names: Map<string, string>;
   onToggle: () => void;
   onShowNewer: (attemptId: string) => void;
 }) {
   const status = noticeStatus(item);
+  const about = participantsLine(item, names);
   return (
     <View style={styles.row} testID={`inbox-item-${item.attemptId}`}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${item.title}, ${status.label}`}
+        accessibilityLabel={[item.title, about, status.label].filter(Boolean).join(', ')}
         accessibilityHint={expanded ? 'Hides the notice' : 'Shows the whole notice'}
         accessibilityState={{ expanded }}
         onPress={onToggle}
@@ -197,6 +232,7 @@ function NoticeRow({
         testID={`inbox-toggle-${item.attemptId}`}
       >
         <Text style={styles.title}>{item.title}</Text>
+        {about ? <Text style={styles.caption}>{about}</Text> : null}
         {!expanded ? (
           <Text style={styles.caption} numberOfLines={2}>
             {item.body}
@@ -225,6 +261,12 @@ function InboxList({ openId }: { openId?: string }) {
       [cursors],
     ),
     signedIn,
+  );
+  const me = useMe();
+  const loadedItems = [first.data, ...older.map((o) => o.data)].flatMap((p) => p?.items ?? []);
+  const names = usePersonNames(
+    loadedItems.flatMap((i) => i.subjectPersonIds ?? []),
+    me.data,
   );
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(openId ? [openId] : []));
   useEffect(() => {
@@ -269,6 +311,7 @@ function InboxList({ openId }: { openId?: string }) {
                       ? (byNotification.get(item.supersededByNotificationId) ?? null)
                       : null
                   }
+                  names={names}
                   onToggle={() => toggle(item.attemptId)}
                   onShowNewer={(id) => setExpanded((s) => new Set(s).add(id))}
                 />
