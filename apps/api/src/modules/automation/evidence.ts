@@ -36,6 +36,31 @@ export function freshnessOf(
   return { freshness: ageSeconds <= maxAgeMinutes * 60 ? 'recent' : 'stale', ageSeconds };
 }
 
+/**
+ * The same evidence read later (SPK-AUTO-002): a recommendation keeps the evidence read when it was
+ * proposed, and a reviewer reads it up to its expiry. After its read it is a stored observation,
+ * not a live one: it is `recent` while the instant its knowledge dates from (the read of a live
+ * record or evaluation, the as-of instant of a stored result) lies within the evidence window and
+ * `stale` beyond it, and its age is measured to `now`. At its own read it is unchanged.
+ */
+export function ageEvidence(
+  item: AssistantEvidence,
+  now: Date,
+  maxAgeMinutes: number,
+): AssistantEvidence {
+  const observedAt = Date.parse(item.observedAt);
+  if (item.asOf === null || item.freshness === 'unknown' || now.getTime() <= observedAt) {
+    return item;
+  }
+  const asOf = Date.parse(item.asOf);
+  const knownAt = item.freshness === 'live' ? observedAt : asOf;
+  return {
+    ...item,
+    ageSeconds: Math.max(0, Math.floor((now.getTime() - asOf) / 1000)),
+    freshness: now.getTime() - knownAt <= maxAgeMinutes * 60_000 ? 'recent' : 'stale',
+  };
+}
+
 const SLUG = /^[a-z][a-z0-9_]{0,63}$/;
 
 function slug(value: string): string {

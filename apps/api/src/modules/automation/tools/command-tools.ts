@@ -14,7 +14,7 @@ import { CommunicationsActions, NotificationsService } from '../../communication
 import { FinanceActions, PaymentsService, RefundsService } from '../../finance';
 import { ScheduleDraftsService, SchedulingActions } from '../../scheduling';
 import { missingEvidence } from '../evidence';
-import { commandTool, type AnyCommandTool, type ApplyContext } from './tool.types';
+import { ApplyFailure, commandTool, type AnyCommandTool, type ApplyContext } from './tool.types';
 
 function organizationOf(principal: Principal): string {
   if (!principal.organizationId) throw errors.authenticationRequired();
@@ -51,6 +51,10 @@ const PublishInput = z.object({
     })
     .optional(),
 });
+
+/** What a refused repair publication carries to the next apply: the draft it opened. */
+const RepairCarry = z.object({ repairDraftId: z.uuid(), lastSavedAt: z.string() });
+type RepairCarry = z.infer<typeof RepairCarry>;
 
 const RefundArgs = z
   .object({
@@ -90,6 +94,23 @@ export class CommandTools {
 
   all(): AnyCommandTool[] {
     return [this.publishSchedule(), this.sendNotice(), this.refund()];
+  }
+
+  /**
+   * A facility the provider chose is data, not authority (SPK-AUTO-004): it must be a facility of
+   * the requester's organization before anything is authorized or proposed on it. A missing id and
+   * another organization's id are refused alike (NOT_FOUND), so nothing about either is disclosed,
+   * and the proposal can never carry a facility the recommendation's composite key would refuse.
+   */
+  private async requireFacility(organizationId: string, facilityId: string): Promise<void> {
+    const row = await this.uow
+      .reader()
+      .selectFrom('facilities')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', facilityId)
+      .executeTakeFirst();
+    if (!row) throw errors.notFound('facility', facilityId);
   }
 
   /** SPK-AUTO-001 "Propose schedule repairs" → SPK-AUTO-003 "Publishing schedules". */
@@ -162,6 +183,7 @@ export class CommandTools {
           };
         }
         const repair = args.repair as NonNullable<typeof args.repair>;
+        await this.requireFacility(organizationId, repair.facilityId);
         // A repair opens a draft and publishes it: the requester must be able to do both.
         await this.authorization.require(principal, SchedulingActions.manageDrafts, {
           type: 'schedule_draft',
@@ -204,10 +226,41 @@ export class CommandTools {
           reason: ctx.reason ?? undefined,
           policyReferences: ctx.policyReferences.length ? [...ctx.policyReferences] : undefined,
         };
-        let draftId = input.draftId;
-        let expectedRevision = input.draftRevision;
-        if (!draftId) {
-          const repair = input.repair as NonNullable<typeof input.repair>;
+        const publish = async (draftId: string, expectedRevision: number | undefined) => {
+          const publication = await this.drafts.publish(
+            reviewer,
+            draftId,
+            { expectedRevision, ...meta },
+            ctx.correlationId ?? undefined,
+          );
+          return {
+            commandOperationId: publication.operationId,
+            record: { type: 'schedule_publication', id: publication.id },
+            result: { draftId, publicationId: publication.id, eventIds: publication.eventIds },
+          };
+        };
+        if (input.draftId) return publish(input.draftId, input.draftRevision);
+        const repair = input.repair as NonNullable<typeof input.repair>;
+        // §4.11: a refused publication leaves the draft this repair opened. A retry publishes that
+        // draft again instead of opening another, as long as nobody changed, published or
+        // discarded it meanwhile — then the reviewer settles it in scheduling.
+        const previous = RepairCarry.safeParse(ctx.carried ?? undefined);
+        let carry: RepairCarry | null = previous.success ? previous.data : null;
+        try {
+          if (carry) {
+            const draft = await this.drafts.get(reviewer, carry.repairDraftId);
+            if (
+              draft.lastSavedAt !== carry.lastSavedAt ||
+              draft.status === 'published' ||
+              draft.status === 'discarded'
+            ) {
+              throw errors.resourceConflict(
+                'The draft this repair opened was changed, published or discarded outside this recommendation; review it in scheduling instead.',
+                { code: 'REPAIR_DRAFT_CHANGED', draftId: draft.id, draftStatus: draft.status },
+              );
+            }
+            return await publish(draft.id, draft.revision);
+          }
           const body = CreateScheduleDraftBody.parse({
             facilityId: repair.facilityId,
             name: repair.name,
@@ -215,20 +268,15 @@ export class CommandTools {
             ...meta,
           });
           const draft = await this.drafts.create(reviewer, body, ctx.correlationId ?? undefined);
-          draftId = draft.id;
-          expectedRevision = draft.revision;
+          carry = { repairDraftId: draft.id, lastSavedAt: draft.lastSavedAt };
+          return await publish(draft.id, draft.revision);
+        } catch (error) {
+          if (!carry) throw error;
+          throw new ApplyFailure(error, {
+            record: { type: 'schedule_draft', id: carry.repairDraftId },
+            carried: carry,
+          });
         }
-        const publication = await this.drafts.publish(
-          reviewer,
-          draftId,
-          { expectedRevision, ...meta },
-          ctx.correlationId ?? undefined,
-        );
-        return {
-          commandOperationId: publication.operationId,
-          record: { type: 'schedule_publication', id: publication.id },
-          result: { draftId, publicationId: publication.id, eventIds: publication.eventIds },
-        };
       },
     });
   }
@@ -251,6 +299,10 @@ export class CommandTools {
       argsSchema: SendArgs,
       propose: async (principal, args, rationale) => {
         const organizationId = organizationOf(principal);
+        if (args.facilityId) await this.requireFacility(organizationId, args.facilityId);
+        if (args.audience.facilityId && args.audience.facilityId !== args.facilityId) {
+          await this.requireFacility(organizationId, args.audience.facilityId);
+        }
         const target = {
           type: 'notification',
           organizationId,
@@ -367,6 +419,27 @@ export class CommandTools {
           { amountMinor: input.amountMinor, reason: ctx.reason ?? input.reason },
           ctx.correlationId,
         );
+        // SPK-AUTO-003, §4.11: the recommendation is applied only when the money moved. A refund
+        // the provider declined (its reservation released) is a failed apply that may be retried;
+        // one whose outcome is not reported yet keeps the apply claimed until it is reconciled.
+        const record = { type: 'refund_attempt', id: refund.id };
+        if (refund.status === 'failed' || refund.status === 'canceled') {
+          throw new ApplyFailure(
+            errors.resourceConflict('The refund did not go through; nothing was refunded.', {
+              code: 'REFUND_NOT_COMPLETED',
+              refundId: refund.id,
+              refundStatus: refund.status,
+              failureReason: refund.failureReason,
+            }),
+            { outcome: 'failed', record },
+          );
+        }
+        if (refund.status !== 'succeeded') {
+          throw new ApplyFailure(
+            errors.paymentOutcomeUnknown({ refundId: refund.id, refundStatus: refund.status }),
+            { outcome: 'unknown', record },
+          );
+        }
         return {
           commandOperationId: refund.operationId,
           record: { type: 'refund_attempt', id: refund.id },

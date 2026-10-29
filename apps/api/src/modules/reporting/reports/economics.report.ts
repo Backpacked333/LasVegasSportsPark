@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { errors, type MetricValue, type ReportRow } from '@sportspark/contracts';
+import { allocate, errors, money, type MetricValue, type ReportRow } from '@sportspark/contracts';
 import { sql } from 'kysely';
 import {
   allocateSales,
@@ -63,7 +63,7 @@ export class EconomicsReport {
     scope: 'facility',
     pointInTime: 'partial',
     pointInTimeNote:
-      'Orders fulfilled after the as-of instant and reservations released by then are excluded; session schedules and cost inputs are taken as they stand now. The stored run is the reproducible record.',
+      'Orders fulfilled after the as-of instant and reservations released by then are excluded, and cost inputs are those in force at the as-of instant (recorded by then and not yet withdrawn); session schedules are taken as they stand now. The stored run is the reproducible record.',
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
@@ -222,6 +222,9 @@ export class EconomicsReport {
 
     let costs: CostRow[] = [];
     if (params.includeMargin) {
+      // The inputs in force at the as-of instant (G3, SPK-REPORT-007): a correction withdraws an
+      // input and records another, so an earlier run still reproduces from the inputs of its time.
+      // Active inputs never overlap, so neither do the inputs in force at one instant.
       costs = await ctx.db
         .selectFrom('cost_inputs')
         .select([
@@ -233,8 +236,11 @@ export class EconomicsReport {
         ])
         .where('organization_id', '=', ctx.organizationId)
         .where('facility_id', '=', facility.id)
-        .where('status', '=', 'active')
         .where('basis', '=', 'per_activity_hour')
+        .where('recorded_at', '<=', ctx.asOf)
+        .where((eb) => eb.or([eb('withdrawn_at', 'is', null), eb('withdrawn_at', '>', ctx.asOf)]))
+        .orderBy('recorded_at')
+        .orderBy('id')
         .execute();
       const missing: Array<{ resourceId: string; date: string; currency: string }> = [];
       for (const s of spaces.values()) {
@@ -326,24 +332,55 @@ export class EconomicsReport {
       });
     }
 
-    // Refunds of the included orders are adjustments shown beside the sales, never netted (E2).
+    // Refunds of the included sales are adjustments shown beside them, never netted (E2). A refund
+    // is of a payment, which pays a whole order: each is split over its order's lines by their
+    // totals (largest remainder), and only the shares of the lines reported here count — another
+    // facility's line is neither this facility's adjustment nor visible in its scope (G2).
     const orderIds = [...new Set(lineRows.map((l) => l.order_id))];
+    const includedLineIds = new Set(lineRows.map((l) => l.order_line_id));
     const refunds =
       orderIds.length === 0
         ? []
         : await ctx.db
             .selectFrom('reporting_refund_attempts_v')
-            .select(['currency', 'amount_minor'])
+            .select(['refund_attempt_id', 'order_id', 'currency', 'amount_minor'])
             .where('organization_id', '=', ctx.organizationId)
             .where('order_id', 'in', orderIds)
             .where('status', '=', 'succeeded')
             .where('resolved_at', '>=', spanStart)
             .where('resolved_at', '<', spanEnd)
             .where('resolved_at', '<=', ctx.asOf)
+            .orderBy('refund_attempt_id')
             .execute();
+    const linesOfOrder = new Map<string, Array<{ id: string; totalMinor: number }>>();
+    if (refunds.length > 0) {
+      const orderLines = await ctx.db
+        .selectFrom('reporting_order_lines_v')
+        .select(['order_line_id', 'order_id', 'total_minor'])
+        .where('organization_id', '=', ctx.organizationId)
+        .where('order_id', 'in', [...new Set(refunds.map((r) => r.order_id as string))])
+        .orderBy('order_line_id')
+        .execute();
+      for (const l of orderLines) {
+        const list = linesOfOrder.get(l.order_id) ?? [];
+        list.push({ id: l.order_line_id, totalMinor: Number(l.total_minor) });
+        linesOfOrder.set(l.order_id, list);
+      }
+    }
     const refundsByCurrency = new Map<string, number>();
-    for (const r of refunds)
-      refundsByCurrency.set(r.currency, (refundsByCurrency.get(r.currency) ?? 0) + r.amount_minor);
+    for (const r of refunds) {
+      const orderLines = linesOfOrder.get(r.order_id as string) ?? [];
+      if (orderLines.reduce((sum, l) => sum + l.totalMinor, 0) <= 0) continue;
+      const shares = allocate(
+        money(Number(r.amount_minor), r.currency),
+        orderLines.map((l) => l.totalMinor),
+      );
+      const here = orderLines.reduce(
+        (sum, l, i) => (includedLineIds.has(l.id) ? sum + shares[i]!.amountMinor : sum),
+        0,
+      );
+      refundsByCurrency.set(r.currency, (refundsByCurrency.get(r.currency) ?? 0) + here);
+    }
 
     const values: MetricValue[] = [];
     for (const [currency, t] of [...totalsByCurrency.entries()].sort(([a], [b]) =>
@@ -461,7 +498,7 @@ export class EconomicsReport {
             ? 'A line is allocated only when its offering has exactly one scheduled event.'
             : "A line is spread over its offering's scheduled events by activity minutes."
         } Each event's share is spread over its spaces by activity unit-time; every split uses largest-remainder allocation.`,
-        'Sales are order lines of fulfilled orders (SPK-PAY-011); receipts, credits, fees and disputes are not sales (rule G6). Refunds are shown as adjustments and never netted.',
+        'Sales are order lines of fulfilled orders (SPK-PAY-011); receipts, credits, fees and disputes are not sales (rule G6). Refunds are shown as adjustments and never netted; a refund is split over its order’s lines by their totals (largest remainder) and only the share of the lines reported here is shown.',
         'Allocated sales are reported in the period of their event; unallocated sales in the period of their fulfilment. Coverage shows what share of the period’s sales the per-hour figure represents (E3).',
         params.includeMargin
           ? 'Contribution margin uses the agreed cost inputs in force on each event day (a space’s own input before the facility’s).'

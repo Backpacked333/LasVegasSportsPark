@@ -18,6 +18,7 @@ import type {
 import type { Selectable } from 'kysely';
 import type { Trx } from '../../kernel';
 import type { AutomationSettings } from './automation.settings';
+import { ageEvidence } from './evidence';
 
 export type Reader = Db | Trx;
 export type AssistantRequestRow = Selectable<AssistantRequestsTable>;
@@ -108,7 +109,13 @@ export function commandOf(row: RecommendationRow): RecommendationCommand | null 
   };
 }
 
-export function toRecommendation(row: RecommendationRow): Recommendation {
+/** When a recommendation is read, and the evidence window its stored evidence ages against. */
+export interface EvidenceAging {
+  now: Date;
+  maxAgeMinutes: number;
+}
+
+export function toRecommendation(row: RecommendationRow, aging: EvidenceAging): Recommendation {
   const command = commandOf(row);
   const applyState: Recommendation['apply']['state'] = !command
     ? 'not_applicable'
@@ -129,7 +136,10 @@ export function toRecommendation(row: RecommendationRow): Recommendation {
     facilityId: row.facility_id,
     payload: (row.payload ?? {}) as Record<string, unknown>,
     command,
-    evidence: (row.evidence ?? []) as unknown as AssistantEvidence[],
+    // SPK-AUTO-002: read when proposed, reviewed later — the freshness shown is the one now.
+    evidence: ((row.evidence ?? []) as unknown as AssistantEvidence[]).map((e) =>
+      ageEvidence(e, aging.now, aging.maxAgeMinutes),
+    ),
     missingEvidence: (row.missing_evidence ?? []) as unknown as AssistantMissingEvidence[],
     status: row.status,
     requester: actorOf(row.requester),

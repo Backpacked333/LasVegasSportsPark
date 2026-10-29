@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evidenceItem, freshnessOf, mergeEvidence, missingEvidence } from './evidence';
+import { ageEvidence, evidenceItem, freshnessOf, mergeEvidence, missingEvidence } from './evidence';
 
 const observedAt = new Date('2027-01-16T20:00:00.000Z');
 const minutesAgo = (m: number) => new Date(observedAt.getTime() - m * 60_000);
@@ -94,5 +94,52 @@ describe('SPK-AUTO-002 evidence freshness', () => {
       reason: 'not_available',
       description: 'x'.repeat(500),
     });
+  });
+});
+
+describe('SPK-AUTO-002 evidence read later (a recommendation under review)', () => {
+  const hoursLater = (h: number) => new Date(observedAt.getTime() + h * 3_600_000);
+  const record = evidenceItem(
+    'scheduling.publish_schedule',
+    { recordType: 'schedule_draft', recordId: 'd1', asOf: minutesAgo(10), basis: 'record' },
+    observedAt,
+    60,
+  );
+  const snapshot = evidenceItem(
+    'reporting.demand_report',
+    { recordType: 'report', recordId: 'r1', asOf: minutesAgo(30), basis: 'snapshot' },
+    observedAt,
+    60,
+  );
+
+  it('is unchanged at its own read', () => {
+    expect(ageEvidence(record, observedAt, 60)).toEqual(record);
+    expect(record.freshness).toBe('live');
+  });
+
+  it('a live read is recent within the window after it and stale beyond; its age runs to now', () => {
+    expect(ageEvidence(record, hoursLater(1), 60)).toMatchObject({
+      freshness: 'recent',
+      ageSeconds: 70 * 60,
+      observedAt: record.observedAt,
+    });
+    expect(ageEvidence(record, new Date(hoursLater(1).getTime() + 1000), 60).freshness).toBe(
+      'stale',
+    );
+  });
+
+  it('a stored result ages from its own as-of instant; unknown stays unknown', () => {
+    expect(ageEvidence(snapshot, hoursLater(0.5), 60)).toMatchObject({
+      freshness: 'recent',
+      ageSeconds: 60 * 60,
+    });
+    expect(ageEvidence(snapshot, hoursLater(0.6), 60).freshness).toBe('stale');
+    const unknown = evidenceItem(
+      'support.today_feed',
+      { recordType: 'visit', recordId: 'v1', asOf: null, basis: 'record' },
+      observedAt,
+      60,
+    );
+    expect(ageEvidence(unknown, hoursLater(5), 60)).toEqual(unknown);
   });
 });

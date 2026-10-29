@@ -5,7 +5,7 @@ import { CostInputMachine, ExportMachine, MetricDefinitionMachine } from './repo
 import { definitionHash, METRICS, metricsForReport } from './reporting.metrics';
 import { agingBand } from './reports/finance.reports';
 import { costInputFor } from './reports/economics.report';
-import { parseWeights } from './reports/utilization.report';
+import { closedPeriods, parseWeights } from './reports/utilization.report';
 
 describe('reporting state machines (§4.6)', () => {
   it('Export: ready → downloaded | expired | revoked; every other state is final', () => {
@@ -194,5 +194,23 @@ describe('report policy helpers', () => {
     expect(costInputFor(inputs, 'pitch', '2027-01-15', 'USD')?.amount_minor).toBe(100);
     expect(costInputFor(inputs, 'room', '2027-03-01', 'USD')).toBeNull();
     expect(costInputFor(inputs, 'room', '2027-02-01', 'EUR')).toBeNull();
+  });
+});
+
+describe('space status history (SPK-REPORT-003, MET-064)', () => {
+  it('a space is closed from a change to closed until the next change to another status', () => {
+    const periods = closedPeriods([
+      { resourceId: 'a', status: 'closed', at: 10 },
+      { resourceId: 'b', status: 'restricted', at: 12 },
+      { resourceId: 'a', status: 'closed', at: 15 },
+      { resourceId: 'a', status: 'active', at: 20 },
+      { resourceId: 'a', status: 'closed', at: 30 },
+      { resourceId: 'b', status: 'active', at: 40 },
+    ]);
+    expect(periods.get('a')).toEqual([
+      [10, 20],
+      [30, Number.POSITIVE_INFINITY],
+    ]);
+    expect(periods.has('b')).toBe(false);
   });
 });

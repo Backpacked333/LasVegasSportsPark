@@ -14,7 +14,7 @@ import {
   seedResource,
   type PitchFixture,
 } from '../../scheduling';
-import { get, HOUR, reportingTestApp, staff, valueOf, type Actor } from './support';
+import { get, HOUR, key, reportingTestApp, staff, valueOf, type Actor } from './support';
 
 const DATE = '2027-02-03';
 
@@ -219,5 +219,129 @@ describe('field utilization (SPK-REPORT-003)', () => {
     expect((await report(finance)).status).toBe(200);
     const otherFacilityStaff = await staff(t, ['scheduler'], { facilityIds: [pitch.pitchId] });
     expect((await report(otherFacilityStaff)).status).toBe(403);
+  });
+});
+
+describe('field utilization of closed spaces (SPK-REPORT-003, MET-064)', () => {
+  let t: TestApp;
+  let scheduler: Actor;
+  let pitch: PitchFixture;
+  let roomId: string;
+
+  const report = (query: Record<string, string> = {}) =>
+    get(t, '/v1/reports/utilization', scheduler, {
+      facilityId: t.facilityId,
+      from: DATE,
+      to: DATE,
+      ...query,
+    });
+  const rowOf = (body: { rows: Row[] }, resourceId: string) =>
+    body.rows.find((r) => r.resourceId === resourceId)!;
+  /** Changes a space's status through the scheduling API, as a scheduler would. */
+  const setStatus = async (resourceId: string, status: 'active' | 'closed') => {
+    const current = await get(t, `/v1/resources/${resourceId}`, scheduler);
+    const res = await t.http
+      .patch(`/v1/resources/${resourceId}`)
+      .set(scheduler.header)
+      .set('Idempotency-Key', key())
+      .send({ status, expectedRevision: current.body.revision, reason: 'Space status change' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  };
+
+  beforeAll(async () => {
+    t = await reportingTestApp();
+    scheduler = await staff(t, ['scheduler']);
+    await seedOperatingHours(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      opensAt: '08:00',
+      closesAt: '22:00',
+    });
+    pitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch 1',
+      defaultCleanupMinutes: 10,
+    });
+    roomId = (
+      await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Room X',
+        kind: 'room',
+      })
+    ).resourceId;
+    // A one-hour game on the north half (70 min with its cleanup).
+    await createScheduledEvent(t.app.get(EventsService), {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.northHalfId],
+      start: at(DATE, '10:00'),
+      end: at(DATE, '11:00'),
+      kind: 'game',
+    });
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  it('SPK-REPORT-003 (MET-064): a closed space counts as closure hours, not available hours; a closed whole pitch with open subdivisions stays available', async () => {
+    const reserved = 70 / 60;
+    const open = await report();
+    expect(open.status, JSON.stringify(open.body)).toBe(200);
+    expect(valueOf(open.body, 'MET-064', 'Available unit-hours')).toBeCloseTo(14 * 3, 4);
+
+    // The room is closed: scheduling refuses it, so its 14 operating hours are closure hours.
+    const beforeClosing = t.clock.now();
+    t.clock.advance(HOUR);
+    await setStatus(roomId, 'closed');
+    const closed = await report();
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+    expect(valueOf(closed.body, 'MET-064', 'Available unit-hours')).toBeCloseTo(28, 4);
+    expect(valueOf(closed.body, 'MET-068', 'Closure unit-hours')).toBeCloseTo(14, 4);
+    expect(valueOf(closed.body, 'MET-070', 'Utilization rate')).toBeCloseTo(reserved / 28, 4);
+    expect(valueOf(closed.body, 'MET-072')).toBeCloseTo(28 - reserved, 4);
+    expect(rowOf(closed.body, roomId)).toMatchObject({
+      availableUnitHours: 0,
+      closureUnitHours: 14,
+      utilizationRate: null,
+    });
+    expect((closed.body.disclosures as string[]).join(' ')).toContain(
+      `Room X (closed from ${t.clock.now().toISOString()})`,
+    );
+    // As of before the change the room was open (G3): the earlier evaluation is unchanged.
+    const earlier = await report({ asOf: beforeClosing.toISOString() });
+    expect(earlier.status, JSON.stringify(earlier.body)).toBe(200);
+    expect(valueOf(earlier.body, 'MET-064', 'Available unit-hours')).toBeCloseTo(42, 4);
+
+    // A closed whole pitch whose halves are open: scheduling still books the halves.
+    t.clock.advance(HOUR);
+    await setStatus(pitch.pitchId, 'closed');
+    const pitchClosed = await report();
+    expect(valueOf(pitchClosed.body, 'MET-064', 'Available unit-hours')).toBeCloseTo(28, 4);
+    expect(rowOf(pitchClosed.body, pitch.pitchId)).toMatchObject({
+      availableUnitHours: 28,
+      closureUnitHours: 0,
+    });
+    // Once the south half is closed too, its unit has no open space left; the north unit has one.
+    await setStatus(pitch.southHalfId, 'closed');
+    const halfClosed = await report();
+    expect(valueOf(halfClosed.body, 'MET-064', 'Available unit-hours')).toBeCloseTo(14, 4);
+    expect(rowOf(halfClosed.body, pitch.southHalfId)).toMatchObject({
+      availableUnitHours: 0,
+      closureUnitHours: 14,
+    });
+    expect(rowOf(halfClosed.body, pitch.northHalfId)).toMatchObject({ availableUnitHours: 14 });
+
+    // Reopened before the day: closed only while it was closed, so the day is available again.
+    t.clock.advance(HOUR);
+    const whileClosed = t.clock.now();
+    t.clock.advance(HOUR);
+    await setStatus(roomId, 'active');
+    const reopened = await report();
+    expect(valueOf(reopened.body, 'MET-064', 'Available unit-hours')).toBeCloseTo(28, 4);
+    expect(rowOf(reopened.body, roomId)).toMatchObject({ availableUnitHours: 14 });
+    const asClosed = await report({ asOf: whileClosed.toISOString() });
+    expect(rowOf(asClosed.body, roomId)).toMatchObject({ availableUnitHours: 0 });
   });
 });
