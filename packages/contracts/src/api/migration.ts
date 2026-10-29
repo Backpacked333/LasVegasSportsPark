@@ -387,6 +387,11 @@ export const ImportBatchSchema = z
     }),
     /** Other batches of this source with the same checksum: a re-import of the same snapshot. */
     sameChecksumBatchIds: z.array(z.uuid()),
+    /**
+     * The batch's most recent reconciliation report (§5.5), null until one is generated; earlier
+     * ones are listed at GET /import-batches/{id}/reconciliation-reports (MIG-01).
+     */
+    latestReconciliationReportId: z.uuid().nullable(),
     validatedAt: Instant.nullable(),
     reviewedAt: Instant.nullable(),
     applyStartedAt: Instant.nullable(),
@@ -439,6 +444,13 @@ export const ImportExceptionSchema = z
     rowId: z.uuid(),
     entityType: ImportEntityTypeSchema,
     externalId: z.string(),
+    /**
+     * MIG-01 (§5.5, SPK-PAY-001): when the exception concerns a balance (an opening obligation,
+     * credit or refund row), the amount in minor units and its currency as the staged row states
+     * them; null otherwise. An approved amount (`resolution.amountMinor`) is in this currency.
+     */
+    stagedAmountMinor: z.number().int().nullable(),
+    currency: z.string().nullable(),
     kind: ImportExceptionKindSchema,
     phase: z.enum(['validation', 'apply']),
     reasons: z.array(ImportReasonSchema),
@@ -661,6 +673,14 @@ export const MigrationReconciliationReportSchema = z
   .openapi('MigrationReconciliationReport');
 export type MigrationReconciliationReport = z.infer<typeof MigrationReconciliationReportSchema>;
 
+/** GET /import-batches/{id}/reconciliation-reports: every report of the batch, newest first. */
+export const MigrationReconciliationReportListSchema = z
+  .object({ items: z.array(MigrationReconciliationReportSchema) })
+  .openapi('MigrationReconciliationReportList');
+export type MigrationReconciliationReportList = z.infer<
+  typeof MigrationReconciliationReportListSchema
+>;
+
 export const GenerateReconciliationBody = withCommandMeta({})
   .strict()
   .openapi('GenerateMigrationReconciliationRequest');
@@ -748,7 +768,7 @@ command(
 );
 query(
   '/import-batches',
-  'List import batches',
+  'List import batches, newest first (cursor paging)',
   ListImportBatchesQuery,
   pageSchema(ImportBatchSchema),
 );
@@ -796,7 +816,7 @@ command(
 );
 query(
   '/import-exceptions',
-  'Import review queue (ambiguous relationships and balances, conflicts, validation errors)',
+  'Import review queue (ambiguous relationships and balances, conflicts, validation errors), newest first (cursor paging)',
   ListImportExceptionsQuery,
   pageSchema(ImportExceptionSchema),
 );
@@ -809,7 +829,7 @@ command(
 );
 query(
   '/external-mappings',
-  'Look up external identifiers mapped to internal records',
+  'Look up external identifiers mapped to internal records, newest first (cursor paging)',
   ListExternalMappingsQuery,
   pageSchema(ExternalMappingSchema),
 );
@@ -821,9 +841,9 @@ command(
 );
 query(
   '/import-batches/{id}/reconciliation-reports',
-  'List the reconciliation reports of a batch (§5.5)',
+  'List the reconciliation reports of a batch, newest first; the batch names the latest (§5.5)',
   null,
-  z.array(MigrationReconciliationReportSchema),
+  MigrationReconciliationReportListSchema,
 );
 query(
   '/import-reconciliation-reports/{id}',
@@ -840,7 +860,7 @@ command(
 );
 query(
   '/authority-assignments',
-  'List the authority matrix assignments (§5.6)',
+  'List the authority matrix assignments, newest first (cursor paging, §5.6)',
   ListAuthorityAssignmentsQuery,
   pageSchema(AuthorityAssignmentSchema),
 );

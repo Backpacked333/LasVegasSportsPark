@@ -25,6 +25,7 @@ import {
   type ImportException,
   type ImportRow,
   type MigrationReconciliationReport,
+  type MigrationReconciliationReportList,
   type Page,
   type Principal,
 } from '@sportspark/contracts';
@@ -159,7 +160,7 @@ export class ImportBatchesController {
   reports(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: IdParams,
-  ): Promise<MigrationReconciliationReport[]> {
+  ): Promise<MigrationReconciliationReportList> {
     return this.reconciliation.listForBatch(principal, params.id);
   }
 }

@@ -21,10 +21,14 @@ export { csvToStagedRows, parseCsv } from './staging/csv';
 export {
   AUTHORITY_EXEMPT_ROUTES,
   AUTHORITY_ROUTES,
+  classifyWriteRoutes,
   matchAuthorityRoute,
+  toRouteFactPath,
   type AuthorityExemptRoute,
   type AuthorityRoute,
   type AuthorityScopeSource,
+  type ClassifiedRouteFact,
+  type RouteClassificationReport,
 } from './services/authority-routes';
 export { AuthorityService } from './services/authority.service';
 export { AuthorityWriteInterceptor } from './services/authority-write.interceptor';

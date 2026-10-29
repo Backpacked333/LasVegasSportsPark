@@ -15,10 +15,12 @@ import type { Trx } from '../../kernel';
  * is refused, so SportsPark never becomes a second writer of a record the legacy system still
  * owns. Without any assignment SportsPark is authoritative (a facility that never migrates is
  * not affected). The migration module also enforces the guard on the HTTP write routes of every
- * category (AuthorityWriteInterceptor, deny-by-default over every served write route), so modules
- * built before this port are covered on their routes. In-process, finance guards its refund
- * command itself (finance's RECORD_AUTHORITY_PORT, implemented by this module's AuthorityService);
- * other service-to-service writes are guarded only at their routes (README "Known gaps").
+ * category (AuthorityWriteInterceptor, deny-by-default over every served write route: a handler's
+ * K-11 decorator first, then the static lists), so modules built before this port are covered on
+ * their routes. In-process, the same AuthorityService implements the kernel's
+ * RECORD_AUTHORITY_PORT (RECORD_AUTHORITY_IMPL, IF-42; scheduling's port writes, SCH-02) and
+ * finance's (its refund command); other service-to-service writes are guarded only at their
+ * routes (README "Known gaps").
  */
 export const AUTHORITY_GUARD_PORT = Symbol('AUTHORITY_GUARD_PORT');
 

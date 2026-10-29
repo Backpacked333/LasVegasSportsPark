@@ -331,7 +331,10 @@ describe('reconciliation (§5.5)', () => {
       supersededByReportId: second.body.id,
     });
     const list = await get(t, `/v1/import-batches/${applied.id}/reconciliation-reports`, operator);
-    expect(list.body.map((r: { id: string }) => r.id)).toEqual([second.body.id, first.body.id]);
+    expect(list.body.items.map((r: { id: string }) => r.id)).toEqual([
+      second.body.id,
+      first.body.id,
+    ]);
     // A balanced area is approved without a reason.
     const ok = await post(
       t,

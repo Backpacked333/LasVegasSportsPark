@@ -14,6 +14,7 @@ import {
   type ListAuthorityAssignmentsQuery,
   type Page,
   type Principal,
+  type RecordAuthorityScope,
 } from '@sportspark/contracts';
 import {
   isExclusionViolation,
@@ -32,14 +33,19 @@ import {
   snapshotActor,
   UnitOfWork,
   type Clock,
+  type RecordAuthorityPort,
   type Trx,
 } from '../../../kernel';
 import { MigrationActions } from '../migration.actions';
 import { MigrationEvents } from '../migration.events';
 import type { AuthorityGuardPort, AuthorityScopeRef } from '../migration.ports';
 import {
+  afterKeyset,
+  createdAtText,
   iso,
+  keysetPage,
   organizationOf,
+  readKeysetCursor,
   scopeOf,
   toAuthorityAssignment,
   type AssignmentRow,
@@ -68,7 +74,7 @@ const SPECIFICITY: Record<AuthorityScopeKind, number> = {
  * SportsPark is authoritative.
  */
 @Injectable()
-export class AuthorityService implements AuthorityGuardPort {
+export class AuthorityService implements AuthorityGuardPort, RecordAuthorityPort {
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
@@ -223,6 +229,28 @@ export class AuthorityService implements AuthorityGuardPort {
     );
   }
 
+  /**
+   * The kernel's RECORD_AUTHORITY_PORT (K-11, IF-42; MIG-00): an in-process command of another
+   * module (a scheduling port write, an outbox handler, a periodic job) asserts its record
+   * category with the most specific scope it knows, inside its unit of work. With a scope the
+   * most specific assignment in effect decides (§5.6); without one, any legacy assignment of the
+   * category in effect refuses (§4.7 invariant 11: ambiguity refuses rather than duplicates).
+   * Refusal: ACCESS_DENIED, `nextAction: write_in_authoritative_system`,
+   * `details { code: 'LEGACY_AUTHORITY', recordCategory }`.
+   */
+  async assertNoLegacyAuthority(
+    organizationId: string,
+    category: ImportEntityTypeValue,
+    scope?: RecordAuthorityScope,
+    trx?: Trx,
+  ): Promise<void> {
+    if (scope && (scope.facilityId || scope.programId || scope.competitionId)) {
+      await this.assertSportsparkAuthority(organizationId, category, scope, trx);
+      return;
+    }
+    await this.assertNoLegacyAuthorityInEffect(organizationId, category, trx);
+  }
+
   // -------------------------------------------------------------------------------------------
   // Queries
   // -------------------------------------------------------------------------------------------
@@ -236,14 +264,16 @@ export class AuthorityService implements AuthorityGuardPort {
       type: 'authority_assignment',
       organizationId,
     });
+    // MIG-01: keyset paging, newest first (created_at desc, id desc).
+    const cursor = readKeysetCursor(query.cursor);
     let q = this.db
       .selectFrom('authority_assignments')
       .selectAll()
+      .select(createdAtText('created_at').as('created_at_text'))
       .where('organization_id', '=', organizationId)
-      .orderBy('record_category')
-      .orderBy('effective_from')
-      .orderBy('id')
-      .limit(query.limit);
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
     if (query.recordCategory) q = q.where('record_category', '=', query.recordCategory);
     if (query.at) {
       const at = new Date(query.at);
@@ -251,8 +281,9 @@ export class AuthorityService implements AuthorityGuardPort {
         .where('effective_from', '<=', at)
         .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]));
     }
-    const rows = await q.execute();
-    return { items: rows.map(toAuthorityAssignment), nextCursor: null };
+    if (cursor) q = q.where(afterKeyset('created_at', 'id', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
+    return { items: page.rows.map(toAuthorityAssignment), nextCursor: page.nextCursor };
   }
 
   async get(principal: Principal, id: string): Promise<AuthorityAssignment> {

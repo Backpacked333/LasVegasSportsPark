@@ -28,7 +28,11 @@ import { MigrationEvents } from '../migration.events';
 import { ImportExceptionMachine } from '../migration.machines';
 import { MIGRATION_POLICY, type MigrationPolicy } from '../migration.policy';
 import {
+  afterKeyset,
+  createdAtText,
+  keysetPage,
   organizationOf,
+  readKeysetCursor,
   toImportException,
   type BatchRow,
   type ExceptionRow,
@@ -181,27 +185,39 @@ export class ImportExceptionsService {
       organizationId,
       protected: true,
     });
+    // MIG-01: keyset paging, newest first (created_at desc, id desc).
+    const cursor = readKeysetCursor(query.cursor);
     let q = this.db
       .selectFrom('import_exceptions as e')
       .innerJoin('import_rows as r', (join) =>
         join.onRef('r.organization_id', '=', 'e.organization_id').onRef('r.id', '=', 'e.row_id'),
       )
       .selectAll('e')
-      .select(['r.entity_type as row_entity_type', 'r.external_id as row_external_id'])
+      .select([
+        'r.entity_type as row_entity_type',
+        'r.external_id as row_external_id',
+        'r.payload as row_payload',
+      ])
+      .select(createdAtText('e.created_at').as('created_at_text'))
       .where('e.organization_id', '=', organizationId)
-      .orderBy('e.created_at')
-      .orderBy('e.id')
-      .limit(query.limit);
+      .orderBy('e.created_at', 'desc')
+      .orderBy('e.id', 'desc')
+      .limit(query.limit + 1);
     if (query.batchId) q = q.where('e.batch_id', '=', query.batchId);
     if (query.status) q = q.where('e.status', '=', query.status);
     if (query.kind) q = q.where('e.kind', '=', query.kind);
     if (query.reviewOwnerRole) q = q.where('e.review_owner_role', '=', query.reviewOwnerRole);
-    const rows = await q.execute();
+    if (cursor) q = q.where(afterKeyset('e.created_at', 'e.id', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
     return {
-      items: rows.map((r) =>
-        toImportException(r, { entityType: r.row_entity_type, externalId: r.row_external_id }),
+      items: page.rows.map((r) =>
+        toImportException(r, {
+          entityType: r.row_entity_type,
+          externalId: r.row_external_id,
+          payload: r.row_payload,
+        }),
       ),
-      nextCursor: null,
+      nextCursor: page.nextCursor,
     };
   }
 
@@ -318,6 +334,7 @@ export class ImportExceptionsService {
       return toImportException(updated, {
         entityType: row.entity_type,
         externalId: row.external_id,
+        payload: row.payload,
       });
     });
   }

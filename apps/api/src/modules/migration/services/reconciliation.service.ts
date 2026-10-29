@@ -14,6 +14,7 @@ import {
   type ImportExceptionResolution,
   type MigrationDiscrepancy,
   type MigrationReconciliationReport,
+  type MigrationReconciliationReportList,
   type Principal,
   type ReconciliationAreaValue,
   type ReconciliationLevelValue,
@@ -824,10 +825,11 @@ export class ReconciliationService {
     return this.view(this.db, report.organization_id, report.id);
   }
 
+  /** MIG-01 (§5.5): every report of the batch, newest first (earlier ones stay as evidence). */
   async listForBatch(
     principal: Principal,
     batchId: string,
-  ): Promise<MigrationReconciliationReport[]> {
+  ): Promise<MigrationReconciliationReportList> {
     const batch = await this.batches.authorized(
       this.db,
       principal,
@@ -840,10 +842,11 @@ export class ReconciliationService {
       .where('organization_id', '=', batch.organization_id)
       .where('batch_id', '=', batch.id)
       .orderBy('generated_at', 'desc')
+      .orderBy('id', 'desc')
       .execute();
-    const out: MigrationReconciliationReport[] = [];
-    for (const r of reports) out.push(await this.view(this.db, batch.organization_id, r.id));
-    return out;
+    const items: MigrationReconciliationReport[] = [];
+    for (const r of reports) items.push(await this.view(this.db, batch.organization_id, r.id));
+    return { items };
   }
 
   async decide(

@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { CatalogModule } from '../catalog';
-import { FinanceModule, RECORD_AUTHORITY_IMPL } from '../finance';
+import { RECORD_AUTHORITY_IMPL } from '../../kernel';
+import { FinanceModule, RECORD_AUTHORITY_IMPL as FINANCE_RECORD_AUTHORITY_IMPL } from '../finance';
 import { IdentityModule } from '../identity';
 import {
   AuthorityController,
@@ -30,7 +31,8 @@ import { ReconciliationService } from './services/reconciliation.service';
  * modules' exported services — identity (persons, households, relationships), catalog (programs)
  * and finance (opening obligations and credits) — never through their tables. Registers a global
  * interceptor that refuses the HTTP write commands of a record category while the legacy system
- * is authoritative for it (§5.6). See README.md.
+ * is authoritative for it (§5.6), and implements the kernel's RECORD_AUTHORITY_PORT for in-process
+ * writers (MIG-00, IF-42). See README.md.
  */
 @Module({
   imports: [IdentityModule, CatalogModule, FinanceModule],
@@ -46,8 +48,11 @@ import { ReconciliationService } from './services/reconciliation.service';
     ImportApplyService,
     ReconciliationService,
     { provide: AUTHORITY_GUARD_PORT, useExisting: AuthorityService },
-    // Finance resolves this at call time to guard its refund command in-process (§5.6).
+    // K-11, IF-42 (MIG-00): the kernel's RECORD_AUTHORITY_PORT resolves this lazily, so every
+    // in-process writer (scheduling's port writes, SCH-02) asserts record authority here (§5.6).
     { provide: RECORD_AUTHORITY_IMPL, useExisting: AuthorityService },
+    // Finance resolves its own port at call time to guard its refund command in-process (§5.6).
+    { provide: FINANCE_RECORD_AUTHORITY_IMPL, useExisting: AuthorityService },
     { provide: EXTERNAL_MAPPING_PORT, useExisting: ExternalMappingsService },
     // §5.6 / §4.7 invariant 11: a synchronized copy never becomes an independent writer.
     { provide: APP_INTERCEPTOR, useClass: AuthorityWriteInterceptor },
@@ -63,6 +68,7 @@ import { ReconciliationService } from './services/reconciliation.service';
     MIGRATION_POLICY,
     AUTHORITY_GUARD_PORT,
     RECORD_AUTHORITY_IMPL,
+    FINANCE_RECORD_AUTHORITY_IMPL,
     EXTERNAL_MAPPING_PORT,
     AuthorityService,
     ExternalMappingsService,

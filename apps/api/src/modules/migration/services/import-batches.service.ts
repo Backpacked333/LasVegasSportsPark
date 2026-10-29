@@ -35,8 +35,12 @@ import { MigrationEvents } from '../migration.events';
 import { ImportBatchMachine } from '../migration.machines';
 import { MIGRATION_POLICY, type MigrationPolicy } from '../migration.policy';
 import {
+  afterKeyset,
   countOutcomes,
+  createdAtText,
+  keysetPage,
   organizationOf,
+  readKeysetCursor,
   toImportBatch,
   toImportRow,
   type BatchRow,
@@ -124,7 +128,21 @@ export class ImportBatchesService {
           .orderBy('received_at')
           .execute()
       : [];
-    return toImportBatch(batch, { exceptions, sameChecksumBatchIds: same.map((s) => s.id) });
+    // MIG-01 (§5.5): the latest report is named on the batch; earlier ones stay listed.
+    const latest = await db
+      .selectFrom('reconciliation_reports')
+      .select('id')
+      .where('organization_id', '=', batch.organization_id)
+      .where('batch_id', '=', batch.id)
+      .orderBy('generated_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    return toImportBatch(batch, {
+      exceptions,
+      sameChecksumBatchIds: same.map((s) => s.id),
+      latestReconciliationReportId: latest?.id ?? null,
+    });
   }
 
   async get(principal: Principal, id: string): Promise<ImportBatch> {
@@ -139,19 +157,25 @@ export class ImportBatchesService {
       organizationId,
       protected: true,
     });
+    // MIG-01: keyset paging, newest first (created_at desc, id desc).
+    const cursor = readKeysetCursor(query.cursor);
     let q = this.db
       .selectFrom('import_batches')
       .selectAll()
+      .select(createdAtText('created_at').as('created_at_text'))
       .where('organization_id', '=', organizationId)
-      .orderBy('received_at', 'desc')
+      .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
-      .limit(query.limit);
+      .limit(query.limit + 1);
     if (query.sourceSystem) q = q.where('source_system', '=', query.sourceSystem);
     if (query.status) q = q.where('status', '=', query.status);
-    const rows = await q.execute();
+    if (cursor) q = q.where(afterKeyset('created_at', 'id', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
     const items: ImportBatch[] = [];
-    for (const row of rows) items.push(await this.view(this.db, row));
-    return { items, nextCursor: null };
+    for (const { created_at_text: _at, ...row } of page.rows) {
+      items.push(await this.view(this.db, row));
+    }
+    return { items, nextCursor: page.nextCursor };
   }
 
   async rows(
