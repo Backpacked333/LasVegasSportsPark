@@ -15,7 +15,9 @@
  *    default); a party lasts its package's duration, which the API states. Only start times at
  *    which the offering's number of resources are free are offered, and the customer chooses which
  *    of the free resources (exactly the number the API states).
- * 3. A party states its number of guests (the package's guest limit is checked by the API, which
+ * 3. Forms the offering requires (`requiredFormPolicyVersionIds`) are signed by the booker first
+ *    (`BookingForms`, `POST /v1/acknowledgments`); the API answers MISSING_ACKNOWLEDGMENT otherwise.
+ *    A party states its number of guests (the package's guest limit is checked by the API, which
  *    answers GUEST_LIMIT_EXCEEDED next to the field). A rental may repeat every week for a number of
  *    weeks; the API checks every week (RESOURCE_CONFLICT lists the ones that are not free).
  * 4. `POST /v1/bookings`, one idempotency key per booking intent (a retry after no answer reuses
@@ -90,6 +92,7 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
+import { BookingForms } from './BookingForms';
 
 type Offering = Schema<'Offering'>;
 
@@ -320,6 +323,7 @@ function BookingForm({
   return (
     <View>
       <TermsBlock terms={terms} />
+      <BookingForms policyVersionIds={offering.requiredFormPolicyVersionIds} zone={zone.zone} />
 
       <Section title="When" testID="booking-when">
         {kind === 'rental' ? (

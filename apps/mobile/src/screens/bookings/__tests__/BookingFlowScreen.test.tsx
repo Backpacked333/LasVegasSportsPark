@@ -13,7 +13,7 @@ import {
   type FakeHandler,
 } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
-import { createRouterMock } from '../../../features/money/testing/fixtures';
+import { createRouterMock, me } from '../../../features/money/testing/fixtures';
 import {
   createMoneyTestApp as createTestApp,
   settleApps,
@@ -39,6 +39,25 @@ jest.mock('expo-router', () => ({
 }));
 
 type App = ReturnType<typeof createTestApp>;
+
+function acknowledgment() {
+  return {
+    id: '0192f1a0-0000-7000-8000-00000000fc01',
+    subjectPersonId: G.self,
+    policyVersionId: G.policy,
+    signedByPersonId: G.self,
+    basis: 'self',
+    recordedByPersonId: null,
+    recordedByKind: 'customer',
+    signedAt: '2026-10-24T12:00:00.000Z',
+    evidence: {},
+    status: 'active',
+    withdrawnAt: null,
+    withdrawnReason: null,
+    revision: 1,
+    createdAt: '2026-10-24T12:00:00.000Z',
+  };
+}
 
 const TEN_AM = 'Sat, Oct 24, 10:00 AM to 11:00 AM PDT, 2 free: Court 1, Court 2';
 const ELEVEN_AM = 'Sat, Oct 24, 11:00 AM to 12:00 PM PDT, 1 free: Court 1';
@@ -242,6 +261,59 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(screen.getByText(/Error code: RESOURCE_CONFLICT/)).toBeOnTheScreen();
     expect(posts(app)[0]?.body).toMatchObject({ recurrence: { count: 4 } });
     await waitFor(() => expect(availabilityReads(app).length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('SPK-REG-009: forms the offering requires are signed by the booker before booking; MISSING_ACKNOWLEDGMENT shows its code', async () => {
+    let signed = false;
+    const app = renderFlow(
+      rentalRoutes({
+        'GET /me': ok(me()),
+        'GET /offerings/{id}': ok(offering({ requiredFormPolicyVersionIds: [G.policy] })),
+        'GET /policy-versions/{id}': (req) =>
+          fakeResponse(
+            200,
+            req.params.id === G.policy
+              ? bookingTerms(
+                  { text: 'I accept the court rules.' },
+                  { id: G.policy, kind: 'form', title: 'Court waiver' },
+                )
+              : bookingTerms(),
+          ),
+        'GET /acknowledgments': () => fakeResponse(200, signed ? [acknowledgment()] : []),
+        'POST /acknowledgments': () => {
+          signed = true;
+          return fakeResponse(201, acknowledgment());
+        },
+        'POST /bookings': {
+          status: 422,
+          body: apiErrorBody('MISSING_ACKNOWLEDGMENT', {
+            message: 'Required forms must be acknowledged before booking.',
+            nextAction: 'complete_required_forms',
+          }),
+        },
+      }),
+    );
+    const forms = await screen.findByTestId('booking-forms');
+    expect(await within(forms).findByText('I accept the court rules.')).toBeOnTheScreen();
+    const sign = await within(forms).findByRole('button', { name: 'Sign Court waiver' });
+    expect(sign).toBeDisabled();
+    await chooseRentalHour();
+    await press('Book now');
+    expect(await screen.findByText(/Error code: MISSING_ACKNOWLEDGMENT/)).toBeOnTheScreen();
+    fireEvent.press(
+      within(forms).getByRole('checkbox', { name: 'I have read and agree to Court waiver' }),
+    );
+    await act(async () => {
+      fireEvent.press(within(forms).getByRole('button', { name: 'Sign Court waiver' }));
+    });
+    expect(
+      await within(forms).findByLabelText('Signed Oct 24, 2026, 5:00 AM PDT'),
+    ).toBeOnTheScreen();
+    const [ack] = app.fake.requests.filter(
+      (r) => r.method === 'POST' && r.route === '/acknowledgments',
+    );
+    expect(ack?.body).toEqual({ subjectPersonId: G.self, policyVersionId: G.policy });
+    expect(ack?.headers['idempotency-key']).toMatch(/^key-/);
   });
 
   it('a later day reads the next facility-local day; the first day has no earlier one', async () => {
