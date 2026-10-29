@@ -10,6 +10,7 @@ import {
 } from '../../identity';
 import { CommunicationsModule } from '../communications.module';
 import { attemptsOf, composeAndDispatch } from '../testing/communications-fixtures';
+import { withDeclaredPortDoubles } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -22,6 +23,7 @@ describe('communication preferences (SPK-COMMS-007 essential vs promotional, SPK
 
   beforeAll(async () => {
     t = await createTestApp({
+      configure: withDeclaredPortDoubles,
       imports: [CommunicationsModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',

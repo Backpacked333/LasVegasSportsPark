@@ -1,7 +1,15 @@
 import type { INestApplication } from '@nestjs/common';
-import type { DeliveryReceiptStatus, Notification, Principal } from '@sportspark/contracts';
+import {
+  newId,
+  type DeliveryReceiptStatus,
+  type Notification,
+  type PushPlatformValue,
+  type Principal,
+} from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
-import { Inbox, OutboxDispatcher } from '../../../kernel';
+import { Inbox, OutboxDispatcher, type Clock } from '../../../kernel';
+import { hashToken } from '../services/calendar-feeds.service';
+import { tokenHintOf } from '../services/push-devices.service';
 import {
   FAKE_MESSAGING_PROVIDER,
   FakeEmailProvider,
@@ -137,4 +145,56 @@ export async function inboxOf(db: Db, organizationId: string, personId: string) 
     .where('r.person_id', '=', personId)
     .orderBy('a.created_at', 'desc')
     .execute();
+}
+
+/**
+ * An active push registration for a person (COM-01), as `POST /v1/me/push-devices` would leave it;
+ * for tests of other flows that need the push channel to reach someone. The account defaults to
+ * the person's active account. Returns the device id and its token.
+ */
+export async function registerPushDeviceFixture(
+  ctx: { db: Db; clock: Clock; organizationId: string },
+  input: {
+    personId: string;
+    accountId?: string;
+    token?: string;
+    platform?: PushPlatformValue;
+    organizationId?: string;
+  },
+): Promise<{ deviceId: string; token: string }> {
+  const organizationId = input.organizationId ?? ctx.organizationId;
+  let accountId = input.accountId;
+  if (!accountId) {
+    const account = await ctx.db
+      .selectFrom('accounts')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('person_id', '=', input.personId)
+      .where('status', '=', 'active')
+      .executeTakeFirst();
+    if (!account) throw new Error(`person ${input.personId} has no active account for a device`);
+    accountId = account.id;
+  }
+  const token = input.token ?? `device-${newId()}`;
+  const deviceId = newId();
+  const now = ctx.clock.now();
+  await ctx.db
+    .insertInto('push_devices')
+    .values({
+      id: deviceId,
+      organization_id: organizationId,
+      person_id: input.personId,
+      account_id: accountId,
+      platform: input.platform ?? 'ios',
+      token,
+      token_hash: hashToken(token),
+      token_hint: tokenHintOf(token),
+      app_version: null,
+      registered_at: now,
+      last_seen_at: now,
+      revoked_at: null,
+      revoked_reason: null,
+    })
+    .execute();
+  return { deviceId, token };
 }

@@ -795,9 +795,16 @@ export class NotificationsService {
       .orderBy('created_at')
       .orderBy('id')
       .execute();
+    // SPK-UX-006 (COM-02): staff see who each recipient is, by name only (IF-09).
+    const names = await this.persons.displayNames(
+      organizationId,
+      recipients.map((r) => r.person_id),
+    );
     return {
       notification: toNotification(row),
-      recipients: recipients.map(toRecipient),
+      recipients: recipients.map((r) =>
+        toRecipient(r, names.get(r.person_id)?.displayName ?? null),
+      ),
       attempts: attempts.map(toAttempt),
     };
   }

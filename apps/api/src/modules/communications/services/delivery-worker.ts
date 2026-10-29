@@ -70,7 +70,12 @@ type RecordedResult =
 /** What the hand-off claim transaction decided: a recorded outcome, or a committed claim to send. */
 type HandOff =
   | { kind: Exclude<DeliveryOutcome, 'accepted'> }
-  | { kind: 'send'; recipient: RecipientRow; address: string; provider: ChannelProviderPort };
+  | {
+      kind: 'send';
+      recipient: RecipientRow;
+      addresses: string[];
+      provider: ChannelProviderPort;
+    };
 
 /**
  * Hands queued external attempts to channel providers (SPK-COMMS-004, §4.11): claims a batch with a
@@ -203,15 +208,16 @@ export class DeliveryWorker {
     if (!notification || !loaded || claimed.channel === 'in_app') return 'skipped';
     const channel: ExternalChannel = claimed.channel;
 
-    // 1. Plain reads before any lock: the address (contact points stay in identity) and the adapter.
-    const address = await this.addresses.resolve(organizationId, loaded.person_id, channel);
+    // 1. Plain reads before any lock: the addresses (contact points stay in identity; push goes to
+    // the person's active devices, COM-01) and the adapter.
+    const addresses = await this.addresses.resolve(organizationId, loaded.person_id, channel);
     const provider = this.providers.find(
       (p) => p.name === claimed.provider && p.channel === channel,
     );
 
     // 2. The hand-off claim, atomically: re-check and "about to call" mark in one transaction.
     const handOff = await this.uow.run(({ trx }) =>
-      this.claimHandOff(trx, claimed, notification, channel, address, provider),
+      this.claimHandOff(trx, claimed, notification, channel, addresses, provider),
     );
     if (handOff.kind !== 'send') return handOff.kind;
 
@@ -224,7 +230,8 @@ export class DeliveryWorker {
         notificationId: notification.id,
         channel,
         personId: handOff.recipient.person_id,
-        address: handOff.address,
+        address: handOff.addresses[0] as string,
+        addresses: handOff.addresses,
         title: notification.title,
         body: notification.body,
         category: notification.category,
@@ -258,7 +265,7 @@ export class DeliveryWorker {
     claimed: ClaimedAttempt,
     notification: NotificationRow,
     channel: ExternalChannel,
-    address: string | null,
+    addresses: string[],
     provider: ChannelProviderPort | undefined,
   ): Promise<HandOff> {
     const organizationId = claimed.organization_id;
@@ -361,8 +368,13 @@ export class DeliveryWorker {
       );
       return { kind: 'skipped' };
     }
-    if (!address) {
-      await fail('NO_ADDRESS', `no ${channel} contact point for the recipient`);
+    if (addresses.length === 0) {
+      await fail(
+        'NO_ADDRESS',
+        channel === 'push'
+          ? 'no active push device is registered for the recipient'
+          : `no ${channel} contact point for the recipient`,
+      );
       return { kind: 'failed' };
     }
     if (!provider) {
@@ -389,7 +401,7 @@ export class DeliveryWorker {
       .where('attempted_at', 'is', null)
       .executeTakeFirst();
     if (Number(marked.numUpdatedRows) !== 1) return { kind: 'skipped' };
-    return { kind: 'send', recipient, address, provider };
+    return { kind: 'send', recipient, addresses, provider };
   }
 
   private async record(
@@ -578,11 +590,14 @@ export class DeliveryWorker {
         });
         // SPK-UX-006 "failed urgent communications": an essential notice that did not reach a
         // person is an operational exception for the front desk; revocations and superseded
-        // (obsolete) notices are not failures.
+        // (obsolete) notices are not failures, and neither is a push to a person who registered no
+        // device (COM-01: they have not installed or allowed the app; the in-app notice of an
+        // essential kind is delivered regardless, SPK-COMMS-007).
         if (
           input.notification.category === 'operational' &&
           failureCode !== 'RECIPIENT_REVOKED' &&
-          failureCode !== 'SUPERSEDED'
+          failureCode !== 'SUPERSEDED' &&
+          !(current.channel === 'push' && failureCode === 'NO_ADDRESS')
         ) {
           await this.exceptions.raise(trx, {
             organizationId,

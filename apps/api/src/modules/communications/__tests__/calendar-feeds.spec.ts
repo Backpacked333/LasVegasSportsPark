@@ -19,6 +19,7 @@ import {
 } from '../../scheduling';
 import { CommunicationsModule } from '../communications.module';
 import { dispatchOutbox } from '../testing/communications-fixtures';
+import { withDeclaredPortDoubles } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -33,6 +34,7 @@ describe('private calendar feeds (SPK-COMMS-008 stable identities and revocable 
 
   beforeAll(async () => {
     t = await createTestApp({
+      configure: withDeclaredPortDoubles,
       imports: [CommunicationsModule, SchedulingModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',

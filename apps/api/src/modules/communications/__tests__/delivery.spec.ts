@@ -26,8 +26,10 @@ import {
   deliverQueued,
   fakeProviders,
   recordReceipt,
+  registerPushDeviceFixture,
   type FakeProviders,
 } from '../testing/communications-fixtures';
+import { withDeclaredPortDoubles } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -38,9 +40,11 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
   let system: Principal;
   let fakes: FakeProviders;
   let parent: { Authorization: string };
+  let pushToken: string;
 
   beforeAll(async () => {
     t = await createTestApp({
+      configure: withDeclaredPortDoubles,
       imports: [CommunicationsModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',
@@ -56,6 +60,8 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
       verified: true,
     });
     parent = await authHeaderForPerson(t, people.adult.personId);
+    // COM-01: the push channel reaches the person's registered devices.
+    pushToken = (await registerPushDeviceFixture(t, { personId: people.adult.personId })).token;
   });
   beforeEach(() => {
     fakes.push.reset();
@@ -92,7 +98,7 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
     expect(summary).toMatchObject({ claimed: 2, accepted: 2 });
     expect(fakes.email.sent).toHaveLength(1);
     expect(fakes.email.sent[0]).toMatchObject({ address: 'parent@example.test', channel: 'email' });
-    expect(fakes.push.sent[0]).toMatchObject({ address: `person:${people.adult.personId}` });
+    expect(fakes.push.sent[0]).toMatchObject({ address: pushToken, addresses: [pushToken] });
     a = await attemptsByChannel(n.id);
     expect(a['push']).toMatchObject({
       status: 'provider_accepted',
@@ -343,6 +349,7 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
   it('a person without a contact point for the channel gets a failed attempt (NO_ADDRESS), not a silent skip', async () => {
     const guardian = await createPersonFixture(t, { kind: 'adult' });
     await createAccountFixture(t, { personId: guardian });
+    await registerPushDeviceFixture(t, { personId: guardian });
     const child = await createPersonFixture(t, { kind: 'child' });
     await createRelationshipFixture(t, {
       actorPersonId: guardian,

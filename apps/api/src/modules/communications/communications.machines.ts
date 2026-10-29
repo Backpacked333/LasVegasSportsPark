@@ -2,6 +2,7 @@ import {
   defineStateMachine,
   type DeliveryStatusValue,
   type NotificationStatusValue,
+  type PushDeviceStatusValue,
 } from '@sportspark/contracts';
 
 /**
@@ -71,8 +72,28 @@ export const DeliveryAttemptMachine = defineStateMachine<DeliveryState, Delivery
   },
 });
 
+/**
+ * Push device registration (SPK-UX-001, COM-01; migration 1004 lists the same states): active
+ * until the person revokes it, the token moves to another account ('reregistered') or the
+ * account is recovered ('account_relinked', SPK-AT-025). A revoked device is never reactivated:
+ * registering the token again creates a new registration.
+ */
+export type PushDeviceState = PushDeviceStatusValue;
+export type PushDeviceEvent = 'revoke';
+export const PushDeviceMachine = defineStateMachine<PushDeviceState, PushDeviceEvent>({
+  name: 'PushDevice',
+  initial: 'active',
+  states: ['active', 'revoked'],
+  terminal: ['revoked'],
+  transitions: {
+    active: { revoke: 'revoked' },
+    revoked: {},
+  },
+});
+
 export const COMMUNICATIONS_STATE_MACHINES = [
   NotificationMachine,
   RecipientMachine,
   DeliveryAttemptMachine,
+  PushDeviceMachine,
 ] as const;

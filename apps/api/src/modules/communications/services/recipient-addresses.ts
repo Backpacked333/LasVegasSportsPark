@@ -5,11 +5,12 @@ import { PeopleService } from '../../identity';
 import type { ExternalChannel } from '../ports';
 
 /**
- * Resolves where an external channel reaches a person, immediately before the provider call:
- * contact points stay owned by identity (read through its exported service, never its tables) and
- * are never copied onto delivery attempts. Push has no device registry yet (no app build, Package E),
- * so the handle is the person id and the fake push provider addresses by it; a real adapter maps a
- * registered device token here.
+ * Resolves where an external channel reaches a person, immediately before the provider call.
+ * Email and SMS: contact points stay owned by identity (read through its exported service, never
+ * its tables) and are never copied onto delivery attempts; one address. Push (COM-01, SPK-UX-001):
+ * every active device the person registered (this module's `push_devices`); a revoked device is
+ * never addressed, and a person with no active device has no push address (the attempt fails with
+ * NO_ADDRESS). An empty list means "no address".
  */
 @Injectable()
 export class RecipientAddresses {
@@ -23,8 +24,20 @@ export class RecipientAddresses {
     personId: string,
     channel: ExternalChannel,
     db?: Db | Trx,
-  ): Promise<string | null> {
-    if (channel === 'push') return `person:${personId}`;
+  ): Promise<string[]> {
+    const reader = db ?? this.uow.reader();
+    if (channel === 'push') {
+      const devices = await reader
+        .selectFrom('push_devices')
+        .select('token')
+        .where('organization_id', '=', organizationId)
+        .where('person_id', '=', personId)
+        .where('status', '=', 'active')
+        .orderBy('registered_at')
+        .orderBy('id')
+        .execute();
+      return devices.map((d) => d.token).filter((t): t is string => t !== null);
+    }
     let contactPoints: Array<{
       kind: string;
       value: string;
@@ -32,10 +45,9 @@ export class RecipientAddresses {
       verifiedAt: string | null;
     }>;
     try {
-      contactPoints = (await this.people.detail(db ?? this.uow.reader(), organizationId, personId))
-        .contactPoints;
+      contactPoints = (await this.people.detail(reader, organizationId, personId)).contactPoints;
     } catch {
-      return null;
+      return [];
     }
     const kind = channel === 'email' ? 'email' : 'phone';
     const candidates = contactPoints.filter((c) => c.kind === kind);
@@ -44,6 +56,6 @@ export class RecipientAddresses {
       candidates.find((c) => c.isPrimary) ??
       candidates.find((c) => c.verifiedAt !== null) ??
       candidates[0];
-    return pick?.value ?? null;
+    return pick ? [pick.value] : [];
   }
 }

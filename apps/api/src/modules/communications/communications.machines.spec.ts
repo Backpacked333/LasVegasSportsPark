@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DeliveryAttemptMachine,
   NotificationMachine,
+  PushDeviceMachine,
   RecipientMachine,
 } from './communications.machines';
 
@@ -59,5 +60,12 @@ describe('communications state machines (§4.6, SPK-COMMS-004)', () => {
     expect(DeliveryAttemptMachine.can('delivered', 'fail')).toBe(false);
     expect(DeliveryAttemptMachine.isTerminal('failed')).toBe(true);
     expect(DeliveryAttemptMachine.isTerminal('unknown')).toBe(false);
+  });
+
+  it('PushDevice (COM-01): active → revoked; a revoked registration is never reactivated', () => {
+    expect(PushDeviceMachine.states).toEqual(['active', 'revoked']);
+    expect(PushDeviceMachine.next('active', 'revoke')).toBe('revoked');
+    expect(PushDeviceMachine.can('revoked', 'revoke')).toBe(false);
+    expect(PushDeviceMachine.isTerminal('revoked')).toBe(true);
   });
 });
