@@ -11,6 +11,13 @@
  *   eligible replacements, expiry, redemption limit and history, with "Book a makeup session"
  *   (SCR-C-35 redeem) while one can still be redeemed.
  *
+ * - Session packages (`GET /v1/me/package-entitlements`, ENR-11; Package G behind the
+ *   `session_packages` switch, DEC-016, DEC-074): a third, separate list for the whole account,
+ *   with sessions left, expiry and redemption history (MySessionPackagesScreen.tsx). While the
+ *   switch is off the turned-off state names the decisions and packages already held stay listed.
+ *
+ * Credits are read in cursor pages with "Load more", so none is silently cut off (§4.5).
+ *
  * States: loading; empty (no credits and no makeups, two separate empties); ready; validation
  * failure and processing: on the redeem screen; permission restriction (each section reads "not
  * available" on its own: credits need the pay permission, makeups the view permission); stale
@@ -21,6 +28,7 @@ import { presentationForError } from '@sportspark/api-client';
 import { Stack, useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
 import { PeopleGate } from '../../features/money/PeopleGate';
@@ -40,11 +48,13 @@ import { ButtonRow, Caption, Field, Section } from '../../features/money/ui';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing } from '../../ui/theme';
+import { SessionPackagesSection } from '../session-packages/MySessionPackagesScreen';
 
 const REFERENCE_LABELS: Record<string, string> = {
   obligation: 'a balance due',
@@ -151,7 +161,7 @@ function SectionUnavailable({ what }: { what: string }) {
 }
 
 function CreditsSection({ person }: { person: AccountPerson }) {
-  const credits = useApiQuery({
+  const credits = useApiPages({
     path: '/credits',
     request: { query: { ownerPersonId: person.personId, limit: 50 } },
   });
@@ -171,21 +181,22 @@ function CreditsSection({ person }: { person: AccountPerson }) {
       <QueryBoundary
         query={credits}
         label="credits"
-        isEmpty={(page) => page.items.length === 0}
+        isEmpty={(items) => items.length === 0}
         empty={{
           title: 'No credits',
           description:
             'Money credits from the facility appear here, with what they can be used for and when they expire.',
         }}
       >
-        {(page) => (
+        {(items) => (
           <View accessibilityRole="list" style={styles.list}>
-            {page.items.map((credit) => (
+            {items.map((credit) => (
               <CreditCard key={credit.id} credit={credit} />
             ))}
           </View>
         )}
       </QueryBoundary>
+      <LoadMore pages={credits} label="credits" />
     </Section>
   );
 }
@@ -246,6 +257,7 @@ export function CreditsScreen() {
             </View>
           )}
         </PeopleGate>
+        <SessionPackagesSection />
       </RequireSession>
     </Screen>
   );
