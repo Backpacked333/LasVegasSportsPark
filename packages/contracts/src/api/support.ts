@@ -65,6 +65,18 @@ export const CaseActionStatusSchema = z
   .enum(['requested', 'succeeded', 'failed', 'unknown'])
   .openapi('CaseActionStatus');
 export const CaseActionViaSchema = z.enum(['linked', 'helper']).openapi('CaseActionVia');
+/**
+ * How a case was opened (migration 1102, SUP-01): `staff` (POST /cases), `customer` (the
+ * customer's own request, POST /me/support-requests) or `hook` (to coordinate an origin record:
+ * an escalated disputed-access review or an operational exception). Immutable provenance.
+ */
+export const CaseOpenedViaSchema = z.enum(['staff', 'customer', 'hook']).openapi('CaseOpenedVia');
+export type CaseOpenedViaValue = z.infer<typeof CaseOpenedViaSchema>;
+/** GET /cases?origin: how the case was opened, or which origin record it coordinates. */
+export const CaseOriginFilterSchema = z
+  .enum(['staff', 'customer', 'access_review', 'exception'])
+  .openapi('CaseOriginFilter');
+export type CaseOriginFilterValue = z.infer<typeof CaseOriginFilterSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Cases (SPK-SUPPORT-002)
@@ -122,7 +134,16 @@ export const CaseSchema = z
     status: CaseStatusSchema,
     title: z.string(),
     description: z.string().nullable(),
-    subject: z.object({ personId: z.uuid().nullable(), householdId: z.uuid().nullable() }),
+    subject: z.object({
+      /** The person the case was opened about; never rewritten by a merge (SPK-IAM-007). */
+      personId: z.uuid().nullable(),
+      householdId: z.uuid().nullable(),
+      /**
+       * The surviving person when the subject was merged into another record (SPK-IAM-007,
+       * SUP-05); the same id otherwise; null without a subject person.
+       */
+      canonicalPersonId: z.uuid().nullable(),
+    }),
     owner: z.object({ personId: z.uuid().nullable(), queue: z.string().nullable() }),
     relatedRecords: z.array(RecordReferenceSchema),
     origin: z
@@ -134,6 +155,7 @@ export const CaseSchema = z
     resolvedAt: Instant.nullable(),
     closedAt: Instant.nullable(),
     openedBy: ActorSnapshotSchema,
+    openedVia: CaseOpenedViaSchema,
     /** CaseMachine events the case accepts now (the caller's permission is checked on use). */
     allowedEvents: z.array(CaseEventNameSchema),
     revision: Revision,
@@ -206,9 +228,23 @@ export const TransitionCaseBody = withCommandMeta({
     .object({ kind: CaseResolutionKindSchema, summary: z.string().trim().min(1).max(2000) })
     .strict()
     .optional(),
+  /**
+   * SUP-04 (§4.11, SPK-UX-006): resolving or closing a case while one of its related operations
+   * is `recovery_required` is refused (RESOURCE_CONFLICT `RELATED_RECORD_IN_RECOVERY`, listing
+   * them) unless the operator acknowledges it with a reason; the acknowledgment is audited.
+   */
+  acknowledgeOpenRecovery: z.boolean().optional(),
 })
   .extend({ expectedRevision: Revision })
   .strict()
+  .refine((v) => !v.acknowledgeOpenRecovery || (v.reason !== undefined && v.reason.length > 0), {
+    message: 'Acknowledging an open recovery records why.',
+    path: ['reason'],
+  })
+  .refine((v) => !v.acknowledgeOpenRecovery || v.event === 'resolve' || v.event === 'close', {
+    message: 'Only resolve and close acknowledge an open recovery.',
+    path: ['acknowledgeOpenRecovery'],
+  })
   .refine((v) => v.event !== 'resolve' || v.resolution !== undefined, {
     message: 'Resolving a case records its resolution.',
     path: ['resolution'],
@@ -233,8 +269,53 @@ export const ListCasesQuery = PageRequestSchema.extend({
   ownerQueue: Slug.optional(),
   subjectPersonId: z.uuid().optional(),
   facilityId: z.uuid().optional(),
+  /** SUP-01: staff, customer (own requests), access_review or exception (the origin record). */
+  origin: CaseOriginFilterSchema.optional(),
 });
 export type ListCasesQuery = z.infer<typeof ListCasesQuery>;
+
+// ---------------------------------------------------------------------------------------------
+// Customer support requests (SUP-01: SPK-SUPPORT-002, SPK-CAP-001, SCR-C-22, SCR-C-38)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A customer contacts the operating team (POST /me/support-requests). The case is about the
+ * caller or someone they hold `view` over (`subjectPersonId`, default the caller); a team request
+ * names the entry the caller captains (`teamEntryId`). Related records are verified through their
+ * owning module with the caller's own principal: a record of another household is not found. The
+ * request is routed to a queue by category (`support.policy.ts`, pending DEC-015).
+ */
+export const CustomerSupportRequestBody = withCommandMeta({
+  category: CaseCategorySchema,
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().min(1).max(5000),
+  subjectPersonId: z.uuid().optional(),
+  teamEntryId: z.uuid().optional(),
+  relatedRecords: z.array(RecordReferenceSchema).max(10).default([]),
+})
+  .strict()
+  .openapi('CustomerSupportRequest');
+export type CustomerSupportRequestInput = z.infer<typeof CustomerSupportRequestBody>;
+
+/**
+ * What a customer sees of their own request: its status, never notes, owner, queue, history,
+ * actions or any internal detail (§4.14).
+ */
+export const CustomerCaseSchema = z
+  .object({
+    id: z.uuid(),
+    category: CaseCategorySchema,
+    title: z.string(),
+    status: CaseStatusSchema,
+    createdAt: Instant,
+    updatedAt: Instant,
+    resolvedAt: Instant.nullable(),
+  })
+  .openapi('CustomerCase');
+export type CustomerCase = z.infer<typeof CustomerCaseSchema>;
+
+export const ListMyCasesQuery = PageRequestSchema.extend({ status: CaseStatusSchema.optional() });
+export type ListMyCasesQuery = z.infer<typeof ListMyCasesQuery>;
 
 /**
  * Links a command the operator already ran (with their own principal) to the case. The evidence
@@ -358,10 +439,21 @@ export const ExceptionStatusSchema = z
   .enum(['open', 'acknowledged', 'resolved', 'closed'])
   .openapi('ExceptionStatus');
 
+/**
+ * What a next action does, so a client never parses `href` (SUP-01): `acknowledge`, `resolve`
+ * and `close` are the exception lifecycle (POST /exceptions/{id}/<verb>); `open` carries out the
+ * owning module's command at `href`; `view` reads the owning module's record at `href`.
+ */
+export const NextActionVerbSchema = z
+  .enum(['acknowledge', 'resolve', 'close', 'open', 'view'])
+  .openapi('NextActionVerb');
+export type NextActionVerb = z.infer<typeof NextActionVerbSchema>;
+
 /** An action the viewer is permitted to take now (computed with their principal). */
 export const NextActionSchema = z
   .object({
     action: z.string(),
+    verb: NextActionVerbSchema,
     label: z.string(),
     method: z.enum(['GET', 'POST']),
     href: z.string().nullable(),
@@ -471,6 +563,12 @@ export const TodayItemSchema = z
     ageMinutes: z.number().int().nullable(),
     deadlineAt: Instant.nullable(),
     overdue: z.boolean(),
+    /**
+     * SUP-01: the revision of the record the lifecycle actions change (the exception's, or the
+     * restriction's), to send as `expectedRevision`; null for a condition derived from the owning
+     * module now (readiness, coverage).
+     */
+    revision: Revision.nullable(),
     nextActions: z.array(NextActionSchema),
     history: z.array(ResolutionHistoryEntrySchema),
     details: z.record(z.string(), z.unknown()),
@@ -520,8 +618,11 @@ export type TodayFeed = z.infer<typeof TodayFeedSchema>;
 
 export const TimelineQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
-  /** Entries strictly older than this cursor (from `nextCursor`). */
-  cursor: z.string().max(2048).optional(),
+  /**
+   * The next page (from `nextCursor`): every source continues after its own last entry (SUP-03,
+   * each source pages with its own keyset, merged into this one cursor).
+   */
+  cursor: z.string().max(8192).optional(),
 });
 export type TimelineQuery = z.infer<typeof TimelineQuery>;
 
@@ -675,6 +776,21 @@ command(
   201,
 );
 query('/cases', 'List support cases', ListCasesQuery, pageSchema(CaseSchema));
+command(
+  'post',
+  '/me/support-requests',
+  'Contact the operating team: open a support request about yourself, someone you view, or a team you captain (SPK-SUPPORT-002, SPK-CAP-001)',
+  CustomerSupportRequestBody,
+  CustomerCaseSchema,
+  201,
+);
+query(
+  '/me/cases',
+  'Your own support requests and their status (never notes, owner or internal details)',
+  ListMyCasesQuery,
+  pageSchema(CustomerCaseSchema),
+);
+query('/me/cases/{id}', 'The status of one of your support requests', null, CustomerCaseSchema);
 query('/cases/{id}', 'Read a support case with its history and actions', null, CaseDetailSchema);
 command(
   'patch',

@@ -1,14 +1,22 @@
 import { Injectable } from '@nestjs/common';
-import type { NextAction, Principal } from '@sportspark/contracts';
-import type { OperationalExceptionsTable } from '@sportspark/db';
-import type { Selectable } from 'kysely';
-import { AuthorizationService, ExceptionActions, type ActionDefinition } from '../../../kernel';
+import {
+  StaffRole,
+  type NextAction,
+  type NextActionVerb,
+  type Principal,
+} from '@sportspark/contracts';
+import {
+  AuthorizationService,
+  ExceptionActions,
+  type ActionDefinition,
+  type OperationalExceptionRow,
+} from '../../../kernel';
 import { CommunicationsActions } from '../../communications';
 import { FacilitiesActions } from '../../facilities';
 import { FinanceActions } from '../../finance';
 import { WorkforceActions } from '../../workforce';
 
-export type ExceptionRow = Selectable<OperationalExceptionsTable>;
+export type ExceptionRow = OperationalExceptionRow;
 
 export interface Candidate {
   definition: ActionDefinition;
@@ -16,6 +24,8 @@ export interface Candidate {
   method: 'GET' | 'POST';
   href: string | null;
   facilityId: string | null;
+  /** Default: `view` for GET, `open` for POST (the owning module's command). */
+  verb?: NextActionVerb;
 }
 
 /**
@@ -38,7 +48,13 @@ export class NextActions {
         facilityId: c.facilityId,
       });
       if (decision.allowed) {
-        out.push({ action: c.definition.id, label: c.label, method: c.method, href: c.href });
+        out.push({
+          action: c.definition.id,
+          verb: c.verb ?? (c.method === 'GET' ? 'view' : 'open'),
+          label: c.label,
+          method: c.method,
+          href: c.href,
+        });
       }
     }
     return out;
@@ -114,14 +130,22 @@ export class NextActions {
     }
   }
 
-  /** The exception workflow itself (kernel `exceptions.manage`), by current status. */
-  lifecycleCandidates(row: ExceptionRow): Candidate[] {
+  /**
+   * The exception workflow itself, by current status: the kernel's `exceptions.manage`, or — for
+   * a viewer who holds the staff role the exception's queue is named after — that role's
+   * `exceptions.manage_own_queue` (K-10), the same rule `OperationalExceptions.transition`
+   * applies, so the feed offers exactly the lifecycle steps the kernel would accept.
+   */
+  lifecycleCandidates(row: ExceptionRow, principal?: Principal): Candidate[] {
+    const definition = ownQueueDefinition(principal, row.owner_queue) ?? ExceptionActions.manage;
     const make = (verb: 'acknowledge' | 'resolve' | 'close', label: string): Candidate => ({
-      definition: ExceptionActions.manage,
+      definition,
       label,
       method: 'POST',
       href: `/v1/exceptions/${row.id}/${verb}`,
       facilityId: row.facility_id,
+      // SUP-01: the lifecycle step itself, so a client never parses `href`.
+      verb,
     });
     switch (row.status) {
       case 'open':
@@ -138,4 +162,16 @@ export class NextActions {
         return [];
     }
   }
+}
+
+/** `exceptions.manage_own_queue` narrowed to the queue's role when the viewer holds it (K-10). */
+function ownQueueDefinition(
+  principal: Principal | undefined,
+  ownerQueue: string,
+): ActionDefinition | null {
+  if (principal?.kind !== 'staff') return null;
+  const role = StaffRole.safeParse(ownerQueue);
+  if (!role.success || !principal.staffRoles.includes(role.data)) return null;
+  if (!ExceptionActions.manageOwnQueue.staffRoles.includes(role.data)) return null;
+  return { ...ExceptionActions.manageOwnQueue, staffRoles: [role.data] };
 }

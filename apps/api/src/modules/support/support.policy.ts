@@ -1,5 +1,5 @@
 import type { StaffRole } from '@sportspark/contracts';
-import type { CasePriority } from '@sportspark/db';
+import type { CaseCategory, CasePriority } from '@sportspark/db';
 
 /**
  * Support policy values the specification leaves to operators (§6.6). The mechanisms are
@@ -35,6 +35,14 @@ export interface SupportPolicy {
    * and operations ownership decisions.
    */
   helperOutcomeGraceMinutes: number;
+  /**
+   * SUP-01: the queue a customer's own support request is routed to, by category (a staff-role
+   * queue or a configured exception queue). Proposed: every category to `support_operator`, the
+   * queue that triages and reassigns; routing by category is pending DEC-015 (support coverage).
+   */
+  customerRequestQueues: Record<CaseCategory, string>;
+  /** SUP-01: the priority (and so the service level) of a customer's request. Proposed: normal. */
+  customerRequestPriority: CasePriority;
 }
 
 export const DEFAULT_SUPPORT_POLICY: SupportPolicy = {
@@ -45,6 +53,16 @@ export const DEFAULT_SUPPORT_POLICY: SupportPolicy = {
   todayEventLimit: 200,
   accessEscalationPriority: 'high',
   helperOutcomeGraceMinutes: 15,
+  customerRequestQueues: {
+    access: 'support_operator',
+    registration: 'support_operator',
+    payment: 'support_operator',
+    schedule: 'support_operator',
+    team: 'support_operator',
+    facility: 'support_operator',
+    other: 'support_operator',
+  },
+  customerRequestPriority: 'normal',
 };
 
 export const SUPPORT_POLICY = Symbol('SUPPORT_POLICY');

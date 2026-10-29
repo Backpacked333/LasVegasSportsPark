@@ -160,6 +160,15 @@ describe('Today workspace (SPK-UX-006)', () => {
     expect(financeItem!.nextActions.map((a) => a.action)).toEqual(
       expect.arrayContaining(['finance.reconcile_payment', 'exceptions.manage']),
     );
+    // SUP-01: the item carries the revision its lifecycle steps expect, and every next action
+    // says what it does, so a client never parses `href`.
+    expect(financeItem!.revision).toBe(1);
+    expect(financeItem!.nextActions.map((a) => [a.action, a.verb])).toEqual([
+      ['finance.reconcile_payment', 'open'],
+      ['exceptions.manage', 'acknowledge'],
+      ['exceptions.manage', 'resolve'],
+      ['exceptions.manage', 'close'],
+    ]);
 
     const readiness = byId(feed, `readiness:${fixture.fixtureId}`);
     expect(readiness).toMatchObject({
@@ -172,8 +181,11 @@ describe('Today workspace (SPK-UX-006)', () => {
     });
     expect(readiness!.nextActions[0]).toMatchObject({
       action: 'competition.read_readiness',
+      verb: 'view',
       href: `/v1/fixtures/${fixture.fixtureId}/readiness`,
     });
+    // A condition derived from the owning module now has no revision of its own.
+    expect(readiness!.revision).toBeNull();
     // Officials are reported once, by the coverage source, not again inside readiness.
     const issueCodes = (readiness!.details['issues'] as Array<{ code: string }>).map((i) => i.code);
     expect(issueCodes).not.toContain('required_officials_not_accepted');
@@ -205,6 +217,7 @@ describe('Today workspace (SPK-UX-006)', () => {
     expect(restriction!.nextActions.map((a) => a.action)).toContain(
       'facilities.release_to_service',
     );
+    expect(restriction!.revision).toEqual(expect.any(Number));
     expect(restriction!.history.map((h) => h.action)).toContain('facilities.restriction_approved');
 
     // Most severe first.
@@ -222,15 +235,25 @@ describe('Today workspace (SPK-UX-006)', () => {
     expect(
       financeFeed.items.some((i) => i.source === 'coverage' || i.source === 'restriction'),
     ).toBe(false);
-    // They may reconcile, but managing the exception itself is the kernel's exceptions.manage.
-    const actions = byId(financeFeed, `exception:${ids.finance}`)!.nextActions.map((a) => a.action);
+    // They may reconcile, and settle their own queue's exception with their own role (K-10:
+    // exceptions.manage_own_queue); exceptions.manage stays with the oversight roles.
+    const financeActions = byId(financeFeed, `exception:${ids.finance}`)!.nextActions;
+    const actions = financeActions.map((a) => a.action);
     expect(actions).toContain('finance.reconcile_payment');
     expect(actions).not.toContain('exceptions.manage');
+    expect(
+      financeActions.filter((a) => a.action === 'exceptions.manage_own_queue').map((a) => a.verb),
+    ).toEqual(['acknowledge', 'resolve', 'close']);
 
     const deskFeed = await feedOf(desk);
     expect(byId(deskFeed, `exception:${ids.delivery}`)).toMatchObject({
       group: 'communications',
-      nextActions: [expect.objectContaining({ action: 'communications.read_notification' })],
+      nextActions: [
+        expect.objectContaining({ action: 'communications.read_notification', verb: 'view' }),
+        expect.objectContaining({ action: 'exceptions.manage_own_queue', verb: 'acknowledge' }),
+        expect.objectContaining({ action: 'exceptions.manage_own_queue', verb: 'resolve' }),
+        expect.objectContaining({ action: 'exceptions.manage_own_queue', verb: 'close' }),
+      ],
     });
     expect(byId(deskFeed, `exception:${ids.finance}`)).toBeUndefined();
     // The desk does not see the league manager's exception, so the derived referee gap shows.

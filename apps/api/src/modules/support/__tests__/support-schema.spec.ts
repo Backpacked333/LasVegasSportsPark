@@ -434,6 +434,8 @@ describe('support schema invariants (migration 1100)', () => {
           owner_queue: null,
           origin_access_review_id: null,
           origin_exception_id: exception.id,
+          // 1102: a case that coordinates an origin record was opened for it.
+          opened_via: 'hook',
           due_at: null,
           resolution_kind: null,
           resolution_summary: null,
@@ -465,6 +467,92 @@ describe('support schema invariants (migration 1100)', () => {
       .where('id', '=', first.id)
       .execute();
     await insert();
+  });
+
+  it('SUP-01 (migration 1102): the database rejects a customer case without its opener; how a case was opened matches its origin and never changes', async () => {
+    const opener = await createPersonFixture(t, { kind: 'adult' });
+    const exception = await t.db.transaction().execute((trx) =>
+      t.app.get(OperationalExceptions).raise(trx, {
+        organizationId: t.organizationId,
+        category: 'test.opened_via',
+        severity: 'warning',
+        title: 'Origin for the opened_via checks',
+        ownerQueue: 'support_operator',
+      }),
+    );
+    const insert = (values: {
+      opened_via: 'staff' | 'customer' | 'hook';
+      opened_by_person_id?: string | null;
+      origin_exception_id?: string | null;
+    }) =>
+      t.db
+        .insertInto('cases')
+        .values({
+          id: newId(),
+          organization_id: t.organizationId,
+          facility_id: null,
+          category: 'other',
+          priority: 'normal',
+          title: 'Opened-via check',
+          description: null,
+          subject_person_id: null,
+          subject_household_id: null,
+          owner_person_id: null,
+          owner_queue: 'support_operator',
+          origin_access_review_id: null,
+          origin_exception_id: values.origin_exception_id ?? null,
+          due_at: null,
+          resolution_kind: null,
+          resolution_summary: null,
+          resolved_at: null,
+          resolved_by: null,
+          closed_at: null,
+          opened_by: ACTOR,
+          opened_by_person_id: values.opened_by_person_id ?? null,
+          opened_via: values.opened_via,
+        })
+        .returning(['id', 'revision'])
+        .executeTakeFirstOrThrow();
+    // A customer's request always names who opened it.
+    await expectPgError(insert({ opened_via: 'customer' }), '23514');
+    const customer = await insert({ opened_via: 'customer', opened_by_person_id: opener });
+    // A hook case names exactly one origin, and only a hook case does.
+    await expectPgError(insert({ opened_via: 'hook' }), '23514');
+    await expectPgError(
+      insert({ opened_via: 'staff', origin_exception_id: exception.id }),
+      '23514',
+    );
+    await insert({ opened_via: 'hook', origin_exception_id: exception.id });
+    // Provenance: how a case was opened never changes.
+    await expect(
+      t.db
+        .updateTable('cases')
+        .set({ opened_via: 'staff', revision: customer.revision + 1 })
+        .where('id', '=', customer.id)
+        .execute(),
+    ).rejects.toThrow(/provenance is immutable/);
+  });
+
+  it('SUP-03 (migration 1103): a backfill cursor names both keyset columns or neither and is never deleted', async () => {
+    // The other organization was created after migration 1103, so it has no cursor yet.
+    const org = other;
+    await expectPgError(
+      t.db
+        .insertInto('support_timeline_backfill_cursors')
+        .values({ organization_id: org.organizationId, last_event_id: newId() })
+        .execute(),
+      '23514',
+    );
+    await t.db
+      .insertInto('support_timeline_backfill_cursors')
+      .values({ organization_id: org.organizationId })
+      .execute();
+    await expect(
+      t.db
+        .deleteFrom('support_timeline_backfill_cursors')
+        .where('organization_id', '=', org.organizationId)
+        .execute(),
+    ).rejects.toThrow();
   });
 
   it('exception queues: owning roles are staff roles, names are unique, acknowledgment is due before resolution', async () => {

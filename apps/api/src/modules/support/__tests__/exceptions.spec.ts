@@ -238,7 +238,8 @@ describe('operational exceptions (SPK-UX-006)', () => {
       desk,
     );
     const open = [...firstPage.body.items, ...rest.body.items].map((e: { id: string }) => e.id);
-    expect(open).toEqual(raised.slice(0, 4));
+    // Newest first: the order of the kernel's exception list (K-10), which support reads (SUP-02).
+    expect(open).toEqual(raised.slice(0, 4).reverse());
     const closed = await get(t, `/v1/exceptions?queue=${queue}&status=closed`, desk);
     expect(closed.body.items.map((e: { id: string }) => e.id)).toEqual([raised[4]]);
   });

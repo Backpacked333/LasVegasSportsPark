@@ -1,9 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
-  decodeCursor,
   encodeCursor,
   errors,
-  z,
   type AcknowledgeExceptionInput,
   type ListExceptionsQuery,
   type OperationalException,
@@ -13,7 +11,6 @@ import {
   type SettleExceptionInput,
 } from '@sportspark/contracts';
 import type { Db, ExceptionStatus } from '@sportspark/db';
-import { sql, type SqlBool } from 'kysely';
 import {
   AuthorizationService,
   CLOCK,
@@ -28,7 +25,6 @@ import {
 import { ExceptionTransitioned } from '../support.events';
 import {
   addMinutesTo,
-  actorOf,
   iso,
   isoOrNull,
   minutesBetween,
@@ -39,7 +35,6 @@ import {
 import { ExceptionQueuesService } from './exception-queues.service';
 import { NextActions, type ExceptionRow } from './next-actions';
 
-const ListCursor = z.object({ openedAt: z.iso.datetime(), id: z.uuid() });
 const SCAN_BATCH = 200;
 const SCAN_PASSES = 25;
 
@@ -57,8 +52,8 @@ export interface ExceptionViewContext {
  * lifecycle and writes the audit record; support never touches the affected record — closing an
  * exception about a payment, booking or delivery leaves that record exactly as it is.
  *
- * The kernel offers `listOpen` only, so lists by status and single reads use the kernel table
- * `operational_exceptions` read-only (writes stay with the kernel service).
+ * Every read goes through the kernel's `OperationalExceptions` read API (K-10, IF-29: `get`,
+ * `list`, `history`); support never selects the kernel's tables (§4.2, SUP-02).
  */
 @Injectable()
 export class ExceptionsService {
@@ -90,64 +85,43 @@ export class ExceptionsService {
     ) {
       throw errors.accessDenied('This queue is outside your scope.', { queue: query.queue });
     }
-    const cursor = decodeCursor(query.cursor, ListCursor);
-    let base = this.db
-      .selectFrom('operational_exceptions')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .orderBy('opened_at')
-      .orderBy('id');
-    base = query.status
-      ? base.where('status', '=', query.status)
-      : base.where('status', 'in', ['open', 'acknowledged']);
-    if (query.queue) base = base.where('owner_queue', '=', query.queue);
-    if (query.facilityId) base = base.where('facility_id', '=', query.facilityId);
-    if (query.severity) base = base.where('severity', '=', query.severity);
+    const statuses: ExceptionStatus[] = query.status ? [query.status] : ['open', 'acknowledged'];
     // Facility-scoped staff see their facilities' exceptions and organization-wide ones (§4.3),
     // through the roles that hold the read action (§4.14, identity-05).
     const scope = listFacilityScope(principal, ExceptionActions.read);
-    if (scope) {
-      const facilityIds = [...scope];
-      base = base.where((eb) =>
-        facilityIds.length > 0
-          ? eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', facilityIds)])
-          : eb('facility_id', 'is', null),
-      );
-    }
-    // Queue visibility is decided per row (configured owning roles); scan in bounded batches.
+    const inScope = (row: ExceptionRow) =>
+      !scope || row.facility_id === null || scope.includes(row.facility_id);
+    // The kernel list is newest first with a keyset cursor (K-10). Queue visibility (configured
+    // owning roles), severity and facility scope are decided per row: scan in bounded batches.
     const visible: ExceptionRow[] = [];
-    let after = cursor;
-    let resumeAt: { openedAt: string; id: string } | null = null;
+    let cursor: string | undefined = query.cursor;
+    let resumeAt: string | null = null;
     for (let pass = 0; visible.length <= query.limit; pass += 1) {
       if (pass >= SCAN_PASSES) {
-        resumeAt = after;
+        resumeAt = cursor ?? null;
         break;
       }
-      let page = base;
-      if (after) {
-        const from = after;
-        page = page.where(
-          sql<SqlBool>`(opened_at, id) > (${new Date(from.openedAt)}::timestamptz, ${from.id}::uuid)`,
-        );
-      }
-      const rows = await page.limit(SCAN_BATCH).execute();
-      for (const row of rows) {
+      const page = await this.exceptions.list(organizationId, {
+        statuses,
+        ownerQueue: query.queue,
+        facilityId: query.facilityId,
+        cursor,
+        limit: SCAN_BATCH,
+      });
+      for (const row of page.items) {
+        if (query.severity && row.severity !== query.severity) continue;
+        if (!inScope(row)) continue;
         if (this.queues.visibleTo(principal, this.queues.resolve(row.owner_queue, configured))) {
           visible.push(row);
         }
       }
-      const last = rows[rows.length - 1];
-      if (rows.length < SCAN_BATCH || !last) break;
-      after = { openedAt: iso(last.opened_at), id: last.id };
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
     }
     const items = visible.slice(0, query.limit);
     const lastItem = items[items.length - 1];
     const nextCursor =
-      visible.length > query.limit && lastItem
-        ? encodeCursor({ openedAt: iso(lastItem.opened_at), id: lastItem.id })
-        : resumeAt
-          ? encodeCursor(resumeAt)
-          : null;
+      visible.length > query.limit && lastItem ? kernelCursorAfter(lastItem) : resumeAt;
     const history = await this.history(
       this.db,
       organizationId,
@@ -166,7 +140,7 @@ export class ExceptionsService {
 
   async get(principal: Principal, id: string): Promise<OperationalException> {
     const organizationId = organizationOf(principal);
-    const row = await this.load(this.db, organizationId, id);
+    const row = await this.exceptions.get(organizationId, id);
     if (!row) throw errors.notFound('exception', id);
     return this.authorizedView(this.db, principal, row);
   }
@@ -207,28 +181,25 @@ export class ExceptionsService {
   ): Promise<OperationalException> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const row = await trx
-        .selectFrom('operational_exceptions')
-        .selectAll()
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', id)
-        .forUpdate()
-        .executeTakeFirst();
-      // Another organization's exception is not found, never "access denied" (§4.3).
-      if (!row) throw errors.notFound('exception', id);
-      const configured = await this.queues.configured(trx, organizationId);
-      if (!this.queues.visibleTo(principal, this.queues.resolve(row.owner_queue, configured))) {
-        throw errors.accessDenied('This exception belongs to a queue outside your scope.', {
-          queue: row.owner_queue,
-        });
+      const row = await this.exceptions.get(organizationId, id, trx);
+      if (row) {
+        const configured = await this.queues.configured(trx, organizationId);
+        if (!this.queues.visibleTo(principal, this.queues.resolve(row.owner_queue, configured))) {
+          throw errors.accessDenied('This exception belongs to a queue outside your scope.', {
+            queue: row.owner_queue,
+          });
+        }
       }
-      // Kernel: `exceptions.manage` authorization (facility scope), lifecycle, revision, audit.
+      // Kernel: the row lock, `exceptions.manage` or queue-owner authority (facility scope),
+      // lifecycle, revision and audit. An unknown id, or another organization's, is NOT_FOUND
+      // (K-10, §4.3).
       await this.exceptions.transition(trx, principal, id, to, {
         expectedRevision: input.expectedRevision,
         reason: input.reason,
         resolution: input.resolution,
         correlationId: correlationId ?? undefined,
       });
+      if (!row) throw errors.notFound('exception', id);
       await this.outbox.enqueue(trx, ExceptionTransitioned, {
         organizationId,
         aggregateType: 'operational_exception',
@@ -236,7 +207,7 @@ export class ExceptionsService {
         payload: { exceptionId: id, from: row.status, to, ownerQueue: row.owner_queue },
         correlationId,
       });
-      const after = await this.load(trx, organizationId, id);
+      const after = await this.exceptions.get(organizationId, id, trx);
       if (!after) throw errors.internal('exception vanished');
       return this.authorizedView(trx, principal, after);
     });
@@ -263,41 +234,27 @@ export class ExceptionsService {
     return this.view(row, { principal, queues: configured, history, now: this.clock.now() });
   }
 
-  async load(db: Reader, organizationId: string, id: string): Promise<ExceptionRow | undefined> {
-    return db
-      .selectFrom('operational_exceptions')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', id)
-      .executeTakeFirst();
-  }
-
-  /** Resolution history from the kernel's audit records of the exceptions (append-only). */
+  /**
+   * Resolution history of the exceptions, oldest first, from the kernel's audited transitions
+   * (`OperationalExceptions.history`, K-10 / IF-29 through AuditReader).
+   */
   async history(
     db: Reader,
     organizationId: string,
     ids: readonly string[],
   ): Promise<Map<string, ResolutionHistoryEntry[]>> {
     const out = new Map<string, ResolutionHistoryEntry[]>();
-    if (ids.length === 0) return out;
-    const rows = await db
-      .selectFrom('audit_records')
-      .select(['target_id', 'occurred_at', 'action', 'actor', 'reason'])
-      .where('organization_id', '=', organizationId)
-      .where('target_type', '=', 'operational_exception')
-      .where('target_id', 'in', [...ids])
-      .orderBy('occurred_at')
-      .orderBy('id')
-      .execute();
-    for (const r of rows) {
-      const list = out.get(r.target_id) ?? [];
-      list.push({
-        at: iso(r.occurred_at),
-        action: r.action,
-        actorLabel: actorOf(r.actor).actorLabel,
-        reason: r.reason,
-      });
-      out.set(r.target_id, list);
+    for (const id of new Set(ids)) {
+      const records = await this.exceptions.history(organizationId, id, db);
+      out.set(
+        id,
+        [...records].reverse().map((r) => ({
+          at: iso(r.occurredAt),
+          action: r.action,
+          actorLabel: r.actor.actorLabel,
+          reason: r.reason,
+        })),
+      );
     }
     return out;
   }
@@ -322,7 +279,7 @@ export class ExceptionsService {
         (acknowledgeBy !== null && acknowledgeBy.getTime() < ctx.now.getTime()));
     const nextActions = await this.nextActions.permitted(ctx.principal, [
       ...(live ? this.nextActions.domainCandidates(row) : []),
-      ...this.nextActions.lifecycleCandidates(row),
+      ...this.nextActions.lifecycleCandidates(row, ctx.principal),
     ]);
     return {
       id: row.id,
@@ -360,4 +317,12 @@ export class ExceptionsService {
       underlyingRecordUnchanged: true,
     };
   }
+}
+
+/**
+ * The kernel list's keyset position just after `row` (newest first: the next page starts with
+ * the row opened before it). The same encoding `OperationalExceptions.list` issues as nextCursor.
+ */
+function kernelCursorAfter(row: ExceptionRow): string {
+  return encodeCursor({ at: new Date(row.opened_at).toISOString(), id: row.id });
 }
