@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
 import type { TestApp } from '../../../testing';
 import {
   stagedCredit,
+  stagedEvent,
   stagedObligation,
   stagedPerson,
   stagedRelationship,
+  stagedRoster,
 } from '../testing/migration-fixtures';
 import {
   customer,
@@ -359,7 +362,7 @@ describe('reconciliation (§5.5)', () => {
     expect(rejected.body.approvalStatus).toBe('rejected');
   });
 
-  it('§5.5 levels 2-4: unresolved rows, authority that is no longer effective, and active records the owning module cannot import are all reported', async () => {
+  it('§5.5 levels 2-4: unresolved rows, authority that is no longer effective, and active records that were not applied are all reported', async () => {
     const rows = [
       stagedPerson('L-1', { dateOfBirth: '1980-02-02' }),
       stagedPerson('L-2', { dateOfBirth: '2015-02-02' }),
@@ -368,23 +371,46 @@ describe('reconciliation (§5.5)', () => {
         subjectExternalId: 'L-2',
         permissions: ['view', 'pay'],
       }),
-      {
-        entityType: 'roster' as const,
-        externalId: 'RO-1',
-        payload: { teamExternalId: 'T-1', personExternalId: 'L-1', active: 'true' },
-      },
-      {
-        entityType: 'roster' as const,
-        externalId: 'RO-2',
-        payload: { teamExternalId: 'T-1', personExternalId: 'L-2', active: false },
-      },
-      {
-        entityType: 'future_schedule' as const,
-        externalId: 'FS-1',
-        payload: { startsAt: '2027-03-01T17:00:00Z' },
-      },
+      // MIG-02: rosters of a category SportsPark is authoritative for (no legacy assignment: a
+      // conflict, rejected in review); one of them had already ended.
+      stagedRoster('RO-1', { entryExternalId: 'T-1', personExternalId: 'L-1' }),
+      stagedRoster('RO-2', {
+        entryExternalId: 'T-1',
+        personExternalId: 'L-2',
+        effectiveTo: '2026-12-20T18:00:00.000Z',
+      }),
+      // A future event at a facility SportsPark schedules (no legacy assignment): a conflict,
+      // rejected in review.
+      stagedEvent('FS-1', {
+        facilityId: t.facilityId,
+        resourceIds: [newId()],
+        scheduledStart: '2027-03-01T17:00:00.000Z',
+        scheduledEnd: '2027-03-01T18:00:00.000Z',
+      }),
     ];
-    const applied = await importSnapshot(t, operator, rows);
+    const validated = await stageAndValidate(t, operator, rows);
+    const open = await exceptionsOf(t, operator, validated.id);
+    expect(open.map((e) => [e.externalId, e.kind]).sort()).toEqual([
+      ['FS-1', 'conflict'],
+      ['RO-1', 'conflict'],
+      ['RO-2', 'conflict'],
+    ]);
+    for (const exception of open) {
+      const decided = await post(t, `/v1/import-exceptions/${exception.id}/decide`, operator, {
+        decision: 'reject',
+        reason: 'Not imported; rebuilt in SportsPark.',
+        expectedRevision: exception.revision,
+      });
+      expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    }
+    const current = await get(t, `/v1/import-batches/${validated.id}`, operator);
+    const reviewed = await post(t, `/v1/import-batches/${validated.id}/review`, operator, {
+      expectedRevision: current.body.revision,
+    });
+    expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+    const appliedRes = await post(t, `/v1/import-batches/${validated.id}/apply`, operator, {});
+    expect(appliedRes.status, JSON.stringify(appliedRes.body)).toBe(200);
+    const applied = appliedRes.body as { id: string; outcomeCounts: Record<string, number> };
     expect(applied.outcomeCounts).toEqual({
       created: 3,
       matched: 0,

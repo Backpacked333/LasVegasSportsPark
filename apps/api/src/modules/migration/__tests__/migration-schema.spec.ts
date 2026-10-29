@@ -3,6 +3,7 @@ import { json, seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createProgramFixture } from '../../catalog';
+import { createSeasonFixture } from '../../competition';
 import { createPersonFixture } from '../../identity';
 import {
   createAuthorityAssignmentFixture,
@@ -297,6 +298,88 @@ describe('migration schema invariants (migration 1200)', () => {
         })
         .execute(),
       CHECK,
+    );
+  });
+
+  it('MIG-02 (§5.3, SPK-AT-024): an operational mapping always carries its reserved record id, links exactly that record of its own organization, and the reservation never changes', async () => {
+    const season = await createSeasonFixture(t, { status: 'draft' });
+    const other = await createSeasonFixture(t, { status: 'draft' });
+    const { batchId } = await createImportBatchFixture(t, { rows: [] });
+    const mapping = (overrides: Record<string, unknown>) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      source_system: 'legacy-fixture',
+      entity_type: 'season' as const,
+      external_id: `S-${newId()}`,
+      applied_payload_hash: null,
+      first_seen_batch_id: batchId,
+      last_seen_batch_id: batchId,
+      provenance: json({}),
+      linked_at: null,
+      ...overrides,
+    });
+    // An operational category is only ever created through an import command with a reservation.
+    await expectPgError(t.db.insertInto('external_mappings').values(mapping({})).execute(), CHECK);
+    const reserved = mapping({ reserved_record_id: season.seasonId });
+    await t.db.insertInto('external_mappings').values(reserved).execute();
+    // Linking any record but the reserved one is refused.
+    await expectPgError(
+      t.db
+        .updateTable('external_mappings')
+        .set({ status: 'linked', season_id: other.seasonId, linked_at: t.clock.now() })
+        .where('id', '=', reserved.id)
+        .execute(),
+      CHECK,
+    );
+    // The reservation itself never changes.
+    await expectPgError(
+      t.db
+        .updateTable('external_mappings')
+        .set({ reserved_record_id: other.seasonId })
+        .where('id', '=', reserved.id)
+        .execute(),
+      CHECK,
+    );
+    // A season target is only valid for a season mapping, and a team entry only for a team.
+    await expectPgError(
+      t.db
+        .insertInto('external_mappings')
+        .values(
+          mapping({
+            entity_type: 'roster',
+            status: 'linked',
+            season_id: season.seasonId,
+            reserved_record_id: season.seasonId,
+            linked_at: t.clock.now(),
+          }),
+        )
+        .execute(),
+      CHECK,
+    );
+    await t.db
+      .updateTable('external_mappings')
+      .set({ status: 'linked', season_id: season.seasonId, linked_at: t.clock.now() })
+      .where('id', '=', reserved.id)
+      .execute();
+    // Composite keys: another organization's season can never be reached.
+    const foreign = await seedOrganization(t.db);
+    const foreignSeason = await createSeasonFixture(t, {
+      status: 'draft',
+      organizationId: foreign.organizationId,
+    });
+    await expectPgError(
+      t.db
+        .insertInto('external_mappings')
+        .values(
+          mapping({
+            status: 'linked',
+            season_id: foreignSeason.seasonId,
+            reserved_record_id: foreignSeason.seasonId,
+            linked_at: t.clock.now(),
+          }),
+        )
+        .execute(),
+      FOREIGN_KEY,
     );
   });
 

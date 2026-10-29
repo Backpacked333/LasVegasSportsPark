@@ -1,4 +1,10 @@
-import { DomainError } from '@sportspark/contracts';
+import {
+  CommunicationPreferenceImportPayloadSchema,
+  DomainError,
+  FutureScheduleImportPayloadSchema,
+  RosterImportPayloadSchema,
+  TeamImportPayloadSchema,
+} from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
 import { matchAuthorityRoute } from '../services/authority-routes';
 import { areasFor, CATEGORY_RULES, DEPENDENCY_ORDER } from './categories';
@@ -160,5 +166,71 @@ describe('authority routes', () => {
     expect(matchAuthorityRoute('GET', '/v1/people')).toBeUndefined();
     expect(matchAuthorityRoute('POST', '/v1/import-batches')).toBeUndefined();
     expect(matchAuthorityRoute('POST', undefined)).toBeUndefined();
+  });
+});
+
+describe('operational payloads (staging-v1, MIG-02)', () => {
+  it('a team row is a team by default and an entry only when it says so; CSV values parse', () => {
+    const [team, entry] = csvToStagedRows(
+      'team',
+      'external_id,record,name,teamExternalId,seasonExternalId,status,appliedAt\n' +
+        'T-1,,Rovers,,,,\n' +
+        'E-1,entry,,T-1,S-1,applied,2026-12-01T18:00:00.000Z\n',
+    );
+    expect(TeamImportPayloadSchema.parse(team?.payload)).toMatchObject({
+      record: 'team',
+      name: 'Rovers',
+    });
+    expect(TeamImportPayloadSchema.parse(entry?.payload)).toMatchObject({
+      record: 'entry',
+      teamExternalId: 'T-1',
+      seasonExternalId: 'S-1',
+      status: 'applied',
+    });
+    // An entry without its season is a validation failure, never a team.
+    expect(
+      TeamImportPayloadSchema.safeParse({ record: 'entry', teamExternalId: 'T-1' }).success,
+    ).toBe(false);
+  });
+
+  it('CSV preferences are category.channel=true|false and stated channels only', () => {
+    const [row] = csvToStagedRows(
+      'communication_preference',
+      'external_id,personExternalId,preferences\nCP-1,P-1,promotional.email=false;operational.sms=true\n',
+    );
+    expect(CommunicationPreferenceImportPayloadSchema.parse(row?.payload)).toEqual({
+      personExternalId: 'P-1',
+      preferences: [
+        { category: 'promotional', channel: 'email', enabled: false },
+        { category: 'operational', channel: 'sms', enabled: true },
+      ],
+    });
+    expect(
+      CommunicationPreferenceImportPayloadSchema.safeParse({
+        personExternalId: 'P-1',
+        preferences: 'promotional.fax=true',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('a future event lists its resources and integer buffers; a roster jersey is an integer', () => {
+    const [event] = csvToStagedRows(
+      'future_schedule',
+      'external_id,facilityId,resourceIds,kind,title,scheduledStart,scheduledEnd,setupMinutes\n' +
+        'EV-1,01a18000-0000-7000-8000-000000000001,01a18000-0000-7000-8000-000000000002;01a18000-0000-7000-8000-000000000003,game,Final,2027-02-06T18:00:00.000Z,2027-02-06T19:00:00.000Z,15\n',
+    );
+    expect(FutureScheduleImportPayloadSchema.parse(event?.payload)).toMatchObject({
+      resourceIds: ['01a18000-0000-7000-8000-000000000002', '01a18000-0000-7000-8000-000000000003'],
+      setupMinutes: 15,
+    });
+    expect(
+      RosterImportPayloadSchema.safeParse({
+        entryExternalId: 'E-1',
+        personExternalId: 'P-1',
+        status: 'active',
+        effectiveFrom: '2026-12-05T18:00:00.000Z',
+        jerseyNumber: '10',
+      }).data?.jerseyNumber,
+    ).toBe(10);
   });
 });

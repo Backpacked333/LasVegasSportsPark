@@ -6,9 +6,10 @@ import type { MappedEntityType } from '@sportspark/db';
  *   - `applied`: created or updated through the owning module's public service and mapped.
  *   - `history`: retained as staged history with its provenance; never executed (orders, refunds,
  *     attendance and results are past facts; credentials are never imported).
- *   - `not_supported`: an operational record whose owning module exposes no import command yet;
- *     the row is skipped with that reason and every active one is reported by reconciliation
- *     level 4 so nothing disappears silently (§5.5).
+ *   - `not_supported`: an operational record whose owning module exposes no import command; the
+ *     row is skipped with that reason and every active one is reported by reconciliation level 4
+ *     so nothing disappears silently (§5.5). Since MIG-02 every operational category has an
+ *     import command, so no category uses it; it stays for a category added to §5.3 later.
  */
 export type CategoryClass = 'applied' | 'history' | 'not_supported';
 
@@ -79,48 +80,14 @@ export const CATEGORY_RULES: Readonly<Record<ImportEntityTypeValue, CategoryRule
         'Documents are retained by reference only; restricted object storage is not provisioned (§4.1).',
     },
   },
-  season: {
-    class: 'not_supported',
-    area: 'participation',
-    skip: {
-      code: 'no_import_command',
-      message: 'The competition module exposes no import command for seasons yet.',
-    },
-  },
-  team: {
-    class: 'not_supported',
-    area: 'participation',
-    skip: {
-      code: 'no_import_command',
-      message: 'The competition module exposes no import command for teams yet.',
-    },
-  },
-  roster: {
-    class: 'not_supported',
-    area: 'participation',
-    skip: {
-      code: 'no_import_command',
-      message: 'The competition module exposes no import command for rosters yet.',
-    },
-  },
-  future_schedule: {
-    class: 'not_supported',
-    area: 'schedule',
-    skip: {
-      code: 'schedule_rebuilt_under_single_authority',
-      message:
-        'Future schedules are not imported as reservations: periodic imports cannot prevent conflicting reservations; scheduling transfers authority and rebuilds them (§5.6).',
-    },
-  },
-  communication_preference: {
-    class: 'not_supported',
-    area: 'identity',
-    skip: {
-      code: 'no_import_command',
-      message:
-        'The communications module only lets a person set their own preferences; there is no import command.',
-    },
-  },
+  // MIG-02 (IF-40): created through the owning modules' import commands, as the records their
+  // owners approve as active participation (§5.5) and the schedule (future events are drafts that
+  // hold no space until a schedule draft publishes them under SportsPark's authority, §5.6).
+  season: { class: 'applied', area: 'participation' },
+  team: { class: 'applied', area: 'participation' },
+  roster: { class: 'applied', area: 'participation' },
+  future_schedule: { class: 'applied', area: 'schedule' },
+  communication_preference: { class: 'applied', area: 'identity' },
 };
 
 /** Rows are evaluated so that every reference is resolved before it is needed. */
@@ -131,17 +98,18 @@ export const DEPENDENCY_ORDER: readonly ImportEntityTypeValue[] = [
   'relationship_evidence',
   'open_obligation',
   'credit',
-  'account',
   'season',
+  // teams before their entries (inDependencyOrder), entries before rosters
   'team',
   'roster',
   'future_schedule',
+  'communication_preference',
+  'account',
   'attendance_history',
   'result',
   'order',
   'refund',
   'document',
-  'communication_preference',
 ];
 
 export function isMappedEntityType(type: ImportEntityTypeValue): type is MappedEntityType {

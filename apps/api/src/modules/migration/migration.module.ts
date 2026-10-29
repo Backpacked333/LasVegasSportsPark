@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { CatalogModule } from '../catalog';
+import { CommunicationsModule } from '../communications';
+import { CompetitionModule } from '../competition';
 import { RECORD_AUTHORITY_IMPL } from '../../kernel';
 import { FinanceModule, RECORD_AUTHORITY_IMPL as FINANCE_RECORD_AUTHORITY_IMPL } from '../finance';
 import { IdentityModule } from '../identity';
+import { SchedulingModule } from '../scheduling';
 import {
   AuthorityController,
   ExternalMappingsController,
@@ -28,14 +31,24 @@ import { ReconciliationService } from './services/reconciliation.service';
  * ImportException, AuthorityAssignment; §4.7 invariant 11; SPK-AT-024). Owns import batches,
  * staged rows and their outcomes, external mappings, import exceptions (review queues), the
  * authority matrix and reconciliation reports. Creates imported records only through the owning
- * modules' exported services — identity (persons, households, relationships), catalog (programs)
- * and finance (opening obligations and credits) — never through their tables. Registers a global
+ * modules' exported services — identity (persons, households, relationships), catalog (programs),
+ * competition (seasons, teams, team entries, roster memberships), scheduling (future events as
+ * drafts), communications (preferences) and finance (opening obligations and credits) — never
+ * through their tables (§4.2). Registers a global
  * interceptor that refuses the HTTP write commands of a record category while the legacy system
  * is authoritative for it (§5.6), and implements the kernel's RECORD_AUTHORITY_PORT for in-process
  * writers (MIG-00, IF-42). See README.md.
  */
 @Module({
-  imports: [IdentityModule, CatalogModule, FinanceModule],
+  // MIG-02 (IF-40): the owning modules whose import commands create the operational categories.
+  imports: [
+    IdentityModule,
+    CatalogModule,
+    FinanceModule,
+    CompetitionModule,
+    SchedulingModule,
+    CommunicationsModule,
+  ],
   providers: [
     // Policy values left to operators (§6.6): the proposed defaults, replaceable by approval.
     { provide: MIGRATION_POLICY, useValue: DEFAULT_MIGRATION_POLICY },

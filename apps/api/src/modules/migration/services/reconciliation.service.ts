@@ -20,12 +20,7 @@ import {
   type ReconciliationLevelValue,
   type StaffRole,
 } from '@sportspark/contracts';
-import {
-  json,
-  type Db,
-  type MappedEntityType,
-  type ReconciliationReportsTable,
-} from '@sportspark/db';
+import { json, type Db, type ReconciliationReportsTable } from '@sportspark/db';
 import type { Selectable } from 'kysely';
 import {
   AuditWriter,
@@ -58,7 +53,7 @@ import { compareControlTotals, stagedAmount } from '../staging/control-totals';
 import { ImportBatchesService } from './import-batches.service';
 import { ImportContextBuilder } from './import-context';
 import { rowKey } from './import-planner';
-import { ImportTargets } from './import-targets';
+import { ImportTargets, type AuditedCreation } from './import-targets';
 
 type ReportRow = Selectable<ReconciliationReportsTable>;
 
@@ -81,13 +76,47 @@ const APPLIED = new Set(['created', 'matched', 'updated']);
 /** Categories whose applied amounts finance holds (opening balances, §5.5). */
 const LOADED_MONEY: ReadonlySet<ImportEntityTypeValue> = new Set(['open_obligation', 'credit']);
 /** Categories the owning module audits a creation for, under the mapping's correlation id. */
-const AUDITED_CREATIONS: readonly Exclude<MappedEntityType, 'relationship_evidence'>[] = [
+const AUDITED_CREATIONS: readonly AuditedCreation[] = [
   'person',
   'household',
   'program',
   'open_obligation',
   'credit',
 ];
+/**
+ * MIG-02: operational categories created through the owning modules' import commands. Their
+ * mappings reach the records through composite foreign keys (migration 1201) and those records are
+ * never deleted, so a linked mapping proves the record exists.
+ */
+const OPERATIONAL: ReadonlySet<ImportEntityTypeValue> = new Set([
+  'season',
+  'team',
+  'roster',
+  'future_schedule',
+  'communication_preference',
+]);
+
+/** Whether a staged operational row was active (or upcoming) at the snapshot (§5.5 level 4). */
+function isActiveRow(row: RowRow, now: Date): boolean {
+  const p = row.payload as Record<string, unknown>;
+  if (p['active'] === false || p['active'] === 'false') return false;
+  const after = (value: unknown): boolean => {
+    if (typeof value !== 'string') return true;
+    const at = new Date(value).getTime();
+    return Number.isNaN(at) || at > now.getTime();
+  };
+  switch (row.entity_type) {
+    case 'future_schedule':
+      return after(p['scheduledEnd']);
+    case 'roster':
+      return p['effectiveTo'] === undefined || p['effectiveTo'] === '' || after(p['effectiveTo']);
+    case 'season':
+      return p['status'] === 'open' || p['status'] === 'active' || p['active'] === true;
+    default:
+      return true;
+  }
+}
+
 const LEVELS: readonly ReconciliationLevelValue[] = [
   'control_totals',
   'record_identity',
@@ -105,9 +134,11 @@ const LEVELS: readonly ReconciliationLevelValue[] = [
  *   3. relationships — imported relationship evidence is effective authority in identity and
  *      households hold their staged members;
  *   4. operational outcomes — opening obligations and credits hold the approved amounts, an
- *      amount re-valued in review is reported against the source amount (`revalued_in_review`),
- *      and active operational records the owning modules cannot import yet (rosters, seasons,
- *      teams, future schedules, preferences) are reported, never assumed present.
+ *      amount re-valued in review is reported against the source amount (`revalued_in_review`);
+ *      seasons, teams, team entries, rosters, future events (drafts) and preferences are created
+ *      through the owning modules' import commands (MIG-02), and every active one that was not
+ *      applied is reported per category (`active_records_not_applied`), never assumed present.
+ *      Enrollments and orders stay staged history.
  * So review decisions never make the totals appear correct: finance approves every difference
  * between the source's opening balances and SportsPark's explicitly, with a reason
  * (support-migration-07).
@@ -408,6 +439,7 @@ export class ReconciliationService {
 
     // Level 4 — operational outcomes.
     const notApplied = new Map<ImportEntityTypeValue, string[]>();
+    const notAppliedReasons = new Map<ImportEntityTypeValue, string[]>();
     // What finance holds for this batch's applied opening balances, per (category, currency).
     const loaded = new Map<string, number>();
     const addLoaded = (entityType: ImportEntityTypeValue, currency: string, amount: number) => {
@@ -483,6 +515,24 @@ export class ReconciliationService {
         });
         revalued(row, mapping.internal_id, staged.data.amountMinor, staged.data.currency);
         addLoaded(row.entity_type, credit.currency, credit.originalMinor);
+      } else if (OPERATIONAL.has(row.entity_type)) {
+        // MIG-02: created through the import command when applied; an active record that was not
+        // (an exception, a rejection) is reported per category, never assumed present.
+        checked.operational_outcomes += 1;
+        if (row.outcome && APPLIED.has(row.outcome)) continue;
+        if (isActiveRow(row, this.clock.now())) {
+          notApplied.set(row.entity_type, [
+            ...(notApplied.get(row.entity_type) ?? []),
+            row.external_id,
+          ]);
+          for (const r of (row.reasons as Array<{ code?: unknown }>) ?? []) {
+            if (typeof r.code === 'string') {
+              notAppliedReasons.set(row.entity_type, [
+                ...new Set([...(notAppliedReasons.get(row.entity_type) ?? []), r.code]),
+              ]);
+            }
+          }
+        }
       } else if (rule.class === 'not_supported') {
         checked.operational_outcomes += 1;
         const active = (row.payload as { active?: unknown }).active;
@@ -506,7 +556,8 @@ export class ReconciliationService {
         countDifference: -externalIds.length,
         details: {
           externalIds: externalIds.slice(0, 50),
-          reason: CATEGORY_RULES[entityType].skip?.code,
+          reason: CATEGORY_RULES[entityType].skip?.code ?? null,
+          reasons: notAppliedReasons.get(entityType) ?? [],
         },
       });
     }
@@ -710,7 +761,8 @@ export class ReconciliationService {
           await this.targets.credit(system, internalId);
           return true;
         default:
-          // Relationships are verified as effective authority at level 3.
+          // Relationships are verified as effective authority at level 3; the operational
+          // categories (MIG-02) are proven by their mapping's composite foreign key.
           return true;
       }
     } catch (error) {

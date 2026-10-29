@@ -464,7 +464,7 @@ export class ImportBatchesService {
     for (const row of inDependencyOrder(rows)) {
       const plan = planner.plan(row);
       plans.set(row.id, plan);
-      ImportContextBuilder.notePerson(ctx, row, plan, null, true);
+      ImportContextBuilder.noteRow(ctx, row, plan, null, true);
     }
     const plannedCounts = countOutcomes([...plans.values()].map((p) => p.outcome));
     const totals = compareControlTotals(

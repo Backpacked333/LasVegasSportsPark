@@ -5,6 +5,7 @@ import {
   newId,
   type ApplyImportBatchInput,
   type ImportBatch,
+  type ImportExceptionKindValue,
   type ImportReason,
   type ImportRowOutcomeValue,
   type Principal,
@@ -14,6 +15,7 @@ import {
   AuditWriter,
   CLOCK,
   DATABASE,
+  databaseConstraintOf,
   OperationalExceptions,
   OperationsService,
   Outbox,
@@ -31,8 +33,10 @@ import {
   countOutcomes,
   importPrincipal,
   MAPPING_COLUMN,
+  NO_TARGETS,
   reason,
   type BatchRow,
+  type MappingColumn,
   type MappingRow,
   type RowRow,
 } from '../migration.shared';
@@ -40,13 +44,19 @@ import { ImportBatchesService } from './import-batches.service';
 import { ImportContextBuilder, inDependencyOrder } from './import-context';
 import { ImportExceptionsService } from './import-exceptions.service';
 import {
+  IMPORT_COMMAND_TYPES,
   ImportPlanner,
   rowKey,
   type CreateValues,
   type PlanningContext,
   type RowPlan,
 } from './import-planner';
-import { ImportTargets, type TargetContext } from './import-targets';
+import {
+  ImportTargets,
+  type AuditedCreation,
+  type ImportCommandValues,
+  type TargetContext,
+} from './import-targets';
 
 interface Executed {
   outcome: ImportRowOutcomeValue;
@@ -67,6 +77,15 @@ interface Executed {
  * - Records are created only through the owning modules' public commands with the import system
  *   principal and an import reason. Obligations and credits are opening balances: no payment
  *   attempt and no customer notice exists for them (finance records the subledger facts only).
+ * - MIG-02 (IF-40, IF-28): persons, programs, seasons, teams, team entries, roster memberships,
+ *   future events (drafts) and communication preferences go through the owning modules' import
+ *   commands. Per row the mapping first reserves the record id (UUID v7) in its own transaction;
+ *   then one migration unit of work (the outermost) fences the lease, runs the command (which
+ *   joins it and inserts with id = the reserved id), links the mapping and records the outcome,
+ *   so the record and its mapping commit together or not at all. A refusal (RESOURCE_CONFLICT
+ *   incl. IMPORT_SCHEDULE_CONFLICT and IMPORT_CONTENT_MISMATCH, VALIDATION_FAILED, a database
+ *   constraint) rolls that whole row back and its exception is recorded in a new transaction, so
+ *   rows never affect each other. A rerun finds the mapping linked and calls nothing.
  * - The multi-step command is a durable operation (`migration.apply_batch`) readable at
  *   GET /v1/operations/{id}; a refused row becomes an apply-phase exception, never a silent drop.
  */
@@ -233,7 +252,7 @@ export class ImportApplyService {
     for (const row of inDependencyOrder(rows)) {
       if (row.outcome !== null) {
         // Applied by an earlier, interrupted attempt: its outcome is a fact.
-        ImportContextBuilder.notePerson(
+        ImportContextBuilder.noteRow(
           ctx,
           row,
           { outcome: row.outcome, reasons: [], action: { type: 'none' } },
@@ -244,7 +263,7 @@ export class ImportApplyService {
       }
       const plan = planner.plan(row);
       const executed = await this.execute(batch, operationId, row, plan, ctx, correlationId);
-      ImportContextBuilder.notePerson(
+      ImportContextBuilder.noteRow(
         ctx,
         row,
         { ...plan, outcome: executed.outcome },
@@ -288,29 +307,224 @@ export class ImportApplyService {
       });
       return { outcome: 'matched', internalId: mapping.internal_id };
     }
+    if (action.type === 'create' && IMPORT_COMMAND_TYPES.has(row.entity_type)) {
+      return this.importRow(batch, operationId, row, plan, action.values, ctx, correlationId);
+    }
     try {
       return action.type === 'create'
         ? await this.create(batch, operationId, row, plan, action.values, ctx)
         : await this.update(batch, operationId, row, plan, action.values, ctx);
     } catch (error) {
-      if (!DomainError.is(error) || error.httpStatus >= 500) throw error;
       // The owning module refused the record: the row becomes a reviewable exception (§5.4).
-      const kind =
-        error.code === 'VALIDATION_FAILED' || error.code === 'NOT_FOUND'
-          ? 'validation'
-          : 'conflict';
-      const reasons: ImportReason[] = [
-        reason('owning_module_refused', error.message, {
-          code: error.code,
-          details: error.details,
-        }),
-      ];
-      await this.uow.run(async ({ trx }) => {
-        await this.exceptions.open(trx, batch, row, kind, reasons, 'apply', correlationId);
-        await this.record(trx, batch, operationId, row, 'exception', reasons, null);
-      });
-      return { outcome: 'exception', internalId: null };
+      const refusal = refusalOf(error);
+      if (!refusal) throw error;
+      return this.refused(batch, operationId, row, refusal, correlationId);
     }
+  }
+
+  /** Records a refused row's exception and outcome in a transaction of its own (§5.4). */
+  private async refused(
+    batch: BatchRow,
+    operationId: string,
+    row: RowRow,
+    refusal: Refusal,
+    correlationId: string | null,
+  ): Promise<Executed> {
+    await this.uow.run(async ({ trx }) => {
+      await this.exceptions.open(
+        trx,
+        batch,
+        row,
+        refusal.kind,
+        refusal.reasons,
+        'apply',
+        correlationId,
+      );
+      await this.record(trx, batch, operationId, row, 'exception', refusal.reasons, null);
+    });
+    return { outcome: 'exception', internalId: null };
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Import commands (MIG-02, IF-40)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * One row created through its owning module's import command: reserve, then one unit of work
+   * (command + mapping link + row outcome), else the refusal in a new transaction.
+   */
+  private async importRow(
+    batch: BatchRow,
+    operationId: string,
+    row: RowRow,
+    plan: RowPlan,
+    values: CreateValues,
+    ctx: PlanningContext,
+    correlationId: string | null,
+  ): Promise<Executed> {
+    // 1. The reservation is fenced and commits on its own: a resumed apply reuses its record id.
+    let mapping = await this.uow.run(({ trx }) =>
+      this.reserveMapping(trx, batch, operationId, row, true),
+    );
+    const tctx = this.targetContext(batch, mapping, row);
+    const recoveredReasons = [
+      ...plan.reasons,
+      reason(
+        'recovered_after_interruption',
+        'Created by an interrupted earlier apply; linked, not created again.',
+      ),
+    ];
+    if (mapping.status === 'linked') {
+      // An earlier attempt committed the record with its mapping before this row's outcome.
+      const linked = mapping;
+      await this.uow.run(async ({ trx }) => {
+        await this.touchMapping(trx, linked, batch, row.payload_hash);
+        await this.record(trx, batch, operationId, row, 'created', recoveredReasons, linked.id);
+      });
+      return { outcome: 'created', internalId: linked.internal_id };
+    }
+    if (!mapping.reserved_record_id) {
+      // A reservation made before MIG-02 (persons, programs): the creation it guarded may have
+      // committed without its mapping; its owning module's audit record of the mapping's
+      // correlation id finds it, so it is linked, never created again.
+      const recovered =
+        row.entity_type === 'person' || row.entity_type === 'program'
+          ? await this.targets.recover(batch.organization_id, row.entity_type, tctx.correlationId)
+          : null;
+      if (recovered) {
+        const pending = mapping;
+        const linkedId = await this.uow.run(async ({ trx }) => {
+          await this.renewLease(trx, batch, operationId);
+          const linked = await this.linkMapping(trx, pending, batch, row, recovered);
+          await this.record(trx, batch, operationId, row, 'created', recoveredReasons, linked.id);
+          return recovered;
+        });
+        return { outcome: 'created', internalId: linkedId };
+      }
+      const pending = mapping;
+      mapping = await this.uow.run(({ trx }) =>
+        this.assignReservation(trx, batch, operationId, pending),
+      );
+    }
+    const reserved = mapping;
+    const recordId = reserved.reserved_record_id as string;
+    try {
+      const command = this.commandValues(values, ctx);
+      const internalId = await this.uow.run(async ({ trx }) => {
+        // 2. Fence, command (joins this unit, id = the reserved id), link, outcome: one commit.
+        await this.renewLease(trx, batch, operationId);
+        const imported = await this.targets.importRecord(
+          tctx,
+          { batchId: batch.id, externalKey: row.external_id, recordId },
+          command,
+        );
+        const linked = await this.linkMapping(
+          trx,
+          reserved,
+          batch,
+          row,
+          imported.internalId,
+          imported.column,
+        );
+        await this.record(trx, batch, operationId, row, 'created', plan.reasons, linked.id);
+        return imported.internalId;
+      });
+      return { outcome: 'created', internalId };
+    } catch (error) {
+      // 3. The whole row rolled back; its exception is recorded in a new transaction.
+      const refusal = refusalOf(error);
+      if (!refusal) throw error;
+      return this.refused(batch, operationId, row, refusal, correlationId);
+    }
+  }
+
+  /** The planned values with every staged reference resolved to its internal record. */
+  private commandValues(values: CreateValues, ctx: PlanningContext): ImportCommandValues {
+    const record = (entityType: 'season' | 'team', externalId: string, label: string): string => {
+      const ref = ctx.records.get(rowKey(entityType, externalId));
+      if (!ref?.internalId || !ref.resolvable) {
+        throw errors.validation(`${label} ${externalId} has not been imported.`, { externalId });
+      }
+      return ref.internalId;
+    };
+    switch (values.entityType) {
+      case 'person':
+        return { entityType: 'person', person: values.person };
+      case 'program':
+        return { entityType: 'program', program: values.program };
+      case 'season':
+        return { entityType: 'season', season: values.season };
+      case 'team':
+        if (values.record === 'team') return { entityType: 'team', team: values.team };
+        return {
+          entityType: 'team_entry',
+          entry: {
+            seasonId: record('season', values.entry.seasonExternalId, 'Season'),
+            teamId: record('team', values.entry.teamExternalId, 'Team'),
+            divisionId: values.entry.divisionId,
+            status: values.entry.status,
+            appliedAt: values.entry.appliedAt,
+            approvedAt: values.entry.approvedAt,
+            captainPersonId: values.entry.captainExternalId
+              ? this.personId(ctx, values.entry.captainExternalId)
+              : null,
+          },
+        };
+      case 'roster':
+        return {
+          entityType: 'roster',
+          roster: {
+            teamEntryId: record('team', values.roster.entryExternalId, 'Team entry'),
+            personId: this.personId(ctx, values.roster.personExternalId),
+            status: values.roster.status,
+            effectiveFrom: values.roster.effectiveFrom,
+            effectiveTo: values.roster.effectiveTo,
+            jerseyNumber: values.roster.jerseyNumber,
+          },
+        };
+      case 'future_schedule':
+        return { entityType: 'future_schedule', event: values.event };
+      case 'communication_preference':
+        return {
+          entityType: 'communication_preference',
+          personId: this.personId(ctx, values.personExternalId),
+          preferences: values.preferences,
+        };
+      default:
+        throw errors.internal(`no import command for ${values.entityType}`);
+    }
+  }
+
+  /** Gives a reservation made before MIG-02 its record id (fenced; set once, never changed). */
+  private async assignReservation(
+    trx: Trx,
+    batch: BatchRow,
+    operationId: string,
+    mapping: MappingRow,
+  ): Promise<MappingRow> {
+    await this.renewLease(trx, batch, operationId);
+    await trx
+      .updateTable('external_mappings')
+      .set({ reserved_record_id: newId(), revision: mapping.revision + 1 })
+      .where('organization_id', '=', mapping.organization_id)
+      .where('id', '=', mapping.id)
+      .where('revision', '=', mapping.revision)
+      .where('reserved_record_id', 'is', null)
+      .where('status', '=', 'pending')
+      .execute();
+    const current = await trx
+      .selectFrom('external_mappings')
+      .selectAll()
+      .where('organization_id', '=', mapping.organization_id)
+      .where('id', '=', mapping.id)
+      .executeTakeFirstOrThrow();
+    if (!current.reserved_record_id || current.status !== 'pending') {
+      throw errors.resourceConflict('The mapping changed while this apply was reserving it.', {
+        code: 'MAPPING_CHANGED',
+        mappingId: mapping.id,
+      });
+    }
+    return current;
   }
 
   private targetContext(batch: BatchRow, mapping: MappingRow, row: RowRow): TargetContext {
@@ -395,16 +609,14 @@ export class ImportApplyService {
         ? mapping.internal_id
         : await this.targets.recover(
             batch.organization_id,
-            entityType as Exclude<MappedEntityType, 'relationship_evidence'>,
+            entityType as AuditedCreation,
             tctx.correlationId,
           );
     const recovered = internalId !== null;
     if (!internalId) internalId = await this.createRecord(tctx, mapping, values, ctx);
-    // Bring the record to every staged fact the creation itself cannot carry (a person's status,
-    // household members), also after a recovered creation.
-    if (values.entityType === 'person') {
-      await this.targets.syncPerson(tctx, internalId, values.person);
-    } else if (values.entityType === 'household') {
+    // Bring the record to every staged fact the creation itself cannot carry (household members),
+    // also after a recovered creation.
+    if (values.entityType === 'household') {
       await this.targets.syncHousehold(
         tctx,
         internalId,
@@ -491,12 +703,8 @@ export class ImportApplyService {
     ctx: PlanningContext,
   ): Promise<string> {
     switch (values.entityType) {
-      case 'person':
-        return this.targets.createPerson(tctx, values.person);
       case 'household':
         return this.targets.createHousehold(tctx, values.name);
-      case 'program':
-        return this.targets.createProgram(tctx, values.program);
       case 'open_obligation':
         return this.targets.createOpeningObligation(tctx, {
           mappingId: mapping.id,
@@ -595,11 +803,16 @@ export class ImportApplyService {
   // Mappings and row outcomes
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * Reserves the row's external mapping (fenced by the apply lease). With `reserveRecordId` a new
+   * mapping also reserves the UUID v7 the owning module's import command will insert (MIG-02).
+   */
   private async reserveMapping(
     trx: Trx,
     batch: BatchRow,
     operationId: string,
     row: RowRow,
+    reserveRecordId = false,
   ): Promise<MappingRow> {
     await this.renewLease(trx, batch, operationId);
     const entityType = row.entity_type as MappedEntityType;
@@ -623,12 +836,8 @@ export class ImportApplyService {
         source_system: batch.source_system,
         entity_type: entityType,
         external_id: row.external_id,
-        person_id: null,
-        household_id: null,
-        relationship_id: null,
-        program_id: null,
-        obligation_id: null,
-        credit_id: null,
+        ...NO_TARGETS,
+        reserved_record_id: reserveRecordId ? newId() : null,
         applied_payload_hash: null,
         first_seen_batch_id: batch.id,
         last_seen_batch_id: batch.id,
@@ -655,8 +864,8 @@ export class ImportApplyService {
     batch: BatchRow,
     row: RowRow,
     internalId: string,
+    column: MappingColumn = MAPPING_COLUMN[mapping.entity_type],
   ): Promise<MappingRow> {
-    const column = MAPPING_COLUMN[mapping.entity_type];
     if (mapping.status === 'linked') {
       if (mapping.internal_id !== internalId) {
         throw errors.internal('The mapping is linked to a different record.');
@@ -858,4 +1067,50 @@ function lostToAnotherApply(error: unknown): boolean {
   if (!DomainError.is(error) || error.code !== 'RESOURCE_CONFLICT') return false;
   const code = (error.details as { code?: unknown } | undefined)?.code;
   return code === 'APPLY_LOCK_LOST' || code === 'MAPPING_CHANGED';
+}
+
+/** This apply's own fence refused it: never a row exception, the apply stops (§4.12). */
+function isFence(error: unknown): boolean {
+  if (!DomainError.is(error) || error.code !== 'RESOURCE_CONFLICT') return false;
+  const code = (error.details as { code?: unknown } | undefined)?.code;
+  return code === 'APPLY_LOCK_LOST' || code === 'MAPPING_CHANGED' || code === 'ROW_ALREADY_APPLIED';
+}
+
+interface Refusal {
+  kind: ImportExceptionKindValue;
+  reasons: ImportReason[];
+}
+
+/**
+ * How an owning module's refusal of one row becomes its import exception (§5.4): a domain error
+ * below 500 (VALIDATION_FAILED and NOT_FOUND are validation exceptions, everything else —
+ * RESOURCE_CONFLICT incl. IMPORT_SCHEDULE_CONFLICT and IMPORT_CONTENT_MISMATCH,
+ * DUPLICATE_ENTITLEMENT, CAPACITY_UNAVAILABLE, INVALID_TRANSITION — a conflict), or a database
+ * constraint the command did not translate (databaseConstraintOf, IF-28). Anything else, and this
+ * apply's own fence, is not a refusal: the apply stops and is resumed later.
+ */
+function refusalOf(error: unknown): Refusal | null {
+  if (DomainError.is(error)) {
+    if (error.httpStatus >= 500 || isFence(error)) return null;
+    const refusal = (error.details as { code?: unknown } | undefined)?.code;
+    return {
+      kind:
+        error.code === 'VALIDATION_FAILED' || error.code === 'NOT_FOUND'
+          ? 'validation'
+          : 'conflict',
+      reasons: [
+        reason('owning_module_refused', error.message, {
+          code: error.code,
+          refusal: typeof refusal === 'string' ? refusal : null,
+          details: error.details,
+        }),
+      ],
+    };
+  }
+  const constraint = databaseConstraintOf(error);
+  if (!constraint) return null;
+  return {
+    kind: 'conflict',
+    reasons: [reason('database_constraint', 'The database refused the record (§4.7).', constraint)],
+  };
 }

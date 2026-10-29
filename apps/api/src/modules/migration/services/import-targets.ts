@@ -2,17 +2,30 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
   type Credit,
+  type EventKind,
   type GrantPermissionValue,
   type Household,
+  type ImportProvenance,
   type Obligation,
   type PersonDetail,
   type Principal,
   type Program,
+  type RosterPlayingStatus,
+  type Season,
+  type SeasonStatus,
 } from '@sportspark/contracts';
-import type { Db, MappedEntityType } from '@sportspark/db';
+import type { Db } from '@sportspark/db';
 import { DATABASE, type Trx } from '../../../kernel';
 import { CreditsService, FinanceActions, ObligationsService } from '../../finance';
 import { ProgramsService } from '../../catalog';
+import { CommunicationPreferencesService, type ImportedPreference } from '../../communications';
+import {
+  CompetitionImportService,
+  SeasonsService,
+  TEAM_ENTRY_QUERY_PORT,
+  type TeamEntryQueryPort,
+  type TeamEntrySummary,
+} from '../../competition';
 import {
   HouseholdsService,
   IdentityActions,
@@ -20,7 +33,16 @@ import {
   RelationshipsService,
   type PersonSummary,
 } from '../../identity';
-import type { Reader } from '../migration.shared';
+import { EVENT_SCHEDULING_PORT, type EventSchedulingPort } from '../../scheduling';
+import {
+  MAPPING_COLUMN,
+  TEAM_ENTRY_COLUMN,
+  type MappingColumn,
+  type Reader,
+} from '../migration.shared';
+
+/** Categories whose owning module audits a creation under the mapping's correlation id. */
+export type AuditedCreation = 'person' | 'household' | 'program' | 'open_obligation' | 'credit';
 
 /** What the owning module is told about one imported record. */
 export interface TargetContext {
@@ -61,6 +83,83 @@ function contactKey(kind: 'email' | 'phone', value: string): string {
 export type SyncResult = 'updated' | 'unchanged';
 
 /**
+ * What an owning module's import command receives (MIG-02, IF-40): the planned values with every
+ * staged reference resolved to the internal record it was imported as.
+ */
+export type ImportCommandValues =
+  | { entityType: 'person'; person: PersonValues }
+  | { entityType: 'program'; program: ProgramValues }
+  | {
+      entityType: 'season';
+      season: {
+        competitionId: string;
+        ruleSetId: string;
+        name: string;
+        startsOn: string;
+        endsOn: string;
+        status: SeasonStatus;
+        registrationOpensAt: string | null;
+        registrationClosesAt: string | null;
+      };
+    }
+  | {
+      entityType: 'team';
+      team: {
+        name: string;
+        colors: { primary?: string; secondary?: string };
+        status: 'active' | 'inactive' | 'archived';
+      };
+    }
+  | {
+      entityType: 'team_entry';
+      entry: {
+        seasonId: string;
+        teamId: string;
+        divisionId: string | null;
+        status: 'applied' | 'approved';
+        appliedAt: string;
+        approvedAt: string | null;
+        captainPersonId: string | null;
+      };
+    }
+  | {
+      entityType: 'roster';
+      roster: {
+        teamEntryId: string;
+        personId: string;
+        status: RosterPlayingStatus;
+        effectiveFrom: string;
+        effectiveTo: string | null;
+        jerseyNumber: number | null;
+      };
+    }
+  | {
+      entityType: 'future_schedule';
+      event: {
+        facilityId: string;
+        resourceIds: string[];
+        kind: EventKind;
+        title: string;
+        format: string | null;
+        scheduledStart: string;
+        scheduledEnd: string;
+        setupMinutes?: number;
+        cleanupMinutes?: number;
+      };
+    }
+  | {
+      entityType: 'communication_preference';
+      personId: string;
+      preferences: ImportedPreference[];
+    };
+
+/** The record an import command created (or found, create-if-absent) and its mapping column. */
+export interface ImportedRecord {
+  internalId: string;
+  column: MappingColumn;
+}
+
+/**
  * The calls this module makes into the owning modules (§4.2: a module never writes another
  * module's tables). Every creation goes through the owning module's public command with the
  * import system principal, a reason naming the batch, and a correlation id unique to the mapping.
@@ -85,11 +184,160 @@ export class ImportTargets {
     private readonly programs: ProgramsService,
     private readonly obligations: ObligationsService,
     private readonly credits: CreditsService,
+    private readonly competitionImports: CompetitionImportService,
+    private readonly seasons: SeasonsService,
+    @Inject(TEAM_ENTRY_QUERY_PORT) private readonly teamEntries: TeamEntryQueryPort,
+    @Inject(EVENT_SCHEDULING_PORT) private readonly scheduling: EventSchedulingPort,
+    private readonly preferences: CommunicationPreferencesService,
   ) {}
+
+  // -------------------------------------------------------------------------------------------
+  // Import commands (MIG-02, IF-40): inside the migration's row unit of work, which they join
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * Runs the owning module's import command for one staged row with the import principal of the
+   * batch (`migration.import:<batchId>`) and the provenance whose `recordId` the mapping reserved.
+   * Every command joins the caller's unit of work, inserts with `id = recordId` (create-if-absent:
+   * the same record and content returns it with no new effect), and refuses different content
+   * (RESOURCE_CONFLICT IMPORT_CONTENT_MISMATCH). None charges, notifies or publishes: persons and
+   * programs only record facts, competition imports publish no events, an imported event is a
+   * draft that holds no space, and imported preferences never override a person's own choice.
+   * Reads here go through the joined transaction only (the commands read with it).
+   */
+  async importRecord(
+    ctx: TargetContext,
+    provenance: ImportProvenance,
+    values: ImportCommandValues,
+  ): Promise<ImportedRecord> {
+    const importProvenance = provenance;
+    switch (values.entityType) {
+      case 'person': {
+        const v = values.person;
+        const contactPoints: Array<{
+          kind: 'email' | 'phone';
+          value: string;
+          isPrimary: boolean;
+          verified: boolean;
+        }> = [];
+        // Contact values are imported unverified: never keys, never logins (§5.3).
+        if (v.email) {
+          contactPoints.push({ kind: 'email', value: v.email, isPrimary: true, verified: false });
+        }
+        if (v.phone) {
+          contactPoints.push({ kind: 'phone', value: v.phone, isPrimary: true, verified: false });
+        }
+        const person = await this.people.create(
+          ctx.principal,
+          {
+            kind: v.kind,
+            givenName: v.givenName,
+            familyName: v.familyName,
+            dateOfBirth: v.dateOfBirth,
+            contactPoints,
+          },
+          ctx.correlationId,
+          { importProvenance },
+        );
+        // The staged status the creation cannot carry, in the same unit of work.
+        if ((v.status ?? 'active') !== person.status && person.status !== 'merged') {
+          await this.people.updatePerson(
+            ctx.principal,
+            person.id,
+            { status: v.status ?? 'active', expectedRevision: person.revision, reason: ctx.reason },
+            ctx.correlationId,
+          );
+        }
+        return { internalId: person.id, column: MAPPING_COLUMN.person };
+      }
+      case 'program': {
+        const v = values.program;
+        const program = await this.programs.create(
+          ctx.principal,
+          {
+            name: v.name,
+            description: v.description,
+            activityType: v.activityType,
+            format: v.format,
+            ageBand: {},
+            status: v.status ?? 'draft',
+            reason: ctx.reason,
+          },
+          ctx.correlationId,
+          { importProvenance },
+        );
+        return { internalId: program.id, column: MAPPING_COLUMN.program };
+      }
+      case 'season': {
+        const season = await this.competitionImports.importSeason(
+          ctx.principal,
+          { ...values.season, importProvenance },
+          ctx.correlationId,
+        );
+        return { internalId: season.id, column: MAPPING_COLUMN.season };
+      }
+      case 'team': {
+        const team = await this.competitionImports.importTeam(
+          ctx.principal,
+          { ...values.team, importProvenance },
+          ctx.correlationId,
+        );
+        return { internalId: team.id, column: MAPPING_COLUMN.team };
+      }
+      case 'team_entry': {
+        const entry = await this.competitionImports.importTeamEntry(
+          ctx.principal,
+          { ...values.entry, importProvenance },
+          ctx.correlationId,
+        );
+        return { internalId: entry.id, column: TEAM_ENTRY_COLUMN };
+      }
+      case 'roster': {
+        const member = await this.competitionImports.importRosterMembership(
+          ctx.principal,
+          { ...values.roster, importProvenance },
+          ctx.correlationId,
+        );
+        return { internalId: member.id, column: MAPPING_COLUMN.roster };
+      }
+      case 'future_schedule': {
+        const event = await this.scheduling.importEvent(ctx.principal, {
+          ...values.event,
+          commitments: [],
+          // importEvent writes source_type 'import' with the batch as its source (SCH-04).
+          sourceType: 'import',
+          sourceId: provenance.batchId,
+          status: 'draft',
+          reason: ctx.reason,
+          correlationId: ctx.correlationId,
+          importProvenance,
+        });
+        return { internalId: event.id, column: MAPPING_COLUMN.future_schedule };
+      }
+      case 'communication_preference': {
+        const result = await this.preferences.importPreferences(ctx.principal, {
+          importProvenance,
+          personId: values.personId,
+          preferences: values.preferences,
+        });
+        return { internalId: result.recordId, column: MAPPING_COLUMN.communication_preference };
+      }
+    }
+  }
+
+  /** A season (its competition decides the season authority scope, §5.6). */
+  season(principal: Principal, seasonId: string): Promise<Season> {
+    return this.seasons.getSeason(principal, seasonId);
+  }
+
+  /** A team entry with its competition (roster authority scope, §5.6). */
+  teamEntry(organizationId: string, teamEntryId: string): Promise<TeamEntrySummary | null> {
+    return this.teamEntries.findTeamEntry(organizationId, teamEntryId);
+  }
 
   /** The audit action and target the owning module records for each creation. */
   private static readonly CREATION_AUDIT: Record<
-    Exclude<MappedEntityType, 'relationship_evidence'>,
+    AuditedCreation,
     { action: string; targetType: string }
   > = {
     person: { action: IdentityActions.createPerson.id, targetType: 'person' },
@@ -106,7 +354,7 @@ export class ImportTargets {
    */
   async creationsFor(
     organizationId: string,
-    entityType: Exclude<MappedEntityType, 'relationship_evidence'>,
+    entityType: AuditedCreation,
     correlationIds: readonly string[],
   ): Promise<Array<{ correlationId: string; targetId: string }>> {
     if (correlationIds.length === 0) return [];
@@ -129,7 +377,7 @@ export class ImportTargets {
    */
   async recover(
     organizationId: string,
-    entityType: Exclude<MappedEntityType, 'relationship_evidence'>,
+    entityType: AuditedCreation,
     correlationId: string,
   ): Promise<string | null> {
     const anchor = ImportTargets.CREATION_AUDIT[entityType];
@@ -148,34 +396,6 @@ export class ImportTargets {
   // -------------------------------------------------------------------------------------------
   // Persons (identity)
   // -------------------------------------------------------------------------------------------
-
-  async createPerson(ctx: TargetContext, values: PersonValues): Promise<string> {
-    const contactPoints: Array<{
-      kind: 'email' | 'phone';
-      value: string;
-      isPrimary: boolean;
-      verified: boolean;
-    }> = [];
-    // Contact values are imported unverified: they are never keys and never logins (§5.3).
-    if (values.email) {
-      contactPoints.push({ kind: 'email', value: values.email, isPrimary: true, verified: false });
-    }
-    if (values.phone) {
-      contactPoints.push({ kind: 'phone', value: values.phone, isPrimary: true, verified: false });
-    }
-    const person = await this.people.createPerson(
-      ctx.principal,
-      {
-        kind: values.kind,
-        givenName: values.givenName,
-        familyName: values.familyName,
-        dateOfBirth: values.dateOfBirth,
-        contactPoints,
-      },
-      ctx.correlationId,
-    );
-    return person.id;
-  }
 
   /** Brings the person to the staged values (only fields the source states; never removes). */
   async syncPerson(
@@ -326,23 +546,6 @@ export class ImportTargets {
   // -------------------------------------------------------------------------------------------
   // Programs (catalog)
   // -------------------------------------------------------------------------------------------
-
-  async createProgram(ctx: TargetContext, values: ProgramValues): Promise<string> {
-    const program = await this.programs.create(
-      ctx.principal,
-      {
-        name: values.name,
-        description: values.description,
-        activityType: values.activityType,
-        format: values.format,
-        ageBand: {},
-        status: values.status ?? 'draft',
-        reason: ctx.reason,
-      },
-      ctx.correlationId,
-    );
-    return program.id;
-  }
 
   async syncProgram(
     ctx: TargetContext,

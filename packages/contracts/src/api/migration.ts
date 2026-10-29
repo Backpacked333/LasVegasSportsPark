@@ -5,8 +5,11 @@ import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
 import { StaffRole } from '../principal';
 import { Instant } from '../time';
+import { DeliveryChannelSchema, NotificationCategorySchema } from './communications';
+import { RosterPlayingStatusSchema, SeasonStatusSchema, TeamStatusSchema } from './competition';
 import { ActorSnapshotSchema } from './facilities';
 import { GrantPermissionSchema } from './identity';
+import { EventKind } from './scheduling';
 
 /**
  * Migration module API contract (specification §5.3 inventory, §5.4 import behaviour, §5.5
@@ -200,16 +203,140 @@ export const OperationalImportPayloadSchema = z.looseObject({
   active: csvBool.optional(),
 });
 
+// Operational categories created through the owning modules' import commands (MIG-02, IF-40).
+// Records that are SportsPark configuration rather than §5.3 inventory lines — competitions, rule
+// sets, divisions, facilities and resources (supplied by Operations, DEC-001) — are referenced by
+// their SportsPark ids; everything staged is referenced by external id. Proposed contract, pending
+// the migration scope decision (§6.6).
+
+/** A season of a SportsPark competition, under one of its rule sets (competition importSeason). */
+export const SeasonImportPayloadSchema = z.looseObject({
+  competitionId: z.uuid(),
+  ruleSetId: z.uuid(),
+  name: Text200,
+  startsOn: DateOnly,
+  endsOn: DateOnly,
+  /** The season's status at the snapshot; never defaulted. */
+  status: SeasonStatusSchema,
+  registrationOpensAt: Instant.optional(),
+  registrationClosesAt: Instant.optional(),
+  active: csvBool.optional(),
+});
+export type SeasonImportPayload = z.infer<typeof SeasonImportPayloadSchema>;
+
+/** `record: 'team'` (default): a team, which persists across seasons (competition importTeam). */
+export const TeamRecordImportPayloadSchema = z.looseObject({
+  record: z.literal('team'),
+  name: Text200,
+  primaryColor: z.string().trim().min(1).max(50).optional(),
+  secondaryColor: z.string().trim().min(1).max(50).optional(),
+  status: TeamStatusSchema.optional(),
+  active: csvBool.optional(),
+});
+/**
+ * `record: 'entry'`: a staged team's entry in a staged season (competition importTeamEntry). Only
+ * `applied` and `approved` entries are imported; withdrawn and rejected entries stay history.
+ */
+export const TeamEntryImportPayloadSchema = z.looseObject({
+  record: z.literal('entry'),
+  teamExternalId: ExternalId,
+  seasonExternalId: ExternalId,
+  /** A SportsPark division of the season (configuration). */
+  divisionId: z.uuid().optional(),
+  status: z.enum(['applied', 'approved']),
+  appliedAt: Instant,
+  /** Required when `status` is `approved`, and only then. */
+  approvedAt: Instant.optional(),
+  /** The person (external id) holding the captain role from `appliedAt`. */
+  captainExternalId: ExternalId.optional(),
+  active: csvBool.optional(),
+});
+/** One `team` inventory line is a team or a team's entry in a season (one record per row). */
+export const TeamImportPayloadSchema = z.preprocess(
+  (value) =>
+    value && typeof value === 'object' && !Array.isArray(value) && !('record' in value)
+      ? { ...value, record: 'team' }
+      : value,
+  z.discriminatedUnion('record', [TeamRecordImportPayloadSchema, TeamEntryImportPayloadSchema]),
+);
+export type TeamImportPayload = z.infer<typeof TeamImportPayloadSchema>;
+
+/** A roster membership on a staged team entry (competition importRosterMembership). */
+export const RosterImportPayloadSchema = z.looseObject({
+  /** The external id of the staged team row with `record: 'entry'`. */
+  entryExternalId: ExternalId,
+  personExternalId: ExternalId,
+  status: RosterPlayingStatusSchema,
+  effectiveFrom: Instant,
+  effectiveTo: Instant.optional(),
+  jerseyNumber: csvInt.pipe(z.number().int().min(0).max(999)).optional(),
+  active: csvBool.optional(),
+});
+export type RosterImportPayload = z.infer<typeof RosterImportPayloadSchema>;
+
+/**
+ * A future event, imported as a draft that holds no space (scheduling importEvent): it is
+ * published only through a schedule draft under SportsPark's scheduling authority (§5.6).
+ */
+export const FutureScheduleImportPayloadSchema = z.looseObject({
+  /** A SportsPark facility and its resources (the inventory is supplied by Operations, DEC-001). */
+  facilityId: z.uuid(),
+  resourceIds: csvList(z.uuid()).pipe(z.array(z.uuid()).min(1).max(20)),
+  kind: EventKind,
+  title: Text200,
+  format: z.string().trim().min(1).max(100).optional(),
+  scheduledStart: Instant,
+  scheduledEnd: Instant,
+  setupMinutes: csvInt.pipe(z.number().int().min(0).max(240)).optional(),
+  cleanupMinutes: csvInt.pipe(z.number().int().min(0).max(240)).optional(),
+});
+export type FutureScheduleImportPayload = z.infer<typeof FutureScheduleImportPayloadSchema>;
+
+/** One preference: JSON `{ channel, category, enabled }` or CSV `category.channel=true|false`. */
+const ImportedPreferenceSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== 'string') return value;
+    const match = /^([a-z_]+)\.([a-z_]+)=(true|false)$/.exec(value.trim());
+    return match ? { category: match[1], channel: match[2], enabled: match[3] === 'true' } : value;
+  },
+  z
+    .object({
+      channel: DeliveryChannelSchema,
+      category: NotificationCategorySchema,
+      enabled: z.boolean(),
+    })
+    .strict(),
+);
+/** A person's communication preferences (communications importPreferences). */
+export const CommunicationPreferenceImportPayloadSchema = z.looseObject({
+  personExternalId: ExternalId,
+  preferences: csvList(ImportedPreferenceSchema).pipe(
+    z
+      .array(
+        z.object({
+          channel: DeliveryChannelSchema,
+          category: NotificationCategorySchema,
+          enabled: z.boolean(),
+        }),
+      )
+      .min(1)
+      .max(20),
+  ),
+});
+export type CommunicationPreferenceImportPayload = z.infer<
+  typeof CommunicationPreferenceImportPayloadSchema
+>;
+
 export const IMPORT_PAYLOAD_SCHEMAS: Record<ImportEntityTypeValue, z.ZodType> = {
   person: PersonImportPayloadSchema,
   household: HouseholdImportPayloadSchema,
   relationship_evidence: RelationshipEvidenceImportPayloadSchema,
   account: HistoryImportPayloadSchema,
   program: ProgramImportPayloadSchema,
-  season: OperationalImportPayloadSchema,
-  team: OperationalImportPayloadSchema,
-  roster: OperationalImportPayloadSchema,
-  future_schedule: OperationalImportPayloadSchema,
+  season: SeasonImportPayloadSchema,
+  team: TeamImportPayloadSchema,
+  roster: RosterImportPayloadSchema,
+  future_schedule: FutureScheduleImportPayloadSchema,
   attendance_history: HistoryImportPayloadSchema,
   result: HistoryImportPayloadSchema,
   order: OrderImportPayloadSchema,
@@ -217,7 +344,7 @@ export const IMPORT_PAYLOAD_SCHEMAS: Record<ImportEntityTypeValue, z.ZodType> = 
   credit: CreditImportPayloadSchema,
   refund: RefundImportPayloadSchema,
   document: HistoryImportPayloadSchema,
-  communication_preference: OperationalImportPayloadSchema,
+  communication_preference: CommunicationPreferenceImportPayloadSchema,
 };
 
 // ---------------------------------------------------------------------------------------------

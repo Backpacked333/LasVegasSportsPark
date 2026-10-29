@@ -20,6 +20,7 @@ import type {
   AuthorityAssignmentsTable,
   Db,
   ExternalMappingsTable,
+  MappedEntityType,
   ImportBatchesTable,
   ImportExceptionsTable,
   ImportRowOutcome,
@@ -307,7 +308,26 @@ export function toAuthorityAssignment(row: AssignmentRow): AuthorityAssignment {
   };
 }
 
-/** The typed mapping column of an entity type (exactly one per mapped type, migration 1200). */
+/** A typed target column of external_mappings (migrations 1200 and 1201). */
+export type MappingColumn =
+  | 'person_id'
+  | 'household_id'
+  | 'relationship_id'
+  | 'program_id'
+  | 'obligation_id'
+  | 'credit_id'
+  | 'season_id'
+  | 'team_id'
+  | 'team_entry_id'
+  | 'roster_membership_id'
+  | 'event_id'
+  | 'preference_import_id';
+
+/**
+ * The typed mapping column of an entity type (one per mapped record; the database checks the
+ * column matches the entity type). A staged `team` row is a team or, with `record: 'entry'`, a
+ * team's entry in a season (TEAM_ENTRY_COLUMN).
+ */
 export const MAPPING_COLUMN = {
   person: 'person_id',
   household: 'household_id',
@@ -315,4 +335,26 @@ export const MAPPING_COLUMN = {
   program: 'program_id',
   open_obligation: 'obligation_id',
   credit: 'credit_id',
-} as const;
+  season: 'season_id',
+  team: 'team_id',
+  roster: 'roster_membership_id',
+  future_schedule: 'event_id',
+  communication_preference: 'preference_import_id',
+} as const satisfies Record<MappedEntityType, MappingColumn>;
+export const TEAM_ENTRY_COLUMN = 'team_entry_id' satisfies MappingColumn;
+
+/** Every target column, null (a new reservation, or a fixture filling one of them). */
+export const NO_TARGETS: Record<MappingColumn, null> = {
+  person_id: null,
+  household_id: null,
+  relationship_id: null,
+  program_id: null,
+  obligation_id: null,
+  credit_id: null,
+  season_id: null,
+  team_id: null,
+  team_entry_id: null,
+  roster_membership_id: null,
+  event_id: null,
+  preference_import_id: null,
+};
