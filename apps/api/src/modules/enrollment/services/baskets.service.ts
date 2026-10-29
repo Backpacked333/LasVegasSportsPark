@@ -355,135 +355,156 @@ export class BasketsService implements BasketPort {
           path: 'quantity',
         });
       }
-      await this.assertLinesCapable(trx, organizationId, [{ intent: input.intent }]);
-      const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
-      const evaluation = await this.evaluator.evaluate(trx, organizationId, {
+      return this.addLineInTrx(trx, organizationId, principal, basket, person, input, session, {
+        correlationId,
+      });
+    });
+  }
+
+  /**
+   * The body of adding a line once the basket, participant and authority are settled: capability
+   * gate, eligibility, the §4.7 invariant 2 duplicate check, the application, the price basis and
+   * the line itself. Shared by POST /baskets/{id}/lines and the membership renewal (ENR-12).
+   */
+  async addLineInTrx(
+    trx: Trx,
+    organizationId: string,
+    principal: Principal,
+    basket: BasketRow,
+    person: PersonSummary,
+    input: AddBasketLineInput,
+    session: OfferingSession | null | undefined,
+    options: { correlationId: string | null; renewedFromEnrollmentId?: string | null },
+  ): Promise<Basket> {
+    const correlationId = options.correlationId;
+    const basketId = basket.id;
+    await this.assertLinesCapable(trx, organizationId, [{ intent: input.intent }]);
+    const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
+    const evaluation = await this.evaluator.evaluate(trx, organizationId, {
+      snapshot,
+      person,
+      intent: input.intent,
+      teamEntryId: input.teamEntryId ?? null,
+      session,
+    });
+    const equivalence = this.evaluator.equivalence(snapshot, person.id, session?.id ?? null);
+    if (await this.enrollments.findEquivalentActive(trx, organizationId, person.id, equivalence)) {
+      throw errors.duplicateEntitlement(
+        'An equivalent active registration already exists for this participant.',
+        {
+          participantPersonId: person.id,
+          offeringId: snapshot.offering.id,
+        },
+      );
+    }
+    let application = await this.applications.findCurrent(
+      trx,
+      organizationId,
+      snapshot.offering.id,
+      person.id,
+      [principal.personId, basket.owner_person_id, basket.payer_person_id],
+    );
+    if (
+      application &&
+      !isStaffLike(principal) &&
+      application.submitted_by_person_id !== principal.personId &&
+      application.submitted_by_person_id !== basket.owner_person_id &&
+      application.payer_person_id !== basket.owner_person_id
+    ) {
+      // SPK-AT-004: another adult's application already covers this participant and offering. One
+      // equivalent entitlement; the other registrant and payer are never revealed.
+      throw errors.duplicateEntitlement(
+        'An application for this participant and offering already exists.',
+        {
+          participantPersonId: person.id,
+          offeringId: snapshot.offering.id,
+        },
+      );
+    }
+    // SPK-REG-002/007: never link a line to an application (or its override) of another intent.
+    application = this.applications.forIntent(application, input.intent);
+    if (!application) {
+      application = await this.applications.createInTrx(trx, organizationId, {
         snapshot,
         person,
         intent: input.intent,
+        evaluation,
+        payerPersonId: basket.payer_person_id,
         teamEntryId: input.teamEntryId ?? null,
-        session,
-      });
-      const equivalence = this.evaluator.equivalence(snapshot, person.id, session?.id ?? null);
-      if (
-        await this.enrollments.findEquivalentActive(trx, organizationId, person.id, equivalence)
-      ) {
-        throw errors.duplicateEntitlement(
-          'An equivalent active registration already exists for this participant.',
-          {
-            participantPersonId: person.id,
-            offeringId: snapshot.offering.id,
-          },
-        );
-      }
-      let application = await this.applications.findCurrent(
-        trx,
-        organizationId,
-        snapshot.offering.id,
-        person.id,
-        [principal.personId, basket.owner_person_id, basket.payer_person_id],
-      );
-      if (
-        application &&
-        !isStaffLike(principal) &&
-        application.submitted_by_person_id !== principal.personId &&
-        application.submitted_by_person_id !== basket.owner_person_id &&
-        application.payer_person_id !== basket.owner_person_id
-      ) {
-        // SPK-AT-004: another adult's application already covers this participant and offering. One
-        // equivalent entitlement; the other registrant and payer are never revealed.
-        throw errors.duplicateEntitlement(
-          'An application for this participant and offering already exists.',
-          {
-            participantPersonId: person.id,
-            offeringId: snapshot.offering.id,
-          },
-        );
-      }
-      // SPK-REG-002/007: never link a line to an application (or its override) of another intent.
-      application = this.applications.forIntent(application, input.intent);
-      if (!application) {
-        application = await this.applications.createInTrx(trx, organizationId, {
-          snapshot,
-          person,
-          intent: input.intent,
-          evaluation,
-          payerPersonId: basket.payer_person_id,
-          teamEntryId: input.teamEntryId ?? null,
-          sessionId: session?.id ?? null,
-          notes: null,
-          actor: principal,
-          correlationId,
-        });
-      }
-      const price = await this.evaluator.priceSnapshot(trx, organizationId, snapshot.offering.id);
-      if (price && basket.currency && basket.currency !== price.currency) {
-        throw errors.validation(`A basket holds one currency (${basket.currency}).`);
-      }
-      const last = await trx
-        .selectFrom('basket_lines')
-        .select((eb) => eb.fn.max('sequence').as('sequence'))
-        .where('organization_id', '=', organizationId)
-        .where('basket_id', '=', basketId)
-        .executeTakeFirst();
-      const lineId = newId();
-      await trx
-        .insertInto('basket_lines')
-        .values({
-          id: lineId,
-          organization_id: organizationId,
-          basket_id: basketId,
-          sequence: (last?.sequence ?? 0) + 1,
-          participant_person_id: person.id,
-          offering_id: snapshot.offering.id,
-          session_id: session?.id ?? null,
-          team_entry_id: input.teamEntryId ?? null,
-          intent: input.intent,
-          quantity: input.quantity,
-          application_id: application.id,
-          trial_participation_id: null,
-          entitlement_definition_id: snapshot.entitlementDefinition?.id ?? null,
-          equivalence_key: equivalence,
-          eligibility_result: json(evaluation.result),
-          price_snapshot: price ? json(price) : null,
-          policy_references: json(
-            this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy),
-          ),
-          requires_approval: evaluation.requiresApproval,
-          enrollment_id: null,
-          outcome: 'pending',
-          outcome_reason: null,
-        })
-        .execute();
-      await trx
-        .updateTable('baskets')
-        .set({
-          currency: basket.currency ?? price?.currency ?? null,
-          revision: basket.revision + 1,
-        })
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', basketId)
-        .where('revision', '=', basket.revision)
-        .execute();
-      await this.audit.record(trx, {
-        organizationId,
+        sessionId: session?.id ?? null,
+        notes: null,
         actor: principal,
-        action: EnrollmentActions.manageBasket.id,
-        targetType: 'basket_line',
-        targetId: lineId,
-        afterRevision: 1,
         correlationId,
-        details: {
-          basketId,
-          offeringId: snapshot.offering.id,
-          intent: input.intent,
-          applicationId: application.id,
-          eligible: evaluation.result.eligible,
-          priceRuleId: price?.priceRuleId ?? null,
-        },
       });
-      return this.view(trx, organizationId, (await this.load(trx, organizationId, basketId))!);
+    }
+    const price = await this.evaluator.priceSnapshot(trx, organizationId, snapshot.offering.id);
+    if (price && basket.currency && basket.currency !== price.currency) {
+      throw errors.validation(`A basket holds one currency (${basket.currency}).`);
+    }
+    const last = await trx
+      .selectFrom('basket_lines')
+      .select((eb) => eb.fn.max('sequence').as('sequence'))
+      .where('organization_id', '=', organizationId)
+      .where('basket_id', '=', basketId)
+      .executeTakeFirst();
+    const lineId = newId();
+    await trx
+      .insertInto('basket_lines')
+      .values({
+        id: lineId,
+        organization_id: organizationId,
+        basket_id: basketId,
+        sequence: (last?.sequence ?? 0) + 1,
+        participant_person_id: person.id,
+        offering_id: snapshot.offering.id,
+        session_id: session?.id ?? null,
+        team_entry_id: input.teamEntryId ?? null,
+        intent: input.intent,
+        quantity: input.quantity,
+        application_id: application.id,
+        trial_participation_id: null,
+        entitlement_definition_id: snapshot.entitlementDefinition?.id ?? null,
+        equivalence_key: equivalence,
+        eligibility_result: json(evaluation.result),
+        price_snapshot: price ? json(price) : null,
+        policy_references: json(
+          this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy),
+        ),
+        requires_approval: evaluation.requiresApproval,
+        enrollment_id: null,
+        renewed_from_enrollment_id: options.renewedFromEnrollmentId ?? null,
+        outcome: 'pending',
+        outcome_reason: null,
+      })
+      .execute();
+    await trx
+      .updateTable('baskets')
+      .set({
+        currency: basket.currency ?? price?.currency ?? null,
+        revision: basket.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', basketId)
+      .where('revision', '=', basket.revision)
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: EnrollmentActions.manageBasket.id,
+      targetType: 'basket_line',
+      targetId: lineId,
+      afterRevision: 1,
+      correlationId,
+      details: {
+        basketId,
+        offeringId: snapshot.offering.id,
+        intent: input.intent,
+        applicationId: application.id,
+        eligible: evaluation.result.eligible,
+        priceRuleId: price?.priceRuleId ?? null,
+      },
     });
+    return this.view(trx, organizationId, (await this.load(trx, organizationId, basketId))!);
   }
 
   async removeLine(
@@ -889,6 +910,7 @@ export class BasketsService implements BasketPort {
       basketId: basket.id,
       basketLineId: line.id,
       trialParticipationId: line.trial_participation_id,
+      renewedFromEnrollmentId: line.renewed_from_enrollment_id,
       priceSnapshot: price,
       policyReferences: this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy),
       eligibilityResult: result,

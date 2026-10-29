@@ -118,6 +118,8 @@ export async function offering(
     registrationClosesAt?: Date;
     entitlementDefinitionId?: string;
     managerPersonId?: string;
+    cancellationPolicyVersionId?: string;
+    eligibilityPolicyVersionId?: string;
   } = {},
 ): Promise<OfferingSetup> {
   const managerPersonId =
@@ -139,6 +141,8 @@ export async function offering(
     endsOn: input.endsOn,
     registrationClosesAt: input.registrationClosesAt,
     entitlementDefinitionId: input.entitlementDefinitionId,
+    cancellationPolicyVersionId: input.cancellationPolicyVersionId,
+    eligibilityPolicyVersionId: input.eligibilityPolicyVersionId,
   });
   return { ...created, managerPersonId };
 }

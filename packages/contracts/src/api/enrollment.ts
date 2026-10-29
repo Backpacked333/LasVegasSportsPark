@@ -930,6 +930,19 @@ export type ListPlacementRequestsQuery = z.infer<typeof ListPlacementRequestsQue
 // Session bookings (§4.4 SessionBooking, SPK-PLACE-004 pickup, SPK-YOUTH-003/004)
 // ---------------------------------------------------------------------------------------------
 
+/** ENR-11, ENR-12 (§3.16): the entitlement a session booking uses. */
+export const SessionBookingEntitlementBasisSchema = z
+  .enum(['purchase', 'makeup', 'package', 'membership'])
+  .openapi('SessionBookingEntitlementBasis');
+/**
+ * What happened to a package credit or membership session when the booking was canceled:
+ * returned, kept under the approved cancellation policy, or kept because no policy decides
+ * (POL-007, POL-039: no automatic return without one).
+ */
+export const SessionBookingCreditDispositionSchema = z
+  .enum(['returned', 'retained_by_policy', 'retained_pending_policy'])
+  .openapi('SessionBookingCreditDisposition');
+
 export const SessionBookingSchema = z
   .object({
     id: z.uuid(),
@@ -941,6 +954,12 @@ export const SessionBookingSchema = z
     poolId: z.uuid().nullable(),
     holdId: z.uuid().nullable(),
     makeupEntitlementId: z.uuid().nullable(),
+    /** ENR-11, ENR-12: what entitles the booking (its own price, a makeup, a package, a membership). */
+    entitlementBasis: SessionBookingEntitlementBasisSchema,
+    packageEntitlementId: z.uuid().nullable(),
+    membershipEnrollmentId: z.uuid().nullable(),
+    /** Set when a package or membership booking is canceled: what happened to its credit. */
+    creditDisposition: SessionBookingCreditDispositionSchema.nullable(),
     scheduledStart: Instant,
     scheduledEnd: Instant,
     bookedBy: RegistrationActorSnapshotSchema,
@@ -985,7 +1004,16 @@ export const CreateSessionBookingBody = withCommandMeta({
   sessionId: z.uuid(),
   participantPersonId: z.uuid(),
   payerPersonId: z.uuid().optional(),
-}).openapi('CreateSessionBookingRequest');
+  /** ENR-11: redeem one credit of this session package (capability session_packages). */
+  packageEntitlementId: z.uuid().optional(),
+  /** ENR-12: use this membership's included sessions (capability memberships). */
+  membershipEnrollmentId: z.uuid().optional(),
+})
+  .refine((v) => !(v.packageEntitlementId && v.membershipEnrollmentId), {
+    message: 'name a package entitlement or a membership, not both',
+    path: ['membershipEnrollmentId'],
+  })
+  .openapi('CreateSessionBookingRequest');
 export type CreateSessionBookingInput = z.infer<typeof CreateSessionBookingBody>;
 
 export const ConfirmSessionBookingBody = withCommandMeta({})

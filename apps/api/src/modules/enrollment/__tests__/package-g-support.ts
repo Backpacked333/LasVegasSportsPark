@@ -37,6 +37,7 @@ export async function packageOffering(
     expiry?: Record<string, unknown>;
     basePriceMinor?: number | null;
     capacity?: number;
+    cancellationPolicyVersionId?: string;
   },
 ): Promise<OfferingSetup & { definitionId: string }> {
   const definitionId = await definitionWithScope(t, 'package_credits', {
@@ -50,6 +51,7 @@ export async function packageOffering(
     basePriceMinor: input.basePriceMinor === undefined ? 0 : input.basePriceMinor,
     capacityUnits: [{ unit: 'seats', limit: input.capacity ?? 50 }],
     ageBand: { minAgeYears: 18 },
+    cancellationPolicyVersionId: input.cancellationPolicyVersionId,
   });
   return { ...setup, definitionId };
 }

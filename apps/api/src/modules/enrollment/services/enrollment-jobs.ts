@@ -10,9 +10,13 @@ import {
   type PeriodicJobResult,
 } from '../../../kernel';
 import type { EnrollmentSettingsValue } from '../enrollment.settings';
+import { MembershipsService } from './memberships.service';
+import { PackageEntitlementsService } from './package-entitlements.service';
 import { ASSIGN_PLACEMENT_KIND, PlacementService } from './placement.service';
 
 export const RECONCILE_PLACEMENTS_JOB = 'enrollment.reconcile_placements';
+export const EXPIRE_PACKAGES_JOB = 'enrollment.expire_package_entitlements';
+export const MEMBERSHIP_LIFECYCLE_JOB = 'enrollment.membership_lifecycle';
 
 /**
  * Enrollment's periodic jobs (K-06, IF-24; §4.12 durable, interruption-tolerant background work
@@ -22,6 +26,10 @@ export const RECONCILE_PLACEMENTS_JOB = 'enrollment.reconcile_placements';
  *
  * - enrollment.reconcile_placements (ENR-08, SPK-AT-023): placement assignments whose operation is
  *   still `running` longer than ENROLLMENT_PLACEMENT_RECONCILE_AFTER_SECONDS are resumed.
+ * - enrollment.expire_package_entitlements (ENR-11, POL-039): active packages past their expiry.
+ * - enrollment.membership_lifecycle (ENR-12): completes memberships whose term ended, ends
+ *   elapsed suspensions and composes the one renewal notice a definition asks for.
+ * Expiry and lifecycle work is never capability-gated (DEC-016).
  */
 @Injectable()
 export class EnrollmentJobs implements OnModuleInit {
@@ -31,6 +39,8 @@ export class EnrollmentJobs implements OnModuleInit {
     private readonly registry: PeriodicJobRegistry,
     private readonly uow: UnitOfWork,
     private readonly placements: PlacementService,
+    private readonly packages: PackageEntitlementsService,
+    private readonly memberships: MembershipsService,
   ) {}
 
   onModuleInit(): void {
@@ -40,6 +50,69 @@ export class EnrollmentJobs implements OnModuleInit {
       failureOwner: 'program_manager',
       run: (context) => this.reconcilePlacements(context),
     });
+    this.registry.register({
+      name: EXPIRE_PACKAGES_JOB,
+      intervalSeconds: 300,
+      failureOwner: 'program_manager',
+      run: (context) => this.expirePackages(context),
+    });
+    this.registry.register({
+      name: MEMBERSHIP_LIFECYCLE_JOB,
+      intervalSeconds: 900,
+      failureOwner: 'program_manager',
+      run: (context) => this.membershipLifecycle(context),
+    });
+  }
+
+  async expirePackages({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {
+    const due = await this.packages.dueForExpiry(now, batchSize);
+    let processed = 0;
+    for (const row of due) {
+      const expired = await this.uow.run(({ trx }) =>
+        this.packages.expireIfDue(trx, row.organization_id, row.id, null),
+      );
+      if (expired) processed += 1;
+    }
+    return { processed, remaining: processed > 0 && due.length === batchSize ? 1 : 0 };
+  }
+
+  async membershipLifecycle({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {
+    let processed = 0;
+    let full = false;
+    const ended = await this.memberships.endedTerms(now, batchSize);
+    full ||= ended.length === batchSize;
+    for (const row of ended) {
+      if (
+        await this.uow.run(({ trx }) =>
+          this.memberships.completeIfEnded(trx, row.organization_id, row.id),
+        )
+      ) {
+        processed += 1;
+      }
+    }
+    const suspensions = await this.memberships.elapsedSuspensions(now, batchSize);
+    full ||= suspensions.length === batchSize;
+    for (const row of suspensions) {
+      if (
+        await this.uow.run(({ trx }) =>
+          this.memberships.endIfElapsed(trx, row.organization_id, row.id),
+        )
+      ) {
+        processed += 1;
+      }
+    }
+    // Candidates are re-read each run until their notice is composed or their term ends.
+    const candidates = await this.memberships.renewalCandidates(now, batchSize);
+    for (const row of candidates) {
+      if (
+        await this.uow.run(({ trx }) =>
+          this.memberships.renewalNoticeIfDue(trx, row.organization_id, row.id),
+        )
+      ) {
+        processed += 1;
+      }
+    }
+    return { processed, remaining: full && processed > 0 ? 1 : 0 };
   }
 
   async reconcilePlacements({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {

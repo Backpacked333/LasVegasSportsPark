@@ -12,6 +12,7 @@ import { BasketsController } from './controllers/baskets.controller';
 import { CapacityController } from './controllers/capacity.controller';
 import { EnrollmentsController } from './controllers/enrollments.controller';
 import { MeRegistrationsController } from './controllers/me.controller';
+import { PackagesMembershipsController } from './controllers/packages-memberships.controller';
 import { PlacementController } from './controllers/placement.controller';
 import { RegistrationOptionsController } from './controllers/registration-options.controller';
 import { SessionBookingsController } from './controllers/session-bookings.controller';
@@ -49,6 +50,8 @@ import { CustomerScope } from './services/customer-scope';
 import { EnrollmentJobs } from './services/enrollment-jobs';
 import { EnrollmentNotices } from './services/enrollment-notices';
 import { EnrollmentViews } from './services/enrollment-views';
+import { MembershipLedger } from './services/membership-ledger';
+import { MembershipsService } from './services/memberships.service';
 import { MergeFollowUp } from './services/merge-follow-up';
 import { MyRegistrationsService } from './services/my-registrations.service';
 import { RegistrationOptionsService } from './services/registration-options.service';
@@ -57,6 +60,7 @@ import { EnrollmentFacilityScope } from './services/facility-scope';
 import { FamilyCalendarService } from './services/family-calendar.service';
 import { MakeupsService } from './services/makeups.service';
 import { PlacementService } from './services/placement.service';
+import { PackageEntitlementsService } from './services/package-entitlements.service';
 import { RegistrationEvaluator } from './services/registration-evaluator';
 import { SessionBookingsService } from './services/session-bookings.service';
 import { SessionParticipants } from './services/session-participants';
@@ -89,6 +93,9 @@ const providers: Provider[] = [
       lazyPort<BookingQueryPort>(moduleRef, BOOKING_QUERY_IMPL, noBookings, null),
   },
   RegistrationEvaluator,
+  MembershipLedger,
+  PackageEntitlementsService,
+  MembershipsService,
   CatalogSessions,
   EnrollmentFacilityScope,
   EnrollmentViews,
@@ -152,6 +159,7 @@ const providers: Provider[] = [
     CapacityController,
     MeRegistrationsController,
     RegistrationOptionsController,
+    PackagesMembershipsController,
   ],
   exports: [
     RegistrationEvaluator,
@@ -165,6 +173,8 @@ const providers: Provider[] = [
     TrialsService,
     PlacementService,
     FamilyCalendarService,
+    PackageEntitlementsService,
+    MembershipsService,
     ENROLLMENT_POLICY,
     FINANCE_POLICY_PORT,
     ENROLLMENT_PORT,
@@ -186,6 +196,8 @@ export class EnrollmentModule implements OnModuleInit {
     private readonly impactContributors: ClosureImpactContributors,
     private readonly mergeFollowUp: MergeFollowUp,
     private readonly notices: EnrollmentNotices,
+    private readonly packages: PackageEntitlementsService,
+    private readonly memberships: MembershipsService,
   ) {}
 
   onModuleInit(): void {
@@ -308,6 +320,65 @@ export class EnrollmentModule implements OnModuleInit {
         { failureOwner: 'program_manager' },
       );
     }
+    // ENR-11 (SPK-COND-002): a confirmed package purchase issues its credits once; a canceled one
+    // revokes them (bookings stay; future ones raise an owned exception).
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
+      EnrollmentEvents.enrollmentConfirmed.type,
+      'enrollment.issue_package',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, async () => {
+          await this.packages.issueForEnrollment(
+            ctx.trx,
+            event.organizationId,
+            event.payload.enrollmentId,
+            event.correlationId,
+          );
+        }),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentCanceled>>(
+      EnrollmentEvents.enrollmentCanceled.type,
+      'enrollment.revoke_package',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.packages.revokeForEnrollment(
+            ctx.trx,
+            event.organizationId,
+            event.payload.enrollmentId,
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    // ENR-12 (SPK-COND-001): a confirmed membership starts its term; a canceled one says so.
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
+      EnrollmentEvents.enrollmentConfirmed.type,
+      'enrollment.start_membership',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.memberships.startForEnrollment(
+            ctx.trx,
+            event.organizationId,
+            event.payload.enrollmentId,
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentCanceled>>(
+      EnrollmentEvents.enrollmentCanceled.type,
+      'enrollment.membership_canceled',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.memberships.onCanceled(
+            ctx.trx,
+            event.organizationId,
+            event.payload.enrollmentId,
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
     // SPK-YOUTH-004: an unused makeup lapses at its expiry.
     this.registry.on<EventPayload<typeof MakeupExpiryDue>>(
       MakeupExpiryDue.type,

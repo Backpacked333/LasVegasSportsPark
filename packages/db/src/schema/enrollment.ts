@@ -180,6 +180,13 @@ export interface EnrollmentsTable {
   /** Migration 0501: the financial consequence accepted with the transfer (SPK-REG-010). */
   transfer_consequence: Json<Record<string, unknown>> | null;
   completed_at: NullableTimestamp;
+  /** Migration 0507 (ENR-12): the membership term, set when a membership is confirmed. */
+  membership_starts_at: NullableTimestamp;
+  membership_ends_at: NullableTimestamp;
+  /** Migration 0507 (ENR-12): the membership this one renews. */
+  renewed_from_enrollment_id: string | null;
+  /** When the membership's renewal_opportunity notice was composed. */
+  renewal_notice_at: NullableTimestamp;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -206,6 +213,8 @@ export interface BasketLinesTable {
   policy_references: GeneratedJson<Record<string, unknown>>;
   requires_approval: Generated<boolean>;
   enrollment_id: string | null;
+  /** Migration 0507 (ENR-12): a renewal line names the membership it continues. */
+  renewed_from_enrollment_id: string | null;
   outcome: Generated<BasketLineOutcome>;
   outcome_reason: string | null;
   revision: Generated<number>;
@@ -278,6 +287,9 @@ export interface MakeupEntitlementsTable {
 
 export type SessionBookingKind = 'pickup' | 'trial' | 'makeup' | 'session';
 export type SessionBookingStatusValue = 'pending' | 'confirmed' | 'canceled' | 'expired';
+export type SessionBookingEntitlementBasis = 'purchase' | 'makeup' | 'package' | 'membership';
+export type SessionBookingCreditDisposition =
+  'returned' | 'retained_by_policy' | 'retained_pending_policy';
 export interface SessionBookingsTable {
   id: string;
   organization_id: string;
@@ -289,6 +301,15 @@ export interface SessionBookingsTable {
   pool_id: string | null;
   hold_id: string | null;
   makeup_entitlement_id: string | null;
+  /** Migration 0506/0507 (ENR-11, ENR-12): what entitles the booking. */
+  entitlement_basis: Generated<SessionBookingEntitlementBasis>;
+  package_entitlement_id: string | null;
+  /** Migration 0507 (ENR-12): the membership whose included sessions the booking uses. */
+  membership_enrollment_id: string | null;
+  /** `week:<YYYY-MM-DD>`, `month:<YYYY-MM>` or `term`; null for an unlimited membership. */
+  membership_period_key: string | null;
+  /** Set only when a package or membership booking is canceled (POL-007, POL-039). */
+  credit_disposition: SessionBookingCreditDisposition | null;
   scheduled_start: Timestamp;
   scheduled_end: Timestamp;
   booked_by: Json<Record<string, unknown>>;

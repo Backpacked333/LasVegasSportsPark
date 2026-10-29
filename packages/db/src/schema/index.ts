@@ -4,6 +4,7 @@ import type { CatalogTables } from './catalog';
 import type { CommunicationsTables } from './communications';
 import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
+import type { EnrollmentPackageGTables } from './enrollment-package-g';
 import type { EnrollmentTables } from './enrollment';
 import type { EntryTables } from './entry';
 import type { FacilitiesTables } from './facilities';
@@ -21,6 +22,7 @@ export * from './catalog';
 export * from './communications';
 export * from './competition-matches';
 export * from './competition';
+export * from './enrollment-package-g';
 export * from './enrollment';
 export * from './entry';
 export * from './facilities';
@@ -44,6 +46,7 @@ export interface Database
     CommunicationsTables,
     CompetitionMatchesTables,
     CompetitionTables,
+    EnrollmentPackageGTables,
     EnrollmentTables,
     EntryTables,
     FacilitiesTables,

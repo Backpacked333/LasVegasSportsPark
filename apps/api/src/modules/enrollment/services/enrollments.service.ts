@@ -89,6 +89,8 @@ export interface CreatePendingEnrollmentInput {
   basketLineId?: string | null;
   placementRequestId?: string | null;
   trialParticipationId?: string | null;
+  /** ENR-12: the membership a renewal line continues. */
+  renewedFromEnrollmentId?: string | null;
   priceSnapshot: PriceSnapshot | null;
   policyReferences: PolicyReferences;
   eligibilityResult: EligibilityResult | null;
@@ -299,6 +301,7 @@ export class EnrollmentsService implements EnrollmentPort {
           basket_line_id: input.basketLineId ?? null,
           placement_request_id: input.placementRequestId ?? null,
           trial_participation_id: input.trialParticipationId ?? null,
+          renewed_from_enrollment_id: input.renewedFromEnrollmentId ?? null,
           order_ref: null,
           last_operation_id: null,
           price_snapshot: input.priceSnapshot ? json(input.priceSnapshot) : null,
@@ -956,7 +959,6 @@ export class EnrollmentsService implements EnrollmentPort {
     correlationId: string | null,
   ): Promise<Enrollment> {
     const organizationId = organizationOf(principal);
-    const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('enrollment');
@@ -969,39 +971,66 @@ export class EnrollmentsService implements EnrollmentPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
-      const status = EnrollmentMachine.next(row.status, 'complete');
-      await trx
-        .updateTable('enrollments')
-        .set({ status, completed_at: now, revision: row.revision + 1 })
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', id)
-        .where('revision', '=', row.revision)
-        .execute();
-      await this.audit.record(trx, {
+      await this.completeInTrx(
+        trx,
         organizationId,
-        actor: principal,
-        action: EnrollmentActions.completeEnrollment.id,
-        targetType: 'enrollment',
-        targetId: id,
-        beforeRevision: row.revision,
-        afterRevision: row.revision + 1,
-        reason: input.reason ?? null,
+        row,
+        principal,
+        input.reason ?? null,
         correlationId,
-      });
-      await this.outbox.enqueue(trx, EnrollmentEvents.enrollmentCompleted, {
-        organizationId,
-        aggregateType: 'enrollment',
-        aggregateId: id,
-        correlationId,
-        payload: {
-          organizationId,
-          enrollmentId: id,
-          offeringId: row.offering_id,
-          participantPersonId: row.participant_person_id,
-        },
-      });
+      );
       return toEnrollment((await this.load(trx, organizationId, id))!);
     });
+  }
+
+  /**
+   * Completes a confirmed enrollment (EnrollmentMachine confirmed → completed): the staff command
+   * and the membership lifecycle job (ENR-12, a membership whose term ended).
+   */
+  async completeInTrx(
+    trx: Trx,
+    organizationId: string,
+    row: EnrollmentRow,
+    actor: Principal,
+    reason: string | null,
+    correlationId: string | null,
+  ): Promise<EnrollmentRow> {
+    const now = this.clock.now();
+    const id = row.id;
+    const status = EnrollmentMachine.next(row.status, 'complete');
+    await trx
+      .updateTable('enrollments')
+      .set({ status, completed_at: now, revision: row.revision + 1 })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .where('revision', '=', row.revision)
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: EnrollmentActions.completeEnrollment.id,
+      targetType: 'enrollment',
+      targetId: id,
+      beforeRevision: row.revision,
+      afterRevision: row.revision + 1,
+      reason,
+      correlationId,
+    });
+    await this.outbox.enqueue(trx, EnrollmentEvents.enrollmentCompleted, {
+      organizationId,
+      aggregateType: 'enrollment',
+      aggregateId: id,
+      correlationId,
+      payload: {
+        organizationId,
+        enrollmentId: id,
+        offeringId: row.offering_id,
+        participantPersonId: row.participant_person_id,
+      },
+    });
+    const updated = await this.load(trx, organizationId, id);
+    if (!updated) throw errors.internal('enrollment vanished');
+    return updated;
   }
 
   /** Shared cancellation body: machine guard, capacity release, line outcome, audit, events. */
