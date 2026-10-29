@@ -69,6 +69,9 @@ import { EnrollmentFacilityScope } from './facility-scope';
 
 export type PlacementRow = Selectable<PlacementRequestsTable>;
 
+/** The operation kind of a placement assignment (ENR-08 reconciles the interrupted ones). */
+export const ASSIGN_PLACEMENT_KIND = 'enrollment.assign_placement';
+
 /** Entry states that take players (competition TeamEntryMachine). */
 const OPEN_ENTRY_STATES = ['applied', 'approved'];
 
@@ -624,7 +627,7 @@ export class PlacementService {
         : [];
       const operationId = await this.operations.create(trx, {
         organizationId,
-        kind: 'enrollment.assign_placement',
+        kind: ASSIGN_PLACEMENT_KIND,
         requestedBy: principal,
         correlationId,
         input: { placementRequestId: id, teamEntryId },
@@ -711,126 +714,282 @@ export class PlacementService {
     }
 
     // Step 3b: commit the place and record the assignment.
-    const placement = await this.uow.run(async ({ trx }) => {
-      const now = this.clock.now();
-      const row = await this.load(trx, organizationId, id, true);
-      if (!row) throw errors.internal('placement request vanished');
-      const status = PlacementMachine.next(row.status, 'assign');
-      const decision: PlacementReason[] = [...prepared.reasons];
-      let operationStatus: 'succeeded' | 'recovery_required' = 'succeeded';
-      for (const holdId of prepared.holdIds) {
+    const placement = await this.uow.run(({ trx }) =>
+      this.completeAssignment(trx, principal, organizationId, id, {
+        teamEntryId: prepared.teamEntryId,
+        holdIds: prepared.holdIds,
+        holdPools: prepared.holdPools,
+        operationId: prepared.operationId,
+        reasons: prepared.reasons,
+        poolId: prepared.poolId,
+        membershipId,
+        reason: input.reason ?? null,
+        correlationId,
+      }),
+    );
+    return { placement };
+  }
+
+  /**
+   * The assignment's final step (SPK-PLACE-003, §4.7 invariants 3 and 12): commit each held roster
+   * place (re-acquiring one whose hold lapsed; a place taken meanwhile leaves the operation
+   * `recovery_required` with an owned exception), mark the request assigned with the roster
+   * membership, complete the operation, audit and announce. Shared by the command and by the
+   * reconciler that resumes an interrupted assignment (ENR-08), so both end the same way.
+   */
+  private async completeAssignment(
+    trx: Trx,
+    principal: Principal,
+    organizationId: string,
+    id: string,
+    prepared: {
+      teamEntryId: string;
+      holdIds: readonly string[];
+      holdPools: ReadonlyMap<string, string>;
+      operationId: string;
+      reasons: readonly PlacementReason[];
+      poolId: string | null;
+      membershipId: string | null;
+      reason: string | null;
+      correlationId: string | null;
+    },
+  ): Promise<PlacementRequest> {
+    const { membershipId, correlationId } = prepared;
+    const now = this.clock.now();
+    const row = await this.load(trx, organizationId, id, true);
+    if (!row) throw errors.internal('placement request vanished');
+    const status = PlacementMachine.next(row.status, 'assign');
+    const decision: PlacementReason[] = [...prepared.reasons];
+    let operationStatus: 'succeeded' | 'recovery_required' = 'succeeded';
+    for (const holdId of prepared.holdIds) {
+      try {
+        await this.capacity.commitHold(
+          trx,
+          organizationId,
+          holdId,
+          { placementRequestId: id },
+          correlationId,
+        );
+      } catch (error) {
+        const heldPoolId = prepared.holdPools.get(holdId);
+        if (!DomainError.is(error) || error.code !== 'CAPACITY_UNAVAILABLE' || !heldPoolId)
+          throw error;
         try {
-          await this.capacity.commitHold(
+          await this.capacity.acquireCommitted(
             trx,
             organizationId,
-            holdId,
-            { placementRequestId: id },
-            correlationId,
+            [{ poolId: heldPoolId, quantity: 1 }],
+            {
+              placementRequestId: id,
+            },
           );
-        } catch (error) {
-          const heldPoolId = prepared.holdPools.get(holdId);
-          if (!DomainError.is(error) || error.code !== 'CAPACITY_UNAVAILABLE' || !heldPoolId)
-            throw error;
-          try {
-            await this.capacity.acquireCommitted(
-              trx,
-              organizationId,
-              [{ poolId: heldPoolId, quantity: 1 }],
-              {
-                placementRequestId: id,
-              },
-            );
-          } catch (inner) {
-            if (!DomainError.is(inner) || inner.code !== 'CAPACITY_UNAVAILABLE') throw inner;
-            // The roster now has the player but the enrollment pool is full: keep it visible (§4.11).
-            operationStatus = 'recovery_required';
-            decision.push({
-              code: 'roster_capacity_exceeded',
-              severity: 'warning',
-              message:
-                'The roster place was taken before the assignment completed; staff must resolve the capacity.',
-              source: { type: 'capacity_pool', id: heldPoolId },
-            });
-            await this.exceptions.raise(trx, {
-              organizationId,
-              category: 'enrollment.placement_capacity',
-              severity: 'high',
-              title: 'Placement completed beyond the configured roster capacity',
-              affectedType: 'placement_request',
-              affectedId: id,
-              ownerQueue: 'league_manager',
-              dedupeKey: `placement_capacity:${id}`,
-              details: { teamEntryId: prepared.teamEntryId, poolId: heldPoolId },
-            });
-          }
+        } catch (inner) {
+          if (!DomainError.is(inner) || inner.code !== 'CAPACITY_UNAVAILABLE') throw inner;
+          // The roster now has the player but the enrollment pool is full: keep it visible (§4.11).
+          operationStatus = 'recovery_required';
+          decision.push({
+            code: 'roster_capacity_exceeded',
+            severity: 'warning',
+            message:
+              'The roster place was taken before the assignment completed; staff must resolve the capacity.',
+            source: { type: 'capacity_pool', id: heldPoolId },
+          });
+          await this.exceptions.raise(trx, {
+            organizationId,
+            category: 'enrollment.placement_capacity',
+            severity: 'high',
+            title: 'Placement completed beyond the configured roster capacity',
+            affectedType: 'placement_request',
+            affectedId: id,
+            ownerQueue: 'league_manager',
+            dedupeKey: `placement_capacity:${id}`,
+            details: { teamEntryId: prepared.teamEntryId, poolId: heldPoolId },
+          });
         }
       }
-      decision.push({
-        code: 'capacity_checked',
-        severity: 'info',
-        message: prepared.poolId
-          ? 'A roster place was committed in the team entry pool.'
-          : 'Roster limits were checked by the competition rules.',
-        source: {
-          type: prepared.poolId ? 'capacity_pool' : 'team_entry',
-          id: prepared.poolId ?? prepared.teamEntryId,
-        },
-      });
-      await trx
-        .updateTable('placement_requests')
-        .set({
-          status,
-          assigned_team_entry_id: prepared.teamEntryId,
-          assigned_at: now,
-          decided_by: json(actorSnapshot(principal)),
-          decided_by_person_id: principal.personId,
-          decision_reasons: json(decision),
-          roster_membership_ref: membershipId,
-          revision: row.revision + 1,
-        })
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', id)
-        .where('revision', '=', row.revision)
-        .execute();
-      await this.operations.transition(trx, prepared.operationId, operationStatus, {
-        result: {
-          placementRequestId: id,
-          teamEntryId: prepared.teamEntryId,
-          rosterMembershipId: membershipId,
-        },
-      });
-      await this.record(
-        trx,
-        principal,
-        row,
-        EnrollmentActions.managePlacement.id,
-        input.reason ?? null,
-        correlationId,
-        {
-          decision: 'assigned',
-          teamEntryId: prepared.teamEntryId,
-          rosterMembershipId: membershipId,
-          reasonCodes: decision.map((r) => r.code),
-        },
-        prepared.operationId,
-      );
-      await this.outbox.enqueue(trx, EnrollmentEvents.placementAssigned, {
-        organizationId,
-        aggregateType: 'placement_request',
-        aggregateId: id,
-        correlationId,
-        operationId: prepared.operationId,
-        payload: {
-          organizationId,
-          placementRequestId: id,
-          teamEntryId: prepared.teamEntryId,
-          participantPersonId: row.participant_person_id,
-          rosterMembershipRef: membershipId,
-        },
-      });
-      return this.view((await this.load(trx, organizationId, id))!, trx);
+    }
+    decision.push({
+      code: 'capacity_checked',
+      severity: 'info',
+      message: prepared.poolId
+        ? 'A roster place was committed in the team entry pool.'
+        : 'Roster limits were checked by the competition rules.',
+      source: {
+        type: prepared.poolId ? 'capacity_pool' : 'team_entry',
+        id: prepared.poolId ?? prepared.teamEntryId,
+      },
     });
-    return { placement };
+    await trx
+      .updateTable('placement_requests')
+      .set({
+        status,
+        assigned_team_entry_id: prepared.teamEntryId,
+        assigned_at: now,
+        decided_by: json(actorSnapshot(principal)),
+        decided_by_person_id: principal.personId,
+        decision_reasons: json(decision),
+        roster_membership_ref: membershipId,
+        last_operation_id: prepared.operationId,
+        revision: row.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .where('revision', '=', row.revision)
+      .execute();
+    await this.operations.transition(trx, prepared.operationId, operationStatus, {
+      result: {
+        placementRequestId: id,
+        teamEntryId: prepared.teamEntryId,
+        rosterMembershipId: membershipId,
+      },
+    });
+    await this.record(
+      trx,
+      principal,
+      row,
+      EnrollmentActions.managePlacement.id,
+      prepared.reason,
+      correlationId,
+      {
+        decision: 'assigned',
+        teamEntryId: prepared.teamEntryId,
+        rosterMembershipId: membershipId,
+        reasonCodes: decision.map((r) => r.code),
+      },
+      prepared.operationId,
+    );
+    await this.outbox.enqueue(trx, EnrollmentEvents.placementAssigned, {
+      organizationId,
+      aggregateType: 'placement_request',
+      aggregateId: id,
+      correlationId,
+      operationId: prepared.operationId,
+      payload: {
+        organizationId,
+        placementRequestId: id,
+        teamEntryId: prepared.teamEntryId,
+        participantPersonId: row.participant_person_id,
+        rosterMembershipRef: membershipId,
+      },
+    });
+    return this.view((await this.load(trx, organizationId, id))!, trx);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Reconciliation of interrupted assignments (ENR-08, §4.12, SPK-AT-023)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * Resumes one assignment whose operation is still `running` (ENR-08): the unit of work that
+   * assigns normally commits or rolls back whole, so a `running` assignment left behind was
+   * interrupted around competition's roster command. When competition's roster already holds the
+   * participant (ROSTER_PORT read), enrollment's final step is applied with that membership —
+   * never a second roster row; otherwise the held places are released and the operation fails
+   * with an exception owned by program management. Returns what was done, or null when the
+   * operation is no longer running (another runner or a retried command finished it).
+   */
+  async reconcileAssignment(
+    trx: Trx,
+    organizationId: string,
+    operationId: string,
+    actor: Principal,
+  ): Promise<'completed' | 'released' | null> {
+    const operation = await trx
+      .selectFrom('operations')
+      .select(['id', 'status', 'input', 'kind'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', operationId)
+      .forUpdate()
+      .skipLocked()
+      .executeTakeFirst();
+    if (!operation || operation.status !== 'running' || operation.kind !== ASSIGN_PLACEMENT_KIND) {
+      return null;
+    }
+    const input = (operation.input ?? {}) as { placementRequestId?: string; teamEntryId?: string };
+    const row = input.placementRequestId
+      ? await this.load(trx, organizationId, input.placementRequestId, true)
+      : undefined;
+    const holds = row
+      ? await this.capacity.holdsOfOwner(trx, organizationId, 'placement', row.id)
+      : [];
+    const live = holds.filter((h) => h.status === 'active' || h.status === 'expired');
+    const now = this.clock.now();
+    const member =
+      row && input.teamEntryId
+        ? (await this.rosters.effectiveRoster(organizationId, input.teamEntryId, now, trx)).find(
+            (m) => m.personId === row.participant_person_id,
+          )
+        : undefined;
+    if (row && input.teamEntryId && member && PlacementMachine.can(row.status, 'assign')) {
+      // An expired hold's place is re-acquired by the final step (or reported, never doubled).
+      await this.completeAssignment(trx, actor, organizationId, row.id, {
+        teamEntryId: input.teamEntryId,
+        holdIds: live.map((h) => h.id),
+        holdPools: new Map(live.map((h) => [h.id, h.pool_id] as const)),
+        operationId,
+        reasons: [
+          {
+            code: 'reconciled',
+            severity: 'info',
+            message:
+              'The assignment was interrupted after the roster addition and completed by reconciliation.',
+            source: { type: 'operation', id: operationId },
+          },
+        ],
+        poolId: live[0]?.pool_id ?? null,
+        membershipId: member.membershipId,
+        reason: 'interrupted assignment reconciled',
+        correlationId: null,
+      });
+      return 'completed';
+    }
+    for (const hold of live) {
+      if (hold.status === 'active') {
+        await this.capacity.releaseHoldRow(
+          trx,
+          organizationId,
+          hold.id,
+          'placement_interrupted',
+          null,
+        );
+      }
+    }
+    await this.operations.transition(trx, operationId, 'failed', {
+      error: {
+        code: 'PLACEMENT_INTERRUPTED',
+        message:
+          'The assignment was interrupted before the roster addition; its held place was released.',
+      },
+    });
+    await this.exceptions.raise(trx, {
+      organizationId,
+      category: 'enrollment.placement_interrupted',
+      severity: 'warning',
+      title: 'An interrupted placement was not completed; assign it again',
+      affectedType: 'placement_request',
+      affectedId: row?.id ?? null,
+      ownerQueue: 'program_manager',
+      dedupeKey: `placement_interrupted:${operationId}`,
+      details: {
+        operationId,
+        placementRequestId: row?.id ?? null,
+        teamEntryId: input.teamEntryId ?? null,
+        releasedHoldIds: live.filter((h) => h.status === 'active').map((h) => h.id),
+      },
+    });
+    if (row) {
+      await this.audit.record(trx, {
+        organizationId,
+        actor,
+        action: 'enrollment.reconcile_placement',
+        targetType: 'placement_request',
+        targetId: row.id,
+        operationId,
+        reason: 'interrupted before the roster addition',
+        details: { teamEntryId: input.teamEntryId ?? null, outcome: 'released' },
+      });
+    }
+    return 'released';
   }
 
   // -------------------------------------------------------------------------------------------

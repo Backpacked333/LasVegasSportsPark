@@ -1,11 +1,11 @@
 import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry, lazyPort, runWithTransaction } from '../../kernel';
+import { EventHandlerRegistry, lazyPort, moduleSettings, runWithTransaction } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
 import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
-import { SESSION_AUDIENCE_IMPL } from '../communications';
-import { IdentityModule } from '../identity';
+import { CommunicationsModule, SESSION_AUDIENCE_IMPL } from '../communications';
+import { IdentityEvents, IdentityModule } from '../identity';
 import { ClosureImpactContributors, SchedulingModule } from '../scheduling';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
@@ -24,6 +24,7 @@ import {
   MakeupExpiryDue,
 } from './enrollment.events';
 import { DEFAULT_ENROLLMENT_POLICY, ENROLLMENT_POLICY } from './enrollment.policy';
+import './enrollment.settings';
 import {
   BASKET_PORT,
   BOOKING_QUERY_IMPL,
@@ -45,7 +46,10 @@ import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
 import { CompetitionFormsCheck } from './services/competition-forms-check';
 import { CustomerScope } from './services/customer-scope';
+import { EnrollmentJobs } from './services/enrollment-jobs';
+import { EnrollmentNotices } from './services/enrollment-notices';
 import { EnrollmentViews } from './services/enrollment-views';
+import { MergeFollowUp } from './services/merge-follow-up';
 import { MyRegistrationsService } from './services/my-registrations.service';
 import { RegistrationOptionsService } from './services/registration-options.service';
 import { EnrollmentsService } from './services/enrollments.service';
@@ -62,6 +66,8 @@ import { WaitlistService } from './services/waitlist.service';
 const providers: Provider[] = [
   // Policy values the specification leaves to operators (DEC-006, DEC-026..029): proposed defaults.
   { provide: ENROLLMENT_POLICY, useValue: DEFAULT_ENROLLMENT_POLICY },
+  // K-15: ENROLLMENT_* technical settings (enrollment.settings.ts).
+  moduleSettings('enrollment'),
   // Finance registers FINANCE_POLICY_IMPL (refund, credit, charge on transfer/cancel, DEC-009);
   // until then no financial consequence is asserted. Resolved lazily so there is no import cycle.
   {
@@ -89,6 +95,9 @@ const providers: Provider[] = [
   CustomerScope,
   MyRegistrationsService,
   RegistrationOptionsService,
+  MergeFollowUp,
+  EnrollmentNotices,
+  EnrollmentJobs,
   CapacityService,
   EnrollmentsService,
   ApplicationsService,
@@ -124,7 +133,13 @@ const providers: Provider[] = [
  * See README.md.
  */
 @Module({
-  imports: [IdentityModule, CatalogModule, CompetitionModule, SchedulingModule],
+  imports: [
+    IdentityModule,
+    CatalogModule,
+    CompetitionModule,
+    SchedulingModule,
+    CommunicationsModule,
+  ],
   providers,
   controllers: [
     ApplicationsController,
@@ -169,6 +184,8 @@ export class EnrollmentModule implements OnModuleInit {
     private readonly makeups: MakeupsService,
     private readonly sessionParticipants: SessionParticipants,
     private readonly impactContributors: ClosureImpactContributors,
+    private readonly mergeFollowUp: MergeFollowUp,
+    private readonly notices: EnrollmentNotices,
   ) {}
 
   onModuleInit(): void {
@@ -304,6 +321,38 @@ export class EnrollmentModule implements OnModuleInit {
             event.correlationId,
           ),
         ),
+      { failureOwner: 'program_manager' },
+    );
+    // ENR-07 (SPK-IAM-007, §4.7 invariant 2): a merge that leaves two equivalent live records
+    // raises one owned exception per pair; nothing is canceled or rewritten automatically.
+    this.registry.on<EventPayload<typeof IdentityEvents.personsMerged>>(
+      IdentityEvents.personsMerged.type,
+      'enrollment.follow_person_merge',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, async () => {
+          await this.mergeFollowUp.onPersonsMerged(ctx.trx, event.organizationId, event.payload);
+        }),
+      { failureOwner: 'program_manager' },
+    );
+    // ENR-09 (SPK-COMMS-002): enrollment composes its own customer notices (IF-22).
+    this.registry.on<EventPayload<typeof EnrollmentEvents.waitlistOfferMade>>(
+      EnrollmentEvents.waitlistOfferMade.type,
+      'enrollment.notify_waitlist_offer',
+      (event, ctx) => runWithTransaction(ctx.trx, () => this.notices.waitlistOffer(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentEvents.placementAssigned>>(
+      EnrollmentEvents.placementAssigned.type,
+      'enrollment.notify_placement',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.placementAssigned(ctx.trx, event)),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof EnrollmentEvents.applicationDecided>>(
+      EnrollmentEvents.applicationDecided.type,
+      'enrollment.notify_registration_outcome',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.applicationDecided(ctx.trx, event)),
       { failureOwner: 'program_manager' },
     );
     // SPK-REG-005 / SPK-YOUTH-002: commercial pools follow the catalog limits; staffing pools keep
