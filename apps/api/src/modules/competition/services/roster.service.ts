@@ -1,27 +1,38 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   hasStaffRole,
   newId,
   systemPrincipal,
+  z,
   type AcceptTeamInvitationInput,
   type ChangeRosterInput,
   type CreateJoinRequestInput,
   type CreateTeamInvitationInput,
+  type DeclineTeamInvitationInput,
   type DecideJoinRequestInput,
+  type DomainEvent,
   type EligibilityEvaluation,
   type EligibilityQuery,
+  type HandoverTeamRoleInput,
   type JoinRequest,
   type JoinRequestDecided,
+  type ListMyTeamInvitationsQuery,
+  type Page,
   type Principal,
   type RevokeTeamInvitationInput,
   type RosterMember,
   type RosterPlayingStatus,
   type RosterQuery,
   type RosterResponse,
+  type RuleSetContent,
   type TeamInvitation,
   type TeamInvitationAccepted,
   type TeamInvitationIssued,
+  type TeamInvitationView,
+  type TeamRoleHandover,
 } from '@sportspark/contracts';
 import {
   isUniqueViolation,
@@ -30,26 +41,32 @@ import {
   type Db,
   type JoinRequestStatus,
   type RosterSource,
+  type TeamInvitationsTable,
   type TeamInvitationStatus,
 } from '@sportspark/db';
-import { sql } from 'kysely';
+import { sql, type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
   DATABASE,
+  OperationalExceptions,
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
   executorFor,
   snapshotActor,
   type Clock,
+  type HandlerContext,
+  type PeriodicJobContext,
+  type PeriodicJobResult,
   type Trx,
 } from '../../../kernel';
 import { PeopleService } from '../../identity';
+import { MERGED_ROSTER_DUPLICATE } from '../competition-matches.policy';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
-import { TEAM_INVITATION_DEFAULT_HOURS } from '../competition.policy';
+import { TEAM_INVITATION_DEFAULT_HOURS, TEAM_INVITATION_EXPIRY_JOB } from '../competition.policy';
 import {
   effectiveRoles,
   loadEntryContext,
@@ -64,12 +81,14 @@ import {
 import {
   hashToken,
   hoursFromNow,
+  isEffectiveAt,
   isStaffLike,
   iso,
   newToken,
   organizationOf,
   toJoinRequest,
   toTeamInvitation,
+  toTeamRole,
 } from '../competition.shared';
 import { JoinRequestMachine, TeamInvitationMachine } from '../competition.state-machines';
 import type { EffectiveRosterMember, RosterPort } from '../ports';
@@ -95,6 +114,7 @@ export class RosterService implements RosterPort {
     private readonly people: PeopleService,
     private readonly eligibility: EligibilityService,
     private readonly entries: TeamEntriesService,
+    private readonly exceptions: OperationalExceptions,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -553,6 +573,592 @@ export class RosterService implements RosterPort {
    * refused and rolled back. Only a caller presenting the token triggers it, so probing an id
    * reveals nothing (§4.10). No background sweeper exists yet (README "Known gaps").
    */
+  // -------------------------------------------------------------------------------------------
+  // Invitation reads, decline and expiry (CMP-03, CMP-07; SPK-CAP-001, §4.6, §4.10, §4.12)
+  // -------------------------------------------------------------------------------------------
+  /**
+   * `GET /v1/team-invitations/{id}`: the recipient (or a guardian holding register for a child
+   * recipient), the entry's captain and co-captains, and league staff; anyone else gets protected
+   * NOT_FOUND. The token is never returned.
+   */
+  async getInvitation(principal: Principal, invitationId: string): Promise<TeamInvitationView> {
+    const organizationId = organizationOf(principal);
+    const db = executorFor(this.db);
+    const row = await db
+      .selectFrom('team_invitations')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', invitationId)
+      .executeTakeFirst();
+    if (!row) throw errors.protectedNotFound('team_invitation');
+    if (!(await this.mayReadInvitation(db, principal, row))) {
+      throw errors.protectedNotFound('team_invitation');
+    }
+    const [view] = await this.invitationViews(db, organizationId, [row]);
+    return view as TeamInvitationView;
+  }
+
+  /**
+   * `GET /v1/me/team-invitations`: invitations addressed to the acting person or to one of their
+   * verified contact points (the rule acceptance applies), newest first.
+   */
+  async listMyInvitations(
+    principal: Principal,
+    query: ListMyTeamInvitationsQuery,
+  ): Promise<Page<TeamInvitationView>> {
+    const organizationId = organizationOf(principal);
+    const personId = principal.personId;
+    if (!personId) return { items: [], nextCursor: null };
+    await this.authorization.require(principal, CompetitionActions.readTeamInvitation, {
+      type: 'team_invitation',
+      organizationId,
+      subjectPersonIds: [personId],
+    });
+    const db = executorFor(this.db);
+    const contacts = await this.verifiedContacts(db, organizationId, personId);
+    const cursor = decodeCursor(query.cursor, InvitationCursor);
+    if (query.cursor && !cursor) throw errors.validation('The cursor is not valid.');
+    let q = db
+      .selectFrom('team_invitations')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('status', '=', query.status)
+      .where((eb) =>
+        eb.or([
+          eb('recipient_person_id', '=', personId),
+          ...contacts.map((c) =>
+            eb.and([
+              eb('recipient_contact_kind', '=', c.kind),
+              eb('recipient_contact_value', '=', c.value),
+            ]),
+          ),
+        ]),
+      );
+    if (cursor) {
+      const at = new Date(cursor.at);
+      q = q.where((eb) =>
+        eb.or([
+          eb('created_at', '<', at),
+          eb.and([eb('created_at', '=', at), eb('id', '<', cursor.id)]),
+        ]),
+      );
+    }
+    const rows = await q
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = rows.slice(0, query.limit);
+    const last = page[page.length - 1];
+    return {
+      items: await this.invitationViews(db, organizationId, page),
+      nextCursor:
+        rows.length > query.limit && last
+          ? encodeCursor({ at: iso(last.created_at), id: last.id })
+          : null,
+    };
+  }
+
+  /**
+   * `POST /v1/team-invitations/{id}/decline` (CMP-03): the recipient (or a guardian holding
+   * register for a child recipient) declines a pending invitation, which can then no longer be
+   * accepted. Locked row, TeamInvitationMachine 'decline', declined_at, audit and
+   * competition.team_invitation_resolved 'declined' naming the person.
+   */
+  async decline(
+    principal: Principal,
+    invitationId: string,
+    input: DeclineTeamInvitationInput,
+    correlationId: string | null,
+  ): Promise<TeamInvitationView> {
+    const organizationId = organizationOf(principal);
+    const now = this.clock.now();
+    return this.uow.run(async ({ trx }) => {
+      const invitation = await trx
+        .selectFrom('team_invitations')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', invitationId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!invitation) throw errors.protectedNotFound('team_invitation');
+      const subject = await this.recipientSubject(trx, principal, invitation);
+      if (!subject) throw errors.protectedNotFound('team_invitation');
+      await this.authorization.require(principal, CompetitionActions.declineTeamInvitation, {
+        type: 'team_invitation',
+        id: invitationId,
+        organizationId,
+        subjectPersonIds: [subject],
+        protected: true,
+      });
+      if (invitation.status === 'pending' && new Date(invitation.expires_at) <= now) {
+        // Past its expiry: the sweep (or the next acceptance attempt) records the expiry.
+        throw errors.invalidTransition('TeamInvitation', 'expired', 'decline');
+      }
+      TeamInvitationMachine.next(invitation.status, 'decline');
+      await this.resolveInvitation(
+        trx,
+        principal,
+        invitation.id,
+        invitation.team_entry_id,
+        invitation.roster_membership_id,
+        'decline',
+        { declined_at: now },
+        subject,
+        now,
+        correlationId,
+        { reason: input.reason ?? null },
+      );
+      const row = await trx
+        .selectFrom('team_invitations')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', invitationId)
+        .executeTakeFirstOrThrow();
+      const [view] = await this.invitationViews(trx, organizationId, [row]);
+      return view as TeamInvitationView;
+    });
+  }
+
+  /**
+   * CMP-07 (IF-24, §4.12): the periodic job `competition.expire_team_invitations`. Pending
+   * invitations past `expires_at` are claimed with SKIP LOCKED and expired one per transaction
+   * through the TeamInvitationMachine, audited with the system-only action
+   * competition.expire_team_invitation and announced (status expired, personId null). A replayed
+   * run finds nothing due and changes nothing. Expiry durations are unchanged.
+   */
+  async expireDueInvitations({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {
+    const due = await this.db
+      .selectFrom('team_invitations')
+      .select(['id', 'organization_id'])
+      .where('status', '=', 'pending')
+      .where('expires_at', '<=', now)
+      .orderBy('expires_at')
+      .orderBy('id')
+      .limit(batchSize)
+      .execute();
+    let processed = 0;
+    for (const candidate of due) {
+      const expired = await this.uow.run(async ({ trx }) => {
+        const row = await trx
+          .selectFrom('team_invitations')
+          .selectAll()
+          .where('organization_id', '=', candidate.organization_id)
+          .where('id', '=', candidate.id)
+          .where('status', '=', 'pending')
+          .where('expires_at', '<=', now)
+          .forUpdate()
+          .skipLocked()
+          .executeTakeFirst();
+        if (!row) return false;
+        const system = systemPrincipal(row.organization_id, TEAM_INVITATION_EXPIRY_JOB.name);
+        await this.authorization.require(system, CompetitionActions.expireTeamInvitation, {
+          type: 'team_invitation',
+          id: row.id,
+          organizationId: row.organization_id,
+        });
+        await this.resolveInvitation(
+          trx,
+          system,
+          row.id,
+          row.team_entry_id,
+          row.roster_membership_id,
+          'expire',
+          {},
+          null,
+          now,
+          null,
+          { auditAction: CompetitionActions.expireTeamInvitation.id },
+        );
+        return true;
+      });
+      if (expired) processed += 1;
+    }
+    const remaining = await this.db
+      .selectFrom('team_invitations')
+      .select((eb) => eb.fn.countAll<string>().as('n'))
+      .where('status', '=', 'pending')
+      .where('expires_at', '<=', now)
+      .executeTakeFirstOrThrow();
+    // A row another transaction holds is skipped now and found by the next run.
+    return { processed, remaining: processed === 0 ? 0 : Number(remaining.n) };
+  }
+
+  /** Whether the principal may read the invitation (recipient, guardian, captains, league staff). */
+  private async mayReadInvitation(
+    db: Reader,
+    principal: Principal,
+    row: Selectable<TeamInvitationsTable>,
+  ): Promise<boolean> {
+    const base = {
+      type: 'team_invitation',
+      id: row.id,
+      organizationId: row.organization_id,
+      protected: true,
+    };
+    const action = CompetitionActions.readTeamInvitation;
+    if (
+      isStaffLike(principal) &&
+      (await this.authorization.decide(principal, action, base)).allowed
+    ) {
+      return true;
+    }
+    const subject = await this.recipientSubject(db, principal, row);
+    if (
+      subject &&
+      (await this.authorization.decide(principal, action, { ...base, subjectPersonIds: [subject] }))
+        .allowed
+    ) {
+      return true;
+    }
+    return (
+      await this.authorization.decide(principal, action, {
+        ...base,
+        teamEntryId: row.team_entry_id,
+      })
+    ).allowed;
+  }
+
+  /**
+   * The recipient the principal acts for: themselves when the invitation names them or one of
+   * their verified contact points, or the named child they may hold register over (decided by the
+   * kernel); null when the invitation is not theirs.
+   */
+  private async recipientSubject(
+    db: Reader,
+    principal: Principal,
+    row: Selectable<TeamInvitationsTable>,
+  ): Promise<string | null> {
+    const personId = principal.personId;
+    if (!personId) return null;
+    if (row.recipient_person_id) return row.recipient_person_id;
+    if (row.recipient_contact_kind && row.recipient_contact_value) {
+      const contacts = await this.verifiedContacts(db, row.organization_id, personId);
+      const holds = contacts.some(
+        (c) => c.kind === row.recipient_contact_kind && c.value === row.recipient_contact_value,
+      );
+      return holds ? personId : null;
+    }
+    return null;
+  }
+
+  private async verifiedContacts(
+    db: Reader,
+    organizationId: string,
+    personId: string,
+  ): Promise<Array<{ kind: 'email' | 'phone'; value: string }>> {
+    const person = await this.people.loadPerson(db, organizationId, personId);
+    if (!person) return [];
+    const detail = await this.people.detail(db, organizationId, personId);
+    return detail.contactPoints
+      .filter((c) => c.verifiedAt !== null && (c.kind === 'email' || c.kind === 'phone'))
+      .map((c) => ({ kind: c.kind as 'email' | 'phone', value: c.value }));
+  }
+
+  /** Invitations as readers see them: team and season names, inviter's name, never the token. */
+  private async invitationViews(
+    db: Reader,
+    organizationId: string,
+    rows: Array<Selectable<TeamInvitationsTable>>,
+  ): Promise<TeamInvitationView[]> {
+    if (rows.length === 0) return [];
+    const entryIds = [...new Set(rows.map((r) => r.team_entry_id))];
+    const entries = await db
+      .selectFrom('team_entries')
+      .innerJoin('teams', (join) =>
+        join
+          .onRef('teams.organization_id', '=', 'team_entries.organization_id')
+          .onRef('teams.id', '=', 'team_entries.team_id'),
+      )
+      .innerJoin('seasons', (join) =>
+        join
+          .onRef('seasons.organization_id', '=', 'team_entries.organization_id')
+          .onRef('seasons.id', '=', 'team_entries.season_id'),
+      )
+      .select(['team_entries.id', 'teams.name as team_name', 'seasons.name as season_name'])
+      .where('team_entries.organization_id', '=', organizationId)
+      .where('team_entries.id', 'in', entryIds)
+      .execute();
+    const byEntry = new Map(entries.map((e) => [e.id, e]));
+    const inviters = new Map<string, string>();
+    for (const inviterId of new Set(rows.map((r) => r.invited_by_person_id))) {
+      if (!inviterId) continue;
+      const person = await this.people.loadPerson(db, organizationId, inviterId);
+      if (person) inviters.set(inviterId, `${person.given_name} ${person.family_name}`.trim());
+    }
+    const now = this.clock.now();
+    return rows.map((row) => {
+      const entry = byEntry.get(row.team_entry_id);
+      const inviterName = row.invited_by_person_id
+        ? inviters.get(row.invited_by_person_id)
+        : undefined;
+      return {
+        id: row.id,
+        teamEntryId: row.team_entry_id,
+        teamName: entry?.team_name ?? 'Unknown team',
+        seasonName: entry?.season_name ?? '',
+        invitedBy:
+          row.invited_by_person_id && inviterName
+            ? { personId: row.invited_by_person_id, displayName: inviterName }
+            : null,
+        message: row.message,
+        status: row.status,
+        effectiveStatus:
+          row.status === 'pending' && new Date(row.expires_at) <= now ? 'expired' : row.status,
+        expiresAt: iso(row.expires_at),
+        revision: row.revision,
+      };
+    });
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Person merge follow-up (CMP-08; SPK-IAM-007, SPK-COMP-005, §4.7 invariant 2, §4.2)
+  // -------------------------------------------------------------------------------------------
+  /**
+   * `identity.persons_merged` (IF-21): competition never rewrites a person id in its history
+   * (roster, role, result and discipline rows keep the id they were recorded with; reads resolve
+   * merges through personIdsResolvingTo). When the survivor and the merged person both hold an
+   * open roster row or an open team role on the same entry, the duplicate the roster invariants
+   * forbid is surfaced once per merge to the league manager (dedupe key by merge id).
+   */
+  async followPersonMerge(
+    event: DomainEvent<{
+      mergeId: string;
+      survivorPersonId: string;
+      mergedPersonId: string;
+      operationId: string;
+    }>,
+    ctx: HandlerContext,
+  ): Promise<void> {
+    const { mergeId, survivorPersonId, mergedPersonId } = event.payload;
+    const organizationId = event.organizationId;
+    if (survivorPersonId === mergedPersonId) return;
+    const now = this.clock.now();
+    const holdings = async (personId: string): Promise<Set<string>> => {
+      const rows = await ctx.trx
+        .selectFrom('roster_memberships')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('person_id', '=', personId)
+        .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', now)]))
+        .execute();
+      const roles = await ctx.trx
+        .selectFrom('team_roles')
+        .select('team_entry_id')
+        .where('organization_id', '=', organizationId)
+        .where('person_id', '=', personId)
+        .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', now)]))
+        .execute();
+      return new Set([
+        ...rows.filter((r) => statusAt(r) !== null).map((r) => r.team_entry_id),
+        ...roles.map((r) => r.team_entry_id),
+      ]);
+    };
+    const survivor = await holdings(survivorPersonId);
+    const merged = await holdings(mergedPersonId);
+    const teamEntryIds = [...survivor].filter((id) => merged.has(id)).sort();
+    if (teamEntryIds.length === 0) return;
+    await this.exceptions.raise(ctx.trx, {
+      organizationId,
+      category: MERGED_ROSTER_DUPLICATE.category,
+      severity: MERGED_ROSTER_DUPLICATE.severity,
+      title: 'A person merge left two roster memberships or roles on one team entry',
+      affectedType: 'person_merge',
+      affectedId: mergeId,
+      ownerQueue: MERGED_ROSTER_DUPLICATE.ownerQueue,
+      dedupeKey: `merged_roster_duplicate:${mergeId}`,
+      details: { mergeId, survivorPersonId, mergedPersonId, teamEntryIds },
+    });
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Team role handover (CMP-13; SPK-COMP-005, SPK-CAP-001, §4.9)
+  // -------------------------------------------------------------------------------------------
+  /**
+   * `POST /v1/team-entries/{id}/roles/handover`: the current captain (handing over their own
+   * captaincy, or a co-captaincy) or league staff passes a role to an effective active roster
+   * member who is eligible under the rule set (a captain is an adult, the proposed default the
+   * entry's creation applies). The outgoing row, any other open role row of the new holder, and
+   * the new row change at one instant in one unit of work; roleHolders answers the new holder at
+   * once.
+   */
+  async handoverRole(
+    principal: Principal,
+    teamEntryId: string,
+    input: HandoverTeamRoleInput,
+    correlationId: string | null,
+  ): Promise<TeamRoleHandover> {
+    const organizationId = organizationOf(principal);
+    const now = this.clock.now();
+    return this.uow.run(async ({ trx }) => {
+      const context = await loadEntryContext(trx, organizationId, teamEntryId, { forUpdate: true });
+      if (!context) throw errors.protectedNotFound('team_entry');
+      await this.authorization.require(principal, CompetitionActions.handoverTeamRole, {
+        type: 'team_entry',
+        id: teamEntryId,
+        organizationId,
+        teamEntryId,
+        protected: true,
+      });
+      assertExpectedRevision(input.expectedRevision, context.entry.revision);
+      this.assertEntryTakesPlayers(context, 'handover_role');
+      if (context.season.status === 'completed' || context.season.status === 'archived') {
+        throw errors.invalidTransition('Season', context.season.status, 'handover_role');
+      }
+      if (
+        !isStaffLike(principal) &&
+        input.role === 'captain' &&
+        input.fromPersonId !== principal.personId
+      ) {
+        throw errors.accessDenied('Only the current captain hands over the captaincy.', {
+          action: CompetitionActions.handoverTeamRole.id,
+        });
+      }
+      const open = await trx
+        .selectFrom('team_roles')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('team_entry_id', '=', teamEntryId)
+        .where('person_id', 'in', [input.fromPersonId, input.toPersonId])
+        .where('effective_to', 'is', null)
+        .where('effective_from', '<=', now)
+        .forUpdate()
+        .execute();
+      const outgoing = open.find(
+        (r) => r.person_id === input.fromPersonId && r.role === input.role,
+      );
+      if (!outgoing) {
+        throw errors.validation(`The person does not hold the ${input.role} role on this entry.`, {
+          code: 'ROLE_NOT_HELD',
+          personId: input.fromPersonId,
+          role: input.role,
+        });
+      }
+      const incumbent = open.find((r) => r.person_id === input.toPersonId) ?? null;
+      if (incumbent && (incumbent.role === input.role || incumbent.role === 'captain')) {
+        throw errors.validation('The person already holds this or a higher role on the entry.', {
+          code: 'ROLE_ALREADY_HELD',
+          personId: input.toPersonId,
+          role: incumbent.role,
+        });
+      }
+      const membership = await openRosterRow(trx, organizationId, teamEntryId, input.toPersonId);
+      if (!membership || statusAt(membership) !== 'active' || !isEffectiveAt(membership, now)) {
+        throw errors.validation('The new holder must be an active member of the roster.', {
+          code: 'NOT_ON_ROSTER',
+          personId: input.toPersonId,
+        });
+      }
+      const person = await this.people.loadPerson(trx, organizationId, input.toPersonId);
+      if (input.role === 'captain' && person?.kind !== 'adult') {
+        // Proposed default pending the guardian/child-account policy decision (§6.6).
+        throw errors.validation('A team captain must be an adult.', {
+          code: 'CAPTAIN_MUST_BE_ADULT',
+        });
+      }
+      const evaluation = await this.eligibility.evaluateInContext(
+        trx,
+        context,
+        input.toPersonId,
+        now,
+        {
+          membershipStatus: 'active',
+          existingMembership: true,
+          actorIsStaff: isStaffLike(principal),
+          restricted: !isStaffLike(principal),
+        },
+        trx,
+      );
+      if (!evaluation.eligible) {
+        throw errors.eligibility('The new holder is not eligible under the rule set.', {
+          personId: input.toPersonId,
+          reasons: evaluation.reasons,
+        });
+      }
+      const ended = [outgoing, ...(incumbent ? [incumbent] : [])];
+      for (const row of ended) {
+        await trx
+          .updateTable('team_roles')
+          .set({
+            effective_to: now,
+            ended_by: json(snapshotActor(principal)),
+            ended_reason: row.id === outgoing.id ? input.reason : `handover: ${input.role}`,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', row.id)
+          .execute();
+      }
+      const newRoleId = newId();
+      await trx
+        .insertInto('team_roles')
+        .values({
+          id: newRoleId,
+          organization_id: organizationId,
+          team_entry_id: teamEntryId,
+          person_id: input.toPersonId,
+          role: input.role,
+          effective_from: now,
+          effective_to: null,
+          assigned_by: json(snapshotActor(principal)),
+          ended_by: null,
+          ended_reason: null,
+        })
+        .execute();
+      const entryRevision = context.entry.revision + 1;
+      await trx
+        .updateTable('team_entries')
+        .set({ revision: entryRevision })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', teamEntryId)
+        .where('revision', '=', context.entry.revision)
+        .execute();
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: CompetitionActions.handoverTeamRole.id,
+        targetType: 'team_entry',
+        targetId: teamEntryId,
+        beforeRevision: context.entry.revision,
+        afterRevision: entryRevision,
+        reason: input.reason,
+        correlationId,
+        details: {
+          role: input.role,
+          fromPersonId: input.fromPersonId,
+          toPersonId: input.toPersonId,
+          effectiveAt: now.toISOString(),
+          endedRoleIds: ended.map((r) => r.id),
+          newRoleId,
+        },
+      });
+      await this.outbox.enqueue(trx, CompetitionEvents.teamRoleChanged, {
+        organizationId,
+        aggregateType: 'team_entry',
+        aggregateId: teamEntryId,
+        payload: {
+          teamEntryId,
+          personId: input.toPersonId,
+          role: input.role,
+          change: 'handed_over',
+          fromPersonId: input.fromPersonId,
+          toPersonId: input.toPersonId,
+          effectiveAt: now.toISOString(),
+        },
+        correlationId,
+      });
+      const roles = await effectiveRoles(trx, organizationId, teamEntryId, now);
+      return {
+        teamEntryId,
+        role: input.role,
+        fromPersonId: input.fromPersonId,
+        toPersonId: input.toPersonId,
+        effectiveAt: now.toISOString(),
+        roles: roles.map(toTeamRole),
+        entryRevision,
+      };
+    });
+  }
+
   private async expireIfDue(
     principal: Principal,
     organizationId: string,
@@ -913,6 +1519,7 @@ export class RosterService implements RosterPort {
     },
   ): Promise<RosterMember> {
     const organizationId = context.entry.organization_id;
+    assertJerseyInRange(context.rules, input.jerseyNumber);
     await this.lockSeasonMemberships(trx, organizationId, context.entry.season_id, [
       input.personId,
     ]);
@@ -1190,6 +1797,7 @@ export class RosterService implements RosterPort {
     personId: string | null,
     now: Date,
     correlationId: string | null,
+    options: { auditAction?: string; reason?: string | null } = {},
   ): Promise<void> {
     const organizationId = organizationOf(principal);
     // Every event leaves `pending`, so the machine's answer is one of the resolved states.
@@ -1208,9 +1816,10 @@ export class RosterService implements RosterPort {
     await this.audit.record(trx, {
       organizationId,
       actor: principal,
-      action: `competition.team_invitation_${status}`,
+      action: options.auditAction ?? `competition.team_invitation_${status}`,
       targetType: 'team_invitation',
       targetId: invitationId,
+      reason: options.reason ?? null,
       correlationId,
       details: { teamEntryId, status },
     });
@@ -1242,6 +1851,23 @@ export class RosterService implements RosterPort {
       : await rosterRowsEffectiveAt(db, organizationId, context.entry.id, at);
     const members = await this.entries.rosterMembers(db, context, rows, at);
     return { teamEntryId: context.entry.id, at: at.toISOString(), members };
+  }
+}
+
+const InvitationCursor = z.object({ at: z.string(), id: z.uuid() });
+
+/**
+ * CMP-13 (SPK-COMP-005, DEC-002): a rule set with `roster.jerseyNumbers` refuses numbers outside
+ * its range; without one only per-entry uniqueness (the database's open-row index) applies.
+ */
+export function assertJerseyInRange(rules: RuleSetContent, jerseyNumber: number | null): void {
+  const range = rules.roster.jerseyNumbers ?? null;
+  if (range === null || jerseyNumber === null) return;
+  if (jerseyNumber < range.min || jerseyNumber > range.max) {
+    throw errors.validation(
+      `Jersey numbers run from ${range.min} to ${range.max} under this rule set.`,
+      { code: 'JERSEY_OUT_OF_RANGE', jerseyNumber, min: range.min, max: range.max },
+    );
   }
 }
 

@@ -1,17 +1,23 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  DIVISION_SPECIFICATIONS_LIMIT,
   DomainError,
   errors,
   newId,
+  systemPrincipal,
+  z,
   type CreateFixtureSpecificationInput,
   type DraftChangeInput,
   type FairnessPreference,
   type FixtureSpecification,
   type GenerateFixturesInput,
+  type ListSolverRunsQuery,
+  type Page,
   type Principal,
-  type ProposedGame,
   type SolverOutcome,
   type SolverRun,
+  type UpdateFixtureSpecificationInput,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import { sql } from 'kysely';
@@ -20,9 +26,12 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
   OperationsService,
   Outbox,
   UnitOfWork,
+  assertExpectedRevision,
+  executorFor,
   snapshotActor,
   type Clock,
 } from '../../../kernel';
@@ -31,20 +40,27 @@ import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { solverDraftName, unscheduledFixtureDeadline } from '../competition-matches.policy';
 import {
+  proposalEntryIds,
   specificationColumns,
   toFixtureSpecification,
   toSolverRun,
   type SpecificationRow,
 } from '../competition-matches.shared';
 import { CompetitionEvents } from '../competition.events';
-import { loadRuleSetRow, loadSeasonRow, type Reader } from '../competition.queries';
+import { loadRuleSetRow, loadSeasonRow, teamNamesOf, type Reader } from '../competition.queries';
 import {
   criteriaOf,
   organizationOf,
   ruleSetContentOf,
   type SeasonRow,
 } from '../competition.shared';
-import { addDays, generateFixtures } from '../matches/fixture-generator';
+import { addDays, generateFixtures, type ProposedGame } from '../matches/fixture-generator';
+import { nextCursorOf } from './discipline.service';
+
+const RunCursor = z.object({ at: z.string(), id: z.uuid() });
+
+/** Draft states in which a generated proposal still waits in scheduling (CMP-12). */
+const OPEN_DRAFT_STATUSES = new Set(['editing', 'validated', 'publishing', 'failed']);
 
 interface GenerationPlan {
   runId: string;
@@ -81,7 +97,239 @@ export class FixtureGenerationService {
     private readonly operations: OperationsService,
     private readonly resources: ResourcesService,
     private readonly drafts: ScheduleDraftsService,
+    private readonly facilities: FacilityDirectory,
   ) {}
+
+  /** Solver runs with the proposed games' team names (CMP-01: one join per page). */
+  private async runViews(
+    db: Reader,
+    organizationId: string,
+    rows: Parameters<typeof toSolverRun>[0][],
+  ): Promise<SolverRun[]> {
+    const names = await teamNamesOf(db, organizationId, rows.flatMap(proposalEntryIds));
+    return rows.map((row) => toSolverRun(row, names));
+  }
+
+  /** `GET /v1/divisions/{id}/fixture-specifications` (CMP-05): bounded, newest first. */
+  async listForDivision(
+    principal: Principal,
+    divisionId: string,
+  ): Promise<{ items: FixtureSpecification[] }> {
+    const organizationId = organizationOf(principal);
+    const db = executorFor(this.db);
+    const division = await db
+      .selectFrom('divisions')
+      .select(['id', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', divisionId)
+      .executeTakeFirst();
+    if (!division) throw errors.notFound('division', divisionId);
+    // The single read's action, at the division's facility (a facility-scoped manager sees theirs).
+    await this.authorization.require(principal, MatchActions.manageFixtureSpecifications, {
+      type: 'fixture_specification',
+      organizationId,
+      facilityId: division.facility_id,
+    });
+    const rows = (await db
+      .selectFrom('fixture_specifications')
+      .select([
+        ...specificationColumns,
+        sql<string>`fixture_specifications.starts_on::text`.as('starts_on'),
+        sql<string>`fixture_specifications.ends_on::text`.as('ends_on'),
+      ])
+      .where('fixture_specifications.organization_id', '=', organizationId)
+      .where('fixture_specifications.division_id', '=', divisionId)
+      .orderBy('fixture_specifications.created_at', 'desc')
+      .orderBy('fixture_specifications.id', 'desc')
+      .limit(DIVISION_SPECIFICATIONS_LIMIT)
+      .execute()) as SpecificationRow[];
+    const teamEntryIds = await this.entryIds(db, organizationId, divisionId);
+    return { items: rows.map((row) => toFixtureSpecification(row, teamEntryIds)) };
+  }
+
+  /** `GET /v1/fixture-specifications/{id}/solver-runs` (CMP-05): newest first, keyset cursor. */
+  async listRuns(
+    principal: Principal,
+    specificationId: string,
+    query: ListSolverRunsQuery,
+  ): Promise<Page<SolverRun>> {
+    const organizationId = organizationOf(principal);
+    const db = executorFor(this.db);
+    const spec = await this.loadSpecification(db, organizationId, specificationId);
+    if (!spec) throw errors.notFound('fixture_specification', specificationId);
+    await this.authorization.require(principal, MatchActions.manageFixtureSpecifications, {
+      type: 'solver_run',
+      organizationId,
+      facilityId: spec.facility_id,
+    });
+    const cursor = decodeCursor(query.cursor, RunCursor);
+    if (query.cursor && !cursor) throw errors.validation('The cursor is not valid.');
+    let q = db
+      .selectFrom('solver_runs')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('specification_id', '=', specificationId);
+    if (cursor) {
+      const at = new Date(cursor.at);
+      q = q.where((eb) =>
+        eb.or([
+          eb('created_at', '<', at),
+          eb.and([eb('created_at', '=', at), eb('id', '<', cursor.id)]),
+        ]),
+      );
+    }
+    const rows = await q
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = rows.slice(0, query.limit);
+    return {
+      items: await this.runViews(db, organizationId, page),
+      nextCursor: nextCursorOf(rows, page, query.limit),
+    };
+  }
+
+  /**
+   * `PATCH /v1/fixture-specifications/{id}` (CMP-12, SPK-FIX-001): the creation fields, changed
+   * from the revision the caller saw, while no generation run of the specification waits in an
+   * open scheduling draft (INVALID_TRANSITION SPECIFICATION_IN_USE): a draft already proposes
+   * fixtures from the current content, so the scheduler publishes or discards it first.
+   */
+  async updateSpecification(
+    principal: Principal,
+    specificationId: string,
+    input: UpdateFixtureSpecificationInput,
+    correlationId: string | null,
+  ): Promise<FixtureSpecification> {
+    const organizationId = organizationOf(principal);
+    const current = await this.loadSpecification(this.db, organizationId, specificationId);
+    if (!current) throw errors.notFound('fixture_specification', specificationId);
+    const facilityId = input.facilityId ?? current.facility_id;
+    await this.authorization.require(principal, MatchActions.manageFixtureSpecifications, {
+      type: 'fixture_specification',
+      id: specificationId,
+      organizationId,
+      facilityId: current.facility_id,
+    });
+    if (facilityId !== current.facility_id) {
+      await this.authorization.require(principal, MatchActions.manageFixtureSpecifications, {
+        type: 'fixture_specification',
+        organizationId,
+        facilityId,
+      });
+    }
+    const requiredResourceIds = input.requiredResourceIds ?? current.required_resource_ids;
+    if (input.requiredResourceIds || input.facilityId) {
+      // Resources are validated through the scheduling module (outside the transaction, §4.11).
+      const resources = await this.resources.listResources(principal, facilityId);
+      const unknown = requiredResourceIds.filter((id) => !resources.some((r) => r.id === id));
+      if (unknown.length > 0) {
+        throw errors.validation('Required resources must belong to the facility.', {
+          unknownResourceIds: unknown,
+        });
+      }
+    }
+    const drafts = await this.db
+      .selectFrom('solver_runs')
+      .select('schedule_draft_id')
+      .where('organization_id', '=', organizationId)
+      .where('specification_id', '=', specificationId)
+      .where('schedule_draft_id', 'is not', null)
+      .execute();
+    const reader = systemPrincipal(organizationId, 'competition.specification_in_use');
+    for (const { schedule_draft_id: draftId } of drafts) {
+      if (!draftId) continue;
+      const draft = await this.drafts.get(reader, draftId);
+      if (OPEN_DRAFT_STATUSES.has(draft.status)) {
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          'A schedule draft generated from this specification is still open; publish or discard it first.',
+          {
+            details: {
+              code: 'SPECIFICATION_IN_USE',
+              scheduleDraftId: draftId,
+              draftStatus: draft.status,
+            },
+          },
+        );
+      }
+    }
+    return this.uow.run(async ({ trx }) => {
+      const row = await this.loadSpecification(trx, organizationId, specificationId, {
+        forUpdate: true,
+      });
+      if (!row) throw errors.notFound('fixture_specification', specificationId);
+      assertExpectedRevision(input.expectedRevision, row.revision);
+      const season = await loadSeasonRow(trx, organizationId, row.season_id);
+      if (!season) throw errors.notFound('season', row.season_id);
+      const teamEntryIds = await this.entryIds(trx, organizationId, row.division_id);
+      const next = {
+        name: input.name ?? row.name,
+        gamesPerTeam: input.gamesPerTeam ?? row.games_per_team,
+        opponentFrequency: input.opponentFrequency ?? row.opponent_frequency,
+        startsOn: input.startsOn ?? row.starts_on,
+        endsOn: input.endsOn ?? row.ends_on,
+        fairnessPreferences:
+          input.fairnessPreferences ?? (row.fairness_preferences as FairnessPreference[]),
+      };
+      if (next.startsOn > next.endsOn) {
+        throw errors.validation('startsOn must not be after endsOn.');
+      }
+      assertSpecificationConsistent(next, season, teamEntryIds, { requireTeams: false });
+      const updated = await trx
+        .updateTable('fixture_specifications')
+        .set({
+          name: next.name,
+          facility_id: facilityId,
+          games_per_team: next.gamesPerTeam,
+          opponent_frequency: next.opponentFrequency,
+          starts_on: next.startsOn,
+          ends_on: next.endsOn,
+          blackouts: input.blackouts ? json(input.blackouts) : undefined,
+          byes_allowed: input.byesAllowed,
+          minimum_rest_minutes: input.minimumRestMinutes,
+          allowed_start_times: input.allowedStartTimes ? json(input.allowedStartTimes) : undefined,
+          match_duration_minutes: input.matchDurationMinutes,
+          required_resource_ids: input.requiredResourceIds,
+          playoff_structure:
+            input.playoffStructure === undefined
+              ? undefined
+              : input.playoffStructure === null
+                ? null
+                : json(input.playoffStructure),
+          fairness_preferences: input.fairnessPreferences
+            ? json(input.fairnessPreferences)
+            : undefined,
+          max_games_per_team_per_day: input.maxGamesPerTeamPerDay,
+          officials_per_game: input.officialsPerGame,
+          revision: row.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', specificationId)
+        .where('revision', '=', row.revision)
+        .executeTakeFirst();
+      if (Number(updated.numUpdatedRows) === 0) {
+        throw errors.staleRevision(input.expectedRevision, row.revision);
+      }
+      const { expectedRevision: _expected, reason, policyReferences: _refs, ...changes } = input;
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: MatchActions.manageFixtureSpecifications.id,
+        targetType: 'fixture_specification',
+        targetId: specificationId,
+        beforeRevision: row.revision,
+        afterRevision: row.revision + 1,
+        reason: reason ?? null,
+        correlationId,
+        details: { operation: 'update', changedFields: Object.keys(changes).sort() },
+      });
+      const saved = await this.loadSpecification(trx, organizationId, specificationId);
+      if (!saved) throw errors.notFound('fixture_specification', specificationId);
+      return toFixtureSpecification(saved, teamEntryIds);
+    });
+  }
 
   async createSpecification(
     principal: Principal,
@@ -151,6 +399,8 @@ export class FixtureGenerationService {
           required_resource_ids: input.requiredResourceIds,
           playoff_structure: input.playoffStructure ? json(input.playoffStructure) : null,
           fairness_preferences: json(input.fairnessPreferences),
+          max_games_per_team_per_day: input.maxGamesPerTeamPerDay ?? null,
+          officials_per_game: input.officialsPerGame ?? null,
           created_by: json(snapshotActor(principal)),
         })
         .execute();
@@ -250,12 +500,11 @@ export class FixtureGenerationService {
       // run holds the division row. FOR NO KEY UPDATE still lets other writers reference it.
       if (!input.dryRun) divisionQuery = divisionQuery.forNoKeyUpdate();
       const division = await divisionQuery.executeTakeFirstOrThrow();
-      const facility = await trx
-        .selectFrom('facilities')
-        .select(['id', 'timezone'])
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', spec.facility_id)
-        .executeTakeFirstOrThrow();
+      // CMP-11 (§4.2): the facility's IANA time zone through the kernel's directory (IF-03).
+      const facility = (
+        await this.facilities.describe(organizationId, [spec.facility_id], trx)
+      ).get(spec.facility_id);
+      if (!facility) throw errors.notFound('facility', spec.facility_id);
       const entries = await trx
         .selectFrom('team_entries')
         .innerJoin('teams', (join) =>
@@ -318,6 +567,8 @@ export class FixtureGenerationService {
           resourceBuffers,
           fairnessPreferences: snapshot.fairnessPreferences,
           playoffStructure: snapshot.playoffStructure,
+          maxGamesPerTeamPerDay: spec.max_games_per_team_per_day ?? null,
+          officialsPerGame: spec.officials_per_game ?? null,
           resolveInstant: (date, time) =>
             resolveLocal(date, time, facility.timezone)?.instant ?? null,
           obligationDeadline: unscheduledFixtureDeadline(
@@ -548,7 +799,8 @@ export class FixtureGenerationService {
         correlationId,
         operationId: plan.operationId,
       });
-      return toSolverRun(run);
+      const [view] = await this.runViews(trx, organizationId, [run]);
+      return view as SolverRun;
     });
   }
 
@@ -568,7 +820,8 @@ export class FixtureGenerationService {
       organizationId,
       facilityId: spec?.facility_id ?? null,
     });
-    return toSolverRun(row);
+    const [view] = await this.runViews(this.db, organizationId, [row]);
+    return view as SolverRun;
   }
 
   private async loadSpecification(

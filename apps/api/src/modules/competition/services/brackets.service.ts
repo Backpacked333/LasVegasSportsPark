@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   errors,
   newId,
   type BracketNode,
@@ -7,6 +8,8 @@ import {
   type CreateBracketNodeInput,
   type Principal,
   type PublishBracketNodeInput,
+  type SeedFromStandingsInput,
+  type TiebreakExplanation,
 } from '@sportspark/contracts';
 import { json, type BracketNodesTable, type Db } from '@sportspark/db';
 import type { Selectable } from 'kysely';
@@ -25,9 +28,10 @@ import {
 import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { toBracketNode } from '../competition-matches.shared';
-import { loadSeasonRow, type Reader } from '../competition.queries';
+import { loadSeasonRow, teamNamesOf, type Reader } from '../competition.queries';
 import { organizationOf } from '../competition.shared';
 import { readTarget } from './competitions.service';
+import { StandingsService } from './standings.service';
 
 function sourcesOf(node: Selectable<BracketNodesTable>): BracketSource[] {
   const rule = node.source_rule as { home: BracketSource; away: BracketSource };
@@ -55,7 +59,157 @@ export class BracketsService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly standings: StandingsService,
   ) {}
+
+  /** Bracket nodes with their slot holders' team names (CMP-01: one join per page). */
+  private async views(
+    db: Reader,
+    organizationId: string,
+    rows: Array<Selectable<BracketNodesTable>>,
+  ): Promise<BracketNode[]> {
+    const names = await teamNamesOf(
+      db,
+      organizationId,
+      rows.flatMap((r) => [r.home_entry_id, r.away_entry_id]),
+    );
+    return rows.map((row) => toBracketNode(row, names));
+  }
+
+  /**
+   * `POST /v1/bracket-nodes/{id}/seed-from-standings` (CMP-10, CMP-15; SPK-COMP-001 bracket
+   * progression, for every competition): an unpublished node's seeded slots take the entries at
+   * the requested ranks of a division's (or a tournament pool's) standings. The table must be
+   * final, every one of its fixtures holding an official result; an unresolved tie at a requested
+   * rank refuses the seeding with the tied entries named (a draw of lots or a play-off is the
+   * league's decision, never computed).
+   */
+  async seedFromStandings(
+    principal: Principal,
+    nodeId: string,
+    input: SeedFromStandingsInput,
+    correlationId: string | null,
+  ): Promise<BracketNode> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const node = await this.load(trx, organizationId, nodeId, { forUpdate: true });
+      if (!node) throw errors.notFound('bracket_node', nodeId);
+      await this.authorization.require(principal, MatchActions.manageBrackets, {
+        type: 'bracket_node',
+        id: nodeId,
+        organizationId,
+      });
+      assertExpectedRevision(input.expectedRevision, node.revision);
+      if (node.published) throw errors.invalidTransition('BracketNode', 'published', 'seed');
+      const rule = node.source_rule as { home: BracketSource; away: BracketSource };
+      const seeds: Array<{
+        slot: 'home' | 'away';
+        teamEntryId: string;
+        rank: number;
+        divisionId: string | null;
+        poolId: string | null;
+      }> = [];
+      for (const source of input.sources) {
+        if (rule[source.slot].kind !== 'seed') {
+          throw errors.validation('Only a seeded slot takes an entry from the standings.', {
+            code: 'SLOT_NOT_SEEDED',
+            slot: source.slot,
+            sourceKind: rule[source.slot].kind,
+          });
+        }
+        const table = source.poolId
+          ? await this.standings.poolTable(trx, organizationId, source.poolId)
+          : await this.standings.divisionTable(
+              trx,
+              organizationId,
+              node.season_id,
+              source.divisionId as string,
+            );
+        if (!table || table.seasonId !== node.season_id) {
+          throw source.poolId
+            ? errors.notFound('pool', source.poolId)
+            : errors.notFound('division', source.divisionId as string);
+        }
+        if (table.pendingFixtureIds.length > 0) {
+          throw new DomainError(
+            'INVALID_TRANSITION',
+            'The standings are not final: some fixtures have no official result yet.',
+            {
+              details: {
+                code: 'STANDINGS_NOT_FINAL',
+                pendingFixtureIds: table.pendingFixtureIds,
+              },
+            },
+          );
+        }
+        const row = table.rows[source.rank - 1];
+        if (!row) {
+          throw errors.validation(`The standings have no rank ${source.rank}.`, {
+            code: 'RANK_NOT_FOUND',
+            rank: source.rank,
+            entries: table.rows.length,
+          });
+        }
+        const tied = unresolvedTieOf(table.tiebreakExplanations, row.teamEntryId);
+        if (tied) {
+          throw new DomainError(
+            'INVALID_TRANSITION',
+            `Rank ${source.rank} is an unresolved tie; the league decides it before seeding.`,
+            { details: { code: 'UNRESOLVED_TIE', rank: source.rank, tiedEntryIds: tied } },
+          );
+        }
+        seeds.push({
+          slot: source.slot,
+          teamEntryId: row.teamEntryId,
+          rank: source.rank,
+          divisionId: source.divisionId ?? null,
+          poolId: source.poolId ?? null,
+        });
+      }
+      const set: { home_entry_id?: string; away_entry_id?: string } = {};
+      for (const seed of seeds) {
+        if (seed.slot === 'home') set.home_entry_id = seed.teamEntryId;
+        else set.away_entry_id = seed.teamEntryId;
+      }
+      const home = set.home_entry_id ?? node.home_entry_id;
+      const away = set.away_entry_id ?? node.away_entry_id;
+      if (home !== null && home === away) {
+        throw errors.validation('Both slots would hold the same entry.', {
+          code: 'SAME_ENTRY_BOTH_SLOTS',
+          teamEntryId: home,
+        });
+      }
+      const updated = await trx
+        .updateTable('bracket_nodes')
+        .set({ ...set, revision: node.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', nodeId)
+        .where('revision', '=', node.revision)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: MatchActions.manageBrackets.id,
+        targetType: 'bracket_node',
+        targetId: nodeId,
+        beforeRevision: node.revision,
+        afterRevision: updated.revision,
+        reason: input.reason ?? null,
+        correlationId,
+        details: { operation: 'seed_from_standings', seeds },
+      });
+      await this.outbox.enqueue(trx, MatchEvents.bracketSeeded, {
+        organizationId,
+        aggregateType: 'bracket_node',
+        aggregateId: nodeId,
+        payload: { bracketNodeId: nodeId, seasonId: node.season_id, seeds },
+        correlationId,
+      });
+      const [view] = await this.views(trx, organizationId, [updated]);
+      return view as BracketNode;
+    });
+  }
 
   async create(
     principal: Principal,
@@ -152,7 +306,8 @@ export class BracketsService {
         payload: { bracketNodeId: id, seasonId, round: input.round },
         correlationId,
       });
-      return toBracketNode(row);
+      const [view] = await this.views(trx, organizationId, [row]);
+      return view as BracketNode;
     });
   }
 
@@ -206,7 +361,8 @@ export class BracketsService {
         payload: { bracketNodeId: nodeId, seasonId: node.season_id, fixtureId: node.fixture_id },
         correlationId,
       });
-      return toBracketNode(updated);
+      const [view] = await this.views(trx, organizationId, [updated]);
+      return view as BracketNode;
     });
   }
 
@@ -237,7 +393,7 @@ export class BracketsService {
       principal.kind === 'staff' || principal.kind === 'system'
         ? rows
         : rows.filter((r) => r.published);
-    return visible.map(toBracketNode);
+    return this.views(this.db, organizationId, visible);
   }
 
   /**
@@ -610,4 +766,20 @@ export class BracketsService {
     if (options.forUpdate) q = q.forUpdate();
     return (await q.executeTakeFirst()) ?? null;
   }
+}
+
+/** The still-tied entries of an unresolved tie the entry is part of, or null (CMP-10). */
+export function unresolvedTieOf(
+  explanations: readonly TiebreakExplanation[],
+  teamEntryId: string,
+): string[] | null {
+  for (const explanation of explanations) {
+    if (explanation.resolved) continue;
+    for (const step of explanation.steps) {
+      if (step.outcome !== 'unresolved') continue;
+      const ids = step.values.map((v) => v.teamEntryId);
+      if (ids.includes(teamEntryId)) return [...ids].sort();
+    }
+  }
+  return null;
 }

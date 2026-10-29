@@ -80,3 +80,28 @@ export function unscheduledFixtureDeadline(now: Date, seasonEndsBefore: Date | n
   const proposed = new Date(now.getTime() + UNSCHEDULED_FIXTURE_DEADLINE_DAYS * 86_400_000);
   return seasonEndsBefore && seasonEndsBefore < proposed ? seasonEndsBefore : proposed;
 }
+
+/**
+ * CMP-12 (SPK-DISC-001, SPK-RESULT-004): an official correction removed the card an approved
+ * (active) suspension rests on. The suspension is not lifted automatically; the league manager
+ * decides (overturn with history, or keep it on another basis). One exception per suspension.
+ */
+export const SUSPENSION_CARD_REMOVED = {
+  category: 'competition.suspension_card_removed',
+  ownerQueue: 'league_manager',
+  severity: 'warning',
+} as const;
+
+/** CMP-12: the reason recorded when a correction overturns a proposed card suspension. */
+export const CARD_REMOVED_OVERTURN_REASON = 'card removed by correction';
+
+/**
+ * CMP-08 (SPK-IAM-007, §4.7 invariant 2): a person merge left the survivor and the merged person
+ * both on one team entry (roster rows or team roles). Nothing is rewritten; the league manager
+ * resolves it (for example by ending one of the rows). One exception per merge.
+ */
+export const MERGED_ROSTER_DUPLICATE = {
+  category: 'competition.merged_roster_duplicate',
+  ownerQueue: 'league_manager',
+  severity: 'warning',
+} as const;

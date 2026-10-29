@@ -1,18 +1,24 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  DomainError,
+  encodeCursor,
   errors,
   hasStaffRole,
   newId,
+  z,
+  type ListResultRevisionsQuery,
+  type Page,
   type Principal,
   type PublishResultInput,
   type PublishResultOutcome,
   type ResubmitResultInput,
+  type ResultClassification,
   type ResultDetails,
   type ResultRevision,
   type ReturnResultInput,
   type RuleSetContent,
   type SubmitResultInput,
-  systemPrincipal,
 } from '@sportspark/contracts';
 import { json, type Db, type FixturesTable, type ResultRevisionsTable } from '@sportspark/db';
 import type { Selectable } from 'kysely';
@@ -26,6 +32,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  executorFor,
   snapshotActor,
   type Clock,
   type Trx,
@@ -45,6 +52,7 @@ import {
 } from '../competition.queries';
 import {
   isStaffLike,
+  iso,
   organizationOf,
   ruleSetContentOf,
   type SeasonRow,
@@ -69,6 +77,15 @@ interface FixtureContext {
 
 const reviewDedupeKey = (revisionId: string): string => `result_correction:${revisionId}`;
 
+const ResultCursor = z.object({ at: z.string(), id: z.uuid() });
+
+/** Classifications recorded before kickoff: a game that will not (or did not yet) take place. */
+const PRE_KICKOFF_CLASSIFICATIONS: readonly ResultClassification[] = [
+  'forfeit',
+  'canceled',
+  'postponed',
+];
+
 /** Winner and loser of a decided game (forfeit: the forfeiting side loses); null when undecided. */
 function sidesOf(
   revision: RevisionRow,
@@ -90,6 +107,15 @@ function sidesOf(
     return revision.home_score > revision.away_score
       ? { winnerEntryId: home, loserEntryId: away }
       : { winnerEntryId: away, loserEntryId: home };
+  }
+  // CMP-10: a drawn playoff game decided by a shootout (rule set tiebreak.playoff 'shootout').
+  const shootout = revision.shootout_winner_entry_id ?? null;
+  if (
+    revision.classification === 'completed' &&
+    shootout !== null &&
+    (shootout === home || shootout === away)
+  ) {
+    return { winnerEntryId: shootout, loserEntryId: shootout === home ? away : home };
   }
   return { winnerEntryId: null, loserEntryId: null };
 }
@@ -146,6 +172,8 @@ export class ResultsService {
       if (context.fixture.status === 'canceled') {
         throw errors.invalidTransition('Fixture', context.fixture.status, 'submit_result');
       }
+      this.assertKickoffPassed(context.fixture, input.classification);
+      await this.assertShootoutAllowed(trx, context, input);
       const open = await trx
         .selectFrom('result_revisions')
         .select('id')
@@ -190,6 +218,7 @@ export class ResultsService {
           home_score: input.homeScore ?? null,
           away_score: input.awayScore ?? null,
           forfeiting_entry_id: input.forfeitingEntryId ?? null,
+          shootout_winner_entry_id: input.shootoutWinnerEntryId ?? null,
           details: json(this.detailsFromInput(input, incidentIds)),
           submitted_by: json(snapshotActor(principal)),
           submitted_by_person_id: principal.personId,
@@ -265,6 +294,8 @@ export class ResultsService {
       assertExpectedRevision(input.expectedRevision, revision.revision);
       const next = ResultMachine.next(revision.status, 'submit');
       this.validateInput(context.fixture, input);
+      this.assertKickoffPassed(context.fixture, input.classification);
+      await this.assertShootoutAllowed(trx, context, input);
       const previous = revision.details as Partial<ResultDetails>;
       const incidentIds = await this.recordIncidents(trx, principal, context, input, correlationId);
       const now = this.clock.now();
@@ -276,6 +307,7 @@ export class ResultsService {
           home_score: input.homeScore ?? null,
           away_score: input.awayScore ?? null,
           forfeiting_entry_id: input.forfeitingEntryId ?? null,
+          shootout_winner_entry_id: input.shootoutWinnerEntryId ?? null,
           details: json(
             this.detailsFromInput(input, [...(previous.incidentIds ?? []), ...incidentIds]),
           ),
@@ -368,30 +400,20 @@ export class ResultsService {
         correlationId,
         details: { transitions: [revision.status, next] },
       });
-      // A correction waiting for management review that is returned closes its review task.
-      const task = await trx
-        .selectFrom('operational_exceptions')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('dedupe_key', '=', reviewDedupeKey(revisionId))
-        .where('status', 'in', ['open', 'acknowledged'])
-        .executeTakeFirst();
+      // A correction waiting for management review that is returned closes its review task. CMP-11:
+      // the task is found through the kernel's exception reads (IF-29) and resolved by the reviewer
+      // as the audited actor (exceptions.manage_own_queue for the league manager queue).
+      const task = await this.openReviewTask(trx, organizationId, revisionId);
       if (task) {
-        await this.exceptions.transition(
-          trx,
-          systemPrincipal(organizationId, 'competition.result_correction_review'),
-          task.id,
-          'resolved',
-          {
-            reason: input.reason,
-            correlationId: correlationId ?? undefined,
-            resolution: {
-              outcome: 'correction_returned',
-              resultRevisionId: revisionId,
-              reviewedBy: snapshotActor(principal),
-            },
+        await this.exceptions.transition(trx, principal, task.id, 'resolved', {
+          reason: input.reason,
+          correlationId: correlationId ?? undefined,
+          resolution: {
+            outcome: 'correction_returned',
+            resultRevisionId: revisionId,
+            reviewedBy: snapshotActor(principal),
           },
-        );
+        });
       }
       await this.outbox.enqueue(trx, MatchEvents.resultReturned, {
         organizationId,
@@ -595,6 +617,19 @@ export class ResultsService {
         correlationId,
         operationId,
       });
+      // CMP-12 (SPK-DISC-001, SPK-RESULT-004): a correction that removed the card behind a
+      // suspension overturns a proposed one and raises a league-manager exception for an active one.
+      if (official) {
+        await this.discipline.reconcileRemovedCards(trx, principal, {
+          organizationId,
+          fixtureId: revision.fixture_id,
+          seasonId: context.fixture.season_id,
+          cards: context.rules.cards,
+          resultCards: detailsOf(updated).cards,
+          correlationId,
+          operationId,
+        });
+      }
       // Bracket progression of a playoff game (SPK-COMP-001, SPK-RESULT-004): the first result
       // with a winner fills the empty slots it feeds; a correction that changes a recorded
       // outcome revises the progression when nothing downstream acts on it yet (otherwise it was
@@ -631,23 +666,18 @@ export class ResultsService {
           });
       if (reviewed) {
         // The management review task is resolved by this decision; the published bracket and the
-        // downstream games are not rewritten here (they stay as published history).
-        await this.exceptions.transition(
-          trx,
-          systemPrincipal(organizationId, 'competition.result_correction_review'),
-          reviewed.exceptionId,
-          'resolved',
-          {
-            reason: updated.reason ?? undefined,
-            correlationId: correlationId ?? undefined,
-            resolution: {
-              outcome: 'correction_published',
-              resultRevisionId: revisionId,
-              supersededRevisionId: official?.id ?? null,
-              reviewedBy: snapshotActor(principal),
-            },
+        // downstream games are not rewritten here (they stay as published history). The reviewing
+        // manager is the audited actor (CMP-11).
+        await this.exceptions.transition(trx, principal, reviewed.exceptionId, 'resolved', {
+          reason: updated.reason ?? undefined,
+          correlationId: correlationId ?? undefined,
+          resolution: {
+            outcome: 'correction_published',
+            resultRevisionId: revisionId,
+            supersededRevisionId: official?.id ?? null,
+            reviewedBy: snapshotActor(principal),
           },
-        );
+        });
       }
 
       await this.audit.record(trx, {
@@ -856,14 +886,9 @@ export class ResultsService {
         action: MatchActions.publishResult.id,
       });
     }
-    const task = await trx
-      .selectFrom('operational_exceptions')
-      .select(['id', 'category', 'affected_type', 'affected_id', 'status'])
-      .where('organization_id', '=', organizationOf(principal))
-      .where('id', '=', exceptionId)
-      .executeTakeFirst();
+    const task = await this.exceptions.get(organizationOf(principal), exceptionId, trx);
     const matches =
-      task !== undefined &&
+      task !== null &&
       task.category === RESULT_CORRECTION_REVIEW.category &&
       task.affected_type === 'result_revision' &&
       task.affected_id === revisionId;
@@ -897,6 +922,63 @@ export class ResultsService {
     return visible.map(toResultRevision);
   }
 
+  /**
+   * CMP-05 (SPK-RESULT-004): the result revisions of a season, newest first, for staff who hold the
+   * result read action (the same action a single read uses), e.g. the submitted results awaiting
+   * publication across the season.
+   */
+  async listForSeason(
+    principal: Principal,
+    seasonId: string,
+    query: ListResultRevisionsQuery,
+  ): Promise<Page<ResultRevision>> {
+    const organizationId = organizationOf(principal);
+    const db = executorFor(this.db);
+    const season = await loadSeasonRow(db, organizationId, seasonId);
+    if (!season) throw errors.notFound('season', seasonId);
+    await this.authorization.require(principal, MatchActions.readResults, {
+      type: 'season',
+      id: seasonId,
+      organizationId,
+    });
+    const cursor = decodeCursor(query.cursor, ResultCursor);
+    if (query.cursor && !cursor) throw errors.validation('The cursor is not valid.');
+    let q = db
+      .selectFrom('result_revisions as r')
+      .innerJoin('fixtures as f', (join) =>
+        join
+          .onRef('f.organization_id', '=', 'r.organization_id')
+          .onRef('f.id', '=', 'r.fixture_id'),
+      )
+      .selectAll('r')
+      .where('r.organization_id', '=', organizationId)
+      .where('f.season_id', '=', seasonId);
+    if (query.status) q = q.where('r.status', '=', query.status);
+    if (cursor) {
+      const at = new Date(cursor.at);
+      q = q.where((eb) =>
+        eb.or([
+          eb('r.created_at', '<', at),
+          eb.and([eb('r.created_at', '=', at), eb('r.id', '<', cursor.id)]),
+        ]),
+      );
+    }
+    const rows = await q
+      .orderBy('r.created_at', 'desc')
+      .orderBy('r.id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = rows.slice(0, query.limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map(toResultRevision),
+      nextCursor:
+        rows.length > query.limit && last
+          ? encodeCursor({ at: iso(last.created_at), id: last.id })
+          : null,
+    };
+  }
+
   async get(principal: Principal, revisionId: string): Promise<ResultRevision> {
     const organizationId = organizationOf(principal);
     const row = await this.loadRevision(this.db, organizationId, revisionId);
@@ -911,6 +993,68 @@ export class ResultsService {
   // -------------------------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------------------------
+  /** The open management review task of a correction, through the kernel's reads (IF-29). */
+  private async openReviewTask(
+    trx: Trx,
+    organizationId: string,
+    revisionId: string,
+  ): Promise<{ id: string } | null> {
+    const page = await this.exceptions.list(
+      organizationId,
+      {
+        statuses: ['open', 'acknowledged'],
+        category: RESULT_CORRECTION_REVIEW.category,
+        affectedType: 'result_revision',
+        affectedId: revisionId,
+        limit: 1,
+      },
+      trx,
+    );
+    return page.items[0] ?? null;
+  }
+
+  /**
+   * CMP-12 (SPK-RESULT-001): a played result waits for kickoff; before the scheduled start only a
+   * forfeit, cancellation or postponement is recorded (INVALID_TRANSITION FIXTURE_NOT_STARTED).
+   */
+  private assertKickoffPassed(fixture: FixtureRow, classification: ResultClassification): void {
+    if (!fixture.scheduled_start || PRE_KICKOFF_CLASSIFICATIONS.includes(classification)) return;
+    if (this.clock.now().getTime() >= new Date(fixture.scheduled_start).getTime()) return;
+    throw new DomainError('INVALID_TRANSITION', 'The fixture has not started yet.', {
+      details: {
+        code: 'FIXTURE_NOT_STARTED',
+        fixtureId: fixture.id,
+        scheduledStart: new Date(fixture.scheduled_start).toISOString(),
+        classification,
+      },
+    });
+  }
+
+  /**
+   * CMP-10 (SPK-COMP-001, DEC-002): a drawn bracket game names a shootout winner only when the
+   * season's rule set says `tiebreak.playoff: shootout`; a league game never does.
+   */
+  private async assertShootoutAllowed(
+    trx: Trx,
+    context: FixtureContext,
+    input: SubmitResultInput | ResubmitResultInput,
+  ): Promise<void> {
+    if (!input.shootoutWinnerEntryId) return;
+    const allowed =
+      context.rules.tiebreak?.playoff === 'shootout' &&
+      (await this.brackets.isBracketFixture(
+        trx,
+        context.fixture.organization_id,
+        context.fixture.id,
+      ));
+    if (!allowed) {
+      throw errors.validation('A shootout does not decide this game under its rule set.', {
+        code: 'SHOOTOUT_NOT_ALLOWED',
+        fixtureId: context.fixture.id,
+      });
+    }
+  }
+
   private async loadContext(
     db: Reader,
     organizationId: string,
@@ -1013,6 +1157,11 @@ export class ResultsService {
       throw errors.validation('A bye has no result.', { fixtureId: fixture.id });
     }
     const sides = [fixture.home_entry_id, fixture.away_entry_id];
+    if (input.shootoutWinnerEntryId && !sides.includes(input.shootoutWinnerEntryId)) {
+      throw errors.validation('The shootout winner must be one of the fixture sides.', {
+        shootoutWinnerEntryId: input.shootoutWinnerEntryId,
+      });
+    }
     if (input.forfeitingEntryId && !sides.includes(input.forfeitingEntryId)) {
       throw errors.validation('The forfeiting entry must be one of the fixture sides.', {
         forfeitingEntryId: input.forfeitingEntryId,

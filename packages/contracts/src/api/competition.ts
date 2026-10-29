@@ -55,6 +55,8 @@ export const RosterSourceSchema = z.enum([
   'renewal',
   /** A paid and approved join_team registration (SPK-AT-002). */
   'registration',
+  /** Created by a migration import (CMP-09, §5.3). */
+  'import',
 ]);
 export const TeamInvitationStatusSchema = z
   .enum(['pending', 'accepted', 'declined', 'revoked', 'expired'])
@@ -218,6 +220,15 @@ export const RosterPolicySchema = z
     guestOrSubstituteRequiresApproval: z.boolean(),
     /** Whether a co-captain satisfies captain checks (kernel team authority). Proposed default: false. */
     coCaptainMayActAsCaptain: z.boolean(),
+    /**
+     * CMP-13 (SPK-COMP-005, DEC-002): the jersey numbers the competition allows. Absent or null,
+     * only per-entry uniqueness applies (no range is assumed).
+     */
+    jerseyNumbers: z
+      .object({ min: z.number().int().min(0).max(999), max: z.number().int().min(0).max(999) })
+      .refine((r) => r.min <= r.max, { message: 'min must not exceed max', path: ['min'] })
+      .nullable()
+      .optional(),
   })
   .openapi('RosterPolicy');
 
@@ -262,6 +273,15 @@ export const RuleSetContentSchema = z
     drawsAllowed: z.boolean(),
     overtime: OvertimeRulesSchema,
     shootout: ShootoutRulesSchema,
+    /**
+     * CMP-10 (SPK-COMP-001, DEC-002): how a drawn playoff (bracket) game is decided. Only
+     * `shootout` lets a drawn bracket game name a winner on its result; absent or null, a drawn
+     * playoff game names none and the bracket waits for a league decision.
+     */
+    tiebreak: z
+      .object({ playoff: z.enum(['shootout', 'replay', 'league_decision']) })
+      .nullable()
+      .optional(),
     cards: CardRulesSchema,
     forfeit: ForfeitRulesSchema,
     abandonment: AbandonmentRulesSchema,
@@ -305,6 +325,13 @@ export const RuleSetContentSchema = z
         code: 'custom',
         path: ['drawsAllowed'],
         message: 'when draws are not allowed, overtime or a shootout must decide the match',
+      });
+    }
+    if (c.tiebreak?.playoff === 'shootout' && !c.shootout.enabled) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tiebreak', 'playoff'],
+        message: 'a shootout decides drawn playoff games only when shootouts are enabled',
       });
     }
     if (new Set(c.tiebreakers).size !== c.tiebreakers.length) {
@@ -620,6 +647,8 @@ export const TeamEntrySchema = z
     seasonId: z.uuid(),
     divisionId: z.uuid().nullable(),
     teamId: z.uuid(),
+    /** CMP-01: the continuing team's name. */
+    teamName: z.string(),
     status: TeamEntryStatusSchema,
     appliedByPersonId: z.uuid().nullable(),
     appliedAt: Instant,
@@ -869,6 +898,37 @@ export const RevokeTeamInvitationBody = withCommandMeta({})
   .openapi('RevokeTeamInvitationRequest');
 export type RevokeTeamInvitationInput = z.infer<typeof RevokeTeamInvitationBody>;
 
+/**
+ * CMP-03 (SPK-CAP-001, §4.10): an invitation as its recipient, the entry's captains and
+ * co-captains, and league staff read it. The token is never returned. `effectiveStatus` is
+ * `expired` for a pending invitation past its expiry that the sweep has not recorded yet.
+ */
+export const TeamInvitationViewSchema = z
+  .object({
+    id: z.uuid(),
+    teamEntryId: z.uuid(),
+    teamName: z.string(),
+    seasonName: z.string(),
+    invitedBy: z.object({ personId: z.uuid(), displayName: z.string() }).nullable(),
+    message: z.string().nullable(),
+    status: TeamInvitationStatusSchema,
+    effectiveStatus: TeamInvitationStatusSchema,
+    expiresAt: Instant,
+    revision: Revision,
+  })
+  .openapi('TeamInvitationView');
+export type TeamInvitationView = z.infer<typeof TeamInvitationViewSchema>;
+
+export const ListMyTeamInvitationsQuery = PageRequestSchema.extend({
+  status: TeamInvitationStatusSchema.default('pending'),
+});
+export type ListMyTeamInvitationsQuery = z.infer<typeof ListMyTeamInvitationsQuery>;
+
+export const DeclineTeamInvitationBody = withCommandMeta({}).openapi(
+  'DeclineTeamInvitationRequest',
+);
+export type DeclineTeamInvitationInput = z.infer<typeof DeclineTeamInvitationBody>;
+
 export const TeamInvitationAcceptedSchema = z
   .object({ invitation: TeamInvitationSchema, membership: RosterMemberSchema })
   .openapi('TeamInvitationAccepted');
@@ -909,6 +969,36 @@ export const JoinRequestDecidedSchema = z
   .object({ request: JoinRequestSchema, membership: RosterMemberSchema.nullable() })
   .openapi('JoinRequestDecided');
 export type JoinRequestDecided = z.infer<typeof JoinRequestDecidedSchema>;
+
+/**
+ * CMP-13 (SPK-COMP-005, SPK-CAP-001, §4.9): the captain (or league staff) hands a role to an
+ * effective roster member; the outgoing and incoming role rows end and start at one instant.
+ */
+export const HandoverTeamRoleBody = withCommandMeta({
+  role: z.enum(['captain', 'co_captain']),
+  fromPersonId: z.uuid(),
+  toPersonId: z.uuid(),
+})
+  .extend({ reason: Reason, expectedRevision: Revision })
+  .refine((b) => b.fromPersonId !== b.toPersonId, {
+    message: 'the role passes to another person',
+    path: ['toPersonId'],
+  })
+  .openapi('HandoverTeamRoleRequest');
+export type HandoverTeamRoleInput = z.infer<typeof HandoverTeamRoleBody>;
+
+export const TeamRoleHandoverSchema = z
+  .object({
+    teamEntryId: z.uuid(),
+    role: TeamRoleSchema,
+    fromPersonId: z.uuid(),
+    toPersonId: z.uuid(),
+    effectiveAt: Instant,
+    roles: z.array(TeamRoleRecordSchema),
+    entryRevision: Revision,
+  })
+  .openapi('TeamRoleHandover');
+export type TeamRoleHandover = z.infer<typeof TeamRoleHandoverSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Fixtures (§4.4 Matches) and availability (SPK-CAP-003)
@@ -1025,13 +1115,81 @@ export const FixtureSideSchema = z
   })
   .openapi('FixtureSide');
 
+/**
+ * CMP-04 (SPK-SCHED-008, SPK-UX-004): where a fixture is played, copied from its scheduling event:
+ * the facility, its IANA time zone (every facility-local time is shown in it) and the resources
+ * (pitches) by name. Null until the fixture's event changes after this projection existed.
+ */
+export const FixtureVenueSchema = z
+  .object({
+    facilityId: z.uuid(),
+    facilityName: z.string(),
+    /** IANA time zone of the facility (SPK-SCHED-008). */
+    timezone: z.string(),
+    resources: z.array(z.object({ id: z.uuid(), name: z.string() })),
+  })
+  .openapi('FixtureVenue');
+export type FixtureVenue = z.infer<typeof FixtureVenueSchema>;
+
+/** CMP-04 (SPK-CAP-003): an answer the viewer may see and change (themselves or a child with register). */
+export const FixtureResponseSchema = z
+  .object({
+    personId: z.uuid(),
+    state: AvailabilityStateSchema,
+    /** Null while no answer is recorded; send it as `expectedRevision` when changing an answer. */
+    revision: z.number().int().nullable(),
+    respondedAt: Instant.nullable(),
+  })
+  .openapi('FixtureResponse');
+export type FixtureResponse = z.infer<typeof FixtureResponseSchema>;
+
 export const FixtureDetailSchema = FixtureSchema.extend({
   home: FixtureSideSchema,
   away: FixtureSideSchema.nullable(),
-  /** The acting person's own response when they are on a roster. */
+  /** Deprecated (CMP-04): use `responses`. The acting person's own response when on a roster. */
   myResponse: AvailabilityStateSchema.nullable(),
+  /** CMP-04: the venue copied from the scheduling event, or null. */
+  venue: FixtureVenueSchema.nullable(),
+  /** CMP-04: the viewer's playing status on either side at kickoff; null when not on a roster. */
+  rosterStatus: RosterPlayingStatusSchema.nullable(),
+  /** CMP-04: answers of the viewer and of every rostered person they hold `register` over. */
+  responses: z.array(FixtureResponseSchema),
 }).openapi('FixtureDetail');
 export type FixtureDetail = z.infer<typeof FixtureDetailSchema>;
+
+/** CMP-01: a row of `GET /v1/seasons/{id}/fixtures` with the two teams' names (null for a bye). */
+export const SeasonFixtureSchema = FixtureSchema.extend({
+  homeTeamName: z.string(),
+  awayTeamName: z.string().nullable(),
+}).openapi('SeasonFixture');
+export type SeasonFixture = z.infer<typeof SeasonFixtureSchema>;
+
+/**
+ * CMP-14 (SPK-CAP-001 "request player availability", SCR-C-24): a captain (a co-captain only when
+ * the rule set lets one act as captain) or league staff asks the entry's roster players without an
+ * answer; a later request is the reminder and reaches only those still without one.
+ */
+export const CreateAvailabilityRequestBody = withCommandMeta({
+  teamEntryId: z.uuid(),
+  message: z.string().trim().min(1).max(500).optional(),
+}).openapi('CreateAvailabilityRequestRequest');
+export type CreateAvailabilityRequestInput = z.infer<typeof CreateAvailabilityRequestBody>;
+
+export const AvailabilityRequestSchema = z
+  .object({
+    id: z.uuid(),
+    fixtureId: z.uuid(),
+    teamEntryId: z.uuid(),
+    requestedByPersonId: z.uuid().nullable(),
+    message: z.string().nullable(),
+    requestedAt: Instant,
+    recipientCount: z.number().int(),
+  })
+  .openapi('AvailabilityRequest');
+export type AvailabilityRequest = z.infer<typeof AvailabilityRequestSchema>;
+
+export const ListAvailabilityRequestsQuery = z.object({ teamEntryId: z.uuid().optional() });
+export type ListAvailabilityRequestsQuery = z.infer<typeof ListAvailabilityRequestsQuery>;
 
 export const FixtureAvailabilityResponseSchema = z
   .object({
@@ -1092,6 +1250,21 @@ export const TeamEntryReadinessSchema = z
   })
   .openapi('TeamEntryReadiness');
 
+/**
+ * CMP-02 (SPK-CAP-001/002, SPK-UX-002): who the workspace viewer is on the entry and what they may
+ * do now. `actingAsCaptain` is true for the captain, and for a co-captain only when the rule set's
+ * `roster.coCaptainMayActAsCaptain` says so; `availableActions` are action ids the kernel allows
+ * the viewer on this entry in its current state.
+ */
+export const TeamEntryViewerSchema = z
+  .object({
+    roles: z.array(TeamRoleSchema),
+    actingAsCaptain: z.boolean(),
+    availableActions: z.array(z.string()),
+  })
+  .openapi('TeamEntryViewer');
+export type TeamEntryViewer = z.infer<typeof TeamEntryViewerSchema>;
+
 export const UpcomingFixtureSchema = z
   .object({
     fixture: FixtureSchema,
@@ -1118,12 +1291,73 @@ export const TeamEntryWorkspaceSchema = z
     roles: z.array(TeamRoleRecordSchema),
     roster: z.array(RosterMemberSchema),
     readiness: TeamEntryReadinessSchema,
-    pendingInvitations: z.array(TeamInvitationSchema),
-    pendingJoinRequests: z.array(JoinRequestSchema),
+    /** CMP-02: null when the viewer may not see them; [] when there are none. */
+    pendingInvitations: z.array(TeamInvitationSchema).nullable(),
+    /** CMP-02: null when the viewer may not see them; [] when there are none. */
+    pendingJoinRequests: z.array(JoinRequestSchema).nullable(),
     upcomingFixtures: z.array(UpcomingFixtureSchema),
+    viewer: TeamEntryViewerSchema,
   })
   .openapi('TeamEntryWorkspace');
 export type TeamEntryWorkspace = z.infer<typeof TeamEntryWorkspaceSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Import commands (CMP-09, IF-40, §5.3, §5.4, SPK-AT-024): in-process only, never a route. The
+// migration module passes the snapshot's content with the batch's import provenance.
+// ---------------------------------------------------------------------------------------------
+export const ImportSeasonInputSchema = z
+  .object({
+    competitionId: z.uuid(),
+    name: Name,
+    ruleSetId: z.uuid(),
+    startsOn: DateOnly,
+    endsOn: DateOnly,
+    status: SeasonStatusSchema,
+    registrationOfferingRef: z.string().trim().min(1).max(200).nullable().default(null),
+    registrationOpensAt: Instant.nullable().default(null),
+    registrationClosesAt: Instant.nullable().default(null),
+  })
+  .refine((b) => b.startsOn <= b.endsOn, { message: 'startsOn must not be after endsOn' });
+export type ImportSeasonInput = z.input<typeof ImportSeasonInputSchema>;
+
+export const ImportTeamInputSchema = z.object({
+  name: Name,
+  colors: TeamColorsSchema.default({}),
+  status: TeamStatusSchema.default('active'),
+});
+export type ImportTeamInput = z.input<typeof ImportTeamInputSchema>;
+
+/**
+ * The entry's snapshot status: `applied` and `approved` entries are imported (an approved one
+ * through the TeamEntryMachine's `approve`, with the snapshot's approval date); withdrawn and
+ * rejected entries stay staged history and are refused.
+ */
+export const ImportTeamEntryInputSchema = z.object({
+  seasonId: z.uuid(),
+  teamId: z.uuid(),
+  divisionId: z.uuid().nullable().default(null),
+  status: TeamEntryStatusSchema,
+  appliedAt: Instant,
+  approvedAt: Instant.nullable().default(null),
+  /** The captain role holder, when the snapshot names one (effective from `appliedAt`). */
+  captainPersonId: z.uuid().nullable().default(null),
+});
+export type ImportTeamEntryInput = z.input<typeof ImportTeamEntryInputSchema>;
+
+export const ImportRosterMembershipInputSchema = z
+  .object({
+    teamEntryId: z.uuid(),
+    personId: z.uuid(),
+    status: RosterPlayingStatusSchema,
+    effectiveFrom: Instant,
+    effectiveTo: Instant.nullable().default(null),
+    jerseyNumber: z.number().int().min(0).max(999).nullable().default(null),
+  })
+  .refine((b) => b.effectiveTo === null || new Date(b.effectiveFrom) <= new Date(b.effectiveTo), {
+    message: 'effectiveTo must not be before effectiveFrom',
+    path: ['effectiveTo'],
+  });
+export type ImportRosterMembershipInput = z.input<typeof ImportRosterMembershipInputSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // OpenAPI registration
@@ -1235,9 +1469,9 @@ command(
 );
 query(
   '/seasons/{id}/fixtures',
-  'List the fixtures of a season',
+  'List the fixtures of a season with team names (CMP-01)',
   ListSeasonFixturesQuery,
-  pageSchema(FixtureSchema),
+  pageSchema(SeasonFixtureSchema),
 );
 
 command(
@@ -1340,6 +1574,34 @@ command(
   TeamInvitationSchema,
   200,
 );
+query(
+  '/me/team-invitations',
+  'Team invitations addressed to me or to one of my verified contacts (CMP-03, SPK-CAP-001)',
+  ListMyTeamInvitationsQuery,
+  pageSchema(TeamInvitationViewSchema),
+);
+query(
+  '/team-invitations/{id}',
+  'Read a team invitation: recipient, captains, co-captains, league staff (CMP-03, §4.10)',
+  null,
+  TeamInvitationViewSchema,
+);
+command(
+  'post',
+  '/team-invitations/{id}/decline',
+  'Decline a pending team invitation (CMP-03, SPK-CAP-001)',
+  DeclineTeamInvitationBody,
+  TeamInvitationViewSchema,
+  200,
+);
+command(
+  'post',
+  '/team-entries/{id}/roles/handover',
+  'Hand a captain or co-captain role to a roster member (CMP-13, SPK-COMP-005)',
+  HandoverTeamRoleBody,
+  TeamRoleHandoverSchema,
+  200,
+);
 command(
   'post',
   '/team-entries/{id}/join-requests',
@@ -1375,8 +1637,21 @@ command(
 command(
   'post',
   '/fixtures/{id}/availability',
-  'Record an authorized RSVP (§4.8, SPK-CAP-003)',
+  'Record an authorized RSVP before kickoff; expectedRevision is enforced (§4.8, SPK-CAP-003, CMP-04)',
   RecordAvailabilityBody,
   FixtureAvailabilityResponseSchema,
   200,
+);
+command(
+  'post',
+  '/fixtures/{id}/availability-requests',
+  'Ask the roster players without an answer for their availability (CMP-14, SPK-CAP-001)',
+  CreateAvailabilityRequestBody,
+  AvailabilityRequestSchema,
+);
+query(
+  '/fixtures/{id}/availability-requests',
+  'Earlier availability requests of a fixture with their recipient counts (CMP-14)',
+  ListAvailabilityRequestsQuery,
+  z.array(AvailabilityRequestSchema),
 );

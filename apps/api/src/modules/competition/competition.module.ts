@@ -1,8 +1,14 @@
 import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry, TEAM_AUTHORITY_IMPL, lazyPort, type Trx } from '../../kernel';
-import { IdentityModule } from '../identity';
+import {
+  EventHandlerRegistry,
+  PeriodicJobRegistry,
+  TEAM_AUTHORITY_IMPL,
+  lazyPort,
+  type Trx,
+} from '../../kernel';
+import { IdentityEvents, IdentityModule } from '../identity';
 import {
   ClosureImpactContributors,
   EventChanged,
@@ -28,6 +34,7 @@ import {
   type FormsCheckPort,
 } from './competition-matches.ports';
 import { BracketsController } from './controllers/brackets.controller';
+import { CompetitionOperationsController } from './controllers/competition-operations.controller';
 import { CompetitionsController } from './controllers/competitions.controller';
 import { DisciplineController } from './controllers/discipline.controller';
 import { DisputesController } from './controllers/disputes.controller';
@@ -39,6 +46,8 @@ import { RosterController } from './controllers/roster.controller';
 import { SeasonsController } from './controllers/seasons.controller';
 import { TeamEntriesController } from './controllers/team-entries.controller';
 import { TeamsController } from './controllers/teams.controller';
+import { TeamWorkspaceController } from './controllers/team-workspace.controller';
+import { TEAM_INVITATION_EXPIRY_JOB } from './competition.policy';
 import {
   ELIGIBILITY_PORT,
   FIXTURE_PORT,
@@ -49,7 +58,9 @@ import {
   TEAM_ENTRY_QUERY_PORT,
   type SuspensionCheckPort,
 } from './ports';
+import { AvailabilityRequestsService } from './services/availability-requests.service';
 import { BracketsService } from './services/brackets.service';
+import { CompetitionImportService } from './services/competition-import.service';
 import { CompetitionsService } from './services/competitions.service';
 import { DisciplineService } from './services/discipline.service';
 import { DisputesService } from './services/disputes.service';
@@ -57,6 +68,9 @@ import { EligibilityService } from './services/eligibility.service';
 import { FixtureGenerationService } from './services/fixture-generation.service';
 import { FixtureObligationsService } from './services/fixture-obligations.service';
 import { FixturesService } from './services/fixtures.service';
+import { MatchSheetService } from './services/match-sheet.service';
+import { MyCompetitionService } from './services/my-competition.service';
+import { PoolsService } from './services/pools.service';
 import { InMemoryReadinessCheckRegistry } from './services/readiness-check.registry';
 import { ReadinessService } from './services/readiness.service';
 import { ResultsService } from './services/results.service';
@@ -163,6 +177,11 @@ const providers: Provider[] = [
   FixtureGenerationService,
   ReadinessService,
   FixtureObligationsService,
+  MyCompetitionService,
+  MatchSheetService,
+  AvailabilityRequestsService,
+  PoolsService,
+  CompetitionImportService,
   // Scheduling publication step 4 (SPK-SCHED-006, SPK-FIX-002) resolves this lazily by token.
   { provide: FIXTURE_OBLIGATION_IMPL, useExisting: FixtureObligationsService },
   { provide: TEAM_ENTRY_QUERY_PORT, useExisting: TeamEntriesService },
@@ -198,6 +217,8 @@ const providers: Provider[] = [
     ReadinessController,
     DisputesController,
     DisciplineController,
+    TeamWorkspaceController,
+    CompetitionOperationsController,
   ],
   exports: [
     CompetitionsService,
@@ -215,6 +236,11 @@ const providers: Provider[] = [
     FixtureGenerationService,
     ReadinessService,
     FixtureObligationsService,
+    MyCompetitionService,
+    MatchSheetService,
+    AvailabilityRequestsService,
+    PoolsService,
+    CompetitionImportService,
     TeamAuthority,
     TEAM_AUTHORITY_IMPL,
     FIXTURE_OBLIGATION_IMPL,
@@ -233,12 +259,28 @@ const providers: Provider[] = [
 export class CompetitionModule implements OnModuleInit {
   constructor(
     private readonly registry: EventHandlerRegistry,
+    private readonly jobs: PeriodicJobRegistry,
     private readonly fixtures: FixturesService,
     private readonly roster: RosterService,
     private readonly impactContributors: ClosureImpactContributors,
   ) {}
 
   onModuleInit(): void {
+    // CMP-07 (IF-24, §4.12): pending team invitations past expiry are expired in the background.
+    this.jobs.register({
+      ...TEAM_INVITATION_EXPIRY_JOB,
+      run: (context) => this.roster.expireDueInvitations(context),
+    });
+    // CMP-08 (SPK-IAM-007, §4.7 invariant 2): a merge that leaves the survivor and the merged person
+    // on one entry raises one league-manager exception; nothing is rewritten.
+    this.registry.on<EventPayload<typeof IdentityEvents.personsMerged>>(
+      IdentityEvents.personsMerged.type,
+      'competition.follow_person_merge',
+      async (event, ctx) => {
+        await this.roster.followPersonMerge(event, ctx);
+      },
+      { failureOwner: 'league_manager' },
+    );
     // SPK-SCHED-009, SPK-AT-009: a closure preview names the rostered players of the committed
     // teams (the customers of a fixture), effective at the event's start.
     this.impactContributors.register(

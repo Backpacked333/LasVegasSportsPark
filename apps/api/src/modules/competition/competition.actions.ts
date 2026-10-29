@@ -169,4 +169,67 @@ export const CompetitionActions = defineActions({
     subjectPermission: 'register',
     requirements: ['SPK-CAP-003', '§4.8'],
   },
+  /**
+   * CMP-03: read one team invitation: its recipient (or a guardian holding register for a child
+   * recipient), the entry's captain and co-captains, and league staff; anyone else NOT_FOUND.
+   */
+  readTeamInvitation: {
+    id: 'competition.read_team_invitation',
+    description:
+      'Read a team invitation (recipient, guardian with register, captain, co-captain or league staff)',
+    staffRoles: LEAGUE_ADMINS,
+    allowSelf: true,
+    subjectPermission: 'register',
+    teamRole: 'co_captain',
+    requirements: ['SPK-CAP-001', '§4.10'],
+  },
+  /** CMP-03: decline a pending invitation (its recipient, or a guardian holding register). */
+  declineTeamInvitation: {
+    id: 'competition.decline_team_invitation',
+    description: 'Decline a team invitation (the invited person or a guardian holding register)',
+    staffRoles: [],
+    allowSelf: true,
+    subjectPermission: 'register',
+    requirements: ['SPK-CAP-001', '§4.6'],
+  },
+  /** CMP-07: the expiry sweep's own action; only the system principal of the job holds it. */
+  expireTeamInvitation: {
+    id: 'competition.expire_team_invitation',
+    description: 'Expire a pending team invitation past its expiry (background sweep only)',
+    staffRoles: [],
+    requirements: ['SPK-CAP-001', '§4.6', '§4.12'],
+  },
+  /** CMP-13: hand the captain or co-captain role to an effective roster member. */
+  handoverTeamRole: {
+    id: 'competition.handover_team_role',
+    description: 'Hand a captain or co-captain role to a roster member (captain or league staff)',
+    staffRoles: LEAGUE_ADMINS,
+    teamRole: 'captain',
+    requirements: ['SPK-COMP-005', 'SPK-CAP-001', '§4.9'],
+  },
+  /**
+   * CMP-14: ask the roster players without an answer for their availability (the captain; a
+   * co-captain only when the rule set lets one act as captain; league staff).
+   */
+  requestAvailability: {
+    id: 'competition.request_availability',
+    description: 'Request player availability for a fixture (captain or league staff)',
+    staffRoles: LEAGUE_ADMINS,
+    teamRole: 'captain',
+    requirements: ['SPK-CAP-001', 'SPK-CAP-003', 'SCR-C-24'],
+  },
+  readAvailabilityRequests: {
+    id: 'competition.read_availability_requests',
+    description: 'Read earlier availability requests of a fixture (captain or league staff)',
+    staffRoles: LEAGUE_ADMINS,
+    teamRole: 'captain',
+    requirements: ['SPK-CAP-001', 'SCR-C-24'],
+  },
+  /** CMP-09, IF-40: the migration import commands; only a batch's import principal holds it. */
+  importRecords: {
+    id: 'competition.import_records',
+    description: 'Import seasons, teams, team entries and roster memberships (migration only)',
+    staffRoles: [],
+    requirements: ['§5.3', '§5.4', 'SPK-AT-024'],
+  },
 });
