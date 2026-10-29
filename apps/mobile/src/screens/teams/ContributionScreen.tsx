@@ -10,15 +10,20 @@
  * cannot collect a payment method and shows the pending state. Development builds use the API's
  * fake provider (features/teams/dev).
  *
+ * A payment toward this line that is still on its way or unknown, started anywhere (another
+ * device, an earlier visit), is found with `GET /v1/me/payments?purpose=contribution` (the request
+ * itself carries no `liveAttempt`; reported) and locks paying with "Do not pay again" until it
+ * settles; "Check again" reads the payments again and never pays.
+ *
  * States: loading; ready; permission restriction (another person's request: NOT_FOUND, not
  * available); stale (refetch after paying and on focus); offline (paying disabled); processing
  * ("Payment processing"); success ("Paid"); recovery required ("Payment outcome being confirmed.
  * Do not pay again." on this line only; a timeout is retried under the same key, never paid twice).
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -46,6 +51,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
+import { useContributionPayments } from './MyContributionsScreen';
 
 type ContributionRequest = Schema<'ContributionRequest'>;
 /** The published component is nullable (reported); an outcome without an attempt shows nothing. */
@@ -99,10 +105,36 @@ function PayContribution({
   const methods = DEV_CONTRIBUTION_PAYMENT_METHODS;
   const [token, setToken] = useState<string | null>(null);
   const pay = useApiCommand('post', '/contribution-requests/{id}/pay', {
-    invalidate: [['api', '/contribution-requests/{id}']],
+    invalidate: [
+      ['api', '/contribution-requests/{id}'],
+      ['api', '/me/contribution-requests'],
+      ['api', '/me/payments'],
+      ['api', '/me/receipts'],
+    ],
   });
   const outcome = pay.data;
   const payment = outcome?.payment ?? null;
+  // A payment toward this line started elsewhere and not settled yet (SPK-PAY-007).
+  const known = useContributionPayments();
+  const liveAttempt = known.live.get(request.id) ?? null;
+  const elsewhere = liveAttempt !== null && liveAttempt.id !== payment?.id ? liveAttempt : null;
+  const knownFailed =
+    known.payments.data === undefined &&
+    known.payments.error !== null &&
+    presentationForError(known.payments.error) === 'error'
+      ? known.payments.error
+      : null;
+  const elsewhereId = elsewhere?.id ?? null;
+  const watchedElsewhere = useRef<string | null>(null);
+  useEffect(() => {
+    // The live attempt this screen showed has settled: the line's status and totals change.
+    if (elsewhereId) {
+      watchedElsewhere.current = elsewhereId;
+    } else if (watchedElsewhere.current) {
+      watchedElsewhere.current = null;
+      void queryClient.invalidateQueries({ queryKey: ['api', '/contribution-requests/{id}'] });
+    }
+  }, [elsewhereId, queryClient]);
   // The attempt's latest state is read here, so the form and the request follow it.
   const latest = useApiQuery({
     path: '/payments/{id}',
@@ -123,23 +155,54 @@ function PayContribution({
       .submit({ path: { id: request.id }, body: { paymentMethodToken: token } })
       .catch(() => undefined);
   };
+  // What the API knows of a payment on its way for this line, shown in every build (SPK-PAY-007).
+  const knownState = (
+    <>
+      {elsewhere && !current ? (
+        <View style={styles.group} testID="contribution-live-attempt">
+          <Body>
+            {`A payment of ${formatMoney(elsewhere.amountMinor, elsewhere.currency)} toward this contribution is on its way. Do not pay again.`}
+          </Body>
+          <PaymentProgress
+            current={elsewhere}
+            checking={known.payments.fetchStatus === 'fetching'}
+            onCheck={() => void known.payments.refetch()}
+          />
+        </View>
+      ) : null}
+      {knownFailed && !current ? (
+        <View style={styles.group} testID="contribution-payments-unchecked">
+          <Body muted>
+            We could not check for a payment already on its way. If you paid recently, check again
+            before paying: a second payment is refused while one is being confirmed.
+          </Body>
+          <CommandFailure error={knownFailed} onRetry={() => void known.payments.refetch()} />
+        </View>
+      ) : null}
+    </>
+  );
   if (!methods) {
     return (
-      <StateView
-        variant="pending-decision"
-        subject="Paying in the app"
-        decisions={['DEC-019']}
-        owner="Technical lead/account owners"
-      />
+      <View style={styles.group}>
+        {knownState}
+        <StateView
+          variant="pending-decision"
+          subject="Paying in the app"
+          decisions={['DEC-019']}
+          owner="Technical lead/account owners"
+        />
+      </View>
     );
   }
   // A payment that may have been taken is never offered again (SPK-PAY-007); a failed one is.
   const locked =
+    elsewhere !== null ||
     pay.error?.outcomeUnknown === true ||
     (outcome !== undefined &&
       (current === null || UNSETTLED.has(current.status) || current.status === 'succeeded'));
   return (
     <View style={styles.group}>
+      {knownState}
       {current ? (
         <PaymentProgress
           current={current}

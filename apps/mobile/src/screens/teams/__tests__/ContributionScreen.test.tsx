@@ -199,4 +199,74 @@ describe('SCR-C-25 ContributionScreen', () => {
     expect(await screen.findByLabelText('Paid on Oct 23, 2026')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: /^Pay / })).toBeNull();
   });
+  it('SPK-PAY-007: a payment on its way from elsewhere shows "Do not pay again" and hides paying until it settles', async () => {
+    let status: 'unknown' | 'succeeded' = 'unknown';
+    const app = renderContribution({
+      'GET /me/payments': () =>
+        fakeResponse(200, {
+          items: [paymentAttempt({ status, unknownSince: '2026-10-23T12:00:00.000Z' })],
+          nextCursor: null,
+        }),
+    });
+    expect(await screen.findByTestId('contribution-live-attempt')).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText('Payment outcome being confirmed. Do not pay again.'),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'A payment of $75.00 toward this contribution is on its way. Do not pay again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
+    expect(app.requestsTo('GET', '/me/payments')[0]?.query).toEqual({
+      purpose: 'contribution',
+      limit: '50',
+    });
+    await app.settle();
+    status = 'succeeded';
+    app.fake.set('GET /contribution-requests/{id}', {
+      status: 200,
+      body: contributionRequest({ status: 'paid', paidAt: '2026-10-24T12:00:00.000Z' }),
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Paid on Oct 24, 2026')).toBeOnTheScreen();
+    expect(screen.queryByTestId('contribution-live-attempt')).toBeNull();
+    expect(app.requestsTo('POST', '/contribution-requests/{id}/pay')).toHaveLength(0);
+    await app.settle();
+  });
+
+  it('a settled earlier payment of another line never locks this one', async () => {
+    renderContribution({
+      'GET /me/payments': {
+        status: 200,
+        body: {
+          items: [
+            paymentAttempt({ status: 'unknown', contributionRequestId: IDS.obligation }),
+            paymentAttempt({ status: 'failed' }),
+          ],
+          nextCursor: null,
+        },
+      },
+    });
+    expect(
+      await screen.findByRole('radio', { name: 'Development payment: succeeds' }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('contribution-live-attempt')).toBeNull();
+  });
+
+  it('when the payments cannot be checked it says so with the code, and the API still guards a second payment', async () => {
+    renderContribution({
+      'GET /me/payments': () =>
+        fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-live' })),
+    });
+    expect(await screen.findByTestId('contribution-payments-unchecked')).toBeOnTheScreen();
+    expect(
+      screen.getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-live/),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(/We could not check for a payment already on its way/),
+    ).toBeOnTheScreen();
+  });
 });
