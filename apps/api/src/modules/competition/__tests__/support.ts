@@ -63,6 +63,21 @@ export async function staffMember(
   };
 }
 
+/**
+ * CMP-12: a played result waits for kickoff. Moves the test clock forward to just after the
+ * fixture's scheduled start (never backwards) before a result is submitted.
+ */
+export async function atKickoff(t: TestApp, fixtureId: string): Promise<void> {
+  const row = await t.db
+    .selectFrom('fixtures')
+    .select('scheduled_start')
+    .where('id', '=', fixtureId)
+    .executeTakeFirstOrThrow();
+  if (!row.scheduled_start) return;
+  const kickoff = new Date(row.scheduled_start).getTime() + 60_000;
+  if (t.clock.now().getTime() < kickoff) t.clock.set(new Date(kickoff));
+}
+
 /** `forbid_mutation` raises `restrict_violation` (SQLSTATE 23001). */
 export function isRestrictViolation(error: unknown): boolean {
   return pgErrorCode(error) === '23001';

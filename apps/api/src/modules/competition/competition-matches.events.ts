@@ -79,6 +79,35 @@ export const MatchEvents = {
     'competition.bracket_node_published',
     z.object({ bracketNodeId: z.uuid(), seasonId: z.uuid(), fixtureId: z.uuid().nullable() }),
   ),
+  /** CMP-10 / CMP-15: an unpublished node's slots were seeded from final standings. */
+  bracketSeeded: defineEvent(
+    'competition.bracket_seeded',
+    z.object({
+      bracketNodeId: z.uuid(),
+      seasonId: z.uuid(),
+      seeds: z.array(
+        z.object({
+          slot: z.enum(['home', 'away']),
+          teamEntryId: z.uuid(),
+          rank: z.number().int(),
+          divisionId: z.uuid().nullable(),
+          poolId: z.uuid().nullable(),
+        }),
+      ),
+    }),
+  ),
+  /** CMP-15: a tournament pool was created or its entries changed. */
+  poolChanged: defineEvent(
+    'competition.pool_changed',
+    z.object({
+      poolId: z.uuid(),
+      seasonId: z.uuid(),
+      divisionId: z.uuid(),
+      change: z.enum(['created', 'entry_added', 'entry_removed']),
+      teamEntryId: z.uuid().nullable(),
+      revision: z.number().int(),
+    }),
+  ),
   fixtureSpecificationCreated: defineEvent(
     'competition.fixture_specification_created',
     z.object({ specificationId: z.uuid(), seasonId: z.uuid(), divisionId: z.uuid() }),

@@ -10,6 +10,7 @@ export * from './competition-matches.state-machines';
 export {
   proposedRuleSetContent,
   TEAM_INVITATION_DEFAULT_HOURS,
+  TEAM_INVITATION_EXPIRY_JOB,
   WORKSPACE_UPCOMING_FIXTURES,
 } from './competition.policy';
 export {
@@ -20,6 +21,8 @@ export {
   DISCIPLINE_MANAGER_ROLES,
   UNSCHEDULED_FIXTURE_DEADLINE_DAYS,
   unscheduledFixtureDeadline,
+  SUSPENSION_CARD_REMOVED,
+  MERGED_ROSTER_DUPLICATE,
 } from './competition-matches.policy';
 export {
   ageOn,
@@ -52,6 +55,11 @@ export {
   statusOf as readinessStatusOf,
 } from './services/readiness.service';
 export { FixtureObligationsService } from './services/fixture-obligations.service';
+export { CompetitionImportService } from './services/competition-import.service';
+export { MyCompetitionService } from './services/my-competition.service';
+export { MatchSheetService } from './services/match-sheet.service';
+export { AvailabilityRequestsService } from './services/availability-requests.service';
+export { PoolsService } from './services/pools.service';
 export {
   computeStandings,
   type OfficialResultInput,
@@ -59,6 +67,7 @@ export {
   type StandingsComputation,
 } from './matches/standings.calculator';
 export {
+  dailyDemandOf,
   generateFixtures,
   roundRobin,
   validateCompleteness,

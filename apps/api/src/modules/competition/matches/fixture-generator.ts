@@ -8,7 +8,7 @@ import type {
   FairnessPreferenceKind,
   PlayoffStructure,
   PreferenceScore,
-  ProposedGame,
+  ProposedGame as NamedProposedGame,
   RemainingObligation,
   SearchSettings,
   SolverExplanation,
@@ -37,6 +37,12 @@ import type {
  * Deterministic for a given seed; time comes from the injected `now`.
  */
 
+/** A proposed game as the generator produces it; team names are read with the run (CMP-01). */
+export type ProposedGame = Omit<NamedProposedGame, 'homeTeamName' | 'awayTeamName'>;
+
+/** CMP-15: one facility-local day of the proposal (compressed play report). */
+export type DailyDemand = NonNullable<SolverExplanation['dailyDemand']>[number];
+
 export interface GeneratorInput {
   teamEntryIds: string[];
   gamesPerTeam: number;
@@ -60,6 +66,13 @@ export interface GeneratorInput {
   resolveInstant: (date: string, time: string) => Date | null;
   /** Instant that unscheduled games must be scheduled by (season start) for remaining obligations. */
   obligationDeadline: string | null;
+  /**
+   * CMP-15 compressed play: a team plays at most this many games on one facility-local day (a
+   * hard constraint next to the minimum rest). Null or absent: no daily cap.
+   */
+  maxGamesPerTeamPerDay?: number | null;
+  /** CMP-15: officials each game needs; the per-day demand report multiplies by it. */
+  officialsPerGame?: number | null;
 }
 
 export interface GeneratorResult {
@@ -67,6 +80,52 @@ export interface GeneratorResult {
   proposal: { games: ProposedGame[] } | null;
   completeness: CompletenessReport;
   explanation: SolverExplanation;
+}
+
+/** Whether the run reports per-day demand (only when a compressed-play field is stated). */
+function reportsDailyDemand(input: GeneratorInput): boolean {
+  return (
+    (input.maxGamesPerTeamPerDay ?? null) !== null || (input.officialsPerGame ?? null) !== null
+  );
+}
+
+/**
+ * CMP-15 (SPK-FIX-004): per facility-local day, the games placed, the most games running at once
+ * (half-open [start, end) intervals), and the official assignments they need.
+ */
+export function dailyDemandOf(
+  placed: Array<{ date: string; start: Date; end: Date }>,
+  officialsPerGame: number | null,
+): DailyDemand[] {
+  const byDate = new Map<string, Array<{ start: number; end: number }>>();
+  for (const game of placed) {
+    const list = byDate.get(game.date) ?? [];
+    list.push({ start: game.start.getTime(), end: game.end.getTime() });
+    byDate.set(game.date, list);
+  }
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, games]) => {
+      const points = games.flatMap((g) => [
+        { at: g.start, delta: 1 },
+        { at: g.end, delta: -1 },
+      ]);
+      // an end and a start at the same instant do not overlap: ends first
+      points.sort((a, b) => a.at - b.at || a.delta - b.delta);
+      let running = 0;
+      let peak = 0;
+      for (const point of points) {
+        running += point.delta;
+        peak = Math.max(peak, running);
+      }
+      return {
+        date,
+        games: games.length,
+        peakConcurrentGames: peak,
+        officialAssignments: officialsPerGame === null ? null : games.length * officialsPerGame,
+        peakConcurrentOfficials: officialsPerGame === null ? null : peak * officialsPerGame,
+      };
+    });
 }
 
 export interface RoundRobinGame {
@@ -321,6 +380,10 @@ function feasibleForTeam(
     if (g.round < round && g.slot.end > slot.start) return false;
     if (g.round > round && g.slot.start < slot.end) return false;
     if (noConsecutiveHard && g.slot.date === slot.date) return false;
+  }
+  const dailyCap = input.maxGamesPerTeamPerDay ?? null;
+  if (dailyCap !== null && team.games.filter((g) => g.slot.date === slot.date).length >= dailyCap) {
+    return false;
   }
   const prefs = preferredFor(input, teamId);
   if (
@@ -894,6 +957,23 @@ export function generateFixtures(
       );
     }
   }
+  const dailyCap = input.maxGamesPerTeamPerDay ?? null;
+  if (dailyCap !== null) {
+    const dates = new Set(slots.map((s) => s.date)).size;
+    if (dates * dailyCap < gamesPerTeam) {
+      return infeasible(
+        `Each team plays ${gamesPerTeam} games, at most ${dailyCap} a day, but only ${dates} playable day(s) exist.`,
+        [
+          {
+            constraint: 'max_games_per_team_per_day',
+            hard: true,
+            message: `${gamesPerTeam} games per team, ${dates} day(s) of at most ${dailyCap}.`,
+            gameKeys: [],
+          },
+        ],
+      );
+    }
+  }
   for (const pref of input.fairnessPreferences) {
     if (!isTeamTimePreference(pref) || !pref.hard || !pref.teamEntryId) continue;
     const matching = slots.filter((s) => matchesPreferred(s, [pref])).length;
@@ -941,6 +1021,18 @@ export function generateFixtures(
     }
   }
 
+  const demandOf = (candidate: Candidate | null): Pick<SolverExplanation, 'dailyDemand'> =>
+    reportsDailyDemand(input)
+      ? {
+          dailyDemand: dailyDemandOf(
+            (candidate?.assignments ?? []).flatMap((a) =>
+              a.slot ? [{ date: a.slot.date, start: a.slot.start, end: a.slot.end }] : [],
+            ),
+            input.officialsPerGame ?? null,
+          ),
+        }
+      : {};
+
   const toProposal = (candidate: Candidate): ProposedGame[] =>
     candidate.assignments.map((a) => ({
       key: a.game.key,
@@ -970,6 +1062,7 @@ export function generateFixtures(
         summary: optimal
           ? 'Every game is scheduled and no fairness preference is violated: the penalty of zero is the minimum possible, so the proposal is optimal.'
           : `Every game is scheduled with a fairness penalty of ${best.penalty.toFixed(2)} after ${tried} candidate(s); a better arrangement may exist, so optimality is not claimed.`,
+        ...demandOf(best),
       },
     };
   }
@@ -1000,6 +1093,7 @@ export function generateFixtures(
       ]
         .filter((s): s is string => s !== null)
         .join(' '),
+      ...demandOf(partial),
     },
   };
 }

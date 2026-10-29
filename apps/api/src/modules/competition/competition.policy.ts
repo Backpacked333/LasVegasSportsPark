@@ -164,3 +164,14 @@ export function proposedRuleSetContent(format: SportFormat): RuleSetContent {
 export const TEAM_INVITATION_DEFAULT_HOURS = 24 * 7;
 /** Upcoming fixtures shown in the captain workspace. */
 export const WORKSPACE_UPCOMING_FIXTURES = 20;
+
+/**
+ * CMP-07 (§4.12): the team-invitation expiry sweep. Technical values (how often the sweep looks
+ * and who owns it when it keeps failing), not policy: the expiry itself is the invitation's own
+ * `expires_at`, chosen when it was issued.
+ */
+export const TEAM_INVITATION_EXPIRY_JOB = {
+  name: 'competition.expire_team_invitations',
+  intervalSeconds: 60,
+  failureOwner: 'league_manager',
+} as const;

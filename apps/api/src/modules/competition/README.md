@@ -17,7 +17,7 @@ continuing identity from season entry", §4.6 Result machine, §4.7 invariants 8
 SPK-AT-002/003/010/011/013/014.
 
 **Migration range:** `packages/db/migrations/0400_competition_*.sql` … `0499` (part 1 uses `0400`,
-part 2 uses `0450`; `0451` tightens the result history guard).
+part 2 uses `0450`; `0451` tightens the result history guard; stage 3 adds `0454` … `0460`).
 
 **Depends on:** identity (`PeopleService` for minimal person facts, date of birth for age
 eligibility, verified contact points for contact invitations), scheduling (`EVENT_SCHEDULING_PORT`
@@ -25,7 +25,8 @@ for fixture events with team commitments; `ScheduleDraftsService` to open genera
 drafts; `EventsService`, `ResourcesService`, `ClosuresService` for readiness; consumes
 `scheduling.event_changed`). It never writes identity or scheduling tables (§4.2).
 
-**Status: implemented (parts 1 and 2)** — verified by `apps/api/src/modules/competition/__tests__`
+**Status: implemented (parts 1 and 2, stage-3 items CMP-01 … CMP-15)** — verified by
+`apps/api/src/modules/competition/__tests__`
 and the unit specs next to the code (`competition.state-machines.spec.ts`,
 `competition-matches.state-machines.spec.ts`, `competition.rules.spec.ts`,
 `matches/fixture-generator.spec.ts`, `matches/standings.calculator.spec.ts`), under PGlite and
@@ -55,7 +56,11 @@ PostgreSQL (`TEST_DATABASE_URL`). Statements below are verified unless marked pr
 - Outbox handler `competition.sync_fixture_schedule` on `scheduling.event_changed`: keeps a
   fixture's copied instants in step when scheduling moves the event, and marks it `postponed` when
   scheduling cancels the event directly. Idempotent under replay (revision-guarded, no-op when
-  nothing changed).
+  nothing changed). The same handler copies the venue read model (CMP-04, below).
+- Periodic job `competition.expire_team_invitations` (CMP-07, IF-24; interval 60 s, failure owner
+  `league_manager`) registered with the kernel `PeriodicJobRegistry`.
+- Outbox handler `competition.follow_person_merge` on `identity.persons_merged` (CMP-08, failure
+  owner `league_manager`).
 
 ## Tables (migration `0400_competition_core.sql`)
 
@@ -350,6 +355,106 @@ identifiers only.
   official publication (else the scheduled end); a dispute never changes a result by itself — a
   `correction_required` consequence is carried out by a correction revision citing the dispute.
 
+## Stage 3 (CMP-01 … CMP-15)
+
+Labels follow §6.7: **verified** = implemented and covered by the named tests (PGlite and
+PostgreSQL); **proposed** = a default chosen here pending an operator decision; **pending** = not
+built, waiting on a decision or another module.
+
+### Migrations (verified, `__tests__/stage3-schema.spec.ts` proves each rejection in the database)
+
+| Migration                                | What it adds                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0454_competition_team_invitation_reads` | `team_invitations_declined_fact` (`declined` ⇔ `declined_at`); recipient, contact and pending-expiry indexes (CMP-03, CMP-07)                                                                                                                                                                                         |
+| `0455_competition_fixture_venue`         | `fixtures.venue_facility_id` (composite FK to facilities), `venue` jsonb, `venue_event_revision`; checks: venue and facility present together, the JSON names the same facility, revision ≥ 1 (CMP-04)                                                                                                                |
+| `0456_competition_import_source`         | `source in ('staff','import')` on seasons, teams and team entries (default `staff`); roster `source` gains `import` (CMP-09)                                                                                                                                                                                          |
+| `0457_competition_shootout_winner`       | `result_revisions.shootout_winner_entry_id` (composite FK), check: only a completed draw names one; trigger `result_revisions_shootout_side_guard`: the winner is a fixture side; the history guard also freezes it once official (CMP-10)                                                                            |
+| `0458_competition_availability_requests` | `availability_requests` (append-only, `forbid_mutation`; message ≤ 500; recipient count ≥ 0; composite FKs); trigger: the entry is a side of the fixture (CMP-14)                                                                                                                                                     |
+| `0459_competition_tournament_pools`      | `team_entries (organization_id, id, season_id, division_id)` key; `pools` (unique name per division) and `pool_entries` (composite FKs to the pool's season and division and to an entry of that same season and division; one pool per entry per division; seed > 0); compressed-play specification columns (CMP-15) |
+| `0460_competition_staff_list_indexes`    | `(organization_id, created_at desc, id desc)` indexes for the dispute, appeal and disciplinary decision lists (CMP-05)                                                                                                                                                                                                |
+
+### Endpoints added or changed (verified)
+
+| Method   | Path                                                                                                                                                                       | Who (action)                                                                                                                                                                                                                                          | Tests                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| GET      | `/seasons/{id}/readiness?from&to`                                                                                                                                          | league staff (`competition.read_readiness`); ≤ 100 fixtures else `VALIDATION_FAILED TOO_MANY_FIXTURES`; counts only, unknown stays unknown                                                                                                            | `team-workspace.spec.ts` (CMP-01)                     |
+| GET      | `/seasons/{id}/fixtures`, `/team-entries`, `/team-entries/{id}`, bracket nodes, solver runs                                                                                | rows carry team names (null for a bye), one name query per page                                                                                                                                                                                       | `team-workspace.spec.ts`, `brackets-pools.spec.ts`    |
+| GET      | `/me/team-entries?status`, `/me/fixtures?from&to` (≤ 120 days)                                                                                                             | customers: themselves and the people they hold `view` over (`customerSubjects`, expanded with `personIdsResolvingTo`)                                                                                                                                 | `team-workspace.spec.ts` (CMP-02)                     |
+| GET      | `/team-entries/{id}`                                                                                                                                                       | gains `viewer { roles, actingAsCaptain, availableActions }`; pending invitation/join-request lists are `null` when hidden, `[]` when empty                                                                                                            | `team-workspace.spec.ts` (CMP-02)                     |
+| GET      | `/me/team-invitations?status&cursor`, `/team-invitations/{id}`                                                                                                             | recipient (by person or verified contact), a guardian with `register`, captains, co-captains, league staff; else protected NOT_FOUND; never the token                                                                                                 | `invitations-roles.spec.ts` (CMP-03)                  |
+| POST     | `/team-invitations/{id}/decline`                                                                                                                                           | recipient or a guardian with `register` (`competition.decline_team_invitation`); `@RecordAuthority('roster')`                                                                                                                                         | `invitations-roles.spec.ts` (CMP-03)                  |
+| GET      | `/fixtures/{id}`                                                                                                                                                           | gains `venue`, `rosterStatus`, `responses` (viewer and people they hold `register` over); `myResponse` deprecated                                                                                                                                     | `team-workspace.spec.ts` (CMP-04)                     |
+| POST     | `/fixtures/{id}/availability`                                                                                                                                              | enforces `expectedRevision` (STALE_REVISION); refused from kickoff (`INVALID_TRANSITION AVAILABILITY_CLOSED`)                                                                                                                                         | `team-workspace.spec.ts` (CMP-04)                     |
+| GET      | `/disputes`, `/appeals`, `/disciplinary-decisions`, `/divisions/{id}/fixture-specifications`, `/fixture-specifications/{id}/solver-runs`, `/seasons/{id}/result-revisions` | staff holding the single read's action; keyset `created_at desc, id desc`                                                                                                                                                                             | `league-operations.spec.ts` (CMP-05)                  |
+| GET      | `/fixtures/{id}/match-sheet`                                                                                                                                               | league staff; an official only with an accepted assignment (`ASSIGNMENT_CHECK_PORT`); a captain of either side sees names and numbers only; else protected NOT_FOUND                                                                                  | `team-workspace.spec.ts` (CMP-06)                     |
+| POST     | `/bracket-nodes/{id}/seed-from-standings`                                                                                                                                  | league administration (`competition.manage_brackets`), `@RecordAuthority('season')`; only final standings (`STANDINGS_NOT_FINAL`), an unresolved tie names the tied entries (`UNRESOLVED_TIE`); division or pool sources                              | `brackets-pools.spec.ts` (CMP-10, CMP-15)             |
+| POST     | `/fixtures/{id}/results`                                                                                                                                                   | `shootoutWinnerEntryId` for a drawn bracket game under rule set `tiebreak.playoff: shootout` (else `SHOOTOUT_NOT_ALLOWED`); a played result before kickoff is `INVALID_TRANSITION FIXTURE_NOT_STARTED` (forfeit, canceled and postponed are recorded) | `brackets-pools.spec.ts`, `league-operations.spec.ts` |
+| POST     | `/disputes/{id}/withdraw`                                                                                                                                                  | the submitter or a captain of the submitting entry (`competition.withdraw_dispute`), `@RecordAuthority('result')`                                                                                                                                     | `league-operations.spec.ts` (CMP-12)                  |
+| GET      | `/seasons/{id}/standings`                                                                                                                                                  | a divided season without `divisionId` is `VALIDATION_FAILED DIVISION_REQUIRED` with the division ids                                                                                                                                                  | `league-operations.spec.ts` (CMP-12)                  |
+| PATCH    | `/fixture-specifications/{id}`                                                                                                                                             | league administration, `@RecordAuthority('season')`, `expectedRevision`; refused while a generation from it sits in an open scheduling draft (`SPECIFICATION_IN_USE`)                                                                                 | `league-operations.spec.ts` (CMP-12)                  |
+| POST     | `/team-entries/{id}/roles/handover`                                                                                                                                        | the current captain or league staff (`competition.handover_team_role`), `@RecordAuthority('roster')`; the two role rows end and start at one instant                                                                                                  | `invitations-roles.spec.ts` (CMP-13)                  |
+| POST/GET | `/fixtures/{id}/availability-requests`                                                                                                                                     | a captain of the entry (a co-captain only when the rule set lets one act as captain) or league staff; before kickoff; `@NoRecordAuthority('Not a §5.3 record category')`                                                                              | `team-workspace.spec.ts` (CMP-14)                     |
+| POST/GET | `/divisions/{id}/pools`, `/pools/{id}`, `/pools/{id}/entries`, `/pools/{id}/entries/{teamEntryId}/remove`, `/pools/{id}/standings`                                         | league administration (`competition.manage_pools`), `@RecordAuthority('season')`; creation and placement need the `tournaments` capability                                                                                                            | `brackets-pools.spec.ts` (CMP-15)                     |
+
+### Behaviour (verified)
+
+- **CMP-01** `TEAM_ENTRY_QUERY_PORT` (IF-15) gains `seasonForOffering` and `roleHolders` (roles
+  effective at an instant, with or without a roster row; reflects a handover at once).
+- **CMP-03 / CMP-07** A declined invitation can no longer be accepted. The expiry sweep claims due
+  invitations with `SKIP LOCKED`, one transaction each, through `TeamInvitationMachine 'expire'`,
+  audited with the system-only action `competition.expire_team_invitation` and announced as
+  `competition.team_invitation_resolved` (`expired`, `personId: null`); the lazy expiry on
+  acceptance announces the same fact; a replayed run changes nothing. Expiry durations unchanged.
+- **CMP-04** The venue copy follows the fixture's current scheduling event and is replaced only by
+  a newer event revision; an unlinked event's venue is dropped; the copy never bumps the fixture
+  revision. Fixtures created before `0455` read `venue: null` until their event changes.
+- **CMP-08** `competition.follow_person_merge` rewrites nothing; when the survivor and the merged
+  person both hold an effective roster row or open role on one entry it raises
+  `competition.merged_roster_duplicate` once per merge (league manager queue). Eligibility and
+  `SUSPENSION_CHECK_PORT` evaluate a person through `personIdsResolvingTo`, so a suspension of the
+  merged person binds the survivor (`person-merge.spec.ts`).
+- **CMP-09** `CompetitionImportService` (exported, IF-40, in-process only): `importSeason`,
+  `importTeam`, `importTeamEntry`, `importRosterMembership` for the import principal of one batch
+  (`assertImportPrincipal`), joining the caller's unit of work; create-if-absent with
+  `id = recordId`, `source = 'import'`, audited with the import actor; different content is
+  `RESOURCE_CONFLICT IMPORT_CONTENT_MISMATCH`. An approved entry goes `applied → approved` with the
+  snapshot's approval date; withdrawn and rejected entries are refused
+  (`IMPORT_STATUS_NOT_IMPORTABLE`, they stay staged history); roster rows keep their effective
+  dates (an ended one is imported removed). Imports publish no domain events
+  (`competition-import.spec.ts`).
+- **CMP-11** Competition no longer selects kernel tables: `OperationalExceptions.get/list` (IF-29)
+  replace `operational_exceptions` reads and the reviewing league manager resolves the review task
+  as the audited actor (`exceptions.manage_own_queue`); `FacilityDirectory` (IF-03) replaces
+  `facilities` reads; `AuditReader.forTarget` (IF-44) replaces `audit_records` reads
+  (`kernel-reads.spec.ts`, `result-corrections.spec.ts`).
+- **CMP-12** An official correction that removes the card behind a `proposed` rule-set suspension
+  overturns it in the same transaction (reason `card removed by correction`); an `active` one stays
+  and raises `competition.suspension_card_removed` (league manager queue) once.
+- **CMP-13** With rule set `roster.jerseyNumbers { min, max }` roster additions (and imports)
+  outside it are `VALIDATION_FAILED JERSEY_OUT_OF_RANGE`; without it only per-entry uniqueness
+  applies. A handover needs the new holder on the active roster (`NOT_ON_ROSTER`), adult for the
+  captaincy (proposed default, `CAPTAIN_MUST_BE_ADULT`) and eligible; outbox
+  `competition.team_role_changed` carries `fromPersonId`, `toPersonId`, `effectiveAt`.
+- **CMP-14** Recipients are the entry's roster players at kickoff without an answer; a later
+  request is the reminder (audit `reminder: true`) and reaches only those still without one;
+  `competition.availability_requested` (IF-45) names them. Without communications nothing is sent;
+  the request is recorded.
+- **CMP-15** Compressed play: `maxGamesPerTeamPerDay` and `officialsPerGame` are optional on
+  specifications (existing ones unchanged); when set the generator keeps each team within the
+  daily cap and the minimum rest and reports per facility-local day the games, peak concurrent
+  games and the official assignments they need (`explanation.dailyDemand`). Official turnaround and
+  daily limits apply at assignment in workforce (WRK-06).
+
+### Behind a capability switch
+
+- `tournaments` (DEC-016 applicability, DEC-078): creating a pool and placing an entry in a pool
+  are refused with `ACCESS_DENIED details.code CAPABILITY_DISABLED` while the organization has not
+  enabled it (default off; changed only by an authorized administrator through the kernel
+  capability commands, audited). Removing an entry, reading pools and pool standings, and seeding
+  brackets from existing pools are never gated (unwinding and reads). **Verified**
+  (`brackets-pools.spec.ts`). Seeding from division standings and shootout winners (CMP-10) are
+  for every competition and not gated.
+
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
 - Rule-set defaults per format (`proposedRuleSetContent`): DEC-002 / POL-026 / POL-032. They are
@@ -373,35 +478,46 @@ identifiers only.
   override them and the run records what was used.
 - Coach or family convenience (`approved_convenience`) is accepted only with an approval
   reference; which preferences are hard is the specification's choice (DEC-049).
+- Stage 3: availability answers and availability requests close at kickoff until a rule set
+  defines a cutoff (DEC-002); a co-captain requests availability only under
+  `coCaptainMayActAsCaptain`; a drawn playoff game names a shootout winner only under rule set
+  `tiebreak.playoff: shootout` (absent: no winner, the bracket waits, DEC-002); no jersey range is
+  assumed (DEC-002); the invitation sweep's interval (60 s) and failure owner are technical values,
+  not policy.
 
 ## Known gaps
 
+- **Pending (other modules):** CMP-02 lists and CMP-08 merge resolution call identity's
+  `PERSON_DIRECTORY_PORT.personIdsResolvingTo` and `subjectsWithPermission` (ID-01/ID-04). On a
+  branch without them the port's declared default refuses (`declaredNotImplemented`), so the
+  eligibility, suspension and "my teams" paths need the identity work merged; the competition
+  suite passes with it (PGlite and PostgreSQL). CMP-06 officials depend on workforce's
+  `ASSIGNMENT_CHECK_IMPL` (DEC-011 governs assignment rules). CMP-14 delivery depends on
+  communications consuming `competition.availability_requested`.
+- **Pending (decisions):** DEC-078 (tournament applicability) and DEC-016 decide whether the
+  `tournaments` switch is turned on; DEC-002 rule-set content (tiebreaks, compressed play, jersey
+  ranges, availability cutoff); DEC-011 official limits.
 - `team_entries.eligibility_status` is recorded (`pending` by default) but no command moves it yet;
   the entry-level evaluation belongs with placement (§3.6).
-- No background expiry of invitations; no transfer command (a transfer is a removal plus an
-  addition with effective dates). Team roles beyond the founding captain are written by fixtures
-  (role handover command pending). Jersey numbers are not validated against a rule-set range.
-- Brackets: nodes are created and seeded by the league manager (no automatic seeding from the
-  standings, no bracket generator from the specification's playoff structure, which is reported as
-  a remaining obligation); a published node cannot be edited, so after a reviewed correction the
-  league manager adjusts the bracket by new nodes. A drawn playoff game (shootout winner) is not
-  modelled: no winner is recorded and progression waits.
+- No transfer command (a transfer is a removal plus an addition with effective dates). Jersey
+  numbers are validated on additions; there is no roster "update" command.
+- Brackets: no bracket generator from the specification's playoff structure (reported as a
+  remaining obligation); a published node cannot be edited or reseeded, so after a reviewed
+  correction the league manager adjusts the bracket by new nodes.
 - A correction that changes the classification leaves the fixture in its first outcome state (the
   fixture machine's outcomes are terminal); the result revision is authoritative. A `canceled` or
   `postponed` classification records the fact; cancelling or postponing the game itself remains a
-  fixture command. Results are not refused before kickoff.
+  fixture command.
 - An open team obligation keeps the finance check `unknown` (never a pass or a block) until the
   participation policy for team balances is approved (POL-017, DEC-056). A fixture whose event was
-  canceled (postponed, unlinked) reports the change notice as `unknown`. Officials are covered:
-  workforce registers `ASSIGNMENT_CHECK_IMPL` and the `workforce.required_officials` readiness
-  check, so an accepted official can submit results.
-- A rule-set suspension proposal is not withdrawn automatically when a correction removes the card;
-  the league manager overturns it. Disputes are withdrawn by the reviewer only (no submitter
-  withdrawal command); a decided consequence is not executed automatically.
-- Fixture specifications are immutable once created (no PATCH): define a new one. The generator is
-  a seeded greedy search, not an exact solver, so `proven_optimal` is claimed only at zero penalty.
-  It treats each required resource independently: a specification naming both a pitch and one of
-  its halves could place two games on shared ground, which publication validation then refuses.
-- `GET /seasons/{id}/standings` without `divisionId` for a season with divisions computes a
-  season-wide table from all divisions.
+  canceled (postponed, unlinked) reports the change notice as `unknown`.
+- A decided dispute's consequence is not executed automatically (a correction revision carries it
+  out).
+- The generator is a seeded greedy search, not an exact solver, so `proven_optimal` is claimed only
+  at zero penalty. It treats each required resource independently: a specification naming both a
+  pitch and one of its halves could place two games on shared ground, which publication validation
+  then refuses.
 - Evidence is a list of references; uploads are not stored here.
+- Integration notes: `docs/api/openapi.json` is regenerated by the integrator (`pnpm openapi`)
+  after the stage-3 branches merge; the workforce replacement-readiness journey submits a result
+  and must advance its clock to kickoff (CMP-12).

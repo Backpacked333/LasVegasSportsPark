@@ -1,11 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
   errors,
   newId,
+  z,
   type CreateDisputeInput,
   type DecideDisputeInput,
   type Dispute,
+  type ListDisputesQuery,
+  type Page,
   type Principal,
+  type WithdrawDisputeInput,
 } from '@sportspark/contracts';
 import { json, type Db, type DisputesTable } from '@sportspark/db';
 import type { Selectable } from 'kysely';
@@ -27,7 +32,9 @@ import { toDispute } from '../competition-matches.shared';
 import { DisputeMachine } from '../competition-matches.state-machines';
 import { loadRuleSetRow, loadSeasonRow, type Reader } from '../competition.queries';
 import { hoursFromNow, isStaffLike, organizationOf, ruleSetContentOf } from '../competition.shared';
-import { DisciplineService } from './discipline.service';
+import { DisciplineService, nextCursorOf } from './discipline.service';
+
+const DisputeCursor = z.object({ at: z.string(), id: z.uuid() });
 
 type DisputeRow = Selectable<DisputesTable>;
 
@@ -269,6 +276,120 @@ export class DisputesService {
       });
       return toDispute(updated, await this.appealStatus(trx, organizationId, disputeId));
     });
+  }
+
+  /**
+   * `POST /v1/disputes/{id}/withdraw` (CMP-12, SPK-RESULT-005): the person who submitted the
+   * dispute, or a captain of the submitting entry, withdraws it while it is submitted or under
+   * review (DisputeMachine 'withdraw'). Anyone else gets protected NOT_FOUND (§4.10).
+   */
+  async withdraw(
+    principal: Principal,
+    disputeId: string,
+    input: WithdrawDisputeInput,
+    correlationId: string | null,
+  ): Promise<Dispute> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const row = await this.load(trx, organizationId, disputeId, { forUpdate: true });
+      if (!row) throw errors.protectedNotFound('dispute');
+      await this.authorization.require(principal, MatchActions.withdrawDispute, {
+        type: 'dispute',
+        id: disputeId,
+        organizationId,
+        subjectPersonIds: row.submitted_by_person_id ? [row.submitted_by_person_id] : [],
+        teamEntryId: row.submitting_team_entry_id,
+        protected: true,
+      });
+      assertExpectedRevision(input.expectedRevision, row.revision);
+      const next = DisputeMachine.next(row.status, 'withdraw');
+      const updated = await trx
+        .updateTable('disputes')
+        .set({ status: next, revision: row.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', disputeId)
+        .where('revision', '=', row.revision)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: MatchActions.withdrawDispute.id,
+        targetType: 'dispute',
+        targetId: disputeId,
+        beforeRevision: row.revision,
+        afterRevision: updated.revision,
+        reason: input.reason,
+        correlationId,
+        details: { operation: 'withdraw', status: next, previousStatus: row.status },
+      });
+      await this.outbox.enqueue(trx, MatchEvents.disputeChanged, {
+        organizationId,
+        aggregateType: 'dispute',
+        aggregateId: disputeId,
+        payload: {
+          disputeId,
+          fixtureId: row.fixture_id,
+          status: next,
+          decision: null,
+          publicationConsequence: null,
+        },
+        correlationId,
+      });
+      return toDispute(updated, await this.appealStatus(trx, organizationId, disputeId));
+    });
+  }
+
+  /**
+   * `GET /v1/disputes` (CMP-05, SPK-RESULT-005): staff holding the dispute read action (the same
+   * action a single read uses), by season, fixture and status, newest first.
+   */
+  async list(principal: Principal, query: ListDisputesQuery): Promise<Page<Dispute>> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, MatchActions.readDispute, {
+      type: 'dispute',
+      organizationId,
+    });
+    const cursor = decodeCursor(query.cursor, DisputeCursor);
+    if (query.cursor && !cursor) throw errors.validation('The cursor is not valid.');
+    let q = this.db
+      .selectFrom('disputes as d')
+      .selectAll('d')
+      .where('d.organization_id', '=', organizationId);
+    if (query.fixtureId) q = q.where('d.fixture_id', '=', query.fixtureId);
+    if (query.status) q = q.where('d.status', '=', query.status);
+    if (query.seasonId) {
+      const seasonId = query.seasonId;
+      q = q.where(({ exists, selectFrom }) =>
+        exists(
+          selectFrom('fixtures as f')
+            .select('f.id')
+            .whereRef('f.organization_id', '=', 'd.organization_id')
+            .whereRef('f.id', '=', 'd.fixture_id')
+            .where('f.season_id', '=', seasonId),
+        ),
+      );
+    }
+    if (cursor) {
+      const at = new Date(cursor.at);
+      q = q.where((eb) =>
+        eb.or([
+          eb('d.created_at', '<', at),
+          eb.and([eb('d.created_at', '=', at), eb('d.id', '<', cursor.id)]),
+        ]),
+      );
+    }
+    const rows = await q
+      .orderBy('d.created_at', 'desc')
+      .orderBy('d.id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = rows.slice(0, query.limit);
+    const items: Dispute[] = [];
+    for (const row of page) {
+      items.push(toDispute(row, await this.appealStatus(this.db, organizationId, row.id)));
+    }
+    return { items, nextCursor: nextCursorOf(rows, page, query.limit) };
   }
 
   async get(principal: Principal, disputeId: string): Promise<Dispute> {
