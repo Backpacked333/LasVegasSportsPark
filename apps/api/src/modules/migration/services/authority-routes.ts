@@ -237,6 +237,12 @@ const x = (
 
 /** Served write routes that change no record of an authority category, with the reason. */
 export const AUTHORITY_EXEMPT_ROUTES: readonly AuthorityExemptRoute[] = [
+  // kernel
+  x(
+    'POST',
+    '/recovery/resume',
+    'Ends recovery mode after a restore once provider facts are reconciled (§5.8, SPK-AT-028); resolves an operational exception, no record of an authority category.',
+  ),
   // identity
   x('POST', '/duplicate-candidates', 'Flags a possible duplicate for review; changes no person.'),
   x('POST', '/duplicate-candidates/:id/dismiss', 'Dismisses a flag; changes no person.'),
