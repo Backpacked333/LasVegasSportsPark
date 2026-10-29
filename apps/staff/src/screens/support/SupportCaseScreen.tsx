@@ -8,12 +8,22 @@
  *   STALE_REVISION offers "Reload" and keeps what was typed.
  * - A note is history only and never a refund, permission change or transfer (SPK-SUPPORT-003);
  *   real actions are the owning module's commands, linked here with their operation as evidence.
- * - A related record or origin exception in recovery is shown beside the case, so resolving the
- *   case is never mistaken for recovering the record. SCR-S-49 recovery state ("not closable as
- *   resolved"): while one is in recovery, a notice beside Resolve and Close names each record and
- *   its state, and resolving or closing needs an explicit acknowledgment, which is sent as the
- *   command's reason for the audit record. The API does not enforce this yet (see the README).
- *   A linked action with an unknown outcome says so and is not repeated.
+ * - A related record or origin exception in recovery is shown beside the case (its own state,
+ *   read from its owning module, `AffectedRecordState.tsx`), so resolving the case is never
+ *   mistaken for recovering the record. SCR-S-49 recovery state ("not closable as resolved"):
+ *   while one is in recovery, a notice beside Resolve and Close names each record and its state,
+ *   and resolving or closing needs an explicit acknowledgment with a reason. The API enforces the
+ *   same for the case's operations in `recovery_required` (SUP-04: RESOURCE_CONFLICT
+ *   `RELATED_RECORD_IN_RECOVERY`, listing them): the refused operations join the notice, and the
+ *   acknowledged command sends `acknowledgeOpenRecovery: true` with the reason, which the API
+ *   audits. Closing with an action whose outcome is unknown is refused by the API
+ *   (`ACTION_OUTCOME_UNKNOWN`), shown with its code. A linked action with an unknown outcome says
+ *   so and is not repeated.
+ * - How the case was opened (`openedVia`): a customer's own request (SPK-SUPPORT-002) says so; the
+ *   customer sees its status, never notes, the owner or internal details. A subject merged into
+ *   another record links to the surviving record (SPK-IAM-007). People are named from
+ *   `GET /v1/person-names`; times are in the case's facility zone (`GET /v1/facilities`).
+ * - The case's audit history is offered to roles that may read the audit log.
  * - Offline the case is read-only. A case the viewer may not see is shown as not available.
  */
 import type { Schema } from '@sportspark/api-client';
@@ -22,6 +32,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import { PersonName, usePeopleNames } from '../../features/people/names';
 import { PersonReferenceField, referenceError } from '../../features/people/PersonReferenceField';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -37,6 +48,7 @@ import {
   useRecordsInRecovery,
   type RecordInRecovery,
 } from '../today/AffectedRecordState';
+import { AuditHistory } from '../today/AuditHistory';
 import { EXCEPTION_STATUS_TONE } from '../today/exception-actions';
 import { useFacilityDirectory } from '../today/useFacilityDirectory';
 import {
@@ -84,6 +96,30 @@ function OriginException({ id }: { id: string }) {
   );
 }
 
+const OPENED_VIA_TEXT: Record<CaseDetail['openedVia'], string> = {
+  staff: 'staff',
+  customer: 'customer request',
+  hook: 'to coordinate an origin record',
+};
+
+function Subject({ item }: { item: CaseDetail }) {
+  const personId = item.subject.personId;
+  const canonical = item.subject.canonicalPersonId;
+  const names = usePeopleNames([personId, canonical]);
+  if (!personId) return <span>None</span>;
+  return (
+    <span>
+      <PersonName id={personId} names={names} />
+      {canonical && canonical !== personId ? (
+        <>
+          {' '}
+          (merged into <PersonName id={canonical} names={names} />)
+        </>
+      ) : null}
+    </span>
+  );
+}
+
 function CaseFacts({ item }: { item: CaseDetail }) {
   const facilities = useFacilityDirectory();
   const zone = facilities.timezone(item.facilityId);
@@ -95,23 +131,23 @@ function CaseFacts({ item }: { item: CaseDetail }) {
           tone={CASE_PRIORITY_TONE[item.priority]}
           label={`Priority: ${item.priority}`}
         />
+        {item.openedVia === 'customer' ? (
+          <StatusBadge tone="info" label="Customer request" />
+        ) : null}
         {item.overdue ? <StatusBadge tone="danger" label="Overdue" /> : null}
       </span>
+      {item.openedVia === 'customer' ? (
+        <p className="caption">
+          The customer opened this request. They see its status, never notes, the owner or internal
+          details.
+        </p>
+      ) : null}
       {item.description ? <p>{item.description}</p> : null}
       <Facts
         label="Case"
         items={[
           ['Category', item.category],
-          [
-            'Customer',
-            item.subject.personId ? (
-              <Link key="subject" to={`/people/${item.subject.personId}`}>
-                Open the person record
-              </Link>
-            ) : (
-              'None'
-            ),
-          ],
+          ['Customer', <Subject key="subject" item={item} />],
           ['Household', item.subject.householdId ?? 'None'],
           ['Facility', facilities.name(item.facilityId) ?? 'Organization-wide'],
           ['Owner queue', item.owner.queue ?? 'None'],
@@ -127,6 +163,7 @@ function CaseFacts({ item }: { item: CaseDetail }) {
           ],
           ['Due', item.dueAt ? formatDateTime(item.dueAt, zone) : 'No due time'],
           ['Opened by', item.openedBy.actorLabel],
+          ['Opened via', OPENED_VIA_TEXT[item.openedVia]],
           ['Opened', formatDateTime(item.createdAt, zone)],
           ['Updated', formatDateTime(item.updatedAt, zone)],
           ['Revision', String(item.revision)],
@@ -165,6 +202,8 @@ function CaseFacts({ item }: { item: CaseDetail }) {
 }
 
 function CaseHistory({ item }: { item: CaseDetail }) {
+  const facilities = useFacilityDirectory();
+  const zone = facilities.timezone(item.facilityId);
   return (
     <section className="panel" aria-labelledby="case-history-title">
       <h3 id="case-history-title">History</h3>
@@ -179,7 +218,10 @@ function CaseHistory({ item }: { item: CaseDetail }) {
                   : ''}
               </span>
               <span className="caption">
-                {formatDateTime(e.occurredAt)} · {e.actor.actorLabel}
+                {formatDateTime(e.occurredAt, zone)} · {e.actor.actorLabel}
+                {Array.isArray(e.details['acknowledgedOpenRecovery'])
+                  ? ' · ended while related operations were still in recovery (acknowledged)'
+                  : ''}
               </span>
               {e.body ? <span>{e.body}</span> : null}
             </div>
@@ -269,16 +311,52 @@ function recoverySignature(records: readonly RecordInRecovery[]): string {
   return records.map((r) => `${r.type}:${r.id}:${r.state}`).join('|');
 }
 
+/** SUP-04: the operations the API listed when it refused to end the case while they recover. */
+export function refusedRecoveryOperations(error: unknown): RecordInRecovery[] {
+  const e = error as { code?: unknown; details?: unknown } | null | undefined;
+  if (!e || e.code !== 'RESOURCE_CONFLICT') return [];
+  const details = e.details as { code?: unknown; operations?: unknown } | null | undefined;
+  if (details?.code !== 'RELATED_RECORD_IN_RECOVERY' || !Array.isArray(details.operations)) {
+    return [];
+  }
+  return details.operations.flatMap((o: unknown) => {
+    const op = o as { operationId?: unknown; kind?: unknown; status?: unknown };
+    if (typeof op.operationId !== 'string') return [];
+    return [
+      {
+        label: `Operation ${typeof op.kind === 'string' ? op.kind : ''}`.trim(),
+        type: 'operation',
+        id: op.operationId,
+        state: typeof op.status === 'string' ? op.status : 'recovery_required',
+      },
+    ];
+  });
+}
+
+function mergeRecovery(
+  a: readonly RecordInRecovery[],
+  b: readonly RecordInRecovery[],
+): RecordInRecovery[] {
+  const seen = new Set(a.map((r) => `${r.type}:${r.id}`));
+  return [...a, ...b.filter((r) => !seen.has(`${r.type}:${r.id}`))];
+}
+
 function RecoveryNotice({
   records,
   acknowledged,
   onAcknowledge,
   error,
+  reason,
+  onReason,
+  reasonError,
 }: {
   records: readonly RecordInRecovery[];
   acknowledged: boolean;
   onAcknowledge: (value: boolean) => void;
   error: string | undefined;
+  reason: string;
+  onReason: (value: string) => void;
+  reasonError: string | undefined;
 }) {
   return (
     <div className="notice" role="group" aria-labelledby="case-recovery-title">
@@ -312,6 +390,17 @@ function RecoveryNotice({
           {error}
         </p>
       ) : null}
+      {acknowledged ? (
+        <TextAreaField
+          label="Why the case may end now"
+          required
+          hint="Kept with the audit record of the acknowledgment."
+          value={reason}
+          onChange={onReason}
+          error={reasonError}
+          maxLength={1500}
+        />
+      ) : null}
     </div>
   );
 }
@@ -319,10 +408,14 @@ function RecoveryNotice({
 function TransitionPanel({ item }: { item: CaseDetail }) {
   const { online } = useApp();
   const recovery = useCaseRecovery(item);
-  const signature = recoverySignature(recovery.inRecovery);
+  // Operations the API reported in recovery when it refused to end the case (SUP-04).
+  const [refused, setRefused] = useState<RecordInRecovery[]>([]);
+  const inRecovery = mergeRecovery(recovery.inRecovery, refused);
+  const signature = recoverySignature(inRecovery);
   // The acknowledgment covers exactly the records and states shown; a change asks again.
   const [acknowledgedFor, setAcknowledgedFor] = useState<string | null>(null);
-  const acknowledged = recovery.inRecovery.length > 0 && acknowledgedFor === signature;
+  const acknowledged = inRecovery.length > 0 && acknowledgedFor === signature;
+  const [ackReason, setAckReason] = useState('');
   const offersEnding = item.allowedEvents.some((e) => ENDING_EVENTS.has(e));
   const [kind, setKind] = useState('');
   const [summary, setSummary] = useState('');
@@ -343,20 +436,23 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
       if (!summary.trim()) problems['summary'] = 'Summarize the resolution.';
     }
     const ending = ENDING_EVENTS.has(event);
+    const acknowledging = ending && inRecovery.length > 0;
     if (ending && recovery.checking) {
       problems['recovery'] = 'Wait until the related records’ state has loaded.';
-    } else if (ending && recovery.inRecovery.length > 0 && !acknowledged) {
+    } else if (acknowledging && !acknowledged) {
       problems['recovery'] =
         'Confirm that the case may end while its related records are still in recovery.';
+    } else if (acknowledging && !ackReason.trim()) {
+      problems['ackReason'] = 'Write why the case may end while these records recover.';
     }
     setErrors(problems);
     if (Object.keys(problems).length > 0) return;
-    const reason =
-      ending && recovery.inRecovery.length > 0
-        ? `Ended while still in recovery: ${recovery.inRecovery
-            .map((r) => `${r.type} ${r.id} (${r.state})`)
-            .join(', ')}`.slice(0, 500)
-        : undefined;
+    // §4.9: the acknowledgment's reason names what is still in recovery, for the audit record.
+    const reason = acknowledging
+      ? `${ackReason.trim()}. Still in recovery: ${inRecovery
+          .map((r) => `${r.type} ${r.id} (${r.state})`)
+          .join(', ')}`.slice(0, 2000)
+      : undefined;
     void transition
       .submit({
         path: { id: item.id },
@@ -366,17 +462,22 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
           ...(event === 'resolve'
             ? { resolution: { kind: kind as CaseResolutionKind, summary: summary.trim() } }
             : {}),
-          ...(reason ? { reason } : {}),
+          ...(acknowledging ? { acknowledgeOpenRecovery: true, reason } : {}),
         },
       })
       .then((next) => {
         setSuccess(`Case updated. State: ${next.status}.`);
+        setRefused([]);
+        setAckReason('');
         if (event === 'resolve') {
           setKind('');
           setSummary('');
         }
       })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        const operations = refusedRecoveryOperations(error);
+        if (operations.length > 0) setRefused(operations);
+      });
   };
   if (item.allowedEvents.length === 0) {
     return (
@@ -410,9 +511,9 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
           />
         </div>
       ) : null}
-      {offersEnding && recovery.inRecovery.length > 0 ? (
+      {offersEnding && inRecovery.length > 0 ? (
         <RecoveryNotice
-          records={recovery.inRecovery}
+          records={inRecovery}
           acknowledged={acknowledged}
           onAcknowledge={(value) => {
             setAcknowledgedFor(value ? signature : null);
@@ -423,6 +524,9 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
             });
           }}
           error={errors['recovery']}
+          reason={ackReason}
+          onReason={setAckReason}
+          reasonError={errors['ackReason']}
         />
       ) : offersEnding && recovery.checking ? (
         <p className="caption">Checking whether the related records are still in recovery…</p>
@@ -635,6 +739,7 @@ function LinkActionPanel({ item }: { item: CaseDetail }) {
 
 function CaseView({ item }: { item: CaseDetail }) {
   const { online } = useApp();
+  const facilities = useFacilityDirectory();
   return (
     <>
       <h3>{item.title}</h3>
@@ -648,6 +753,11 @@ function CaseView({ item }: { item: CaseDetail }) {
       <NotePanel item={item} />
       <AssignPanel item={item} />
       <LinkActionPanel item={item} />
+      <AuditHistory
+        targetType="support_case"
+        targetId={item.id}
+        zone={facilities.timezone(item.facilityId)}
+      />
     </>
   );
 }

@@ -63,6 +63,15 @@ export const RESOLUTION_KINDS: readonly { value: CaseResolutionKind; label: stri
   { value: 'customer_unreachable', label: 'customer_unreachable' },
 ];
 
+/** GET /cases?origin (SUP-01): how the case was opened, or which origin record it coordinates. */
+export type CaseOrigin = Schema<'CaseOriginFilter'>;
+export const CASE_ORIGINS: readonly { value: CaseOrigin; label: string }[] = [
+  { value: 'customer', label: 'customer: the customer’s own request' },
+  { value: 'staff', label: 'staff: opened by staff' },
+  { value: 'access_review', label: 'access_review: an escalated access review' },
+  { value: 'exception', label: 'exception: an operational exception' },
+];
+
 export const CASES_KEY = ['api', '/cases'] as const;
 export const CASE_KEY = ['api', '/cases/{id}'] as const;
 
