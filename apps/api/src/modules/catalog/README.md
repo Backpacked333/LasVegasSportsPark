@@ -29,7 +29,7 @@ index) lets enrollment resolve the sessions of affected events.
 next to the code: `pricing/discount-evaluator.spec.ts`, `entitlements/equivalence-key.spec.ts`,
 `catalog.state-machines.spec.ts`). Statements below are verified unless marked proposed or pending.
 
-## Tables (migrations `0200_catalog_core.sql` … `0207_catalog_discount_per_person_guard.sql`)
+## Tables (migrations `0200_catalog_core.sql` … `0209_catalog_package_g_scope_effects.sql`)
 
 | Table                         | Purpose                                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -284,3 +284,28 @@ cannot set `source` or the id. `Program.source` is in every program read, which 
   finance behaviour, not implemented here.
 - `GET /v1/sessions` reads offering sessions only; scheduling events without a catalog session are
   listed by the scheduling module (`GET /events`).
+
+## Stage-3 integration fixes — verified 2026-10-29
+
+Review findings fixed when the stage-3 branches were integrated (each with its test):
+
+- Migration `0208_catalog_discount_guard_hardening.sql`: a release must reverse a redeem of the
+  same discount, reference and person (`discount_redemption_entries_release_matches_redeem`); a
+  redeem locks the definition `FOR NO KEY UPDATE` (no deadlock with the counter), and a redeem of a
+  per-person-limited discount without a person is refused by the database
+  (`discount_redemption_entries_person_required`); the service answers `VALIDATION_FAILED`
+  `DISCOUNT_PERSON_REQUIRED` first. Tests: `__tests__/discount-per-person-guard.spec.ts`,
+  `__tests__/pricing.spec.ts`.
+- Migration `0209_catalog_package_g_scope_effects.sql`: the four Package G scope checks use
+  immutable helper functions and refuse a malformed scope instead of letting a `null` pass
+  (`__tests__/package-g-definitions.spec.ts`, database rejection test).
+- Reference checks: entitlement definitions and eligibility policies may only name offerings and
+  programs of the organization (`assertCatalogReferences`, `VALIDATION_FAILED` `unknown_reference`
+  on the path); a party or rental offering's publication check names unknown, foreign-facility,
+  closed or retired resources and equipment (`booking_resource_*`, `booking_equipment_*`). The
+  module now imports `SchedulingModule` and `FacilitiesModule` for these reads.
+- The publication check is a staff read: a customer gets `NOT_FOUND` for a draft and for an
+  unknown id (`__tests__/discovery-and-publication-check.spec.ts`); program creation always
+  validates its body, imported or not (`__tests__/program-import.spec.ts`).
+- Cross-module journeys over this module: `apps/api/src/__tests__/journeys/spk-cond-00*.spec.ts`,
+  `pos-to-accounting-export.spec.ts` (approved `tax_fee` versions).

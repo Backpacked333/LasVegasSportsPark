@@ -20,7 +20,7 @@ a per-organization switch. The Package G bookings that call the port's series me
 DEC-076, parties DEC-077) are switched off by default in the modules that own them (enrollment,
 catalog; DEC-016); scheduling only accepts their `sourceType 'enrollment.booking'` events.
 
-## Tables (migration `0300_scheduling_core.sql`; facility-scoped keys `0301`; closure withdrawal `0302`)
+## Tables (migration `0300_scheduling_core.sql`; facility-scoped keys `0301`; closure withdrawal `0302`; closure transition guard `0303`)
 
 | Table                                    | Purpose                                                                                                                                                                                                                                       |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -282,3 +282,18 @@ adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009)
   turnover requirement is not implemented (it would need an action, a contract field and a reason);
   today a smaller requested buffer is always raised to the requirement. Raising a resource's
   default buffer later does not change events already booked on it.
+
+## Stage-3 integration fixes — verified 2026-10-29
+
+- Migration `0303_scheduling_closure_transition_guard.sql`: closures move only pending → active,
+  pending → withdrawn and active → lifted, and a lifted closure carries who lifted it and when
+  (`closures_lifted_facts`); tested in `__tests__/closure-withdrawal.spec.ts`.
+- A closure owned by a facilities restriction cannot be withdrawn directly
+  (`ClosureLiftGuards.check(…, 'withdraw')`; facilities answers `RESOURCE_CONFLICT`
+  `OWNED_BY_RESTRICTION`); the withdrawal reason is validated before the unit of work.
+- A booking principal may not move or cancel an event another source owns (`assertBookingPrincipal`),
+  a port series is checked like a single event (`BOOKING_EVENT_KIND`), and cancelling a port series
+  from a past instant never cancels an occurrence that already started
+  (`__tests__/event-scheduling-port.spec.ts`).
+- A re-imported event with changed setup or cleanup minutes is not taken for the same import
+  (`__tests__/event-import.spec.ts`, K-13); extended holds are stamped from the injected clock.

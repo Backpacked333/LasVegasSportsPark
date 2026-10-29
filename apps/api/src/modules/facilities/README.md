@@ -226,3 +226,11 @@ Handlers registered in `onModuleInit`: `facilities.escalate_overdue_task` (own t
   The §5.6 route-classification test reads the `@RecordAuthority` decorator once MIG-00 lands; the
   withdraw route is classified only by its decorator.
 - Evidence is stored by reference only; file storage is a provider-selection gate (§5.2).
+
+## Stage-3 integration fixes — verified 2026-10-29
+
+- `RestrictionsService.assertClosureWithdrawAllowed`: a scheduling closure linked to a proposed,
+  approved or active restriction cannot be withdrawn through scheduling
+  (`RESOURCE_CONFLICT` `OWNED_BY_RESTRICTION`); the restriction's own withdrawal stays the way to
+  withdraw it (`__tests__/restriction-withdrawal.spec.ts`, scheduling
+  `__tests__/closure-withdrawal.spec.ts`).

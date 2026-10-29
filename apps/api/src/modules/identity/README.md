@@ -286,3 +286,18 @@ and a second approver for staff recovery are **Pending decision** (DEC-018, DEC-
   `pnpm api-client:generate` (the clients typecheck against the regenerated client); and
   `apps/api/src/__tests__/declared-interfaces.spec.ts` still expects
   `personIdsResolvingTo` to answer its pre-ID-01 default (it now resolves `[]` for an unknown id).
+
+## Stage-3 integration fixes — verified 2026-10-29
+
+- An invitation that names a person is listed and read only by that person, never by another
+  holder of the same contact (`__tests__/invitation-reads.spec.ts`, §4.10); declining checks
+  `expectedRevision` (`STALE_REVISION`), and `DeclineInvitationRequest` accepts the command meta.
+- Access-review lifts announce `access_restriction_lifted` only for grants that were suspended and
+  are no longer suspended, once (`__tests__/identity-jobs.spec.ts`).
+- Making a contact point primary and removing one are audited under their own action ids
+  (`identity.make_primary_contact_point`, `identity.remove_contact_point`;
+  `__tests__/contact-points.spec.ts`).
+- People search pages on the same case-insensitive order it sorts by.
+- The creator-guardian revocation rule applies to a child record the guardian created
+  (self-service `POST /v1/people`) and whose guardianship was then verified; exercised end to end by
+  `apps/api/src/__tests__/journeys/spk-iam-004-invitation-to-pickup.spec.ts`.

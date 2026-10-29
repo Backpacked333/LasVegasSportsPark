@@ -477,3 +477,16 @@ bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
   (`services/catalog-sessions.ts` refuses to run inside one).
 - Competition's `RosterService.changeRoster` is called inside placement's transaction; its unit
   of work joins it (the kernel's `UnitOfWork.run` is reentrant).
+
+## Stage-3 integration notes — verified 2026-10-29
+
+- A booking's deposit is now quoted by finance from the approved installment policy its terms name
+  (finance README, "Stage-3 integration fixes"; journey `spk-cond-003-rentals.spec.ts`): the
+  earlier "**Pending** finance (FIN)" note is resolved; DEC-073 (the deposit rule itself) is still
+  **Pending decision**.
+- The module now imports `SchedulingModule`, `CommunicationsModule`, `WorkforceModule` and
+  `FacilitiesModule` (bookings, notices, staffing, equipment); the record-authority classification
+  and OpenAPI parity notes above were closed at integration (both tests pass).
+- Journeys over this module: `spk-cond-001` to `spk-cond-003`, `capability-switches`,
+  `spk-reg-008-waitlist-offer`, `spk-youth-005-progression`, `spk-at-023-interrupted-payment` in
+  `apps/api/src/__tests__/journeys/`.

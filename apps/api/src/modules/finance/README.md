@@ -478,3 +478,18 @@ outcome recording and reconciliation are never gated.
 - Enrollment's `BasketsService.hold` opens its own unit of work, so §4.11 step 3 (holds) commits
   before step 4 (order, operation, checkout); a failure in between leaves held capacity that the
   hold expiry releases.
+
+## Stage-3 integration fixes — verified 2026-10-29
+
+- Booking deposits (§3.16, POL-040; DEC-073 **Pending decision**): a quote for a rental or party
+  whose approved booking terms name an `installmentPolicyKey` is quoted on that approved
+  `installment` policy version (`installments` 2 to 24 and `intervalDays`, recorded as the quote's
+  `installmentPolicyVersionId`); asking for another count is refused (`BOOKING_DEPOSIT_PLAN_FIXED`),
+  mixing bookings with different plans is refused (`BOOKING_DEPOSIT_PLANS_DIFFER`), and a missing
+  or incomplete policy refuses the quote (`BOOKING_DEPOSIT_POLICY_MISSING`,
+  `BOOKING_DEPOSIT_POLICY_INCOMPLETE`) instead of assuming a default. Whether such a booking may be
+  paid in full instead is not answered by the terms (**Pending decision**, POL-040). Found and
+  verified by `apps/api/src/__tests__/journeys/spk-cond-003-rentals.spec.ts`.
+- `docs/api/openapi.json` and the API client are regenerated (the parity test passes); the
+  `stage3-doubles.ts` test doubles remain for module tests, while the journeys run the real
+  identity and catalog members (`pos-to-accounting-export.spec.ts` approves a real `tax_fee`).
