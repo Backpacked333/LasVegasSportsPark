@@ -1,13 +1,24 @@
-import { Controller, HttpCode, Post } from '@nestjs/common';
+import { Controller, Get, HttpCode, Post } from '@nestjs/common';
 import {
   AcceptInvitationBody,
   CreateInvitationBody,
+  DeclineInvitationBody,
+  ListInvitationsQuery,
   RevokeInvitationBody,
   z,
   type Invitation,
+  type InvitationView,
+  type Page,
   type Principal,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CorrelationId } from '../identity.shared';
 import { InvitationsService, type InvitationAccepted } from '../services/invitations.service';
 
@@ -38,6 +49,29 @@ export class InvitationsController {
     @CorrelationId() correlationId: string | null,
   ): Promise<InvitationAccepted> {
     return this.invitations.accept(principal, params.id, body.token, correlationId);
+  }
+
+  /** ID-03: classified for §5.6 like accept and revoke (relationship evidence, unproven). */
+  @Post(':id/decline')
+  @HttpCode(200)
+  @Idempotent()
+  @RecordAuthority('relationship_evidence')
+  decline(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodBody(DeclineInvitationBody) body: z.infer<typeof DeclineInvitationBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<Invitation> {
+    return this.invitations.decline(principal, params.id, body, correlationId);
+  }
+
+  /** GET /v1/invitations (ID-03): staff list (identity.read_invitations). */
+  @Get()
+  list(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListInvitationsQuery) query: z.infer<typeof ListInvitationsQuery>,
+  ): Promise<Page<InvitationView>> {
+    return this.invitations.listForStaff(principal, query);
   }
 
   @Post(':id/revoke')

@@ -1,15 +1,22 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   newId,
+  z,
   type DuplicateCandidate,
+  type DuplicateCandidateDetail,
+  type DuplicateCandidateView,
   type FlagDuplicateInput,
+  type ListDuplicateCandidatesQueryInput,
   type MergeDuplicateInput,
+  type Page,
   type PersonMerge,
   type Principal,
 } from '@sportspark/contracts';
 import { json, type AccessGrantsTable, type Db, type RelationshipsTable } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type Selectable, type SqlBool } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -28,7 +35,16 @@ import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { DuplicateCandidateMachine } from '../identity.machines';
-import { toDuplicateCandidate, toPersonMerge } from '../identity.shared';
+import {
+  displayNameOf,
+  iso,
+  personColumns,
+  toDuplicateCandidate,
+  toPersonMerge,
+  type PersonRow,
+} from '../identity.shared';
+
+const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
 
 export interface MergeSummary {
   contactPointsMoved: number;
@@ -781,6 +797,136 @@ export class DuplicatesService {
         reason,
       },
     });
+  }
+
+  /**
+   * GET /v1/duplicate-candidates (ID-05, SPK-IAM-007, SCR-S-23): candidates by status (default
+   * open), newest first (keyset created_at desc, id desc), with both people's names and the
+   * detection signals (reasons, score); never dates of birth in list rows.
+   */
+  async list(
+    principal: Principal,
+    query: ListDuplicateCandidatesQueryInput,
+  ): Promise<Page<DuplicateCandidateView>> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    await this.authorization.require(principal, IdentityActions.readDuplicates, {
+      type: 'duplicate_candidate',
+      organizationId,
+    });
+    let rows = this.db
+      .selectFrom('duplicate_candidates')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('status', '=', query.status ?? 'open');
+    const cursor = decodeCursor(query.cursor, ListCursor);
+    if (cursor) {
+      rows = rows.where(
+        sql<SqlBool>`(created_at, id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const found = await rows
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = found.slice(0, query.limit);
+    const persons = await this.persons(
+      this.db,
+      organizationId,
+      page.flatMap((c) => [c.person_a_id, c.person_b_id]),
+    );
+    const side = (id: string) => {
+      const p = persons.get(id) as PersonRow;
+      return {
+        personId: p.id,
+        givenName: p.given_name,
+        familyName: p.family_name,
+        displayName: displayNameOf(p.given_name, p.family_name),
+        kind: p.kind,
+        status: p.status,
+      };
+    };
+    const last = page[page.length - 1];
+    return {
+      items: page.map((c) => ({
+        ...toDuplicateCandidate(c),
+        personA: side(c.person_a_id),
+        personB: side(c.person_b_id),
+      })),
+      nextCursor:
+        found.length > query.limit && last
+          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          : null,
+    };
+  }
+
+  /**
+   * GET /v1/duplicate-candidates/{id} (ID-05): one candidate with what a reviewer compares (names,
+   * dates of birth, whether an account is linked, which contact point kinds each holds).
+   */
+  async get(principal: Principal, id: string): Promise<DuplicateCandidateDetail> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    await this.authorization.require(principal, IdentityActions.readDuplicates, {
+      type: 'duplicate_candidate',
+      id,
+      organizationId,
+    });
+    const candidate = await this.load(this.db, organizationId, id);
+    const ids = [candidate.person_a_id, candidate.person_b_id];
+    const persons = await this.persons(this.db, organizationId, ids);
+    const accounts = await this.db
+      .selectFrom('accounts')
+      .select('person_id')
+      .where('organization_id', '=', organizationId)
+      .where('person_id', 'in', ids)
+      .where('status', '=', 'active')
+      .execute();
+    const contacts = await this.db
+      .selectFrom('contact_points')
+      .select(['person_id', 'kind'])
+      .distinct()
+      .where('organization_id', '=', organizationId)
+      .where('person_id', 'in', ids)
+      .execute();
+    const side = (personId: string) => {
+      const p = persons.get(personId) as PersonRow;
+      return {
+        personId: p.id,
+        givenName: p.given_name,
+        familyName: p.family_name,
+        displayName: displayNameOf(p.given_name, p.family_name),
+        kind: p.kind,
+        status: p.status,
+        dateOfBirth: p.date_of_birth,
+        accountLinked: accounts.some((a) => a.person_id === personId),
+        contactPointKinds: contacts
+          .filter((c) => c.person_id === personId)
+          .map((c) => c.kind)
+          .sort(),
+      };
+    };
+    return {
+      ...toDuplicateCandidate(candidate),
+      personA: side(candidate.person_a_id),
+      personB: side(candidate.person_b_id),
+    };
+  }
+
+  private async persons(
+    db: Db | Trx,
+    organizationId: string,
+    ids: string[],
+  ): Promise<Map<string, PersonRow>> {
+    if (ids.length === 0) return new Map();
+    const rows = (await db
+      .selectFrom('persons')
+      .select(personColumns)
+      .where('persons.organization_id', '=', organizationId)
+      .where('persons.id', 'in', [...new Set(ids)])
+      .execute()) as PersonRow[];
+    return new Map(rows.map((r) => [r.id, r]));
   }
 
   private async findPair(trx: Trx, organizationId: string, a: string, b: string) {

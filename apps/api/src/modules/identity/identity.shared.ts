@@ -34,8 +34,9 @@ import type {
   Db,
 } from '@sportspark/db';
 import { sql, type Selectable } from 'kysely';
-import type { ActionDefinition, AuthorizationService, RequestWithContext } from '../../kernel';
+import type { ActionDefinition, AuthorizationService, RequestWithContext, Trx } from '../../kernel';
 import { IdentityActions } from './identity.actions';
+import { allowedReviewDecisions } from './identity.machines';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records. */
 export const CorrelationId = createParamDecorator(
@@ -223,6 +224,58 @@ export function normalizeContactValue(kind: 'email' | 'phone', value: string): s
   return kind === 'email' ? trimmed.toLowerCase() : trimmed.replace(/[\s()-]/g, '');
 }
 
+/**
+ * The name shown for a person (ID-01, IF-09): given then family name. Presentation order by
+ * locale is a client concern; this is the one server-side rendering.
+ */
+export function displayNameOf(givenName: string, familyName: string): string {
+  return `${givenName} ${familyName}`.trim();
+}
+
+/** Display names of people in the organization, by id (unknown ids are absent). */
+export async function displayNamesOf(
+  db: Db | Trx,
+  organizationId: string,
+  ids: readonly string[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Map();
+  const rows = await db
+    .selectFrom('persons')
+    .select(['id', 'given_name', 'family_name'])
+    .where('organization_id', '=', organizationId)
+    .where('id', 'in', unique)
+    .execute();
+  return new Map(rows.map((r) => [r.id, displayNameOf(r.given_name, r.family_name)]));
+}
+
+/**
+ * A contact value with most characters hidden (ID-04, ID-06, §4.14): enough for staff to tell two
+ * contact points apart or for an audit record to name the change, never the full address.
+ * `ann.smith@example.com` → `a***@example.com`; `+15551234567` → `***4567`.
+ */
+export function maskContactValue(kind: 'email' | 'phone', value: string): string {
+  if (kind === 'email') {
+    const at = value.lastIndexOf('@');
+    if (at <= 0) return '***';
+    return `${value.slice(0, 1)}***${value.slice(at)}`;
+  }
+  const digits = value.replace(/\D/g, '');
+  return digits.length <= 4 ? '***' : `***${digits.slice(-4)}`;
+}
+
+/** Escapes LIKE wildcards so a search term matches literally (`\` is PostgreSQL's default escape). */
+export function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Port inputs from other modules are not validated by a pipe: unknown shapes are simply absent. */
+export function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Row mapping
 // ---------------------------------------------------------------------------------------------
@@ -376,6 +429,7 @@ export function toInvitation(row: Selectable<InvitationsTable>): Invitation {
     acceptedAt: isoOrNull(row.accepted_at),
     acceptedByPersonId: row.accepted_by_person_id,
     revokedAt: isoOrNull(row.revoked_at),
+    declinedAt: isoOrNull(row.declined_at),
     revision: row.revision,
     createdAt: iso(row.created_at),
   };
@@ -442,8 +496,10 @@ export function toAccessReview(
       affectedGrantIds: d.affected_grant_ids,
       effectiveFrom: isoOrNull(d.effective_from),
       effectiveTo: isoOrNull(d.effective_to),
+      bySystem: (d.decided_by as { kind?: unknown } | null)?.kind === 'system',
       occurredAt: iso(d.occurred_at),
     })),
+    allowedDecisions: allowedReviewDecisions(row.status),
     revision: row.revision,
     createdAt: iso(row.created_at),
   };

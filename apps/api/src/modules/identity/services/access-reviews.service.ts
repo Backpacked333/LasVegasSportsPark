@@ -1,13 +1,21 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   newId,
+  systemPrincipal,
+  z,
   type AccessReview,
   type AccessReviewDecisionInput,
+  type AccessReviewSummary,
+  type ListAccessReviewsQueryInput,
   type OpenAccessReviewInput,
+  type Page,
   type Principal,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, type AccessReviewStatus, type Db } from '@sportspark/db';
+import { sql, type SqlBool } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -24,8 +32,13 @@ import {
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
-import { AccessReviewMachine } from '../identity.machines';
-import { isSuspendedAt, toAccessReview } from '../identity.shared';
+import { AccessReviewMachine, allowedReviewDecisions } from '../identity.machines';
+import { displayNamesOf, iso, isoOrNull, isSuspendedAt, toAccessReview } from '../identity.shared';
+
+/** ID-08: the system actor that records the end of a restriction window. */
+export const RESTRICTION_WINDOW_ACTOR = 'identity.restriction_window';
+
+const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
 
 interface LiveSuspension {
   id: string;
@@ -156,7 +169,7 @@ export class AccessReviewsService {
     // dates), never staff decision notes, affected grants (which can belong to another household),
     // the owning staff member or the recorded outcome. How parties learn the outcome is a pending
     // operator decision and goes through communications, not this read.
-    return { ...review, ownerPersonId: null, outcome: null, decisions: [] };
+    return { ...review, ownerPersonId: null, outcome: null, decisions: [], allowedDecisions: [] };
   }
 
   async decide(
@@ -267,17 +280,23 @@ export class AccessReviewsService {
         }
         case 'lift': {
           // Ends only this review's suspensions; another review's restriction of the same grant
-          // stays in force (§4.6).
-          const own = [
-            ...(
-              await this.liveSuspensions(
-                trx,
-                organizationId,
-                id,
-                input.grantIds && input.grantIds.length > 0 ? input.grantIds : null,
-              )
-            ).values(),
-          ];
+          // stays in force (§4.6). Explicit grantIds, else the grants actorPersonId holds over the
+          // subject (ID-08 fix: naming an actor never lifts another actor's restriction), else all.
+          let scope: string[] | null = null;
+          if (input.grantIds && input.grantIds.length > 0) {
+            scope = input.grantIds;
+          } else if (input.actorPersonId) {
+            scope = (
+              await trx
+                .selectFrom('access_grants')
+                .select('id')
+                .where('organization_id', '=', organizationId)
+                .where('subject_person_id', '=', review.subject_person_id)
+                .where('actor_person_id', '=', input.actorPersonId)
+                .execute()
+            ).map((g) => g.id);
+          }
+          const own = [...(await this.liveSuspensions(trx, organizationId, id, scope)).values()];
           affectedGrantIds = own.map((s) => s.grant_id).sort();
           if (affectedGrantIds.length > 0) {
             await this.lockGrants(trx, organizationId, affectedGrantIds);
@@ -304,6 +323,7 @@ export class AccessReviewsService {
                   reviewId: id,
                   subjectPersonId: review.subject_person_id,
                   grantIds: restored,
+                  cause: 'decision',
                 },
                 correlationId,
               });
@@ -414,6 +434,248 @@ export class AccessReviewsService {
         correlationId,
       });
       return this.detail(trx, organizationId, id);
+    });
+  }
+
+  /**
+   * GET /v1/access-reviews (ID-05, SPK-IAM-005, SCR-S-22): reviews by status (default: not
+   * closed), owner role and subject, newest first (keyset created_at desc, id desc), each with
+   * the decisions its state allows and how many grants it restricts now. Review deciders only.
+   */
+  async list(
+    principal: Principal,
+    query: ListAccessReviewsQueryInput,
+  ): Promise<Page<AccessReviewSummary>> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    await this.authorization.require(principal, IdentityActions.readAccessReview, {
+      type: 'access_review',
+      organizationId,
+    });
+    let rows = this.db
+      .selectFrom('access_reviews')
+      .selectAll()
+      .where('organization_id', '=', organizationId);
+    rows = query.status
+      ? rows.where('status', '=', query.status)
+      : rows.where('status', '<>', 'closed');
+    if (query.ownerRole) rows = rows.where('owner_role', '=', query.ownerRole);
+    if (query.subjectPersonId) rows = rows.where('subject_person_id', '=', query.subjectPersonId);
+    const cursor = decodeCursor(query.cursor, ListCursor);
+    if (cursor) {
+      rows = rows.where(
+        sql<SqlBool>`(created_at, id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const found = await rows
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = found.slice(0, query.limit);
+    const now = this.clock.now();
+    const restricted = new Map<string, number>();
+    if (page.length > 0) {
+      const live = await this.db
+        .selectFrom('access_grant_suspensions')
+        .select(['review_id', 'grant_id', 'suspended_at', 'suspended_until'])
+        .where('organization_id', '=', organizationId)
+        .where(
+          'review_id',
+          'in',
+          page.map((r) => r.id),
+        )
+        .where('ended_at', 'is', null)
+        .execute();
+      for (const s of live) {
+        if (isSuspendedAt(s, now))
+          restricted.set(s.review_id, (restricted.get(s.review_id) ?? 0) + 1);
+      }
+    }
+    const names = await displayNamesOf(
+      this.db,
+      organizationId,
+      page.map((r) => r.subject_person_id),
+    );
+    const last = page[page.length - 1];
+    return {
+      items: page.map((r) => ({
+        id: r.id,
+        subjectPersonId: r.subject_person_id,
+        subjectDisplayName: names.get(r.subject_person_id) ?? null,
+        reason: r.reason,
+        ownerRole: r.owner_role,
+        ownerPersonId: r.owner_person_id,
+        status: r.status,
+        effectiveFrom: iso(r.effective_from),
+        effectiveTo: isoOrNull(r.effective_to),
+        escalatedAt: isoOrNull(r.escalated_at),
+        decidedAt: isoOrNull(r.decided_at),
+        closedAt: isoOrNull(r.closed_at),
+        restrictedGrantCount: restricted.get(r.id) ?? 0,
+        allowedDecisions: allowedReviewDecisions(r.status),
+        revision: r.revision,
+        createdAt: iso(r.created_at),
+      })),
+      nextCursor:
+        found.length > query.limit && last
+          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          : null,
+    };
+  }
+
+  /**
+   * Reviews with a time-bounded restriction whose window has passed and is not yet recorded as
+   * ended (ID-08), at most `limit`.
+   */
+  async reviewsWithElapsedWindows(
+    now: Date,
+    limit: number,
+  ): Promise<Array<{ organizationId: string; reviewId: string }>> {
+    const rows = await this.db
+      .selectFrom('access_grant_suspensions')
+      .select(['organization_id', 'review_id'])
+      .distinct()
+      .where('ended_at', 'is', null)
+      .where('suspended_until', 'is not', null)
+      .where('suspended_until', '<=', now)
+      .orderBy('organization_id')
+      .orderBy('review_id')
+      .limit(limit)
+      .execute();
+    return rows.map((r) => ({ organizationId: r.organization_id, reviewId: r.review_id }));
+  }
+
+  /**
+   * ID-08 (SPK-IAM-005 temporary restrictions with effective dates, §4.6): authority already stops
+   * honouring a suspension at `suspended_until`; this records the end. In one transaction per
+   * review it locks the review (skipped while a decision holds it) and its grants in id order, as
+   * `decide` does; appends a `lift` decision by the system actor `identity.restriction_window`
+   * with the note 'restriction window ended'; ends each elapsed suspension at its own
+   * `suspended_until` (the append-only guard allows one end); re-projects the grants; and emits
+   * identity.access_restriction_lifted (cause `window_ended`) for the grants no other review still
+   * suspends, plus identity.access_review_decided `lift`. The review's status is unchanged; its
+   * revision moves because its decision history did. Returns false when nothing was recorded.
+   */
+  async endElapsedWindows(organizationId: string, reviewId: string, now: Date): Promise<boolean> {
+    const principal = systemPrincipal(organizationId, RESTRICTION_WINDOW_ACTOR);
+    return runInTransaction(this.uow, async ({ trx }) => {
+      const review = await trx
+        .selectFrom('access_reviews')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', reviewId)
+        .forUpdate()
+        .skipLocked()
+        .executeTakeFirst();
+      if (!review) return false;
+      const due = await trx
+        .selectFrom('access_grant_suspensions')
+        .select(['id', 'grant_id', 'suspended_until'])
+        .where('organization_id', '=', organizationId)
+        .where('review_id', '=', reviewId)
+        .where('ended_at', 'is', null)
+        .where('suspended_until', 'is not', null)
+        .where('suspended_until', '<=', now)
+        .orderBy('grant_id')
+        .execute();
+      if (due.length === 0) return false;
+      const grantIds = [...new Set(due.map((d) => d.grant_id))].sort();
+      await this.lockGrants(trx, organizationId, grantIds);
+      const decisionId = newId();
+      for (const suspension of due) {
+        await trx
+          .updateTable('access_grant_suspensions')
+          .set({ ended_at: suspension.suspended_until, end_decision_id: decisionId })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', suspension.id)
+          .where('ended_at', 'is', null)
+          .execute();
+      }
+      const stillSuspended = await this.projectSuspensions(trx, organizationId, grantIds, now);
+      const restored = grantIds.filter((g) => !stillSuspended.has(g));
+      const windowEnd = new Date(
+        Math.min(...due.map((d) => new Date(d.suspended_until as Date).getTime())),
+      );
+      const sequence =
+        Number(
+          (
+            await trx
+              .selectFrom('access_review_decisions')
+              .select((eb) => eb.fn.count<number>('id').as('n'))
+              .where('review_id', '=', reviewId)
+              .executeTakeFirstOrThrow()
+          ).n,
+        ) + 1;
+      await trx
+        .insertInto('access_review_decisions')
+        .values({
+          id: decisionId,
+          organization_id: organizationId,
+          review_id: reviewId,
+          sequence,
+          kind: 'lift',
+          decided_by: json(snapshotActor(principal)),
+          note: 'restriction window ended',
+          affected_grant_ids: grantIds,
+          effective_from: windowEnd,
+          effective_to: null,
+          details: json({
+            cause: 'window_ended',
+            windows: due.map((d) => ({
+              suspensionId: d.id,
+              grantId: d.grant_id,
+              endedAt: iso(d.suspended_until as Date),
+            })),
+            stillSuspendedByAnotherReview: grantIds.filter((g) => stillSuspended.has(g)),
+          }),
+        })
+        .execute();
+      const updated = await trx
+        .updateTable('access_reviews')
+        .set({ revision: review.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', reviewId)
+        .where('revision', '=', review.revision)
+        .executeTakeFirst();
+      ensureUpdated(updated.numUpdatedRows, () =>
+        errors.staleRevision(review.revision, review.revision + 1),
+      );
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: IdentityActions.endRestrictionWindow.id,
+        targetType: 'access_review',
+        targetId: reviewId,
+        beforeRevision: review.revision,
+        afterRevision: review.revision + 1,
+        details: { decisionId, affectedGrantIds: grantIds, restoredGrantIds: restored },
+      });
+      if (restored.length > 0) {
+        await this.outbox.enqueue(trx, IdentityEvents.accessRestrictionLifted, {
+          organizationId,
+          aggregateType: 'access_review',
+          aggregateId: reviewId,
+          payload: {
+            reviewId,
+            subjectPersonId: review.subject_person_id,
+            grantIds: restored,
+            cause: 'window_ended',
+          },
+        });
+      }
+      await this.outbox.enqueue(trx, IdentityEvents.accessReviewDecided, {
+        organizationId,
+        aggregateType: 'access_review',
+        aggregateId: reviewId,
+        payload: {
+          reviewId,
+          subjectPersonId: review.subject_person_id,
+          kind: 'lift',
+          status: review.status,
+        },
+      });
+      return true;
     });
   }
 
