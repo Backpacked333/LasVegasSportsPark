@@ -15,13 +15,18 @@ display names, `StaffMembershipsService` for time-bounded access), scheduling (`
 event targets, its exported `ConflictDetector` and `SCHEDULING_POLICY` for person commitments,
 `scheduling.event_changed`), competition (`FIXTURE_PORT`, `TEAM_ENTRY_QUERY_PORT`,
 `READINESS_CHECK_REGISTRY`, `ASSIGNMENT_CHECK_IMPL`, `competition.fixture_changed`), catalog
-(`OfferingsService`, `SessionsService`, `catalog.session_canceled`). It never reads or writes
-those modules' tables (§4.2).
+(`OfferingsService`, `SessionsService`, `catalog.session_canceled`), communications
+(`NotificationsService.composeAndQueueIn` for its own assignment notices, IF-22; communications
+does not import workforce), identity again for merges (`identity.persons_merged`,
+`PERSON_DIRECTORY_PORT.personIdsResolvingTo` / `resolveCanonicalPersonId`, IF-21/IF-09), and the
+kernel (`FacilityDirectory`, IF-03; module settings, IF-43). It never reads or writes those
+modules' tables (§4.2).
 
 **Status: implemented** — verified by `apps/api/src/modules/workforce/__tests__` and the unit
 specs next to the code (`workforce.state-machines.spec.ts`, `workforce.shared.spec.ts`), under
-PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are verified unless marked proposed,
-pending or gap.
+PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** unless marked
+**proposed**, **pending** or **gap** (§6.7). Stage 3 (WRK-01 to WRK-06) is summarized in
+"Stage 3" below; every policy value is now configuration with no default ("Policy settings").
 
 ## Kernel and module registrations — verified
 
@@ -68,7 +73,7 @@ pending or gap.
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `availability`            | Person, `starts_at/ends_at` and generated `during tstzrange`, kind `available/unavailable`, note, status `active → withdrawn` (reason kept), revision. Exclusion `availability_no_overlap`: one active statement per person per instant                                                                                                                                                                                                                                                                          |
 | `qualifications`          | Person, kind (slug), level, evidence reference (never an upload), `valid_from/valid_to`, status `pending_verification → verified → revoked` or `rejected`, verifier and instant, reason, revision                                                                                                                                                                                                                                                                                                                |
-| `assignment_requirements` | Target (`fixture/event/session` + the matching composite FK to `fixtures`, `events` or `offering_sessions`), kind, role, `required_count`, `must_be_accepted`, required qualification kinds; unique per (target, role)                                                                                                                                                                                                                                                                                           |
+| `assignment_requirements` | Target (`fixture/event/session` + the matching composite FK to `fixtures`, `events` or `offering_sessions`), kind, role, `required_count`, `must_be_accepted`, required qualification kinds; unique per (target, role); retirement facts `retired_at`, `retired_reason`, `retired_by` (migration 0704)                                                                                                                                                                                                           |
 | `assignments`             | Person, kind `official/coach/supervisor/organizer`, target (+ FKs), copied title and interval, role, slot, engagement `regular/temporary/substitute`, status per `AssignmentMachine` (check lists exactly its states), every state's fact (offered/responded/accepted/declined/withdrawn/completed instants, reasons, actors), turnaround, `committed_end` and generated `committed` range, `replaces_assignment_id`, access status/window/`access_membership_id` (FK to identity `staff_memberships`), revision |
 | `fee_submissions`         | Assignment, person, `rate_basis` jsonb, computed and submitted amounts (bigint minor units + currency), status `submitted → approved/adjusted/rejected → exported`, approver and instant, current approved amount, rejection reason, `export_batch_id`; one live submission per assignment                                                                                                                                                                                                                       |
 | `fee_adjustments`         | Append-only (`forbid_mutation`): sequence, previous and adjusted amount, currency, reason, actor, instant                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -93,23 +98,30 @@ Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.t
 - An event-type requirement or assignment always carries its composite-keyed
   `scheduling_event_id` (`0702`; a null id no longer satisfies the target check).
 - Composite `(organization_id, …)` foreign keys on every reference (§4.3).
+- Requirement retirement (`0704_workforce_requirement_retirement.sql`, WRK-02):
+  `assignment_requirements_retirement_facts` (when, why and by whom: all three or none; the reason
+  1..2000 characters); trigger `assignment_requirements_retirement_guard` refuses any update of a
+  retired requirement (un-retiring included); trigger `assignments_requirement_not_retired`
+  refuses inserting, or moving into, `proposed/offered/accepted` an assignment whose target and
+  role have a retired requirement (it reads the requirement `FOR SHARE`, so a racing retirement
+  either sees the assignment or refuses it). The delete guard stays.
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/workforce.ts`)
 
-| Method   | Path                                                                        | Who (action)                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| -------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST/GET | `/availability`, POST `/availability/{id}/withdraw`                         | own (`workforce.manage_own_availability`); league/program/general managers for others; read: the person or coverage staff                                                                                                                                                                                                                                                                                                       |
-| POST/GET | `/qualifications`, POST `/{id}/verify`, `/{id}/reject`, `/{id}/revoke`      | self-submission awaits verification; league/program/general managers and system administrators record and decide; nobody verifies their own                                                                                                                                                                                                                                                                                     |
-| POST/GET | `/assignment-requirements`, PATCH `/{id}`                                   | league manager, program manager, scheduler, general manager (`workforce.manage_requirements`); GET returns coverage and uncovered slots                                                                                                                                                                                                                                                                                         |
-| POST/GET | `/assignments`, GET `/assignments/{id}`                                     | propose (or propose and offer): the same assigners; temporary/substitute work also needs `workforce.grant_temporary_access` (league/program manager, system administrator); a `turnaroundMinutes` below the facility policy needs `workforce.override_turnaround` (league/program/general managers, POL-033 pending) and a reason, and the audit records both values; read: coverage staff or the assignee, otherwise NOT_FOUND |
-| POST     | `/assignments/{id}/offer`                                                   | assigners                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| POST     | `/assignments/{id}/accept`, `/decline`                                      | only the assignee (§4.8); staff get `PARTICIPANT_AUTHORITY_REQUIRED`, others NOT_FOUND                                                                                                                                                                                                                                                                                                                                          |
-| POST     | `/assignments/{id}/withdraw`                                                | league/program/general managers or the assignee (reason required)                                                                                                                                                                                                                                                                                                                                                               |
-| POST     | `/assignments/{id}/complete`                                                | league/program/general managers, once the activity has started                                                                                                                                                                                                                                                                                                                                                                  |
-| GET/POST | `/assignments/{id}/replacements`                                            | front desk and assigners (`workforce.trigger_replacement`): explained candidates; POST offers the slot to a replacement, optionally withdrawing the original in the same command                                                                                                                                                                                                                                                |
-| POST/GET | `/fee-submissions`, GET `/{id}`, POST `/{id}/approve`, `/adjust`, `/reject` | submit: the assignee of a completed assignment; read: finance operator, general manager, the assignee; decide: finance operator, general manager — never their own fee; staff act only on fees of their facilities' assignments (others NOT_FOUND, absent from lists)                                                                                                                                                           |
-| POST/GET | `/fee-export-batches`, GET `/{id}`                                          | finance operator, exporting only fees of their facilities; reading a batch needs the authority at every facility its lines belong to                                                                                                                                                                                                                                                                                            |
-| GET      | `/me/assignments`                                                           | the caller's own assignments (SPK-UX-007)                                                                                                                                                                                                                                                                                                                                                                                       |
+| Method   | Path                                                                        | Who (action)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| POST/GET | `/availability`, POST `/availability/{id}/withdraw`                         | own (`workforce.manage_own_availability`); league/program/general managers for others; read: the person or coverage staff                                                                                                                                                                                                                                                                                                                                                                  |
+| POST/GET | `/qualifications`, POST `/{id}/verify`, `/{id}/reject`, `/{id}/revoke`      | self-submission awaits verification; league/program/general managers and system administrators record and decide; nobody verifies their own                                                                                                                                                                                                                                                                                                                                                |
+| POST/GET | `/assignment-requirements`, PATCH `/{id}`                                   | league manager, program manager, scheduler, general manager (`workforce.manage_requirements`); GET returns coverage and uncovered slots                                                                                                                                                                                                                                                                                                                                                    |
+| POST/GET | `/assignments`, GET `/assignments/{id}`                                     | list items carry `availableActions` (WRK-01, see Stage 3); propose (or propose and offer): the same assigners; temporary/substitute work also needs `workforce.grant_temporary_access` (league/program manager, system administrator); a `turnaroundMinutes` below the facility policy needs `workforce.override_turnaround` (league/program/general managers, POL-033 pending) and a reason, and the audit records both values; read: coverage staff or the assignee, otherwise NOT_FOUND |
+| POST     | `/assignments/{id}/offer`                                                   | assigners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| POST     | `/assignments/{id}/accept`, `/decline`                                      | only the assignee (§4.8); staff get `PARTICIPANT_AUTHORITY_REQUIRED`, others NOT_FOUND                                                                                                                                                                                                                                                                                                                                                                                                     |
+| POST     | `/assignments/{id}/withdraw`                                                | league/program/general managers or the assignee (reason required)                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| POST     | `/assignments/{id}/complete`                                                | league/program/general managers, once the activity has started                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| GET/POST | `/assignments/{id}/replacements`                                            | front desk and assigners (`workforce.trigger_replacement`): explained candidates; POST offers the slot to a replacement, optionally withdrawing the original in the same command                                                                                                                                                                                                                                                                                                           |
+| POST/GET | `/fee-submissions`, GET `/{id}`, POST `/{id}/approve`, `/adjust`, `/reject` | submit: the assignee of a completed assignment; read: finance operator, general manager, the assignee; decide: finance operator, general manager — never their own fee; staff act only on fees of their facilities' assignments (others NOT_FOUND, absent from lists)                                                                                                                                                                                                                      |
+| POST/GET | `/fee-export-batches`, GET `/{id}`                                          | finance operator, exporting only fees of their facilities; reading a batch needs the authority at every facility its lines belong to                                                                                                                                                                                                                                                                                                                                                       |
+| GET      | `/me/assignments`                                                           | the caller's own assignments (SPK-UX-007); `activity.facility` names the facility and its time zone (WRK-01)                                                                                                                                                                                                                                                                                                                                                                               |
 
 Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Multi-step commands create an
@@ -134,8 +146,8 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   offer left on a canceled game is never accepted and grants no access.
 - **Uncovered slots** (SPK-STAFF-003, SPK-AT-012): declining an offered assignment, or withdrawing
   an accepted one, for a required slot that demands acceptance, with no other accepted assignment
-  on the slot, less than the escalation window before the start, raises
-  `workforce.uncovered_assignment` (severity high, owner `league_manager` for fixtures and
+  on the slot, within the configured escalation window before the start (at once when none is
+  configured), raises `workforce.uncovered_assignment` (severity high, owner `league_manager` for fixtures and
   `scheduler` otherwise, deadline = start, deduplicated per slot) and enqueues
   `workforce.assignment_uncovered`; the command's response carries the notice. Accepting an
   assignment for the slot resolves the exception (it stays as history). Escalation and resolution
@@ -155,9 +167,9 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
 - **Time-bounded access** (SPK-STAFF-004): accepting temporary or substitute work creates an
   identity staff membership (roles per kind, scoped to the activity's facility; identity keeps
   each role at its own membership's facilities, so the access never extends the person's other
-  facility-scoped roles to that facility, §2.1, §4.14) from acceptance
-  until the activity's end plus the trailing hours. The principal resolver drops the roles when
-  the window closes; the assignment, its audit trail, its fee records and the membership row
+  facility-scoped roles to that facility, §2.1, §4.14) from acceptance until the activity's end
+  plus the configured trailing hours (none configured: the end). The principal resolver drops the
+  roles when the window closes; the assignment, its audit trail, its fee records and the membership row
   remain. Every change to the access runs inside the workforce transaction that causes it
   (identity's command joins it; `UnitOfWork.run` is reentrant), so the assignment and the
   membership commit together (§4.7 invariant 12): acceptance grants it, a withdrawal — by a person,
@@ -190,7 +202,11 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
 
 - `ASSIGNMENT_COVERAGE_PORT` (`AssignmentCoveragePort`): `coverage(organizationId, targetType,
 targetId)` per requirement and `acceptedAssignees(...)` for communications (notify the crew),
-  entry (coach attendance) and reporting.
+  entry (coach attendance) and reporting; `isAcceptedOnOffering(organizationId, offeringId,
+personId, kind, trx?)` for enrollment (WRK-03, IF-34). All of them skip retired requirements.
+- `WORKFORCE_STAFFING_PORT` (`WorkforceStaffingPort`, IF-32): `declareRequirements` and
+  `withdrawRequirements` for enrollment's booking events (WRK-02); this module registers
+  `WORKFORCE_STAFFING_IMPL` → `StaffingService` (the port itself is the kernel's lazy port).
 - Exported services: `AvailabilityService`, `QualificationsService` (`check`, `holdersOfAll`),
   `CoverageService`, `RequirementsService`, `AssignmentsService`, `ReplacementsService`,
   `FeesService`, `WorkspaceService`; policy `WORKFORCE_POLICY`.
@@ -204,42 +220,138 @@ targetId)` per requirement and `acceptedAssignees(...)` for communications (noti
 `workforce.temporary_access_changed`, `workforce.availability_changed`,
 `workforce.qualification_changed`, `workforce.requirement_changed`, `workforce.fee_submitted`,
 `workforce.fee_decided`, `workforce.fees_exported`. Payloads carry identifiers and instants only.
+`workforce.requirement_changed` carries `retiredAt` (WRK-02; null while in force). Handlers this
+module registers on its own and identity's events: `workforce.assignment_offer_notice`
+(`workforce.assignment_changed`, WRK-04) and `workforce.follow_person_merge`
+(`identity.persons_merged`, WRK-05), both with failure owner `scheduler`.
 
-## Policy defaults (proposed, pending DEC-011 / POL-033 and DEC-052)
+## Policy settings (WRK-06; values pending DEC-011 / POL-033, DEC-052)
 
-`workforce.policy.ts`; a facility overrides through `facilities.settings.workforce`.
+The mechanisms are **verified**; every value is **pending** operator decision DEC-011 / POL-033
+and has **no default** (rule K-00 (i)). Each is a module setting (`workforce.settings.ts`, IF-43),
+read from the environment and validated at boot (a malformed value refuses boot); an absent value
+applies the conservative behaviour below (`__tests__/policy-settings.spec.ts`,
+`workforce.shared.spec.ts`). A facility may override the turnaround per kind and the escalation
+window through `facilities.settings.workforce` (`turnaroundMinutes.<kind>`,
+`uncoveredEscalationHours`).
 
-- Turnaround: official 30 minutes, coach 15, supervisor and organizer 0. Shortening it for one
-  assignment is an override (`workforce.override_turnaround`, reason required); who may hold that
-  authority is pending POL-033.
-- Uncovered escalation window: 48 hours before the start.
-- Temporary access: roles `official` for officials and `coach` for coaches (supervisors and
-  organizers get none automatically); ends 24 hours after the activity.
-- Who approves fees: finance operator and general manager; export: finance operator (permission
-  matrix C.8 proposal; the scheduler is added to `workforce.trigger_replacement` because it owns
-  uncovered event and session slots).
+| Setting                                      | Absent (conservative behaviour)                                                                                                                               | Set                                                                                                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFORCE_OFFICIAL_TURNAROUND_MINUTES`      | no turnaround: back-to-back assignments are accepted; only overlaps are refused (the `assignments_no_overlap` exclusion constraint, and `assignment_overlap`) | the held interval is the scheduled interval plus the minutes; an assignment inside it is refused (`insufficient_turnaround`, and the exclusion constraint); a shorter one is an override |
+| `WORKFORCE_COACH_TURNAROUND_MINUTES`         | the same for coaches                                                                                                                                          | the same for coaches                                                                                                                                                                     |
+| `WORKFORCE_UNCOVERED_ESCALATION_HOURS`       | a required slot left uncovered by a decline or withdrawal raises `workforce.uncovered_assignment` at once, however far away the start is                      | it is raised only when the activity starts within that many hours                                                                                                                        |
+| `WORKFORCE_ACCESS_TRAILING_HOURS`            | time-bounded access (temporary/substitute work) ends with the activity                                                                                        | access ends that many hours after the activity                                                                                                                                           |
+| `WORKFORCE_OFFICIAL_MAX_ASSIGNMENTS_PER_DAY` | unchecked                                                                                                                                                     | a further acceptance of an official assignment starting on the same facility-local day answers `VALIDATION_FAILED` with `details.code = OFFICIAL_DAILY_LIMIT`                            |
 
-## Known gaps
+Supervisors and organizers have no turnaround setting (none is required). Still **proposed**
+(permission matrix C.8 proposal, pending POL-033): who approves fees (finance operator, general
+manager), who exports them (finance operator), who may shorten a turnaround
+(`workforce.override_turnaround`: league, program and general managers), the scheduler holding
+`workforce.trigger_replacement`, and the roles time-bounded access grants (`official` for
+officials, `coach` for coaches, none for supervisors and organizers; `TEMPORARY_ACCESS_ROLES`).
+The daily limit is checked under the person's party lock (two acceptances for one person are
+counted one after the other); it is an application check, not a database constraint.
 
-- **Scheduling commitments:** accepted assignments are not written into scheduling's
+## Capability switches
+
+Workforce owns no conditional capability, so nothing in this module is behind a capability
+switch. Booking staffing (WRK-02) is requested by enrollment for rental and party bookings, which
+enrollment and catalog gate behind the `rentals` and `parties` switches (DEC-016 with DEC-076 and
+DEC-077; per-organization, default off, changed only by an authorized administrator with audit).
+Which roles and how many a package needs is configuration on the package definition (pending
+DEC-011).
+
+## Stage 3 (WRK-01 to WRK-06) — verified
+
+- **WRK-01 facility and available actions** (SPK-SCHED-008, SPK-UX-007, SPK-STAFF-001..004,
+  SCR-W-01, SCR-S-32/33): `GET /v1/me/assignments` items carry `activity.facility` `{ id, name,
+timezone }` from the kernel `FacilityDirectory`, one directory read per response. `GET
+/v1/assignments` items are `StaffAssignment`: the assignment plus `availableActions`, the
+  AssignmentMachine events allowed from its state (offer and accept only before the activity
+  ends, complete only once it has started, as the commands refuse otherwise), each kept only when
+  `AuthorizationService.decide` allows the action that performs it (`propose_assignment`,
+  `accept_assignment`, `decline_assignment`, `withdraw_assignment`, `complete_assignment`) against
+  the command's own target (the assignment's facility; the assignee as subject for accept,
+  decline and withdraw). A scheduler sees `offer` on proposals only; a league manager also
+  `withdraw` and, once started, `complete`; the assignee `accept/decline/withdraw` on an offer.
+  No command changed. Tests: `__tests__/workspace-facility-actions.spec.ts`.
+- **WRK-02 booking staffing and retirement** (SPK-COND-003, SPK-STAFF-001/002, IF-32):
+  `declareRequirements` (callers: system principal `enrollment.booking`, or staff holding
+  `workforce.manage_requirements` at the facility; any other system label is refused) writes one
+  must-be-accepted requirement per (event, role) in the caller's unit of work, after reading the
+  event from scheduling in the same transaction (it must exist, be at the stated facility and not
+  be canceled); a repeat is a no-op that answers the existing ids. `withdrawRequirements` locks the
+  event's requirements in force, retires them (when, why, by whom; audited
+  `workforce.requirement_retired`, `workforce.requirement_changed` with `retiredAt`), withdraws
+  every proposed, offered or accepted assignment of their roles through the machine (one
+  `workforce.assignment_changed` each; granted access ends as for any withdrawal; nothing is
+  escalated) and resolves the open uncovered-slot exceptions of those roles; a repeat retires
+  nothing. Retired requirements are skipped by `coverage`, `acceptedAssignees`,
+  `isAcceptedOfficial`, `isAcceptedOnOffering`, readiness, the unqualified-assignee flagging,
+  escalation, `GET /assignment-requirements` and so support's Today feed (which reads
+  `RequirementsService.list`). A PATCH of a retired requirement answers `INVALID_TRANSITION`;
+  proposing, offering, accepting or replacing on one answers `RESOURCE_CONFLICT`
+  (`requirement_retired`). Every assignment command takes the requirement's share lock before the
+  assignment's row lock, the order a retirement takes them in. Tests:
+  `__tests__/booking-staffing.spec.ts` (including an acceptance racing a retirement, run under
+  PostgreSQL as well).
+- **WRK-03 offering-level check** (SPK-UX-007, SPK-YOUTH-005, IF-34): `isAcceptedOnOffering` is
+  true when the person holds an accepted or completed assignment of the kind on any session of the
+  offering (`assignments.offering_id`), reading through the passed or active transaction;
+  proposed and offered never count; retired requirements are skipped. Tests: same file.
+- **WRK-04 assignment notices** (SPK-COMMS-002 `assignment_offer`, SPK-STAFF-002, IF-22): handler
+  `workforce.assignment_offer_notice` on this module's own `workforce.assignment_changed` composes
+  and queues, in the handler's transaction, an `assignment_offer` notice (operational, not
+  protected, addressed to the assignee by id, subject `assignment`) with `sourceEventId` = the
+  event id: on a move into `offered` while the offer still stands, and on the withdrawal of an
+  accepted assignment by anyone but the assignee (staff, a replacement, a follow-up or a
+  retirement). The text names the role, slot, activity, facility and the facility-local time with
+  its zone. A replay composes nothing (the dispatcher's consumption record; the notices' unique
+  source-event key). Offer deadlines and reminders are not added (pending DEC-011). Tests:
+  `__tests__/assignment-notices.spec.ts`.
+- **WRK-05 person merges** (SPK-IAM-007, SPK-STAFF-001, §4.2, IF-21, IF-09): no assignment,
+  qualification or availability row is rewritten. Qualification checks (proposals, acceptance,
+  readiness, unqualified flagging, replacement candidates) and availability reads expand the person
+  with `personIdsResolvingTo`, so evidence or unavailability recorded for the merged person counts
+  for the survivor; replacement candidates are the canonical persons. Handler
+  `workforce.follow_person_merge` raises one `workforce.merged_person_overlap` exception (owner
+  `scheduler`, severity high, deadline the earliest start, details: merge id, both persons, every
+  overlapping pair of accepted assignments by held interval) per merge, idempotent by merge id.
+  Tests: `__tests__/person-merge.spec.ts` (the tests read merges through identity's
+  `personIdsResolvingTo` when ID-01 is present, otherwise through a test double following
+  `persons.merged_into_person_id`).
+- **WRK-06 policy settings**: see "Policy settings". Tests: `__tests__/policy-settings.spec.ts`;
+  the other workforce test files run with the test configuration `CONFIGURED_POLICY_ENV`
+  (`__tests__/support.ts`: 30/15 minutes, 48 hours, 24 hours), which is test data, not a default.
+
+## Remaining
+
+- **Pending (DEC-011 / POL-033):** every policy value above; offer deadlines (respond-by) and
+  reminders (SCR-W-02); an access start some lead time before the activity (access begins at
+  acceptance; identity can now end a membership before it starts, so the lead time is a proposed
+  option); whether a revocation removes an accepted official's right to submit the result
+  (`isAcceptedOfficial` still allows it; readiness is blocked and an exception is raised).
+- **Pending (DEC-052, §5.2):** payroll or accounting file formats; exports are JSON lines in the
+  batch, and nothing is paid.
+- **Proposed:** the fee approval and export roles, the turnaround override authority and the
+  temporary access roles (see "Policy settings").
+- **Gap — uncovered-slot sweep:** with an escalation window configured, a slot left uncovered
+  earlier than the window is not escalated later when the activity enters the window (no periodic
+  job yet; K-06 provides the runner). Without a window it escalates at once.
+- **Gap — scheduling commitments:** accepted assignments are not written into scheduling's
   `event_commitments` (a session target may have no event, and a commitment moved with its event
   would lose the turnaround). Double-booking between workforce assignments is guaranteed by this
   module's exclusion constraint; overlap with person commitments held in scheduling is checked in
   both directions under the shared per-person advisory lock (an application-level guarantee, not
   one database constraint spanning both modules' tables). In the scheduling direction the
   assignment's held interval includes its turnaround and scheduling adds its own person rest on
-  top (conservative; the combined rule is pending DEC-011 / POL-033). A single exclusion
-  constraint would need scheduling to hold party commitments that are not tied to an event.
-- **Result submission after a revocation:** `isAcceptedOfficial` still lets an accepted official
-  whose qualification was revoked submit the result (readiness is blocked and an exception is
-  raised). Whether a revocation removes that right depends on its effective instant, which a
-  status-only revocation does not carry: pending POL-033.
-- **Access start:** access begins at acceptance rather than shortly before the activity. Identity
-  can now end a membership before it starts (an empty window), so starting access a policy lead
-  time before the activity is possible; the lead time is a proposed option pending DEC-011.
-- Offers do not expire automatically (no offer deadline or reminder sweep); communications does
-  not yet notify assignees from `workforce.assignment_changed`.
+  top (conservative; the combined rule is pending DEC-011 / POL-033).
+- **Gap — merges:** the workspace (`GET /v1/me/assignments`) and `isAcceptedOnOffering` read the
+  person id they are given; the survivor's workspace does not list the merged person's
+  assignments (the merge exception names them for a scheduler).
+- **Gap — directories and messaging:** no directory of officials and coaches (SCR-S-32/33 find
+  people through qualifications, assignments or identity's person search), and no workspace
+  message action (SCR-W-06, pending DEC-012 / DEC-062).
 - Hours are submitted as rate-basis minutes; there is no clock-in/clock-out record (entry module)
-  and no automatic computation from attendance. Exports are JSON lines in the batch; file formats
-  for a payroll or accounting provider are pending integration decisions (§5.2, DEC-052).
+  and no automatic computation from attendance.
 - Requirements are declared per target; there is no template per season or offering yet.
