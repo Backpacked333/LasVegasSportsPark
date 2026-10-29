@@ -561,3 +561,69 @@ export function waitlistEntry(
     ...overrides,
   };
 }
+
+/** `GET /offerings/{id}/registration-options` for the youth program (ENR-05). */
+export function registrationOptions(
+  overrides: Partial<Schema<'RegistrationOptions'>> = {},
+): Schema<'RegistrationOptions'> {
+  return {
+    offeringId: IDS.offering,
+    availableIntents: ['youth', 'makeup'],
+    seasonId: null,
+    participants: [IDS.parent, IDS.childA, IDS.childB].map((personId) => ({
+      personId,
+      intents: [
+        { intent: 'youth' as const, eligibility: eligible() },
+        { intent: 'makeup' as const, eligibility: eligible() },
+      ],
+    })),
+    ...overrides,
+  };
+}
+
+/**
+ * Answers registration options for the participants a request names, leaving out anyone the
+ * account may not register (the view-only child), as the API does.
+ */
+export function optionsHandler(base: Partial<Schema<'RegistrationOptions'>> = {}) {
+  return (req: FakeRequest) => {
+    const options = registrationOptions(base);
+    const named = (req.query.participantPersonIds ?? '').split(',').filter(Boolean);
+    return fakeResponse(200, {
+      ...options,
+      participants: options.participants.filter((p) => named.includes(p.personId)),
+    });
+  };
+}
+
+/** A blocking eligibility result with the API's reason and alternative (SPK-REG-002). */
+export function ineligible(message: string): Schema<'EligibilityResult'> {
+  return {
+    ...eligible(),
+    eligible: false,
+    reasons: [
+      {
+        code: 'age_band',
+        severity: 'blocking',
+        message,
+        source: { type: 'policy', id: null },
+        requiredAction: 'choose_other_offering',
+      },
+    ],
+    alternatives: [
+      { kind: 'other_offering', message: 'Choose an activity for this age.', offeringId: null },
+    ],
+  };
+}
+
+/** One of `GET /me/waitlist-entries` (ENR-01): the entry with the offering's name and open offer. */
+export function myWaitlistEntry(
+  overrides: Partial<Schema<'MyWaitlistEntry'>> = {},
+): Schema<'MyWaitlistEntry'> {
+  return {
+    ...waitlistEntry(),
+    offeringName: 'Autumn Youth Program',
+    openOffer: null,
+    ...overrides,
+  };
+}

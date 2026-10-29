@@ -10,13 +10,14 @@
  * would need other people's identities, which the app never exposes (SPK-PLACE-005), and the
  * preferred competition needs a list the customer cannot read: both read as not available.
  *
- * The API needs the competition season of the placement, and a public offering does not name its
- * season (reported as an API gap): without a `seasonId` in the link the form reads "not
- * available".
+ * The competition season the placement request names comes from the API:
+ * `GET /v1/offerings/{id}/registration-options` `seasonId` (ENR-05, SPK-PLACE-001). An offering
+ * the API links to no season reads "not available" (nothing is sent).
  *
- * States: loading; empty (nothing approved to collect: pending); ready; validation failure (field
- * messages, input kept); permission restriction (no register permission for this participant);
- * offline (input kept on screen, saving disabled); processing (saving); success (saved).
+ * States: loading (basket, then the season); empty (nothing approved to collect: pending); ready;
+ * validation failure (field messages, input kept); permission restriction (no register permission
+ * for this participant); offline (input kept on screen, saving disabled); processing (saving);
+ * success (saved); the season read's error with its code and "Try again".
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -26,13 +27,14 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
 import { fieldMessages } from '../../features/registration/format';
+import { useRegistrationOptions } from '../../features/registration/options';
 import { useParticipantNames } from '../../features/registration/participants';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { Body, ButtonRow, Section, TextField } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -145,18 +147,18 @@ function AvailabilityEditor({
 function PlacementForm({
   basket,
   lineId,
-  seasonId,
   fields,
 }: {
   basket: Basket;
   lineId: string;
-  seasonId: string | undefined;
   fields: readonly string[];
 }) {
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const line = basket.lines.find((l) => l.id === lineId);
+  const options = useRegistrationOptions(line?.offeringId ?? '', [], line !== undefined);
+  const seasonId = options.data?.seasonId ?? null;
   const names = useParticipantNames(line ? [line.participantPersonId] : []);
   const [availability, setAvailability] = useState<AvailabilityWindow[]>([]);
   const [declaredLevel, setDeclaredLevel] = useState('');
@@ -178,12 +180,19 @@ function PlacementForm({
       />
     );
   }
+  if (options.data === undefined) {
+    return options.error ? (
+      <QueryErrorView error={options.error} onRetry={() => void options.refetch()} />
+    ) : (
+      <StateView variant="loading" label="the season of this activity" />
+    );
+  }
   if (!seasonId) {
     return (
       <StateView
         variant="unavailable"
-        title="Not available in the app yet"
-        description="The season of this activity is not available to the app, so placement information cannot be sent from here. Staff place individual players."
+        title="Not available for this activity"
+        description="This activity is not linked to a league season, so placement information cannot be sent from here. Staff place individual players."
       />
     );
   }
@@ -295,11 +304,9 @@ function PlacementForm({
 export function PlacementInformationScreen({
   basketId,
   lineId,
-  seasonId,
 }: {
   basketId: string;
   lineId: string;
-  seasonId?: string;
 }) {
   const { session, services } = useApp();
   const fields = services.config.placementFields ?? null;
@@ -325,9 +332,7 @@ export function PlacementInformationScreen({
             empty={{ title: 'Not available', description: '' }}
             unavailableOffline={['Saving placement information']}
           >
-            {(b) => (
-              <PlacementForm basket={b} lineId={lineId} seasonId={seasonId} fields={fields} />
-            )}
+            {(b) => <PlacementForm basket={b} lineId={lineId} fields={fields} />}
           </QueryBoundary>
         )}
       </RequireSession>
@@ -335,16 +340,15 @@ export function PlacementInformationScreen({
   );
 }
 
-/** Route component for app/registration/placement/[lineId].tsx (`?basketId=&seasonId=`). */
+/** Route component for app/registration/placement/[lineId].tsx (`?basketId=`). */
 export function PlacementInformationRoute() {
-  const params = useLocalSearchParams<{ lineId: string; basketId?: string; seasonId?: string }>();
+  const params = useLocalSearchParams<{ lineId: string; basketId?: string }>();
   return (
     <>
       <Stack.Screen options={{ title: 'Placement information' }} />
       <PlacementInformationScreen
         lineId={param(params.lineId) ?? ''}
         basketId={param(params.basketId) ?? ''}
-        seasonId={param(params.seasonId)}
       />
     </>
   );

@@ -14,13 +14,10 @@ import {
   formatMoney,
   timeLeftPhrase,
 } from '../format';
-import { INTENT_HANDLING, intentsFor } from '../intents';
-import {
-  MAX_WAITLIST_ENTRIES,
-  memoryProgressBackend,
-  parseProgress,
-  RegistrationProgressStore,
-} from '../progress';
+import { basketInProgress, checkoutNeedsAttention, checkoutOf, openBasketOf } from '../in-progress';
+import { INTENT_CAPABILITY, INTENT_HANDLING } from '../intents';
+import { blockingEligibilityReasons, eligibilityMessages, eligibilityStatus } from '../options';
+import { memoryProgressBackend, parseProgress, RegistrationProgressStore } from '../progress';
 import {
   basketStatus,
   checkoutInFlight,
@@ -28,6 +25,7 @@ import {
   enrollmentStatus,
   holdStatus,
   paymentStatus,
+  pendingLabel,
   quoteStatus,
   registrationWindowStatus,
   waitlistEntryStatus,
@@ -36,6 +34,8 @@ import {
   IDS,
   basket,
   checkout,
+  eligible,
+  ineligible,
   inMinutes,
   offer,
   payment,
@@ -145,52 +145,95 @@ describe('formatting (SPK-PAY-001)', () => {
   });
 });
 
-describe('registration intents (SPK-REG-001)', () => {
-  it('offers the intents the API accepts for the offering kind and routes each to its command', () => {
-    expect(intentsFor('season')).toEqual([
-      'individual_league',
-      'join_team',
-      'create_team_entry',
-      'youth',
-    ]);
-    expect(intentsFor('pickup')).toEqual(['pickup']);
-    expect(INTENT_HANDLING.join_team).toBe('team_invitation');
-    expect(INTENT_HANDLING.pickup).toBe('session_booking');
+describe('registration intents (SPK-REG-001, ENR-05)', () => {
+  it('carries each intent the API offers by its own command; Package G intents name their switch', () => {
     expect(INTENT_HANDLING.youth).toBe('basket');
+    expect(INTENT_HANDLING.membership).toBe('basket');
+    expect(INTENT_HANDLING.rental_request).toBe('booking');
+    expect(INTENT_HANDLING.party_request).toBe('booking');
+    expect(INTENT_HANDLING.makeup).toBe('makeup');
+    expect(INTENT_HANDLING.join_team).toBe('team_invitation');
+    expect(INTENT_HANDLING.pickup).toBe('not_in_app');
+    expect(INTENT_CAPABILITY.rental_request).toBe('rentals');
+    expect(INTENT_CAPABILITY.pickup).toBe('pickup_sessions');
+    expect(INTENT_CAPABILITY.youth).toBeUndefined();
+  });
+});
+
+describe('eligibility preview (SPK-REG-002)', () => {
+  it('reads eligible, not eligible, forms outstanding and unknown evidence apart, never unknown as a pass', () => {
+    expect(eligibilityStatus(eligible())).toEqual({ tone: 'success', label: 'Eligible' });
+    const blocked = ineligible('Too old for this age band.');
+    expect(eligibilityStatus(blocked).label).toBe('Not eligible');
+    expect(blockingEligibilityReasons(blocked)).toEqual(['Too old for this age band.']);
+    expect(eligibilityMessages(blocked).alternatives).toEqual(['Choose an activity for this age.']);
+    const unknown = {
+      ...blocked,
+      reasons: [
+        { ...blocked.reasons[0]!, severity: 'unknown' as const, message: 'No birth date.' },
+      ],
+    };
+    expect(eligibilityStatus(unknown)).toEqual({
+      tone: 'warning',
+      label: 'Eligibility not known yet',
+    });
+    expect(blockingEligibilityReasons(unknown)).toEqual([]);
+    const forms = {
+      ...blocked,
+      reasons: [{ ...blocked.reasons[0]!, code: 'acknowledgment_missing', message: 'Sign it.' }],
+    };
+    expect(eligibilityStatus(forms).label).toBe('Eligible once the required forms are signed');
+    expect(blockingEligibilityReasons(forms)).toEqual([]);
+  });
+
+  it('names a pending enrollment by what it waits for (journeys.md "Registration pending: <reason>")', () => {
+    expect(pendingLabel('approval')).toBe('Registration pending: awaiting approval');
+    expect(pendingLabel('forms')).toBe('Registration pending: a required form is not signed');
+    expect(pendingLabel(null)).toBe('Registration pending');
+    expect(
+      enrollmentStatus({ status: 'confirmed' }, 'League', {
+        status: 'assigned',
+        assignedTeamName: 'Blue Comets',
+      }).label,
+    ).toBe('Confirmed: Blue Comets');
+  });
+});
+
+describe('registrations in progress from the API (SPK-UX-001, SPK-AT-023)', () => {
+  it('keeps open, held and paying baskets and checkouts that need attention', () => {
+    expect(basketInProgress(basket())).toBe(true);
+    expect(basketInProgress(basket({ lines: [] }))).toBe(false);
+    expect(basketInProgress(basket({ status: 'fulfilled' }))).toBe(false);
+    expect(checkoutNeedsAttention(checkout({ status: 'recovery_required' }))).toBe(true);
+    expect(checkoutNeedsAttention(checkout({ status: 'completed' }))).toBe(false);
+    expect(
+      openBasketOf({ items: [basket({ status: 'held' }), basket({ id: IDS.offer })] })?.id,
+    ).toBe(IDS.offer);
+    expect(openBasketOf(undefined)).toBeUndefined();
+    expect(checkoutOf({ items: [checkout()] }, { quoteId: IDS.quote2 })).toBeNull();
+    expect(checkoutOf({ items: [checkout()] }, { basketId: IDS.basket })?.id).toBe(IDS.checkout);
   });
 });
 
 describe('registration progress on the device (§4.13, SPK-UX-001)', () => {
-  it('keeps opaque ids per account and ignores another account or a corrupt value', async () => {
+  it('keeps only the quote of an unanswered checkout, per account, and ignores older or corrupt values', async () => {
     const backend = memoryProgressBackend();
     const store = new RegistrationProgressStore(backend);
     await store.ensureLoaded(TEST_SESSION.accountId);
-    await store.update({ basketId: IDS.basket, checkoutId: IDS.checkout });
-    await store.update({ addWaitlistEntryId: IDS.entry });
-    await store.update({ addWaitlistEntryId: IDS.entry });
-    expect(store.snapshot()).toEqual({
-      basketId: IDS.basket,
-      quoteId: null,
-      checkoutId: IDS.checkout,
-      pendingCheckoutQuoteId: null,
-      waitlistEntryIds: [IDS.entry],
+    await store.update({ pendingCheckoutQuoteId: IDS.quote });
+    expect(store.snapshot()).toEqual({ pendingCheckoutQuoteId: IDS.quote });
+    expect(JSON.parse(backend.value as string)).toEqual({
+      accountId: TEST_SESSION.accountId,
+      pendingCheckoutQuoteId: IDS.quote,
     });
-    expect(JSON.parse(backend.value as string).accountId).toBe(TEST_SESSION.accountId);
-    expect(parseProgress(backend.value, 'another-account').basketId).toBeNull();
-    expect(parseProgress('{not json', TEST_SESSION.accountId).basketId).toBeNull();
+    expect(parseProgress(backend.value, 'another-account').pendingCheckoutQuoteId).toBeNull();
+    expect(parseProgress('{not json', TEST_SESSION.accountId).pendingCheckoutQuoteId).toBeNull();
+    // An earlier build's value (basket, checkout and waitlist ids) brings nothing back.
     expect(
-      parseProgress(JSON.stringify({ accountId: 'a', basketId: 'Ada Example' }), 'a').basketId,
-    ).toBeNull();
-  });
-
-  it('bounds the remembered waitlist entries', async () => {
-    const store = new RegistrationProgressStore(memoryProgressBackend());
-    await store.ensureLoaded(TEST_SESSION.accountId);
-    for (let i = 0; i < MAX_WAITLIST_ENTRIES + 5; i += 1) {
-      await store.update({
-        addWaitlistEntryId: `0192f1a0-0000-7000-8000-${String(i).padStart(12, '0')}`,
-      });
-    }
-    expect(store.snapshot().waitlistEntryIds).toHaveLength(MAX_WAITLIST_ENTRIES);
+      parseProgress(
+        JSON.stringify({ accountId: 'a', basketId: IDS.basket, pendingCheckoutQuoteId: 'Ada' }),
+        'a',
+      ),
+    ).toEqual({ pendingCheckoutQuoteId: null });
   });
 });

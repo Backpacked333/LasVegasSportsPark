@@ -1,14 +1,18 @@
 /**
- * Registration in progress on this device (SPK-UX-001 "Foreground refresh after interrupted
- * registration or payment", SCR-C-14, SCR-C-15, SCR-C-16): the basket, quote and checkout the
- * customer is working on, and the waitlist entries they joined here, so the app can bring them
- * back to the current state after it was backgrounded or closed.
+ * The one piece of registration progress the device keeps (SPK-UX-001 "Foreground refresh after
+ * interrupted registration or payment", SPK-PAY-007, SPK-AT-023; SCR-C-14, SCR-C-15): the quote
+ * whose checkout request was sent but whose answer never arrived.
  *
- * Only opaque record ids are kept, scoped to the signed-in account, in the platform secure store
- * (expo-secure-store, readable only while unlocked, never restored to another device). The API is
- * still the source of truth: every id is re-read, and a record the API answers NOT_FOUND for is
- * simply not shown. The API has no customer-scoped list of baskets, checkouts or waitlist entries
- * (reported as an API gap), which is why the device remembers these ids at all.
+ * Everything else is read from the API, so it survives a reinstall or a second device: the
+ * customer's baskets (`GET /v1/me/baskets`), registration checkouts, including one that needs
+ * recovery (`GET /v1/me/registration-checkouts`), and waitlist entries with their open offers
+ * (`GET /v1/me/waitlist-entries`); see `in-progress.ts`. A sent checkout request may never have
+ * reached the API, so no list can show it: re-posting `{quoteId}` with the same idempotency
+ * semantics returns the existing checkout for that quote, or creates none twice (§4.9, §4.11).
+ *
+ * Only that opaque quote id is kept, scoped to the signed-in account, in the platform secure store
+ * (expo-secure-store, readable only while unlocked, never restored to another device). A value
+ * written by an earlier build (basket, checkout and waitlist ids) is ignored.
  */
 import * as SecureStore from 'expo-secure-store';
 import {
@@ -23,28 +27,18 @@ import {
 import { useApp } from '../../providers/AppProviders';
 
 export interface RegistrationProgress {
-  basketId: string | null;
-  quoteId: string | null;
-  checkoutId: string | null;
   /**
    * The quote whose checkout was sent but whose answer has not arrived yet (saved before sending,
-   * cleared when the checkout id is known). After a restart mid-payment it is the only way back to
-   * the outcome: re-posting `{quoteId}` returns the existing checkout for that quote.
+   * cleared once the API reports the checkout). After a restart mid-payment it leads back to the
+   * checkout screen, which asks again for that quote and never charges twice.
    */
   pendingCheckoutQuoteId: string | null;
-  /** Newest first, at most MAX_WAITLIST_ENTRIES. */
-  waitlistEntryIds: string[];
 }
 
 export const EMPTY_PROGRESS: RegistrationProgress = Object.freeze({
-  basketId: null,
-  quoteId: null,
-  checkoutId: null,
   pendingCheckoutQuoteId: null,
-  waitlistEntryIds: [],
 }) as RegistrationProgress;
 
-export const MAX_WAITLIST_ENTRIES = 20;
 export const PROGRESS_STORAGE_KEY = 'sportspark.registration-progress';
 
 /** Where the serialized progress lives: the secure store on devices, memory in tests. */
@@ -78,32 +72,19 @@ export function memoryProgressBackend(initial: string | null = null): ProgressBa
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const idOrNull = (v: unknown) => (typeof v === 'string' && UUID.test(v) ? v : null);
 
-/** Parses the stored value; anything malformed counts as nothing in progress. */
+/** Parses the stored value; anything malformed or another account's counts as nothing. */
 export function parseProgress(raw: string | null, accountId: string | null): RegistrationProgress {
   if (!raw || !accountId) return EMPTY_PROGRESS;
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (value.accountId !== accountId) return EMPTY_PROGRESS;
-    const entries = Array.isArray(value.waitlistEntryIds) ? value.waitlistEntryIds : [];
-    return {
-      basketId: idOrNull(value.basketId),
-      quoteId: idOrNull(value.quoteId),
-      checkoutId: idOrNull(value.checkoutId),
-      pendingCheckoutQuoteId: idOrNull(value.pendingCheckoutQuoteId),
-      waitlistEntryIds: entries
-        .map(idOrNull)
-        .filter((id): id is string => id !== null)
-        .slice(0, MAX_WAITLIST_ENTRIES),
-    };
+    return { pendingCheckoutQuoteId: idOrNull(value.pendingCheckoutQuoteId) };
   } catch {
     return EMPTY_PROGRESS;
   }
 }
 
-export type ProgressPatch = Partial<Omit<RegistrationProgress, 'waitlistEntryIds'>> & {
-  /** Remembers one more waitlist entry (newest first, de-duplicated). */
-  addWaitlistEntryId?: string;
-};
+export type ProgressPatch = Partial<RegistrationProgress>;
 
 /** Holds the progress of the signed-in account and persists every change. */
 export class RegistrationProgressStore {
@@ -146,18 +127,9 @@ export class RegistrationProgressStore {
 
   async update(patch: ProgressPatch): Promise<void> {
     if (this.loading) await this.loading;
-    const { addWaitlistEntryId, ...rest } = patch;
-    const waitlistEntryIds = addWaitlistEntryId
-      ? [
-          addWaitlistEntryId,
-          ...this.state.waitlistEntryIds.filter((id) => id !== addWaitlistEntryId),
-        ]
-      : this.state.waitlistEntryIds;
-    this.state = {
-      ...this.state,
-      ...rest,
-      waitlistEntryIds: waitlistEntryIds.slice(0, MAX_WAITLIST_ENTRIES),
-    };
+    const next = { ...this.state, ...patch };
+    if (next.pendingCheckoutQuoteId === this.state.pendingCheckoutQuoteId) return;
+    this.state = next;
     this.emit();
     if (!this.accountId) return;
     try {

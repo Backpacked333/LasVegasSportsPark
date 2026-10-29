@@ -5,7 +5,7 @@
  * recovery and compensation each in their own words; not available and offline states.
  */
 import { fakeResponse, type FakeHandler, type FakeRequest } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import {
   IDS,
   basket,
@@ -70,7 +70,7 @@ function renderOutcome(options: Parameters<typeof createRegistrationTestApp>[0] 
 describe('SCR-C-15 CheckoutOutcomeScreen', () => {
   it('SPK-UX-004: names each line\'s confirmed state, keeping "awaiting placement" distinct from "confirmed"', async () => {
     const app = renderOutcome({
-      progress: { basketId: IDS.basket, quoteId: IDS.quote, checkoutId: IDS.checkout },
+      progress: { pendingCheckoutQuoteId: IDS.quote },
       routes: routes(),
     });
     expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
@@ -85,8 +85,8 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
     expect(screen.getByLabelText('Request status: Done')).toBeOnTheScreen();
     expect(screen.getByLabelText('Payment received')).toBeOnTheScreen();
     expect(screen.getByLabelText('Received: $226.00')).toBeOnTheScreen();
-    // A finished checkout is no longer in progress on this device.
-    expect(app.progressStore.snapshot().checkoutId).toBeNull();
+    // The API has this checkout: the device forgets the request it remembered for its quote.
+    await waitFor(() => expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull());
     fireEvent.press(screen.getByRole('button', { name: 'See your schedule' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/schedule');
   });
@@ -209,17 +209,23 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
     expect(screen.getAllByLabelText('Not registered')).toHaveLength(2);
   });
 
-  it('an older finished checkout forgets only what it owns: a newer checkout and basket stay remembered', async () => {
-    const NEWER_CHECKOUT = '0192f1a0-0000-7000-8000-0000000c0c02';
-    const NEWER_BASKET = '0192f1a0-0000-7000-8000-0000000c0b02';
+  it('an older checkout forgets only its own quote: another unanswered checkout stays remembered', async () => {
     const app = renderOutcome({
-      progress: { basketId: NEWER_BASKET, quoteId: null, checkoutId: NEWER_CHECKOUT },
+      progress: { pendingCheckoutQuoteId: IDS.quote2 },
       routes: routes(),
     });
     expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
     await act(async () => undefined);
-    expect(app.progressStore.snapshot().checkoutId).toBe(NEWER_CHECKOUT);
-    expect(app.progressStore.snapshot().basketId).toBe(NEWER_BASKET);
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote2);
+  });
+
+  it('SPK-UX-001: a finished checkout leaves "In progress": the customer lists are read again', async () => {
+    const app = createRegistrationTestApp({ routes: routes() });
+    const listed = ['api', '/me/registration-checkouts', null, { limit: 20 }];
+    app.queryClient.setQueryData(listed, { data: { items: [], nextCursor: null } });
+    render(<CheckoutOutcomeScreen checkoutId={IDS.checkout} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    await waitFor(() => expect(app.queryClient.getQueryState(listed)?.isInvalidated).toBe(true));
   });
 
   it('SPK-PAY-007: a payment retry with no answer is never shown as failed, and only "Check again" is offered', async () => {

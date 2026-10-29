@@ -5,6 +5,9 @@
  * offering, eligibility result and reasons, price basis, policies, approval and outcome; held
  * places show the server's expiry with an informational countdown.
  *
+ * A checkout already started for this basket is found in `GET /v1/me/registration-checkouts`, so
+ * "See your payment" works after a restart or reinstall (SPK-UX-001).
+ *
  * Commands: remove a line (`POST /baskets/{id}/lines/{lineId}/remove`), get a price
  * (`POST /registration-quotes`, SCR-C-12), release held places (`POST /baskets/{id}/release`), and
  * join the waitlist for a line when no place is available (`POST /waitlist-entries`, SCR-C-16).
@@ -33,6 +36,11 @@ import { formatMoney } from '../../features/registration/format';
 import { INTENT_LABELS } from '../../features/registration/intents';
 import { JoinWaitlistButton } from '../../features/registration/JoinWaitlist';
 import { useParticipantNames } from '../../features/registration/participants';
+import {
+  checkoutOf,
+  MY_BASKETS_KEY,
+  useMyCheckouts,
+} from '../../features/registration/in-progress';
 import { useRegistrationProgress } from '../../features/registration/progress';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
@@ -105,7 +113,7 @@ function LineCard({
 }) {
   const router = useRouter();
   const remove = useApiCommand('post', '/baskets/{id}/lines/{lineId}/remove', {
-    invalidate: [['api', '/baskets/{id}']],
+    invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
   const status = basketLineStatus(line);
   const reasons = blockingReasons(line);
@@ -182,7 +190,9 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const { progress, update } = useRegistrationProgress();
+  const { progress } = useRegistrationProgress();
+  const checkouts = useMyCheckouts(basket.status === 'checking_out');
+  const checkout = checkoutOf(checkouts.data, { basketId: basket.id });
   const [failure, setFailure] = useState<Failure | null>(null);
   const names = useParticipantNames(basket.lines.map((l) => l.participantPersonId));
   const offerings = useApiRecords(
@@ -192,7 +202,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
   const offeringName = (id: string) => offerings[id]?.data?.name ?? 'Activity';
   const quote = useApiCommand('post', '/registration-quotes');
   const release = useApiCommand('post', '/baskets/{id}/release', {
-    invalidate: [['api', '/baskets/{id}']],
+    invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
 
   const status = basketStatus(basket, now);
@@ -217,7 +227,6 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
       const created = await quote.submit({
         body: { basketId: basket.id, discountCodes: [], creditIds: [] },
       });
-      await update({ basketId: basket.id, quoteId: created.id });
       router.push(registrationRoutes.quote(created.id));
     } catch (error) {
       setFailure({ error: error as ApiError, retry: () => void getPrice() });
@@ -323,23 +332,19 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
             accessibilityHint="Prices every line from the facility's current price rules"
           />
         ) : null}
-        {basket.status === 'checking_out' && progress.checkoutId ? (
+        {basket.status === 'checking_out' && checkout ? (
+          // The API lists this basket's checkout (SPK-UX-001: also after a reinstall).
           <Button
             label="See your payment"
-            onPress={() => router.push(registrationRoutes.outcome(progress.checkoutId as string))}
+            onPress={() => router.push(registrationRoutes.outcome(checkout.id))}
           />
-        ) : basket.status === 'checking_out' &&
-          (progress.pendingCheckoutQuoteId ?? progress.quoteId) ? (
+        ) : basket.status === 'checking_out' && progress.pendingCheckoutQuoteId ? (
           // The checkout's answer never arrived (the app was closed mid-payment): the checkout
-          // screen re-reads it for this quote, and the API returns the existing checkout.
+          // screen asks again for this quote, and the API returns the existing checkout.
           <Button
             label="Check your payment"
             onPress={() =>
-              router.push(
-                registrationRoutes.checkout(
-                  (progress.pendingCheckoutQuoteId ?? progress.quoteId) as string,
-                ),
-              )
+              router.push(registrationRoutes.checkout(progress.pendingCheckoutQuoteId as string))
             }
           />
         ) : null}

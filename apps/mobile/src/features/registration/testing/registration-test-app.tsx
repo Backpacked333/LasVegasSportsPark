@@ -1,6 +1,8 @@
 /**
  * The foundation test app (real providers, fake API, fixed clock, manual connectivity) plus an
- * in-memory registration progress store, for the SCR-C-07 to SCR-C-16 screen tests.
+ * in-memory registration progress store, for the SCR-C-07 to SCR-C-16 screen tests. The API's
+ * own lists (`/me/baskets`, `/me/registration-checkouts`, `/me/waitlist-entries`) answer empty
+ * pages unless a test gives them.
  */
 import { waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
@@ -12,18 +14,27 @@ import {
   type RegistrationProgress,
 } from '../progress';
 
+const EMPTY_PAGE = { status: 200, body: { items: [], nextCursor: null } };
+
+/** The customer's own registration lists, empty unless a test gives them. */
+export const EMPTY_LIST_ROUTES = {
+  'GET /me/baskets': EMPTY_PAGE,
+  'GET /me/registration-checkouts': EMPTY_PAGE,
+  'GET /me/waitlist-entries': EMPTY_PAGE,
+} as const;
+
 export function createRegistrationTestApp(
   options: TestAppOptions & { progress?: Partial<RegistrationProgress> } = {},
 ) {
-  const app = createTestApp(options);
+  const app = createTestApp({
+    ...options,
+    routes: { ...EMPTY_LIST_ROUTES, ...options.routes },
+  });
   const backend = memoryProgressBackend(
     options.progress
       ? JSON.stringify({
           accountId: TEST_SESSION.accountId,
-          basketId: null,
-          quoteId: null,
-          checkoutId: null,
-          waitlistEntryIds: [],
+          pendingCheckoutQuoteId: null,
           ...options.progress,
         })
       : null,

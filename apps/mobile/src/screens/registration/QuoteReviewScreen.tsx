@@ -31,7 +31,6 @@ import {
   hasPassed,
 } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
-import { useRegistrationProgress } from '../../features/registration/progress';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { quoteStatus } from '../../features/registration/status';
@@ -167,7 +166,6 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const { progress, update } = useRegistrationProgress();
   const names = useParticipantNames(quote.lines.map((l) => l.participantPersonId));
   const policies = useApiRecords('/policy-versions/{id}', quotePolicyIds(quote));
   const policyTitle = (id: string | null) => (id ? (policies[id]?.data?.title ?? null) : null);
@@ -186,7 +184,6 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
       const next = await requote.submit({
         body: { basketId: quote.basketId, discountCodes, creditIds },
       });
-      await update({ basketId: quote.basketId, quoteId: next.id });
       setCode('');
       router.replace(registrationRoutes.quote(next.id));
     } catch (error) {
@@ -312,14 +309,16 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
             disabled={offline}
           />
         ) : quote.status === 'consumed' ? (
-          progress.checkoutId && progress.quoteId === quote.id ? (
+          quote.consumedByCheckoutId ? (
+            // The API names the checkout that used this price (SPK-UX-001: also after a reinstall).
             <Button
               label="See your payment"
-              onPress={() => router.push(registrationRoutes.outcome(progress.checkoutId as string))}
+              onPress={() =>
+                router.push(registrationRoutes.outcome(quote.consumedByCheckoutId as string))
+              }
             />
           ) : (
-            // The checkout for this price is not known on this device (its answer never arrived):
-            // the checkout screen re-reads it, and the API returns the existing checkout.
+            // The checkout screen asks again for this price; the API returns the existing checkout.
             <Button
               label="Check your payment"
               onPress={() => router.push(registrationRoutes.checkout(quote.id))}
