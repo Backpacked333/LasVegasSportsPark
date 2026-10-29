@@ -484,6 +484,10 @@ bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
   (finance README, "Stage-3 integration fixes"; journey `spk-cond-003-rentals.spec.ts`): the
   earlier "**Pending** finance (FIN)" note is resolved; DEC-073 (the deposit rule itself) is still
   **Pending decision**.
+- Booking staffing requirements are declared and retired through workforce's implementation
+  (WRK-02), not the test double: the earlier "test double only" note is resolved (journey
+  `spk-cond-003-party-booking.spec.ts`: an expired hold retires the requirement, which leaves Today
+  and the uncovered-assignments report).
 - The module now imports `SchedulingModule`, `CommunicationsModule`, `WorkforceModule` and
   `FacilitiesModule` (bookings, notices, staffing, equipment); the record-authority classification
   and OpenAPI parity notes above were closed at integration (both tests pass).

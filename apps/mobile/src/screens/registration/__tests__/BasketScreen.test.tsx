@@ -230,8 +230,10 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(
       (await screen.findAllByLabelText('Your held place was released')).length,
     ).toBeGreaterThan(0);
+    // The participant's name arrives with the family read, which may land after the basket.
+    const join = await screen.findByRole('button', { name: 'Join the waitlist for Ada' });
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Join the waitlist for Ada' }));
+      fireEvent.press(join);
     });
     expect(app.fake.requests.find((r) => r.route === '/waitlist-entries')?.body).toEqual({
       offeringId: IDS.offering,

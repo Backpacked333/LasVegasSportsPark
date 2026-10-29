@@ -10,7 +10,7 @@ import {
   type FakeHandler,
   type FakeRequest,
 } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   basket,
@@ -231,6 +231,9 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
   it('SPK-IAM-003: lists a person the account may only view as not available, and shows a denial as not available', async () => {
     const app = createRegistrationTestApp({
       routes: routes({
+        // The basket this screen just opened reads back (the screen re-reads it once it is
+        // remembered), so the only failure on screen is the refused line.
+        'GET /baskets/{id}': { status: 200, body: EMPTY_BASKET },
         'POST /baskets/{id}/lines': () =>
           fakeResponse(
             403,
@@ -249,8 +252,9 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
-    expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
-    expect(screen.getByText(/does not have the permission this needs/)).toBeOnTheScreen();
+    const refusal = await screen.findByTestId('command-error');
+    expect(within(refusal).getByLabelText('Not available')).toBeOnTheScreen();
+    expect(within(refusal).getByText(/does not have the permission this needs/)).toBeOnTheScreen();
   });
 
   it('adds to the open basket already in progress instead of opening another', async () => {
