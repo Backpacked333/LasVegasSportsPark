@@ -27291,6 +27291,7 @@
         },
         "required": [
           "dueAt",
+          "expectedRevision",
           "reason"
         ],
         "additionalProperties": false
@@ -34310,6 +34311,7 @@
         },
         "required": [
           "amountMinor",
+          "expectedRevision",
           "reason"
         ]
       },
@@ -62368,6 +62370,58 @@
           },
           "409": {
             "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List the reconciliation reports of a batch (§5.5)",
+        "tags": [
+          "Migration"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MigrationReconciliationReport"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
             "content": {
               "application/json": {
                 "schema": {

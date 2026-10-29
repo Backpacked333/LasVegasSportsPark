@@ -820,6 +820,12 @@ command(
   MigrationReconciliationReportSchema,
 );
 query(
+  '/import-batches/{id}/reconciliation-reports',
+  'List the reconciliation reports of a batch (§5.5)',
+  null,
+  z.array(MigrationReconciliationReportSchema),
+);
+query(
   '/import-reconciliation-reports/{id}',
   'Read a reconciliation report with its discrepancies and approvals',
   null,

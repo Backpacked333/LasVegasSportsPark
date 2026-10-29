@@ -1,8 +1,13 @@
 import { newId } from '@sportspark/contracts';
-import { json, seedOrganization } from '@sportspark/db';
+import { json, pgConstraintName, seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
+import {
+  createCompetitionFixture,
+  createSeasonFixture,
+  createTeamEntryFixture,
+} from '../../competition';
 import { createPersonFixture } from '../../identity';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import {
@@ -301,6 +306,506 @@ describe('finance database guarantees (§4.7 invariants 5, 6, 7; SPK-PAY-004/008
     expect(
       await rejectsWith(createObligationFixture(t, { debtorPersonId: foreigner, amountMinor: 10 })),
     ).toBe(FOREIGN_KEY);
+  });
+
+  it('SPK-PAY-004/005, §4.7 invariant 5: a receipt cannot be allocated again after its own transaction, nor in another currency', async () => {
+    const constraintOf = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+      } catch (error) {
+        return pgConstraintName(error);
+      }
+      throw new Error('expected the database to reject the statement');
+    };
+    const now = t.clock.now();
+    const allocation = (
+      obligationId: string,
+      receiptId: string,
+      amount: number,
+      currency: string,
+    ) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      obligation_id: obligationId,
+      source_kind: 'receipt' as const,
+      receipt_id: receiptId,
+      credit_redemption_id: null,
+      amount_minor: amount,
+      currency,
+      allocated_at: now,
+    });
+    const settle = (obligationId: string, amount: number) => ({
+      table: 'obligations' as const,
+      set: { allocated_minor: amount, status: 'settled' as const, settled_at: now },
+      id: obligationId,
+    });
+
+    // 1. A fully allocated 1,000 USD receipt settles a second 1,000 USD obligation in a later
+    // transaction: the obligation side balances, the receipt side would count the money twice.
+    const { receiptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const second = await createObligationFixture(t, {
+      debtorPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const again = settle(second, 1_000);
+    expect(
+      await constraintOf(
+        t.db.transaction().execute(async (trx) => {
+          await trx
+            .insertInto('payment_allocations')
+            .values(allocation(second, receiptId, 1_000, 'USD'))
+            .execute();
+          await trx.updateTable(again.table).set(again.set).where('id', '=', again.id).execute();
+        }),
+      ),
+    ).toBe('receipts_allocations_consistent');
+    const allocations = await t.db
+      .selectFrom('payment_allocations')
+      .select('obligation_id')
+      .where('receipt_id', '=', receiptId)
+      .execute();
+    expect(allocations).toHaveLength(1);
+
+    // 2. A 500 EUR receipt allocated in its own transaction as 500 USD to a USD obligation: the
+    // amounts match on both sides, only the currency differs.
+    const usd = await createObligationFixture(t, {
+      debtorPersonId: payer.personId,
+      amountMinor: 500,
+    });
+    const attemptId = newId();
+    const journalId = newId();
+    const euroReceipt = newId();
+    const paid = settle(usd, 500);
+    expect(
+      await constraintOf(
+        t.db.transaction().execute(async (trx) => {
+          await trx
+            .insertInto('payment_attempts')
+            .values({
+              id: attemptId,
+              organization_id: t.organizationId,
+              purpose: 'obligation',
+              checkout_id: null,
+              order_id: null,
+              obligation_id: usd,
+              contribution_request_id: null,
+              installment_id: null,
+              payer_person_id: payer.personId,
+              amount_minor: 500,
+              currency: 'EUR',
+              provider: 'fake-payments',
+              payment_method_ref: 'pm_fake_visa',
+              provider_reference: `fp_${attemptId}`,
+              status: 'succeeded',
+              action_required_payload: null,
+              failure_reason: null,
+              processor_fee_minor: 0,
+              evidence_source: 'sync_response',
+              evidence_inbox_event_id: null,
+              evidence_sequence: null,
+              requested_by: ACTOR,
+              requested_by_person_id: null,
+              submitted_at: now,
+              unknown_since: null,
+              resolved_at: now,
+            })
+            .execute();
+          await trx
+            .insertInto('journals')
+            .values({
+              id: journalId,
+              organization_id: t.organizationId,
+              source_type: 'receipt',
+              source_id: euroReceipt,
+              purpose: 'payment_received',
+              description: 'schema test',
+              currency: 'EUR',
+              reversal_of_journal_id: null,
+              posted_at: now,
+              posted_by: ACTOR,
+              correlation_id: null,
+              operation_id: null,
+            })
+            .execute();
+          await trx
+            .insertInto('journal_entries')
+            .values(
+              (
+                [
+                  ['cash_processor', 500, 0],
+                  ['customer_receivable', 0, 500],
+                ] as const
+              ).map(([account, debit, credit], index) => ({
+                id: newId(),
+                organization_id: t.organizationId,
+                journal_id: journalId,
+                line_number: index + 1,
+                account_code: account,
+                debit_minor: debit,
+                credit_minor: credit,
+                currency: 'EUR',
+                person_id: null,
+                order_id: null,
+                obligation_id: null,
+                reversal_of_entry_id: null,
+                memo: null,
+              })),
+            )
+            .execute();
+          await trx
+            .insertInto('receipts')
+            .values({
+              id: euroReceipt,
+              organization_id: t.organizationId,
+              source_kind: 'payment_attempt',
+              payment_attempt_id: attemptId,
+              cash_tender_id: null,
+              payer_person_id: payer.personId,
+              amount_minor: 500,
+              allocated_minor: 500,
+              excess_minor: 0,
+              currency: 'EUR',
+              processor_fee_minor: 0,
+              order_id: null,
+              obligation_id: usd,
+              journal_id: journalId,
+              received_at: now,
+            })
+            .execute();
+          await trx
+            .insertInto('payment_allocations')
+            .values(allocation(usd, euroReceipt, 500, 'USD'))
+            .execute();
+          await trx.updateTable(paid.table).set(paid.set).where('id', '=', paid.id).execute();
+        }),
+      ),
+    ).toBe('receipts_allocations_consistent');
+  });
+
+  /** The constraint the database names when it refuses the statement. */
+  async function refusedBy(promise: Promise<unknown>): Promise<string | undefined> {
+    try {
+      await promise;
+    } catch (error) {
+      return pgConstraintName(error);
+    }
+    throw new Error('expected the database to reject the statement');
+  }
+
+  /** Inserts a copy of an existing row with some columns changed (constraints still apply). */
+  function copyRow(table: string, sourceId: string, changes: Record<string, unknown>) {
+    return sql`insert into ${sql.table(table)}
+      select (jsonb_populate_record(null::${sql.table(table)}, to_jsonb(s) || ${JSON.stringify(changes)}::jsonb)).*
+      from ${sql.table(table)} s where s.id = ${sourceId}`.execute(t.db);
+  }
+
+  /** A completed registration checkout with a three-installment plan, all in USD. */
+  async function completedPlanCheckout() {
+    const setup = await offering(t, { basePriceMinor: 9_000 });
+    const { basketId } = await basketFor(t, payer, [setup]);
+    const quote = await quoteFor(t, payer, basketId, {
+      paymentPlan: { kind: 'installments', count: 3 },
+    });
+    const res = await post(t, '/v1/registration-checkouts', payer.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      authorizeFutureInstallments: true,
+    });
+    expect(res.body.status).toBe('completed');
+    const orderId = res.body.orderId as string;
+    const plan = await t.db
+      .selectFrom('installment_plans')
+      .select('id')
+      .where('order_id', '=', orderId)
+      .executeTakeFirstOrThrow();
+    return { quoteId: quote.id, orderId, planId: plan.id, checkoutId: res.body.id as string };
+  }
+
+  it('SPK-PAY-001 (migration 0603): a money row that draws on another record carries that record’s currency', async () => {
+    const a = await completedPlanCheckout();
+    const b = await completedPlanCheckout();
+    const now = t.clock.now();
+    // quote and order lines carry their quote's and order's currency
+    const quoteLine = await t.db
+      .selectFrom('quote_lines')
+      .select('id')
+      .where('quote_id', '=', a.quoteId)
+      .executeTakeFirstOrThrow();
+    expect(
+      await refusedBy(
+        copyRow('quote_lines', quoteLine.id, {
+          id: newId(),
+          quote_id: b.quoteId,
+          sequence: 99,
+          currency: 'EUR',
+        }),
+      ),
+    ).toBe('quote_lines_quote_currency_fk');
+    const orderLine = await t.db
+      .selectFrom('order_lines')
+      .select('id')
+      .where('order_id', '=', a.orderId)
+      .executeTakeFirstOrThrow();
+    expect(
+      await refusedBy(
+        copyRow('order_lines', orderLine.id, {
+          id: newId(),
+          order_id: b.orderId,
+          sequence: 99,
+          currency: 'EUR',
+        }),
+      ),
+    ).toBe('order_lines_order_currency_fk');
+    // an installment carries its plan's and its obligation's currency
+    const installment = await t.db
+      .selectFrom('installments')
+      .select('id')
+      .where('plan_id', '=', a.planId)
+      .where('sequence', '=', 2)
+      .executeTakeFirstOrThrow();
+    const euroDebt = await createObligationFixture(t, {
+      debtorPersonId: payer.personId,
+      amountMinor: 3_000,
+      currency: 'EUR',
+    });
+    expect(
+      await refusedBy(
+        copyRow('installments', installment.id, {
+          id: newId(),
+          sequence: 99,
+          obligation_id: euroDebt,
+          currency: 'EUR',
+        }),
+      ),
+    ).toBe('installments_plan_currency_fk');
+    expect(
+      await refusedBy(
+        copyRow('installments', installment.id, {
+          id: newId(),
+          sequence: 99,
+          obligation_id: euroDebt,
+        }),
+      ),
+    ).toBe('installments_obligation_currency_fk');
+    // a USD credit is never consumed as EUR
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: payer.personId,
+      amountMinor: 5_000,
+    });
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('credit_redemptions')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            credit_id: creditId,
+            kind: 'redeem',
+            amount_minor: 50,
+            currency: 'EUR',
+            reference_type: 'obligation',
+            reference_id: euroDebt,
+            reverses_redemption_id: null,
+            actor: ACTOR,
+            redeemed_at: now,
+          })
+          .execute(),
+      ),
+    ).toBe('credit_redemptions_credit_currency_fk');
+    // a USD payment is never refunded in EUR
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('refund_attempts')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            payment_attempt_id: paymentAttemptId,
+            amount_minor: 1_000_000,
+            currency: 'EUR',
+            checkout_id: null,
+            reason: 'schema test',
+            provider: 'fake-payments',
+            provider_reference: null,
+            failure_reason: null,
+            evidence_source: null,
+            evidence_inbox_event_id: null,
+            evidence_sequence: null,
+            requested_by: ACTOR,
+            requested_by_person_id: null,
+            operation_id: null,
+            submitted_at: null,
+            unknown_since: null,
+            resolved_at: null,
+          })
+          .execute(),
+      ),
+    ).toBe('refund_attempts_payment_currency_fk');
+    // a contribution request carries its team obligation's currency
+    const competitionId = await createCompetitionFixture(t);
+    const { seasonId } = await createSeasonFixture(t, { competitionId });
+    const { teamEntryId } = await createTeamEntryFixture(t, {
+      seasonId,
+      captainPersonId: payer.personId,
+    });
+    const teamDebt = await createObligationFixture(t, {
+      debtorTeamEntryId: teamEntryId,
+      amountMinor: 90_000,
+    });
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('contribution_requests')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            obligation_id: teamDebt,
+            requested_person_id: payer.personId,
+            requested_by: ACTOR,
+            requested_by_person_id: null,
+            amount_minor: 30_000,
+            currency: 'EUR',
+            message: null,
+            receipt_id: null,
+            paid_at: null,
+            canceled_at: null,
+            cancel_reason: null,
+          })
+          .execute(),
+      ),
+    ).toBe('contribution_requests_obligation_currency_fk');
+  });
+
+  it('§4.3 (migration 0604): ledger attribution, a consuming checkout and provider evidence never point at another organization', async () => {
+    const other = await seedOrganization(t.db);
+    const stranger = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: other.organizationId,
+    });
+    const foreignDebt = await createObligationFixture(t, {
+      debtorPersonId: stranger,
+      amountMinor: 1_000,
+      organizationId: other.organizationId,
+    });
+    const { receiptId, paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const entry = await t.db
+      .selectFrom('journal_entries')
+      .innerJoin('journals', 'journals.id', 'journal_entries.journal_id')
+      .select('journal_entries.id')
+      .where('journals.source_id', '=', receiptId)
+      .executeTakeFirstOrThrow();
+    const line = (changes: Record<string, unknown>) =>
+      copyRow('journal_entries', entry.id, { id: newId(), line_number: 99, ...changes });
+    expect(await refusedBy(line({ person_id: stranger }))).toBe('journal_entries_person_fk');
+    expect(await refusedBy(line({ obligation_id: foreignDebt }))).toBe(
+      'journal_entries_obligation_fk',
+    );
+    expect(await refusedBy(line({ order_id: newId() }))).toBe('journal_entries_order_fk');
+    // a quote is consumed only by a checkout of its own organization
+    const setup = await offering(t, { basePriceMinor: 2_000 });
+    const { basketId } = await basketFor(t, payer, [setup]);
+    const quote = await quoteFor(t, payer, basketId);
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('quotes')
+          .set({
+            status: 'consumed',
+            consumed_at: t.clock.now(),
+            consumed_by_checkout_id: newId(),
+          })
+          .where('id', '=', quote.id)
+          .execute(),
+      ),
+    ).toBe('quotes_consumed_by_checkout_fk');
+    // a payment or refund attempt's evidence is an inbox event of its own organization
+    const foreignEvent = newId();
+    await t.db
+      .insertInto('inbox_events')
+      .values({
+        id: foreignEvent,
+        provider: 'fake-payments',
+        provider_event_id: `evt_${foreignEvent}`,
+        organization_id: other.organizationId,
+        event_type: 'payment.succeeded',
+        payload: json({}),
+        signature_verified: true,
+      })
+      .execute();
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_attempts')
+          .set({ evidence_inbox_event_id: foreignEvent })
+          .where('id', '=', paymentAttemptId)
+          .execute(),
+      ),
+    ).toBe('payment_attempts_evidence_inbox_scope');
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('refund_attempts')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            payment_attempt_id: paymentAttemptId,
+            amount_minor: 100,
+            currency: 'USD',
+            checkout_id: null,
+            reason: 'schema test',
+            provider: 'fake-payments',
+            provider_reference: null,
+            failure_reason: null,
+            evidence_source: 'webhook',
+            evidence_inbox_event_id: foreignEvent,
+            evidence_sequence: 1,
+            requested_by: ACTOR,
+            requested_by_person_id: null,
+            operation_id: null,
+            submitted_at: null,
+            unknown_since: null,
+            resolved_at: null,
+          })
+          .execute(),
+      ),
+    ).toBe('refund_attempts_evidence_inbox_scope');
+  });
+
+  it('§4.4 (migrations 0452, 0503, 0605): the lookups services run by order, obligation, consuming record, basket line and decision are indexed', async () => {
+    const indexes = await sql<{ indexname: string; indexdef: string }>`
+      select indexname, indexdef from pg_indexes
+      where indexname in ('receipts_order_idx', 'receipts_obligation_idx', 'obligations_order_idx',
+        'credit_redemptions_reference_idx', 'enrollments_basket_line_idx', 'suspensions_decision_idx')
+      order by indexname`.execute(t.db);
+    expect(
+      indexes.rows.map((r) => [r.indexname, r.indexdef.replace(/^.* USING btree /, '')]),
+    ).toEqual([
+      ['credit_redemptions_reference_idx', '(organization_id, reference_type, reference_id, kind)'],
+      [
+        'enrollments_basket_line_idx',
+        '(organization_id, basket_line_id) WHERE (basket_line_id IS NOT NULL)',
+      ],
+      ['obligations_order_idx', '(organization_id, order_id, status) WHERE (order_id IS NOT NULL)'],
+      [
+        'receipts_obligation_idx',
+        '(organization_id, obligation_id) WHERE (obligation_id IS NOT NULL)',
+      ],
+      ['receipts_order_idx', '(organization_id, order_id) WHERE (order_id IS NOT NULL)'],
+      [
+        'suspensions_decision_idx',
+        '(organization_id, decision_id) WHERE (decision_id IS NOT NULL)',
+      ],
+    ]);
   });
 
   it('PaymentAttemptMachine: terminal states never flip; no second live attempt; card data is refused', async () => {

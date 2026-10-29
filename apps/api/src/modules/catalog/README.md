@@ -72,7 +72,10 @@ because the kernel consults the identity port without a transaction handle (see 
 - `OFFERING_LOOKUP_PORT` → `OfferingsService.getOffering(organizationId, offeringId, at)`:
   the offering (staff view), the price rule effective at `at`, the entitlement definition, capacity
   units, the eligibility reference date (SPK-REG-002: configured, else the start date), the
-  eligibility and cancellation policy versions, required form versions, and `registrationOpen`.
+  eligibility and cancellation policy versions, required form versions, and `registrationOpen`;
+  `facilitiesOfOfferings(organizationId, offeringIds)` and
+  `offeringIdsAtFacilities(organizationId, facilityIds)` give modules whose records hang off an
+  offering its facility for authorization and list scope (§4.3, §4.14; enrollment).
 - `POLICY_PORT` → `PoliciesService.getPolicyVersion`, `currentPolicyVersion(kind, key, at)`
   (approved, effective, highest version), `hasAcknowledgment(subject, policyVersion)`.
 - `PRICING_PORT` → `PricingService.effectivePriceRule`, `evaluateDiscounts` (loads active

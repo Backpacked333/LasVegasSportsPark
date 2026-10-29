@@ -37,6 +37,7 @@ import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
 import { CompetitionFormsCheck } from './services/competition-forms-check';
 import { EnrollmentsService } from './services/enrollments.service';
+import { EnrollmentFacilityScope } from './services/facility-scope';
 import { FamilyCalendarService } from './services/family-calendar.service';
 import { MakeupsService } from './services/makeups.service';
 import { PlacementService } from './services/placement.service';
@@ -63,6 +64,7 @@ const providers: Provider[] = [
   },
   RegistrationEvaluator,
   CatalogSessions,
+  EnrollmentFacilityScope,
   CapacityService,
   EnrollmentsService,
   ApplicationsService,

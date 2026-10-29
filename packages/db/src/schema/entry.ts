@@ -1,5 +1,5 @@
 import type { ColumnType, Generated } from 'kysely';
-import type { GeneratedTimestamp, Json, NullableTimestamp, Timestamp } from './core';
+import type { GeneratedJson, GeneratedTimestamp, Json, NullableTimestamp, Timestamp } from './core';
 
 /**
  * Entry module tables (migration 0800, specification §3.14 SPK-ENTRY-001..008, §4.4 Arrival,
@@ -113,7 +113,8 @@ export interface SessionCheckinsTable {
   session_booking_id: string | null;
   basis_reference: string | null;
   status: SessionCheckinStatus;
-  issues: Json<unknown[]>;
+  // `default '[]'::jsonb` (migration 0800): optional on insert.
+  issues: GeneratedJson<unknown[]>;
   checked_in_at: Timestamp;
   evaluated_at: Timestamp;
   admitted_at: NullableTimestamp;

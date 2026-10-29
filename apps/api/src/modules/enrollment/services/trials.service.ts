@@ -46,6 +46,7 @@ import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { RegistrationEvaluator } from './registration-evaluator';
 import { SessionBookingsService } from './session-bookings.service';
+import { EnrollmentFacilityScope } from './facility-scope';
 
 export type TrialRow = Selectable<TrialParticipationsTable>;
 
@@ -82,6 +83,7 @@ export class TrialsService {
     private readonly applications: ApplicationsService,
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   async load(
@@ -121,6 +123,7 @@ export class TrialsService {
       await this.authorization.require(principal, EnrollmentActions.recordTrial, {
         type: 'trial_participation',
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [person.id],
       });
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
@@ -236,6 +239,7 @@ export class TrialsService {
       type: 'trial_participation',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -261,6 +265,7 @@ export class TrialsService {
         type: 'trial_participation',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -343,13 +348,23 @@ export class TrialsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('trial_participation');
-      await this.authorization.require(principal, EnrollmentActions.recordTrial, {
-        type: 'trial_participation',
-        id,
-        organizationId,
-        subjectPersonIds: [row.participant_person_id],
-        protected: true,
-      });
+      // §4.3: a conversion acts at the trial's and the target offering's facility.
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.recordTrial,
+        {
+          type: 'trial_participation',
+          id,
+          organizationId,
+          subjectPersonIds: [row.participant_person_id],
+          protected: true,
+        },
+        await this.scope.facilitiesOf(
+          organizationId,
+          [row.offering_id, input.targetOfferingId],
+          trx,
+        ),
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (!['scheduled', 'attended', 'no_show'].includes(row.status) || row.converted_basket_id) {
         throw errors.invalidTransition('TrialParticipation', row.status, 'convert');

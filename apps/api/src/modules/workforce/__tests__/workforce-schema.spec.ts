@@ -1,9 +1,9 @@
 import { newId } from '@sportspark/contracts';
-import { json, seedOrganization } from '@sportspark/db';
+import { json, pgConstraintName, seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
-import { at } from '../../scheduling';
+import { at, createScheduledEvent, EventsService, seedPitchWithHalves } from '../../scheduling';
 import { createAssignmentFixture, createAvailabilityFixture } from '../testing/workforce-fixtures';
 import {
   competitionWorld,
@@ -311,6 +311,157 @@ describe('workforce schema invariants (migration 0700)', () => {
       }),
       '23503',
     );
+  });
+
+  it('§4.3 / §4.7 (migration 0702): an event target always carries its composite-keyed scheduling event', async () => {
+    const other = await seedOrganization(t.db);
+    const official = await person();
+    const requirementRow = (targetId: string, schedulingEventId: string | null) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      facility_id: t.facilityId,
+      target_type: 'event' as const,
+      target_id: targetId,
+      fixture_id: null,
+      scheduling_event_id: schedulingEventId,
+      offering_session_id: null,
+      offering_id: null,
+      kind: 'official' as const,
+      role: 'event_marshal',
+      required_count: 1,
+      must_be_accepted: true,
+      required_qualifications: [],
+      created_by: json({ kind: 'system', actorLabel: 'schema-test' }),
+    });
+    const assignmentRow = (targetId: string, schedulingEventId: string | null) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      facility_id: t.facilityId,
+      person_id: official,
+      kind: 'official' as const,
+      target_type: 'event' as const,
+      target_id: targetId,
+      fixture_id: null,
+      scheduling_event_id: schedulingEventId,
+      offering_session_id: null,
+      offering_id: null,
+      target_title: 'Event assignment',
+      role: 'event_marshal',
+      slot: 1,
+      engagement: 'regular' as const,
+      status: 'proposed' as const,
+      scheduled_start: new Date(game.start),
+      scheduled_end: new Date(game.end),
+      turnaround_minutes: 0,
+      committed_end: new Date(game.end),
+      replaces_assignment_id: null,
+      offered_at: null,
+      responded_at: null,
+      accepted_at: null,
+      declined_at: null,
+      decline_reason: null,
+      withdrawn_at: null,
+      withdrawn_reason: null,
+      withdrawn_by: null,
+      completed_at: null,
+      completed_by: null,
+      access_membership_id: null,
+      access_from: null,
+      access_until: null,
+      created_by: json({ kind: 'system', actorLabel: 'schema-test' }),
+      created_by_person_id: null,
+    });
+    // A null scheduling_event_id with a random target id, or with another organization's event
+    // id, satisfied 0700's check (a null comparison passes); 0702 refuses both.
+    const foreignPitch = await seedPitchWithHalves(t.db, {
+      organizationId: other.organizationId,
+      facilityId: other.facilityId,
+    });
+    const foreign = await createScheduledEvent(t.app.get(EventsService), {
+      organizationId: other.organizationId,
+      facilityId: other.facilityId,
+      resourceIds: [foreignPitch.pitchId],
+      start: game.start,
+      end: game.end,
+      kind: 'practice',
+      sourceType: 'program',
+    });
+    for (const targetId of [newId(), foreign.id]) {
+      await expectPgError(
+        t.db.insertInto('assignment_requirements').values(requirementRow(targetId, null)).execute(),
+        '23514',
+      );
+      await expectPgError(
+        t.db.insertInto('assignments').values(assignmentRow(targetId, null)).execute(),
+        '23514',
+      );
+    }
+    // The rows the services write still pass: the organization's own event with its key.
+    await t.db
+      .insertInto('assignment_requirements')
+      .values(requirementRow(game.eventId, game.eventId))
+      .execute();
+    await t.db
+      .insertInto('assignments')
+      .values(assignmentRow(game.eventId, game.eventId))
+      .execute();
+  });
+
+  it('SPK-PAY-001 / SPK-STAFF-006 (migration 0703): a fee adjustment carries its submission’s currency', async () => {
+    const p = await person();
+    const assignmentId = await createAssignmentFixture(t, {
+      ...fixtureTarget(game),
+      personId: p,
+      status: 'completed',
+      role: 'timekeeper',
+    });
+    const submissionId = newId();
+    await t.db
+      .insertInto('fee_submissions')
+      .values({
+        id: submissionId,
+        organization_id: t.organizationId,
+        assignment_id: assignmentId,
+        person_id: p,
+        rate_basis: json({ kind: 'flat', amountMinor: 5000 }),
+        computed_amount_minor: 5000,
+        submitted_amount_minor: 5000,
+        currency: 'USD',
+        note: null,
+        submitted_by: json({ kind: 'system', actorLabel: 'test' }),
+        submitted_at: new Date(),
+        status: 'submitted',
+        approved_amount_minor: null,
+        approver: null,
+        approver_person_id: null,
+        approved_at: null,
+        rejected_at: null,
+        rejection_reason: null,
+        export_batch_id: null,
+        exported_at: null,
+      })
+      .execute();
+    const adjustment = (currency: string) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      fee_submission_id: submissionId,
+      sequence: 1,
+      previous_amount_minor: 5000,
+      adjusted_amount_minor: 4500,
+      currency,
+      reason: 'Rate card',
+      adjusted_by: json({ kind: 'system', actorLabel: 'test' }),
+      adjusted_by_person_id: null,
+      adjusted_at: new Date(),
+    });
+    let refused: unknown;
+    try {
+      await t.db.insertInto('fee_adjustments').values(adjustment('EUR')).execute();
+    } catch (error) {
+      refused = error;
+    }
+    expect(pgConstraintName(refused)).toBe('fee_adjustments_submission_currency_fk');
+    await t.db.insertInto('fee_adjustments').values(adjustment('USD')).execute();
   });
 
   it('SPK-STAFF-006: fee adjustments and export batches are append-only; a submission exports only in its batch currency and once live per assignment', async () => {

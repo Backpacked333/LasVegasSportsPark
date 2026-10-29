@@ -94,6 +94,7 @@ describe('fee submissions follow the assignment’s facility scope (SPK-STAFF-00
           await post(t, `/v1/fee-submissions/${a.feeId}/adjust`, actor, {
             amountMinor: 100,
             reason: 'Cut',
+            expectedRevision: 1,
           })
         ).status,
       ).toBe(404);

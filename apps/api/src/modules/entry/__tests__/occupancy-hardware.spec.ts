@@ -1,8 +1,12 @@
 import { newId } from '@sportspark/contracts';
+import type { Db } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { APP_CONFIG, DATABASE, Inbox, type AppConfig } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture, createRelationshipFixture } from '../../identity';
+import { AccessControlWebhooksController } from '../controllers/attendance.controller';
 import {
+  FAKE_ACCESS_CONTROL_PROVIDER,
   FAKE_ACCESS_CONTROL_SIGNATURE_HEADER,
   FakeAccessControlProvider,
 } from '../providers/fake-access-control.provider';
@@ -295,5 +299,30 @@ describe('hardware access events (SPK-COND-004)', () => {
       occurredAt: t.clock.now().toISOString(),
     });
     expect((await deliver(foreign)).status).toBe(404);
+  });
+
+  it('§4.11 / §4.14 / §5.2: the fake provider’s events, signed with a published test secret, are refused in production and record nothing', async () => {
+    const event = device.granted({
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      occurredAt: t.clock.now().toISOString(),
+      personId: fam.childA,
+    });
+    const production = new AccessControlWebhooksController(
+      t.app.get(Inbox),
+      t.app.get<Db>(DATABASE),
+      { ...t.app.get<AppConfig>(APP_CONFIG), NODE_ENV: 'production' },
+    );
+    await expect(
+      production.receive(FAKE_ACCESS_CONTROL_PROVIDER, event.body, event.signature),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    const recorded = await t.db
+      .selectFrom('inbox_events')
+      .select('id')
+      .where('provider_event_id', '=', event.body.id)
+      .execute();
+    expect(recorded).toEqual([]);
+    // Outside production the same signed event is accepted (the fake's purpose in tests).
+    expect((await deliver(event)).status).toBe(202);
   });
 });

@@ -921,6 +921,38 @@ export class OfferingsService implements OfferingLookupPort {
   // OfferingLookupPort
   // -------------------------------------------------------------------------------------------
 
+  async facilitiesOfOfferings(
+    organizationId: string,
+    offeringIds: readonly string[],
+    trx?: Trx,
+  ): Promise<Map<string, string>> {
+    if (offeringIds.length === 0) return new Map();
+    const db = trx ?? executorFor(this.db);
+    const rows = await db
+      .selectFrom('offerings')
+      .select(['id', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', [...new Set(offeringIds)])
+      .execute();
+    return new Map(rows.map((r) => [r.id, r.facility_id]));
+  }
+
+  async offeringIdsAtFacilities(
+    organizationId: string,
+    facilityIds: readonly string[],
+    trx?: Trx,
+  ): Promise<string[]> {
+    if (facilityIds.length === 0) return [];
+    const db = trx ?? executorFor(this.db);
+    const rows = await db
+      .selectFrom('offerings')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('facility_id', 'in', [...new Set(facilityIds)])
+      .execute();
+    return rows.map((r) => r.id);
+  }
+
   async getOffering(
     organizationId: string,
     offeringId: string,

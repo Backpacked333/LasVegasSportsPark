@@ -52,6 +52,7 @@ import { missingAcknowledgments } from '../eligibility/registration-eligibility'
 import { CapacityService, type HoldRow } from './capacity.service';
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
+import { EnrollmentFacilityScope } from './facility-scope';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
 
 export type SessionBookingRow = Selectable<SessionBookingsTable>;
@@ -93,6 +94,7 @@ export class SessionBookingsService {
     private readonly capacity: CapacityService,
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   async load(
@@ -130,6 +132,7 @@ export class SessionBookingsService {
       await this.authorization.require(principal, EnrollmentActions.bookSession, {
         type: 'session_booking',
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [person.id],
       });
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
@@ -379,6 +382,7 @@ export class SessionBookingsService {
       type: 'session_booking',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -403,6 +407,16 @@ export class SessionBookingsService {
         protected: true,
       });
     }
+    // §4.3, §4.14: facility-scoped staff list only their facilities' bookings.
+    const offerings = await this.scope.listOfferings(
+      principal,
+      query.participantPersonId
+        ? EnrollmentActions.readSessionBooking
+        : EnrollmentActions.readCapacity,
+      organizationId,
+      query.participantPersonId,
+    );
+    if (offerings?.length === 0) return [];
     let q = this.db
       .selectFrom('session_bookings')
       .selectAll()
@@ -412,6 +426,7 @@ export class SessionBookingsService {
     if (query.participantPersonId)
       q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.sessionId) q = q.where('session_id', '=', query.sessionId);
+    if (offerings) q = q.where('offering_id', 'in', offerings);
     if (query.status) q = q.where('status', '=', query.status);
     return (await q.execute()).map((r) => redactSessionBooking(principal, toSessionBooking(r)));
   }
@@ -434,6 +449,7 @@ export class SessionBookingsService {
         type: 'session_booking',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -477,6 +493,7 @@ export class SessionBookingsService {
         type: 'session_booking',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });

@@ -61,6 +61,7 @@ import {
 } from '../enrollment.shared';
 import { CapacityService, type PoolRow } from './capacity.service';
 import { RegistrationEvaluator } from './registration-evaluator';
+import { EnrollmentFacilityScope } from './facility-scope';
 
 export type PlacementRow = Selectable<PlacementRequestsTable>;
 
@@ -118,6 +119,7 @@ export class PlacementService {
     @Inject(TEAM_ENTRY_QUERY_PORT) private readonly teamEntries: TeamEntryQueryPort,
     @Inject(ELIGIBILITY_PORT) private readonly eligibility: EligibilityPort,
     @Inject(ROSTER_PORT) private readonly rosters: RosterPort,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   async load(
@@ -154,6 +156,7 @@ export class PlacementService {
       await this.authorization.require(principal, EnrollmentActions.requestPlacement, {
         type: 'placement_request',
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [person.id],
       });
       if (input.applicationId) {
@@ -263,6 +266,7 @@ export class PlacementService {
       type: 'placement_request',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -278,6 +282,13 @@ export class PlacementService {
       type: 'placement_request',
       organizationId,
     });
+    // §4.3, §4.14: facility-scoped staff list the requests of their facilities' offerings and
+    // the requests that name no offering (a season placement is organization-wide).
+    const offerings = await this.scope.listOfferings(
+      principal,
+      EnrollmentActions.managePlacement,
+      organizationId,
+    );
     let q = this.db
       .selectFrom('placement_requests')
       .selectAll()
@@ -287,6 +298,13 @@ export class PlacementService {
       .orderBy('id')
       .limit(query.limit);
     if (query.status) q = q.where('status', '=', query.status);
+    if (offerings) {
+      q = q.where((eb) =>
+        offerings.length > 0
+          ? eb.or([eb('offering_id', 'is', null), eb('offering_id', 'in', offerings)])
+          : eb('offering_id', 'is', null),
+      );
+    }
     return { items: (await q.execute()).map(toPlacementRequest), nextCursor: null };
   }
 
@@ -302,6 +320,7 @@ export class PlacementService {
       type: 'placement_request',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       protected: await this.hidden(principal, row),
     });
     const now = this.clock.now();
@@ -406,6 +425,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
@@ -470,6 +490,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
@@ -533,6 +554,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
@@ -812,6 +834,7 @@ export class PlacementService {
         type: 'placement_request',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         protected: await this.hidden(principal, row),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);

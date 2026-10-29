@@ -488,8 +488,11 @@ export type CreateFeeSubmissionBody = z.infer<typeof CreateFeeSubmissionBody>;
 
 export const ApproveFeeBody = withCommandMeta({}).openapi('ApproveFeeRequest');
 export type ApproveFeeBody = z.infer<typeof ApproveFeeBody>;
+// §4.9: an adjustment edits the approved amount (money), so a stale edit must fail rather than
+// overwrite newer work; the current revision is required. Approve and reject are state transitions
+// that FeeSubmissionMachine already refuses from any state but `submitted`.
 export const AdjustFeeBody = withCommandMeta({ amountMinor: MinorAmount })
-  .extend({ reason: Reason })
+  .extend({ reason: Reason, expectedRevision: Revision })
   .openapi('AdjustFeeRequest');
 export type AdjustFeeBody = z.infer<typeof AdjustFeeBody>;
 export const RejectFeeBody = withCommandMeta({})
