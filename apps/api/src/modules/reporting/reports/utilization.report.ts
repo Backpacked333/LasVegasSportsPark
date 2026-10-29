@@ -10,7 +10,9 @@ import {
   type UtilizationResource,
 } from '../calculators/utilization.calculator';
 import { column, type ReportContext, type ReportDefinition } from '../engine/report-definition';
+import { addDays } from '../../scheduling';
 import { ReportingActions } from '../reporting.actions';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import { hours, localDays, localInstant, metricValue, ratio } from '../reporting.shared';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -80,6 +82,7 @@ export class UtilizationReport {
     pointInTime: 'partial',
     pointInTimeNote:
       'Releases, closure applications and lifts, and space status changes after the as-of instant are ignored (their instants are recorded). The scheduling module does not stamp when a reservation was created, so reservations made after the as-of instant are included; the stored run is the reproducible record.',
+    settings: [REPORTING_SETTING_NAMES.operatingDayStart],
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
@@ -95,7 +98,13 @@ export class UtilizationReport {
   ) {
     const facility = ctx.facility!;
     const tz = facility.timezone;
-    const days: UtilizationDay[] = localDays(tz, params.from, params.to, ctx.policy.maxPeriodDays);
+    const days: UtilizationDay[] = localDays(
+      tz,
+      params.from,
+      params.to,
+      ctx.policy.maxPeriodDays,
+      ctx.dayStart,
+    );
     const spanStart = new Date(days[0]!.start);
     const spanEnd = new Date(days[days.length - 1]!.end);
     const includeBuffers = params.includeBuffers ?? true;
@@ -196,16 +205,18 @@ export class UtilizationReport {
     ): Interval[] | null => {
       const source = windowSource(unitId);
       if (source === null) return null;
-      const weekday = new Date(`${day.date}T00:00:00Z`).getUTCDay();
-      return source
-        .filter((w) => w.weekday === weekday)
-        .map(
-          (w) =>
-            [
-              localInstant(tz, day.date, w.opens_at),
-              localInstant(tz, day.date, w.closes_at),
-            ] as const,
-        );
+      // An operating day that starts after midnight (REPORTING_OPERATING_DAY_START) also holds the
+      // next calendar date's hours before its start; the calculator clips windows to the day.
+      const dates = ctx.dayStart === '00:00' ? [day.date] : [day.date, addDays(day.date, 1)];
+      return dates.flatMap((date) => {
+        const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+        return source
+          .filter((w) => w.weekday === weekday)
+          .map(
+            (w) =>
+              [localInstant(tz, date, w.opens_at), localInstant(tz, date, w.closes_at)] as const,
+          );
+      });
     };
 
     // Closures applied by the as-of instant, cut at a lift known by then (U8, G3).
@@ -433,7 +444,9 @@ export class UtilizationReport {
           ? re.included.map((w) => `${w.name} = ${w.weight}`).join('; ')
           : 'no weighted space'
       }${re.excluded.length > 0 ? `; excluded: ${re.excluded.map((e) => `${e.name} (${e.reason})`).join('; ')}` : ''}. Subdivisions are inside their whole space and are never weighted.`,
-      `Operating day: local midnight to midnight in ${tz} (DEC-001 pending).`,
+      ctx.policy.operatingDayStart === null
+        ? `Operating day: the calendar day, local midnight to midnight in ${tz} (no REPORTING_OPERATING_DAY_START is configured; DEC-001).`
+        : `Operating day: from ${ctx.dayStart} to ${ctx.dayStart} the next day, local time in ${tz} (REPORTING_OPERATING_DAY_START; DEC-001).`,
     ];
     const closedNames = resources
       .filter((r) =>

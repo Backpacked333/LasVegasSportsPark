@@ -4,7 +4,10 @@ import { ReadinessService } from '../../competition';
 import { ASSIGNMENT_COVERAGE_PORT, type AssignmentCoveragePort } from '../../workforce';
 import { column, type ReportDefinition } from '../engine/report-definition';
 import { ReportingActions } from '../reporting.actions';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import { iso, localDays, metricValue, ratio, HOUR_MS } from '../reporting.shared';
+
+const DAY_SETTINGS = [REPORTING_SETTING_NAMES.operatingDayStart] as const;
 
 const LIVE_NOTE =
   'Evaluated live from the owning module at the request instant; a past as-of instant cannot be reconstructed. The stored report run is the reproducible record.';
@@ -14,6 +17,11 @@ const LIVE_NOTE =
  * communication failures (SPK-REPORT-002). Readiness comes from the competition module's
  * ReadinessService and coverage from the workforce module's ASSIGNMENT_COVERAGE_PORT (their
  * exported query services); the rest is read through the views of migration 1300.
+ *
+ * REP-03: coverage reads through the report's snapshot transaction. The ReadinessService reads
+ * part of its sources (season, rule set, proposed suspensions, disputes) through the competition
+ * module's own database handle, which cannot join a transaction, so match readiness is computed
+ * outside a snapshot (`consistency: 'owner_reads'`) and says so.
  */
 @Injectable()
 export class OperationsReports {
@@ -31,9 +39,17 @@ export class OperationsReports {
     scope: 'facility',
     pointInTime: 'none',
     pointInTimeNote: LIVE_NOTE,
+    consistency: 'owner_reads',
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
-      const days = localDays(facility.timezone, params.from, params.to, ctx.policy.maxPeriodDays);
+      const days = localDays(
+        facility.timezone,
+        params.from,
+        params.to,
+        ctx.policy.maxPeriodDays,
+        ctx.dayStart,
+      );
       const fixtures = await ctx.db
         .selectFrom('reporting_fixtures_v')
         .select(['fixture_id', 'division_id', 'scheduled_start', 'status'])
@@ -128,6 +144,7 @@ export class OperationsReports {
         disclosures: [
           'Readiness is derived on every read (SPK-READY-004); unknown evidence is never counted as ready (SPK-READY-002).',
           'Issue codes only: restricted sources (discipline, disputes) are not identified in this report (SPK-DISC-004).',
+          'Readiness is read through the competition module at the request instant, not in one snapshot with the fixture list (REP-03).',
         ],
       };
     },
@@ -142,19 +159,29 @@ export class OperationsReports {
     scope: 'facility',
     pointInTime: 'none',
     pointInTimeNote: LIVE_NOTE,
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
-      const days = localDays(facility.timezone, params.from, params.to, ctx.policy.maxPeriodDays);
+      const days = localDays(
+        facility.timezone,
+        params.from,
+        params.to,
+        ctx.policy.maxPeriodDays,
+        ctx.dayStart,
+      );
+      // WRK-02 (migration 1303): a retired requirement no longer applies and never counts.
       const requirements = await ctx.db
         .selectFrom('reporting_assignment_requirements_v')
         .select(['requirement_id', 'target_type', 'target_id', 'target_start', 'target_title'])
         .where('organization_id', '=', ctx.organizationId)
         .where('facility_id', '=', facility.id)
+        .where('retired_at', 'is', null)
         .where('target_start', '>=', new Date(days[0]!.start))
         .where('target_start', '<', new Date(days[days.length - 1]!.end))
         .orderBy('target_start')
         .orderBy('requirement_id')
         .execute();
+      const inForce = new Set(requirements.map((r) => r.requirement_id));
       const targets = new Map<string, (typeof requirements)[number]>();
       for (const r of requirements) targets.set(`${r.target_type}:${r.target_id}`, r);
       let required = 0;
@@ -165,9 +192,10 @@ export class OperationsReports {
           ctx.organizationId,
           target.target_type as AssignmentTargetType,
           target.target_id,
+          ctx.trx ?? undefined,
         );
         for (const role of roles) {
-          if (!role.mustBeAccepted) continue;
+          if (!role.mustBeAccepted || !inForce.has(role.requirementId)) continue;
           const uncovered = role.uncoveredSlots.length;
           const acceptedSlots = Math.min(role.acceptedPersonIds.length, role.requiredCount);
           required += role.requiredCount;
@@ -213,6 +241,7 @@ export class OperationsReports {
         rows,
         disclosures: [
           'Only accepted or completed assignments cover a slot; proposed and offered assignments never do (SPK-STAFF-002).',
+          'Retired requirements (their activity was withdrawn) are not counted (WRK-02).',
           'Assignees are not named in this report.',
         ],
       };
@@ -350,6 +379,7 @@ export class OperationsReports {
     scope: 'organization',
     pointInTime: 'none',
     pointInTimeNote: LIVE_NOTE,
+    settings: [REPORTING_SETTING_NAMES.unknownDelivery],
     compute: async (ctx, params) => {
       const start = new Date(params.periodStart);
       const end = new Date(params.periodEnd);
@@ -393,9 +423,11 @@ export class OperationsReports {
           );
         }
       }
-      const threshold = new Date(
-        ctx.asOf.getTime() - ctx.policy.unknownDeliveryThresholdMinutes * 60_000,
-      );
+      // MET-062: without a configured threshold (DEC-015) every unknown delivery attempted or
+      // queued by the as-of instant counts as unresolved at once.
+      const thresholdMinutes = ctx.policy.unknownDeliveryMinutes;
+      const threshold = new Date(ctx.asOf.getTime() - (thresholdMinutes ?? 0) * 60_000);
+      const before = thresholdMinutes === null ? '<=' : '<';
       const staleUnknown = await ctx.db
         .selectFrom('reporting_delivery_attempts_v')
         .select((eb) => eb.fn.countAll<number>().as('n'))
@@ -403,8 +435,8 @@ export class OperationsReports {
         .where('status', '=', 'unknown')
         .where((eb) =>
           eb.or([
-            eb('attempted_at', '<', threshold),
-            eb.and([eb('attempted_at', 'is', null), eb('queued_at', '<', threshold)]),
+            eb('attempted_at', before, threshold),
+            eb.and([eb('attempted_at', 'is', null), eb('queued_at', before, threshold)]),
           ]),
         )
         .executeTakeFirst();
@@ -474,7 +506,10 @@ export class OperationsReports {
             'count',
             Number(staleUnknown?.n ?? 0),
             {
-              dimensions: { thresholdMinutes: String(ctx.policy.unknownDeliveryThresholdMinutes) },
+              dimensions: {
+                thresholdMinutes:
+                  thresholdMinutes === null ? 'unconfigured' : String(thresholdMinutes),
+              },
             },
           ),
         ],
@@ -488,7 +523,9 @@ export class OperationsReports {
         ],
         rows,
         disclosures: [
-          `Unknown deliveries are reported after ${ctx.policy.unknownDeliveryThresholdMinutes} minutes (placeholder, DEC-015).`,
+          thresholdMinutes === null
+            ? 'No unknown-delivery threshold is configured (REPORTING_UNKNOWN_DELIVERY_MINUTES, DEC-015): every unknown delivery counts as unresolved at once.'
+            : `Unknown deliveries are reported after ${thresholdMinutes} minutes (REPORTING_UNKNOWN_DELIVERY_MINUTES, DEC-015).`,
           'Promotional messages never count as essential failures (SPK-COMMS-007).',
         ],
       };

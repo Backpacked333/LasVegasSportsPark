@@ -1,10 +1,15 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   newId,
   systemPrincipal,
+  z,
   type CreateExportInput,
+  type ListReportExportsQuery,
+  type Page,
   type Principal,
   type ReportExport,
   type ReportExportCreated,
@@ -12,7 +17,7 @@ import {
   type RevokeExportInput,
 } from '@sportspark/contracts';
 import { json, type ExportsTable } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type Selectable } from 'kysely';
 import {
   assertExpectedRevision,
   AuditWriter,
@@ -32,8 +37,10 @@ import {
   ExportExpiryDue,
   ExportRevoked,
 } from '../reporting.events';
+import { ReportingActions } from '../reporting.actions';
 import { ExportMachine } from '../reporting.machines';
 import { REPORTING_POLICY, type ReportingPolicy } from '../reporting.policy';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import { actorOf, iso, isoOrNull, organizationOf } from '../reporting.shared';
 import { ReportRunsService } from './report-runs.service';
 import { ReportsService } from './reports.service';
@@ -41,6 +48,8 @@ import { ReportsService } from './reports.service';
 export type ExportRow = Selectable<ExportsTable>;
 
 export const EXPORT_TOKEN_PREFIX = 'spx_';
+
+const ListCursor = z.object({ requestedAt: z.string(), id: z.string() });
 
 export function hashExportToken(token: string): string {
   return createHash('sha256').update(token.trim(), 'utf8').digest('hex');
@@ -66,7 +75,11 @@ export interface ExportDownload {
  *     (only its SHA-256 is stored), refuses after the expiry instant (the database refuses a
  *     download recorded at or after it too) and renders exactly the content authorized (digest);
  *   - creation, download, revocation and expiry are audited; a timer event expires an unused
- *     export at its expiry instant.
+ *     export at its expiry instant, and a read of one past its expiry marks it expired at once;
+ *   - the lifetime is the configured REPORTING_EXPORT_LIFETIME_MINUTES (DEC-060): without one no
+ *     export is created (REP-03, rule K-00 (i));
+ *   - the requester lists and reads their own exports with `reporting.read_exports`, re-checked on
+ *     every request; nobody else's export is ever listed, administrators included (REP-01).
  * Content is the stored run's aggregate result; reports carry no person-level rows (rule G9).
  */
 @Injectable()
@@ -99,10 +112,22 @@ export class ExportsService {
     if (!principal.accountId) {
       throw errors.accessDenied('An export is bound to the requesting account.');
     }
+    // §4.14, DEC-060: the lifetime is a retention decision; without it nothing is exported.
+    const lifetimeMinutes = this.policy.exportLifetimeMinutes;
+    if (lifetimeMinutes === null) {
+      throw errors.validation(
+        'No export lifetime is configured, so no export can be created: the retention period is pending decision DEC-060.',
+        {
+          code: 'EXPORT_LIFETIME_UNCONFIGURED',
+          setting: REPORTING_SETTING_NAMES.exportLifetime,
+          pendingDecision: 'DEC-060',
+        },
+      );
+    }
     const result = this.runs.resultOf(run);
     const content = renderExport(result, input.format);
     const now = this.clock.now();
-    const expiresAt = new Date(now.getTime() + this.policy.exportTtlHours * 3_600_000);
+    const expiresAt = new Date(now.getTime() + lifetimeMinutes * 60_000);
     const token = `${EXPORT_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
     const id = newId();
     const row = await this.unitOfWork.run(async ({ trx }) => {
@@ -151,6 +176,7 @@ export class ExportsService {
           metricDefinitions: result.metrics.map((m) => `${m.metricKey}@${m.version}`),
           rowCount: result.rows.length,
           expiresAt: iso(expiresAt),
+          lifetimeMinutes,
         },
       });
       await this.outbox.enqueue(trx, ExportCreated, {
@@ -184,8 +210,96 @@ export class ExportsService {
     };
   }
 
-  async get(principal: Principal, id: string): Promise<ReportExport> {
+  /**
+   * REP-01 (§4.14, SPK-REPORT-007, SCR-S-45): the caller's own exports, newest first (keyset on
+   * requested_at, id). Requires `reporting.read_exports` on every request; only exports requested
+   * by the caller's account are ever listed — another account's never appear, administrators
+   * included. An export past its expiry is marked expired first (the timer's rule), so it lists as
+   * expired. Never a token or a download path.
+   */
+  async list(
+    principal: Principal,
+    query: ListReportExportsQuery,
+    correlationId: string | null,
+  ): Promise<Page<ReportExport>> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, ReportingActions.readExports, {
+      type: 'report_export',
+      organizationId,
+    });
+    const accountId = principal.accountId;
+    if (!accountId) return { items: [], nextCursor: null };
+    await this.expireDue(organizationId, accountId, null, correlationId);
+    const cursor = decodeCursor(query.cursor, ListCursor);
+    let q = this.unitOfWork
+      .reader()
+      .selectFrom('exports')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('requested_by_account_id', '=', accountId);
+    if (query.status) q = q.where('status', '=', query.status);
+    if (cursor) {
+      q = q.where(
+        sql<boolean>`(requested_at, id) < (${new Date(cursor.requestedAt)}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const rows = await q
+      .orderBy('requested_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = rows.slice(0, query.limit);
+    const last = rows.length > query.limit ? page[page.length - 1] : undefined;
+    return {
+      items: page.map((row) => this.view(row)),
+      nextCursor: last ? encodeCursor({ requestedAt: iso(last.requested_at), id: last.id }) : null,
+    };
+  }
+
+  async get(
+    principal: Principal,
+    id: string,
+    correlationId: string | null = null,
+  ): Promise<ReportExport> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, ReportingActions.readExports, {
+      type: 'report_export',
+      id,
+      organizationId,
+    });
+    const row = await this.loadOwn(principal, id);
+    if (row.status !== 'ready' || this.clock.now().getTime() < new Date(row.expires_at).getTime()) {
+      return this.view(row);
+    }
+    await this.expireDue(organizationId, row.requested_by_account_id, row.id, correlationId);
     return this.view(await this.loadOwn(principal, id));
+  }
+
+  /**
+   * Marks the requester's ready exports past their expiry as expired (or only `exportId`), through
+   * the timer's own rule (`expireIfDue`: locked, idempotent, audited) — the lazy half of §4.14.
+   */
+  private async expireDue(
+    organizationId: string,
+    accountId: string,
+    exportId: string | null,
+    correlationId: string | null,
+  ): Promise<void> {
+    const now = this.clock.now();
+    let q = this.unitOfWork
+      .reader()
+      .selectFrom('exports')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('requested_by_account_id', '=', accountId)
+      .where('status', '=', 'ready')
+      .where('expires_at', '<=', now);
+    if (exportId) q = q.where('id', '=', exportId);
+    const due = await q.orderBy('id').execute();
+    if (due.length === 0) return;
+    await this.unitOfWork.run(async ({ trx }) => {
+      for (const { id } of due) await this.expireIfDue(trx, organizationId, id, correlationId);
+    });
   }
 
   async download(

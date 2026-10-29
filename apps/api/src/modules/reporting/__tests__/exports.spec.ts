@@ -181,6 +181,65 @@ describe('exports (SPK-REPORT-007, §4.14 expiring exports)', () => {
     expect(parsed.metrics.length).toBeGreaterThan(0);
   });
 
+  it("§4.14: a requester lists their exports with expiry; another account's exports never appear", async () => {
+    const own = await t.db
+      .selectFrom('exports')
+      .select('id')
+      .where('requested_by_account_id', '=', scheduler.accountId)
+      .orderBy('requested_at', 'desc')
+      .orderBy('id', 'desc')
+      .execute();
+    expect(own.length).toBeGreaterThanOrEqual(3);
+    const listed = await get(t, '/v1/reports/exports', scheduler, { limit: '200' });
+    expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+    expect(listed.body.items.map((i: { id: string }) => i.id)).toEqual(own.map((r) => r.id));
+    expect(listed.body.nextCursor).toBeNull();
+    for (const item of listed.body.items) {
+      // Never a token or a download path (§4.14): only the export's facts and its expiry.
+      expect(item).not.toHaveProperty('downloadToken');
+      expect(item).not.toHaveProperty('downloadPath');
+      expect(item.requestedBy.accountId).toBe(scheduler.accountId);
+      expect(new Date(item.expiresAt).getTime()).toBeGreaterThan(
+        new Date(item.requestedAt).getTime(),
+      );
+    }
+
+    // Keyset paging, newest first.
+    const first = await get(t, '/v1/reports/exports', scheduler, { limit: '2' });
+    expect(first.body.items.map((i: { id: string }) => i.id)).toEqual(
+      own.slice(0, 2).map((r) => r.id),
+    );
+    expect(first.body.nextCursor).toEqual(expect.any(String));
+    const second = await get(t, '/v1/reports/exports', scheduler, {
+      limit: '2',
+      cursor: first.body.nextCursor,
+    });
+    expect(second.body.items.map((i: { id: string }) => i.id)).toEqual(
+      own.slice(2, 4).map((r) => r.id),
+    );
+
+    // Status filter: the downloaded export only.
+    const downloaded = await get(t, '/v1/reports/exports', scheduler, { status: 'downloaded' });
+    expect(downloaded.body.items.length).toBeGreaterThan(0);
+    expect(downloaded.body.items.every((i: { status: string }) => i.status === 'downloaded')).toBe(
+      true,
+    );
+
+    // Another account's exports never appear — an administrator's list holds only their own.
+    const admin = await staff(t, ['system_administrator', 'general_manager']);
+    const adminList = await get(t, '/v1/reports/exports', admin);
+    expect(adminList.status).toBe(200);
+    expect(adminList.body.items).toEqual([]);
+    const colleague = await staff(t, ['scheduler']);
+    expect((await get(t, '/v1/reports/exports', colleague)).body.items).toEqual([]);
+
+    // The read action is required on every request.
+    const frontDesk = await staff(t, ['front_desk']);
+    const refused = await get(t, '/v1/reports/exports', frontDesk);
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe('ACCESS_DENIED');
+  });
+
   it('§4.14: an export cannot be downloaded after it expires, and the expiry timer expires an unused one', async () => {
     const first = await post(t, '/v1/reports/exports', scheduler, {
       reportRunId: utilizationRunId,
@@ -215,6 +274,38 @@ describe('exports (SPK-REPORT-007, §4.14 expiring exports)', () => {
     // Replaying the timer changes nothing (idempotent handler).
     await dispatchAll(t);
     expect((await exportOf(second.body.id)).revision).toBe(timed.revision);
+  });
+
+  it('§4.14: an expired export lists as expired', async () => {
+    const created = await post(t, '/v1/reports/exports', scheduler, {
+      reportRunId: utilizationRunId,
+      format: 'json',
+    });
+    expect(created.status).toBe(201);
+    const ready = await get(t, '/v1/reports/exports', scheduler, { status: 'ready' });
+    expect(ready.body.items.map((i: { id: string }) => i.id)).toContain(created.body.id);
+
+    // Past its expiry and before the timer runs: a read marks it expired by the timer's rule.
+    t.clock.advance(24 * HOUR + 60_000);
+    const stillReady = await get(t, '/v1/reports/exports', scheduler, { status: 'ready' });
+    expect(stillReady.status).toBe(200);
+    expect(stillReady.body.items.map((i: { id: string }) => i.id)).not.toContain(created.body.id);
+    const expired = await get(t, '/v1/reports/exports', scheduler, { status: 'expired' });
+    const item = expired.body.items.find((i: { id: string }) => i.id === created.body.id);
+    expect(item).toMatchObject({ status: 'expired', revision: 2 });
+    expect(item.expiredAt).toBe(t.clock.now().toISOString());
+    expect((await exportOf(created.body.id)).status).toBe('expired');
+    const audits = await t.db
+      .selectFrom('audit_records')
+      .select('action')
+      .where('target_id', '=', created.body.id)
+      .where('action', '=', 'reporting.export_expired')
+      .execute();
+    expect(audits).toHaveLength(1);
+    // The timer arriving later changes nothing (idempotent), and a single read agrees.
+    await dispatchAll(t);
+    const single = await get(t, `/v1/reports/exports/${created.body.id}`, scheduler);
+    expect(single.body).toMatchObject({ status: 'expired', revision: 2 });
   });
 
   it('revocation: stale revision refused; a revoked export cannot be downloaded or revoked again', async () => {

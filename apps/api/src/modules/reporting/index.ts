@@ -3,10 +3,17 @@ export * from './reporting.actions';
 export * from './reporting.events';
 export * from './reporting.machines';
 export {
-  DEFAULT_REPORTING_POLICY,
+  REPORTING_LIMITS,
   REPORTING_POLICY,
+  reportingPolicyFrom,
   type ReportingPolicy,
 } from './reporting.policy';
+export {
+  ReportingSettings,
+  REPORTING_SETTING_NAMES,
+  type ReportingSettingName,
+  type ReportingSettingsValue,
+} from './reporting.settings';
 export {
   METRICS,
   definitionHash,

@@ -295,10 +295,16 @@ describe('retention by cohort (SPK-REPORT-005)', () => {
     expect(res.body.rows[0]).toMatchObject({ cohortSize: 2, returned: 2, returnRate: 1 });
   });
 
-  it('SPK-REPORT-005: rental customers who did not book again', async () => {
+  it('SPK-REPORT-005, REP-02: rental customers come from bookings, not from enrollments of a rental offering; none reports zero with a note', async () => {
+    // The parent's January rental is an enrollment line of a rental offering (the pre-booking
+    // path, which ENR-13 replaces with bookings): it is not a booking. Without the enrollment
+    // module's booking implementation registered, the port answers no bookings.
     const res = await report({ cohort: 'rental_customers', ...PERIODS });
     expect(res.status).toBe(200);
-    expect(res.body.rows[0]).toMatchObject({ cohortSize: 1, returned: 0, returnRate: 0 });
+    expect(res.body.rows[0]).toMatchObject({ cohortSize: 0, returned: 0, returnRate: null });
+    expect((res.body.disclosures as string[]).join(' ')).toContain(
+      'No rental or party booking was confirmed or completed in the anchor period',
+    );
   });
 
   it('SPK-REPORT-005 (K4): members who could not return are shown separately and leave the denominator only when asked', async () => {

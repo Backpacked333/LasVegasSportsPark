@@ -8,7 +8,7 @@ import {
 } from '@sportspark/contracts';
 import type { MetricDefinitionsTable } from '@sportspark/db';
 import type { Selectable } from 'kysely';
-import { addDays, compareLocalDates, resolveLocal, toLocal } from '../scheduling';
+import { addDays, compareLocalDates, minutesOf, resolveLocal, toLocal } from '../scheduling';
 
 export type MetricDefinitionRow = Selectable<MetricDefinitionsTable>;
 
@@ -106,8 +106,9 @@ export function metricValue(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Facility-local days (SPK-SCHED-008; metric dictionary G4: the operating day runs midnight to
-// midnight local time until Operations answers DEC-001)
+// Facility-local operating days (SPK-SCHED-008; metric dictionary G4). A reported day runs from
+// the configured operating day start (REPORTING_OPERATING_DAY_START, DEC-001) to the same local
+// time the next day; without one it is the facility-local calendar day, midnight to midnight.
 // ---------------------------------------------------------------------------------------------
 
 export interface LocalDay {
@@ -117,22 +118,28 @@ export interface LocalDay {
   end: number;
 }
 
-export function localDay(timezone: string, date: string): LocalDay {
-  const start = resolveLocal(date, '00:00', timezone)?.instant;
-  const end = resolveLocal(addDays(date, 1), '00:00', timezone)?.instant;
+export function localDay(timezone: string, date: string, dayStart = '00:00'): LocalDay {
+  const start = resolveLocal(date, dayStart, timezone)?.instant;
+  const end = resolveLocal(addDays(date, 1), dayStart, timezone)?.instant;
   if (!start || !end)
     throw errors.validation(`The date ${date} cannot be resolved in ${timezone}.`);
   const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
   return { date, weekday, start: start.getTime(), end: end.getTime() };
 }
 
-export function localDays(timezone: string, from: string, to: string, maxDays: number): LocalDay[] {
+export function localDays(
+  timezone: string,
+  from: string,
+  to: string,
+  maxDays: number,
+  dayStart = '00:00',
+): LocalDay[] {
   if (compareLocalDates(from, to) > 0) {
     throw errors.validation('The range must not end before it starts.', { from, to });
   }
   const days: LocalDay[] = [];
   for (let d = from; compareLocalDates(d, to) <= 0; d = addDays(d, 1)) {
-    days.push(localDay(timezone, d));
+    days.push(localDay(timezone, d, dayStart));
     if (days.length > maxDays) {
       throw errors.validation(`A report may span at most ${maxDays} days.`, { from, to });
     }
@@ -150,6 +157,27 @@ export function localInstant(timezone: string, date: string, time: string): numb
 export function localDateOfInstant(timezone: string, instant: Date | number): string {
   const l = toLocal(timezone, new Date(instant));
   return `${String(l.year).padStart(4, '0')}-${String(l.month).padStart(2, '0')}-${String(l.day).padStart(2, '0')}`;
+}
+
+/** The reported (operating) day of an instant: before the day start it is the previous date. */
+export function operatingDateOf(
+  timezone: string,
+  instant: Date | number,
+  dayStart = '00:00',
+): string {
+  const date = localDateOfInstant(timezone, instant);
+  if (dayStart === '00:00') return date;
+  const l = toLocal(timezone, new Date(instant));
+  return l.hour * 60 + l.minute < minutesOf(dayStart) ? addDays(date, -1) : date;
+}
+
+/** 0 = Sunday … 6 = Saturday, of the instant's operating day. */
+export function operatingWeekday(
+  timezone: string,
+  instant: Date | number,
+  dayStart = '00:00',
+): number {
+  return new Date(`${operatingDateOf(timezone, instant, dayStart)}T00:00:00Z`).getUTCDay();
 }
 
 /** 0 = Sunday … 6 = Saturday, in the facility's zone. */

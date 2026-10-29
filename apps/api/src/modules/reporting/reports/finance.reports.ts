@@ -2,22 +2,27 @@ import { Injectable } from '@nestjs/common';
 import type { MetricValue, ReportRow } from '@sportspark/contracts';
 import { column, type ReportDefinition } from '../engine/report-definition';
 import { ReportingActions } from '../reporting.actions';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import { DAY_MS, iso, metricValue } from '../reporting.shared';
 
 const LIVE_NOTE =
   'Evaluated live from the finance subledger at the request instant; a past as-of instant cannot be reconstructed. The stored report run is the reproducible record.';
 
-/** Aging band of a due instant at the as-of instant (bands from the policy, DEC-007). */
-export function agingBand(dueAt: Date, asOf: Date, edges: readonly number[]): string {
+/**
+ * Aging band of a due instant at the as-of instant. `upperBounds` are the configured upper bounds
+ * in days past due (REPORTING_AGING_BANDS_DAYS, DEC-007), the last band open-ended; without
+ * configured bands every balance is `unbanded` (REP-03: no invented policy value).
+ */
+export function agingBand(dueAt: Date, asOf: Date, upperBounds: readonly number[] | null): string {
+  if (upperBounds === null || upperBounds.length === 0) return 'unbanded';
   if (dueAt.getTime() > asOf.getTime()) return 'not_due';
   const daysPast = Math.floor((asOf.getTime() - dueAt.getTime()) / DAY_MS);
   let lower = 0;
-  for (let i = 1; i < edges.length; i += 1) {
-    const upper = edges[i]!;
+  for (const upper of upperBounds) {
     if (daysPast <= upper) return `${lower}-${upper}`;
     lower = upper + 1;
   }
-  return `over_${edges[edges.length - 1] ?? 0}`;
+  return `over_${upperBounds[upperBounds.length - 1]!}`;
 }
 
 function sumByCurrency<T>(
@@ -52,6 +57,7 @@ export class FinanceReports {
     scope: 'organization',
     pointInTime: 'none',
     pointInTimeNote: LIVE_NOTE,
+    settings: [REPORTING_SETTING_NAMES.agingBands],
     compute: async (ctx) => {
       const obligations = await ctx.db
         .selectFrom('reporting_obligations_v')
@@ -154,7 +160,9 @@ export class FinanceReports {
         ],
         rows,
         disclosures: [
-          `Aging bands at ${ctx.policy.agingBandDays.join(', ')} days past due (engineering placeholder; Finance decides, DEC-007).`,
+          ctx.policy.agingBandDays === null
+            ? 'No aging bands are configured (REPORTING_AGING_BANDS_DAYS, DEC-007): balances are unbanded totals per currency and obligation mode.'
+            : `Aging bands at ${ctx.policy.agingBandDays.join(', ')} days past due, the last open-ended (REPORTING_AGING_BANDS_DAYS, DEC-007).`,
           'Totals are per currency and never converted or combined (SPK-PAY-001).',
           'Contribution requests are not receipts and do not reduce a balance (SPK-PAY-004).',
         ],

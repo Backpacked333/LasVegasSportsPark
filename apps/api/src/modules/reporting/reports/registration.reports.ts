@@ -3,15 +3,18 @@ import type { ReportRow } from '@sportspark/contracts';
 import { addDays } from '../../scheduling';
 import { column, type ReportContext, type ReportDefinition } from '../engine/report-definition';
 import { ReportingActions } from '../reporting.actions';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import {
   ageBandLabel,
   localDays,
   metricValue,
+  operatingWeekday,
   ratio,
   timeBand,
   weekdayName,
-  toLocalWeekday,
 } from '../reporting.shared';
+
+const DAY_SETTINGS = [REPORTING_SETTING_NAMES.operatingDayStart] as const;
 
 const LIVE_NOTE =
   'Evaluated live from the owning module at the request instant; a past as-of instant cannot be reconstructed. The stored report run is the reproducible record.';
@@ -77,9 +80,16 @@ export class RegistrationReports {
     scope: 'facility',
     pointInTime: 'none',
     pointInTimeNote: LIVE_NOTE,
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
-      const days = localDays(facility.timezone, params.from, params.to, ctx.policy.maxPeriodDays);
+      const days = localDays(
+        facility.timezone,
+        params.from,
+        params.to,
+        ctx.policy.maxPeriodDays,
+        ctx.dayStart,
+      );
       const start = days[0]!.start;
       const end = days[days.length - 1]!.end;
       const offerings = await offeringsAt(ctx);
@@ -185,9 +195,16 @@ export class RegistrationReports {
     pointInTime: 'partial',
     pointInTimeNote:
       'Each stage is counted by the instant the record reached it (submission, decision, acquisition, commitment, release, expiry, confirmation), so later events do not change earlier figures; an application decided after the as-of instant is counted as awaiting its decision.',
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
-      const days = localDays(facility.timezone, params.from, params.to, ctx.policy.maxPeriodDays);
+      const days = localDays(
+        facility.timezone,
+        params.from,
+        params.to,
+        ctx.policy.maxPeriodDays,
+        ctx.dayStart,
+      );
       const start = days[0]!.start;
       const end = days[days.length - 1]!.end;
       const offerings = await offeringsAt(ctx);
@@ -579,11 +596,18 @@ export class RegistrationReports {
     pointInTime: 'partial',
     pointInTimeNote:
       'Each demand signal is counted by the instant it was recorded (submission, acquisition, joining, confirmation); later records do not change the figures.',
+    settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
       const method = params.forecastMethod ?? 'none';
       const periods = method === 'none' ? 0 : (params.forecastPeriods ?? 4);
-      const days = localDays(facility.timezone, params.from, params.to, ctx.policy.maxPeriodDays);
+      const days = localDays(
+        facility.timezone,
+        params.from,
+        params.to,
+        ctx.policy.maxPeriodDays,
+        ctx.dayStart,
+      );
       const length = days.length;
       const earliest = addDays(params.from, -length * periods);
       const span = localDays(
@@ -591,6 +615,7 @@ export class RegistrationReports {
         earliest,
         params.to,
         ctx.policy.maxPeriodDays * (periods + 1),
+        ctx.dayStart,
       );
       const spanStart = span[0]!.start;
       const end = days[days.length - 1]!.end;
@@ -636,7 +661,9 @@ export class RegistrationReports {
         const keyOf = (signal: string, offeringId: string, at: Date | undefined): string | null => {
           const o = offerings.get(offeringId);
           if (!o) return null;
-          const weekday = at ? weekdayName(toLocalWeekday(facility.timezone, at)) : 'unscheduled';
+          const weekday = at
+            ? weekdayName(operatingWeekday(facility.timezone, at, ctx.dayStart))
+            : 'unscheduled';
           const band = at
             ? timeBand(facility.timezone, at, ctx.policy.timeBandMinutes)
             : 'unscheduled';
