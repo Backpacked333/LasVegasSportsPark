@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { errors, newId, type Principal } from '@sportspark/contracts';
+import { DomainError, errors, newId, type Principal } from '@sportspark/contracts';
 import { json, type Db, type ExceptionSeverity, type ExceptionStatus } from '@sportspark/db';
 import { sql, type SqlBool } from 'kysely';
 import { AuditWriter } from '../audit/audit.writer';
@@ -119,13 +119,15 @@ export class OperationalExceptions {
       reason?: string;
       resolution?: Record<string, unknown>;
       correlationId?: string;
+      /** Set only by RecoveryMode.resume: the one path that may end a recovery (§5.8). */
+      recoveryResume?: boolean;
     } = {},
   ): Promise<void> {
     // §4.9, §4.7 invariant 9: lock the row so the revision and state checks run against the
     // current row, and a concurrent transition can never be audited without having happened.
     const current = await trx
       .selectFrom('operational_exceptions')
-      .select(['organization_id', 'facility_id', 'status', 'revision'])
+      .select(['organization_id', 'facility_id', 'status', 'revision', 'category'])
       .where('id', '=', id)
       .forUpdate()
       .executeTakeFirst();
@@ -147,6 +149,20 @@ export class OperationalExceptions {
     };
     if (!allowed[current.status].includes(to)) {
       throw errors.invalidTransition('OperationalException', current.status, to);
+    }
+    if (
+      current.category === 'reliability.recovery_mode' &&
+      (to === 'resolved' || to === 'closed') &&
+      (current.status === 'open' || current.status === 'acknowledged') &&
+      !options.recoveryResume
+    ) {
+      // §5.8, SPK-AT-028: recovery after a restore ends only when provider facts are reconciled
+      // and the recovery owner hands authority back, never by closing its Today card.
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        'Recovery after a restore ends through POST /v1/recovery/resume once provider facts are reconciled.',
+        { details: { code: 'recovery_resume_required' } },
+      );
     }
     const now = this.clock.now();
     const updated = await trx

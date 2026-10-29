@@ -145,6 +145,17 @@ in id order, so a lift racing another review's restriction never clears it
 - Invitation tokens default to 72 hours, claim tokens to 7 days; raw tokens are returned once to
   the issuer because no messaging provider is selected (§5.2).
 
+## Staff logins (SPK-AT-025, §4.14) — verified
+
+Recovering (`POST /accounts/{id}/relink`), provisioning (`POST /accounts` with a `personId`) or
+self-claiming (issue and accept) the login of a person who holds a staff membership in force or
+scheduled needs `identity.manage_staff_membership` (system administrator): support and front desk
+cannot take over a login that may assign staff roles. A relink never re-activates a disabled account
+(409 `INVALID_TRANSITION`) and its audit names the previous and the new provider subject.
+**Verified**: `__tests__/claims-and-accounts.spec.ts` "SPK-AT-025 / §4.14: …" and
+`apps/api/src/__tests__/journeys/spk-at-025.spec.ts`. Verification evidence for recovery, rate limits
+and a second approver for staff recovery are **Pending decision** (DEC-018, DEC-091).
+
 ## Known gaps
 
 - Self claims are bound only by handing the token over in person: an account with no person yet

@@ -31,9 +31,11 @@ import type {
   PersonMergesTable,
   RelationshipsTable,
   StaffMembershipsTable,
+  Db,
 } from '@sportspark/db';
 import { sql, type Selectable } from 'kysely';
 import type { ActionDefinition, AuthorizationService, RequestWithContext } from '../../kernel';
+import { IdentityActions } from './identity.actions';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records. */
 export const CorrelationId = createParamDecorator(
@@ -152,6 +154,68 @@ export async function staffAuthorityApplies(
     organizationId,
   });
   return decision.allowed;
+}
+
+/**
+ * §4.14, SPK-AT-025: whether a person holds a staff membership that is in force or scheduled to
+ * start (`effective_from` is deliberately not compared with now, so a future-dated assignment
+ * counts too).
+ */
+export async function holdsStaffMembership(
+  db: Db,
+  organizationId: string,
+  personId: string,
+  now: Date,
+): Promise<boolean> {
+  const row = await db
+    .selectFrom('staff_memberships')
+    .select('id')
+    .where('organization_id', '=', organizationId)
+    .where('person_id', '=', personId)
+    .where('status', '=', 'active')
+    .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', now)]))
+    .executeTakeFirst();
+  return row !== undefined;
+}
+
+/**
+ * §4.14 (least privilege, privileged staff), SPK-AT-025, SPK-IAM-002: taking control of the login
+ * of a person who holds a staff membership (provisioning an account linked to them, recovering
+ * theirs onto another provider identity, or issuing a self claim on them) needs the authority that
+ * assigns staff roles (`identity.manage_staff_membership`). Otherwise a role that cannot grant
+ * staff roles (support, front desk) could take over an account that can, and then grant itself
+ * more. Verification evidence, rate limits and a second approver for recovery stay pending
+ * (DEC-018 recovery, DEC-091 privileged multifactor authentication).
+ */
+export async function requireStaffLoginAuthority(
+  authorization: Pick<AuthorizationService, 'require'>,
+  db: Db,
+  principal: Principal,
+  organizationId: string,
+  personId: string | null | undefined,
+  now: Date,
+): Promise<void> {
+  if (!personId || !(await holdsStaffMembership(db, organizationId, personId, now))) return;
+  await authorization.require(principal, IdentityActions.manageStaffMembership, {
+    type: 'staff_membership',
+    organizationId,
+  });
+}
+
+/**
+ * SPK-AT-025, §4.14: a self claim on a person who holds a staff membership is honoured only when
+ * whoever issued it held a role that assigns staff roles (a membership may be added after a support
+ * or front-desk claim was issued).
+ */
+export function claimIssuerAssignsStaffRoles(issuedBy: unknown): boolean {
+  const roles = (issuedBy as { kind?: unknown; staffRoles?: unknown } | null)?.staffRoles;
+  if ((issuedBy as { kind?: unknown } | null)?.kind === 'system') return true;
+  return (
+    Array.isArray(roles) &&
+    roles.some((role) =>
+      (IdentityActions.manageStaffMembership.staffRoles as readonly unknown[]).includes(role),
+    )
+  );
 }
 
 export function normalizeContactValue(kind: 'email' | 'phone', value: string): string {

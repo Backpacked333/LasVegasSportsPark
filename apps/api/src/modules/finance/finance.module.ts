@@ -10,6 +10,7 @@ import type { EventPayload } from '@sportspark/contracts';
 import {
   APP_CONFIG,
   BackgroundWorkers,
+  RecoveryChecks,
   EventHandlerRegistry,
   Inbox,
   runWithTransaction,
@@ -63,6 +64,7 @@ import { PaymentsService } from './services/payments.service';
 import { QuotesService } from './services/quotes.service';
 import { ReconciliationService } from './services/reconciliation.service';
 import { RefundsService } from './services/refunds.service';
+import { financeRecoveryBlockers } from './services/finance-recovery.check';
 
 /**
  * RECORD_AUTHORITY_PORT (§5.6, §4.7 invariant 11): the migration module's authority guard, found
@@ -197,9 +199,13 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
     private readonly installments: InstallmentsService,
     private readonly webhooks: PaymentWebhooksService,
     private readonly worker: FinanceWorker,
+    private readonly recoveryChecks: RecoveryChecks,
   ) {}
 
   onModuleInit(): void {
+    // §5.8, SPK-AT-028: after a restore, normal operation resumes only once payment and refund
+    // facts are reconciled with the provider.
+    this.recoveryChecks.register('finance.provider_facts', financeRecoveryBlockers);
     // §4.1, §4.12: the provider-facing poll loop belongs to the worker process (worker.ts starts
     // every registered background worker); request-serving API processes never run it. Tests
     // drive `runOnce()` directly.

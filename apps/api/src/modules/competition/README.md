@@ -172,7 +172,12 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
 - `TEAM_ENTRY_QUERY_PORT` → `findTeamEntry`, `listSeasonEntries`, `entriesOfPerson(at)` (ids and
   readiness facts only).
 - `ROSTER_PORT` → `effectiveRoster(organizationId, teamEntryId, at)` (SPK-COMP-005: the roster as
-  it was at an instant).
+  it was at an instant) and `addRegisteredMember(trx, …)` (SPK-AT-002: enrollment's confirmation of
+  a paid `join_team` registration adds the active membership, source `registration` from migration
+  `0453`, in the caller's transaction after re-evaluating eligibility; idempotent; **Verified**
+  `apps/api/src/__tests__/journeys/spk-at-002.spec.ts`).
+- Closure impact contributor `competition.rostered_players` (SPK-SCHED-009, SPK-AT-009): rostered
+  players of committed teams, effective at the event start, are the preview's customers.
 - `FIXTURE_PORT` → `findFixture`, `listSeasonFixtures`, `fixturesOfEntry`, `recordOutcome`
   (results in part 2 move a fixture to played/forfeit/abandoned inside the caller's transaction).
 - `ELIGIBILITY_PORT` → `evaluatePlayer(organizationId, teamEntryId, personId, at, options)`:

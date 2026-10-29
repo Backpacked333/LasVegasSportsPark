@@ -947,6 +947,96 @@
               ]
             }
           },
+          "customers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "personId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "eventIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "via": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "commitment",
+                      "enrollment",
+                      "booking",
+                      "roster"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "personId",
+                "eventIds",
+                "via"
+              ]
+            }
+          },
+          "obligations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "eventIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "eventIds"
+              ]
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "notificationId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "eventId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "notificationId",
+                "eventId",
+                "kind",
+                "status"
+              ]
+            }
+          },
           "summary": {
             "type": "object",
             "properties": {
@@ -970,6 +1060,15 @@
               },
               "equipment": {
                 "type": "integer"
+              },
+              "customers": {
+                "type": "integer"
+              },
+              "obligations": {
+                "type": "integer"
+              },
+              "messages": {
+                "type": "integer"
               }
             },
             "required": [
@@ -979,7 +1078,10 @@
               "other",
               "teams",
               "people",
-              "equipment"
+              "equipment",
+              "customers",
+              "obligations",
+              "messages"
             ]
           }
         },
@@ -987,6 +1089,9 @@
           "interval",
           "affectedEvents",
           "sourceRecords",
+          "customers",
+          "obligations",
+          "messages",
           "summary"
         ]
       },
@@ -13495,7 +13600,8 @@
               "join_request",
               "captain",
               "staff",
-              "renewal"
+              "renewal",
+              "registration"
             ]
           },
           "removedAt": {
@@ -29675,6 +29781,96 @@
           "status",
           "version",
           "database"
+        ]
+      },
+      "RecoveryStatus": {
+        "type": "object",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "restoreReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enteredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "exceptionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecoveryBlocker"
+            }
+          }
+        },
+        "required": [
+          "active",
+          "restoreReference",
+          "enteredAt",
+          "exceptionId",
+          "blockers"
+        ]
+      },
+      "RecoveryBlocker": {
+        "type": "object",
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "check",
+          "code",
+          "message"
+        ]
+      },
+      "ResumeAfterRecoveryRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "ReportResponse": {
@@ -63024,6 +63220,107 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recovery": {
+      "get": {
+        "summary": "Recovery mode after a restore: whether it is active and what still blocks resuming (§5.8, SPK-AT-028)",
+        "tags": [
+          "Operations"
+        ],
+        "responses": {
+          "200": {
+            "description": "Recovery status for the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recovery/resume": {
+      "post": {
+        "summary": "Resume normal operation after a restore once provider facts are reconciled (general manager; §5.8, SPK-AT-028)",
+        "tags": [
+          "Operations"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeAfterRecoveryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Normal operation resumed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in recovery mode (INVALID_TRANSITION), or provider facts not reconciled yet (RESOURCE_CONFLICT, details.code recovery_reconciliation_incomplete, details.blockers)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

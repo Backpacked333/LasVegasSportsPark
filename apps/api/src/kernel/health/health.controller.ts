@@ -3,9 +3,12 @@ import type { Db } from '@sportspark/db';
 import type { Response } from 'express';
 import { sql } from 'kysely';
 import { Public } from '../auth/public.decorator';
+import { AnyClientVersion } from '../http/client-compatibility.guard';
 import type { AppConfig } from '../config';
 import { APP_CONFIG, DATABASE } from '../tokens';
 
+/** Liveness and readiness answer every client build (SPK-AT-027 step 2). */
+@AnyClientVersion()
 @Controller()
 export class HealthController {
   constructor(

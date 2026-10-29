@@ -52,6 +52,26 @@ export const ConfigSchema = z
     /** How often the worker deletes idempotency records past their expiry (§4.9, §4.14). */
     IDEMPOTENCY_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
     LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
+    /**
+     * Minimum supported app version per client (§4.13, SPK-AT-027), as a comma-separated list of
+     * `<app>-<platform>=<major.minor.patch>` (apps `mobile`, `staff`; platforms `ios`, `android`,
+     * `web`), for example `mobile-ios=1.3.0,mobile-android=1.3.0`. A request whose
+     * `X-Sportspark-Client` header names an older build gets 426 CLIENT_UPDATE_REQUIRED. The values
+     * are pending DEC-061 (mobile release definitions), so none is enforced by default.
+     */
+    CLIENT_MIN_VERSIONS: z
+      .string()
+      .default('')
+      .transform((value, ctx) => parseClientMinimums(value, ctx)),
+    /**
+     * Set when the database was restored from a backup after live transactions (§5.8, SPK-AT-028):
+     * a reference to the restore (ticket or backup id). At boot every organization enters recovery
+     * mode for that restore (a `reliability.recovery_mode` exception), consequential financial
+     * commands are refused and no new charge is started until provider facts are reconciled and a
+     * general manager resumes normal operation (`POST /v1/recovery/resume`). A restore already
+     * resumed is not re-entered when the process restarts with the same reference.
+     */
+    RECOVERY_RESTORE_REFERENCE: z.string().trim().min(1).max(200).optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {
@@ -89,6 +109,38 @@ export const ConfigSchema = z
   });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
+
+export const CLIENT_APPS = ['mobile', 'staff'] as const;
+export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
+/** `<app>-<platform>` → minimum supported version (DEC-061 pending; empty by default). */
+export type ClientMinimums = Readonly<Record<string, string>>;
+
+const VERSION = /^\d+\.\d+\.\d+$/;
+
+function parseClientMinimums(value: string, ctx: z.RefinementCtx): ClientMinimums {
+  const out: Record<string, string> = {};
+  for (const entry of value
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean)) {
+    const [client, version] = entry.split('=').map((p) => p.trim());
+    const [app, platform] = (client ?? '').split('-');
+    if (
+      !version ||
+      !VERSION.test(version) ||
+      !(CLIENT_APPS as readonly string[]).includes(app ?? '') ||
+      !(CLIENT_PLATFORMS as readonly string[]).includes(platform ?? '')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `CLIENT_MIN_VERSIONS entry "${entry}" must be <mobile|staff>-<ios|android|web>=<major.minor.patch>`,
+      });
+      continue;
+    }
+    out[`${app}-${platform}`] = version;
+  }
+  return out;
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = ConfigSchema.safeParse(env);

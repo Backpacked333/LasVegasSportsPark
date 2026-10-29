@@ -244,6 +244,21 @@ minutes; a payment challenge abandoned 60 minutes after submission is canceled a
 application (whether repeated partial use is allowed is pending, POL-010 / DEC-058); percentage
 taxes and fees rounded half up per line (DEC-007).
 
+## Journey fixes (review stage 2) — verified
+
+- SPK-AT-001, SPK-IAM-003, §4.10: the basket owner who may register but not pay a participant gets
+  403 `PARTICIPANT_AUTHORITY_REQUIRED` (`details { permission: 'pay', participantPersonIds }`) from
+  `POST /registration-quotes`, and the quote's payer whose pay authority lapsed gets it from
+  `POST /registration-checkouts`; an owner who named another payer gets `ACCESS_DENIED`; everyone else
+  still gets `NOT_FOUND`. `apps/api/src/__tests__/journeys/spk-at-001.spec.ts`.
+- SPK-AT-028, §5.8: money commands are `@RefusedDuringRecovery()` (503 `INTEGRATION_UNAVAILABLE`
+  `recovery_mode` while the organization recovers from a restore); payment and refund reconcile and
+  settlement reconciliation stay allowed; installment collection starts no new charge; the
+  `finance.provider_facts` recovery check blocks resuming until no payment or refund outcome is
+  unresolved and a processor settlement since the restore balances.
+  `apps/api/src/__tests__/journeys/spk-at-028.spec.ts`. A provider feed that recreates post-backup
+  facts is **Pending decision** (DEC-019).
+
 ## Known gaps
 
 - Disputes and chargebacks are not modelled: the fake provider reports none and the dispute flow

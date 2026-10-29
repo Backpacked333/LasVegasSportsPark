@@ -1,9 +1,14 @@
 import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry, TEAM_AUTHORITY_IMPL, lazyPort } from '../../kernel';
+import { EventHandlerRegistry, TEAM_AUTHORITY_IMPL, lazyPort, type Trx } from '../../kernel';
 import { IdentityModule } from '../identity';
-import { EventChanged, FIXTURE_OBLIGATION_IMPL, SchedulingModule } from '../scheduling';
+import {
+  ClosureImpactContributors,
+  EventChanged,
+  FIXTURE_OBLIGATION_IMPL,
+  SchedulingModule,
+} from '../scheduling';
 import {
   ASSIGNMENT_CHECK_IMPL,
   ASSIGNMENT_CHECK_PORT,
@@ -229,9 +234,37 @@ export class CompetitionModule implements OnModuleInit {
   constructor(
     private readonly registry: EventHandlerRegistry,
     private readonly fixtures: FixturesService,
+    private readonly roster: RosterService,
+    private readonly impactContributors: ClosureImpactContributors,
   ) {}
 
   onModuleInit(): void {
+    // SPK-SCHED-009, SPK-AT-009: a closure preview names the rostered players of the committed
+    // teams (the customers of a fixture), effective at the event's start.
+    this.impactContributors.register(
+      'competition.rostered_players',
+      async (db, organizationId, events) => {
+        const customers = [];
+        for (const event of events) {
+          for (const team of event.commitments.filter((c) => c.partyType === 'team')) {
+            const members = await this.roster.effectiveRoster(
+              organizationId,
+              team.partyId,
+              new Date(event.scheduledStart),
+              db as Trx,
+            );
+            for (const member of members) {
+              customers.push({
+                personId: member.personId,
+                eventIds: [event.eventId],
+                via: ['roster' as const],
+              });
+            }
+          }
+        }
+        return { customers };
+      },
+    );
     // The scheduling module owns time and space; a fixture keeps a copy of its event's instants and
     // follows moves and cancellations made directly in scheduling (idempotent under replay).
     this.registry.on<EventPayload<typeof EventChanged>>(

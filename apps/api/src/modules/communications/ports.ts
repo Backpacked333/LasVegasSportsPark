@@ -66,3 +66,23 @@ export const noTeamMembership: TeamMembershipPort = {
   isMember: async () => false,
   teamEntriesOf: async () => [],
 };
+
+/**
+ * Participants of the catalog sessions behind a scheduling event (SPK-AT-009, SPK-COMMS-002): a
+ * youth session event commits no person or team, yet its enrolled participants (their guardians)
+ * must hear that it was canceled or changed. Implemented by enrollment (SESSION_AUDIENCE_IMPL),
+ * resolved lazily so communications does not import it; without it nobody is added.
+ */
+export interface SessionAudiencePort {
+  participantsOfSchedulingEvent(
+    trx: Trx,
+    organizationId: string,
+    eventId: string,
+  ): Promise<string[]>;
+}
+export const SESSION_AUDIENCE_PORT = Symbol('SESSION_AUDIENCE_PORT');
+export const SESSION_AUDIENCE_IMPL = Symbol('SESSION_AUDIENCE_IMPL');
+
+export const noSessionAudience: SessionAudiencePort = {
+  participantsOfSchedulingEvent: async () => [],
+};

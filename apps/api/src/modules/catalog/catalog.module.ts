@@ -1,5 +1,8 @@
-import { Module } from '@nestjs/common';
+import { Module, type OnModuleInit } from '@nestjs/common';
+import type { EventPayload } from '@sportspark/contracts';
+import { EventHandlerRegistry } from '../../kernel';
 import { IdentityModule } from '../identity';
+import { EventChanged } from '../scheduling';
 import { OFFERING_LOOKUP_PORT, POLICY_PORT, PRICING_PORT } from './catalog.ports';
 import { DiscountsController } from './controllers/discounts.controller';
 import { EntitlementDefinitionsController } from './controllers/entitlement-definitions.controller';
@@ -21,7 +24,8 @@ import { SessionsService } from './services/sessions.service';
  * discount definitions, §4.4 Catalog + Policies, SPK-REG-002, SPK-REG-009, SPK-YOUTH-001/002).
  * Owns programs, offerings, sessions, entitlement definitions, policy versions, approvals,
  * acknowledgments, price rules, discount definitions and redemption counters. Depends on identity
- * for person lookups and guardian authority; consumes no domain events. See README.md.
+ * for person lookups and guardian authority. Consumes `scheduling.event_changed`: a canceled
+ * scheduling event cancels the catalog sessions linked to it (SPK-AT-009). See README.md.
  */
 @Module({
   imports: [IdentityModule],
@@ -61,4 +65,22 @@ import { SessionsService } from './services/sessions.service';
     PRICING_PORT,
   ],
 })
-export class CatalogModule {}
+export class CatalogModule implements OnModuleInit {
+  constructor(
+    private readonly registry: EventHandlerRegistry,
+    private readonly sessions: SessionsService,
+  ) {}
+
+  onModuleInit(): void {
+    // SPK-AT-009, SPK-SCHED-009: the catalog session follows the scheduling event that reserves
+    // its space (scheduling is the authority for the event, catalog for the session).
+    this.registry.on<EventPayload<typeof EventChanged>>(
+      EventChanged.type,
+      'catalog.follow_scheduling_event',
+      async (event, ctx) => {
+        await this.sessions.followSchedulingEvent(ctx.trx, event);
+      },
+      { failureOwner: 'program_manager' },
+    );
+  }
+}

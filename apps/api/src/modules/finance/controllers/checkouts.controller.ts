@@ -12,7 +12,13 @@ import {
   type Principal,
   type Quote,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RefusedDuringRecovery,
+  ZodBody,
+  ZodParams,
+} from '../../../kernel';
 import { CorrelationId, organizationOf } from '../finance.shared';
 import { CheckoutFinalizer } from '../services/checkout-finalizer.service';
 import { CheckoutService } from '../services/checkout.service';
@@ -21,6 +27,7 @@ import { QuotesService } from '../services/quotes.service';
 const IdParams = z.object({ id: z.uuid() });
 
 /** §4.8 `POST /v1/registration-quotes` (SPK-PAY-001/002/003). */
+@RefusedDuringRecovery()
 @Controller('registration-quotes')
 export class QuotesController {
   constructor(private readonly quotes: QuotesService) {}
@@ -45,6 +52,7 @@ export class QuotesController {
 }
 
 /** §4.8 `POST /v1/registration-checkouts` and the checkout's payment and recovery commands (§4.11). */
+@RefusedDuringRecovery()
 @Controller('registration-checkouts')
 export class CheckoutsController {
   constructor(
@@ -118,6 +126,7 @@ export class CheckoutsController {
   }
 }
 
+@RefusedDuringRecovery()
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly checkouts: CheckoutService) {}

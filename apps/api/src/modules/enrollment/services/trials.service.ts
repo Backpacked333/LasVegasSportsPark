@@ -277,6 +277,18 @@ export class TrialsService {
       if (!TRIAL_OUTCOMES[input.outcome].includes(row.status)) {
         throw errors.invalidTransition('TrialParticipation', row.status, input.outcome);
       }
+      if (
+        input.outcome !== 'canceled' &&
+        row.scheduled_for &&
+        now.getTime() < new Date(row.scheduled_for).getTime()
+      ) {
+        // SPK-YOUTH-003, SPK-ENTRY-003, SPK-AT-019: attendance (or its absence) is observed, not
+        // predicted; the trial history that conversion keeps must be a fact.
+        throw errors.validation('A trial outcome cannot be recorded before its session starts.', {
+          code: 'trial_not_started',
+          scheduledFor: new Date(row.scheduled_for).toISOString(),
+        });
+      }
       if (input.outcome === 'canceled' && row.session_booking_id) {
         const booking = await this.bookings.load(trx, organizationId, row.session_booking_id, true);
         if (booking && (booking.status === 'pending' || booking.status === 'confirmed')) {

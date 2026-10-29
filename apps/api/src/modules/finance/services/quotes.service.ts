@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   errors,
   newId,
   type Basket,
@@ -129,16 +130,48 @@ export class QuotesService {
     if (!basket) throw errors.protectedNotFound('basket');
     const payerPersonId = basket.payerPersonId ?? basket.ownerPersonId;
     const lines = quotableLines(basket);
-    await this.authorization.require(principal, FinanceActions.createQuote, {
+    // The basket owner already reads the basket and its participants (enrollment.read_basket), so
+    // a refusal is explained to them; anyone else learns nothing about it (§4.10).
+    const ownsBasket = !!principal.personId && principal.personId === basket.ownerPersonId;
+    const participants = [...new Set(lines.map((l) => l.participantPersonId))];
+    const target = {
       type: 'basket',
       id: basket.id,
       organizationId,
       // SPK-PAY-004/SPK-IAM-003: the payer holds pay over every participant (or is the adult participant).
-      subjectPersonIds: [...new Set(lines.map((l) => l.participantPersonId))],
-      protected: true,
-    });
+      subjectPersonIds: participants,
+    };
+    const decision = await this.authorization.decide(principal, FinanceActions.createQuote, target);
+    if (!decision.allowed) {
+      if (!ownsBasket) throw errors.protectedNotFound('basket');
+      if (lines.length === 0) {
+        throw errors.validation('The basket has no lines that can be quoted.', {
+          basketStatus: basket.status,
+        });
+      }
+      // SPK-AT-001, SPK-IAM-003, §4.10: register and pay are separate grants. An owner who may
+      // register a child but not pay for them is told which participants need pay authority (the
+      // permitted next action), not that their own basket does not exist.
+      const lacking: string[] = [];
+      for (const participant of participants) {
+        const one = await this.authorization.decide(principal, FinanceActions.createQuote, {
+          ...target,
+          subjectPersonIds: [participant],
+        });
+        if (!one.allowed) lacking.push(participant);
+      }
+      throw new DomainError(
+        'PARTICIPANT_AUTHORITY_REQUIRED',
+        'Paying for this basket needs pay authority over every participant (SPK-IAM-003).',
+        { details: { permission: 'pay', participantPersonIds: lacking } },
+      );
+    }
     if (!isStaffLike(principal) && principal.personId !== payerPersonId) {
-      // A quote is the payer's; another adult with authority over a shared child learns nothing (§4.10).
+      // A quote is the payer's; another adult with authority over a shared child learns nothing
+      // (§4.10). The owner, who named the payer, is told that only the payer may request it.
+      if (ownsBasket) {
+        throw errors.accessDenied('Only the payer named on the basket may request its quote.');
+      }
       throw errors.protectedNotFound('basket');
     }
     if (lines.length === 0) {

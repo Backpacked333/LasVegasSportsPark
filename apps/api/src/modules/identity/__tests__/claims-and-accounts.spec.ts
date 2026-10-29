@@ -1,4 +1,5 @@
 import { newId } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { idempotencyStoreContains } from '../../../testing/idempotency-store';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
@@ -456,6 +457,200 @@ describe('claims and accounts (SPK-IAM-002, SPK-AT-025)', () => {
       });
     expect(stale.status).toBe(409);
     expect(stale.body.code).toBe('STALE_REVISION');
+  });
+
+  /** A staff membership written directly, for a person who may have no account yet. */
+  const addMembership = async (
+    personId: string,
+    roles: string[],
+    effectiveFrom: Date = t.clock.now(),
+  ): Promise<void> => {
+    await t.db
+      .insertInto('staff_memberships')
+      .values({
+        id: newId(),
+        organization_id: t.organizationId,
+        person_id: personId,
+        roles: roles as never,
+        facility_ids: [],
+        effective_from: effectiveFrom,
+        effective_to: null,
+        ended_at: null,
+        ended_reason: null,
+        created_by: json({ kind: 'system' }),
+      })
+      .execute();
+  };
+  const relinkBody = (subject: string, expectedRevision = 1) => ({
+    issuer: t.config.AUTH_ISSUER,
+    subject,
+    reason: 'lost phone',
+    expectedRevision,
+  });
+
+  it('SPK-AT-025 / §4.14: support cannot recover a staff login onto another identity; a system administrator can', async () => {
+    const gm = await createStaffMemberFixture(t, {
+      roles: ['general_manager', 'system_administrator'],
+    });
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const supportHeader = await authHeaderForPerson(t, support.personId);
+    const before = await t.db
+      .selectFrom('accounts')
+      .selectAll()
+      .where('id', '=', gm.accountId)
+      .executeTakeFirstOrThrow();
+    const oldToken = await tokenForAccount(t, gm.accountId);
+
+    const attacker = `attacker-${newId()}`;
+    const refused = await t.http
+      .post(`/v1/accounts/${gm.accountId}/relink`)
+      .set(supportHeader)
+      .set('Idempotency-Key', key())
+      .send(relinkBody(attacker));
+    expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+    expect(refused.body.code).toBe('ACCESS_DENIED');
+    const after = await t.db
+      .selectFrom('accounts')
+      .selectAll()
+      .where('id', '=', gm.accountId)
+      .executeTakeFirstOrThrow();
+    expect(after).toEqual(before);
+    // the attacker identity resolves to nobody; the staff member keeps their own login
+    const attackerToken = await t.identityProvider.mint({ subject: attacker, sessionId: newId() });
+    expect(
+      (await t.http.get('/v1/me').set('Authorization', `Bearer ${attackerToken}`)).status,
+    ).toBe(401);
+    expect((await t.http.get('/v1/me').set('Authorization', `Bearer ${oldToken}`)).status).toBe(
+      200,
+    );
+
+    // a membership scheduled to start later protects the login too
+    const future = await createPersonFixture(t, { kind: 'adult' });
+    const futureAccount = await createAccountFixture(t, { personId: future });
+    await addMembership(
+      future,
+      ['finance_operator'],
+      new Date(t.clock.now().getTime() + 86_400_000),
+    );
+    const futureRefused = await t.http
+      .post(`/v1/accounts/${futureAccount.id}/relink`)
+      .set(supportHeader)
+      .set('Idempotency-Key', key())
+      .send(relinkBody(`attacker-${newId()}`));
+    expect(futureRefused.status).toBe(403);
+
+    // the authority that assigns staff roles may recover a staff login; the trail names both identities
+    const recovered = `recovered-${newId()}`;
+    const ok = await t.http
+      .post(`/v1/accounts/${gm.accountId}/relink`)
+      .set(await authHeaderForPerson(t, admin.personId))
+      .set('Idempotency-Key', key())
+      .send(relinkBody(recovered));
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['details'])
+      .where('target_id', '=', gm.accountId)
+      .where('action', '=', 'identity.manage_account')
+      .executeTakeFirstOrThrow();
+    expect(audit.details).toMatchObject({
+      operation: 'relink',
+      previousSubject: before.subject,
+      subject: recovered,
+    });
+  });
+
+  it('SPK-AT-025 / §4.14: support and front desk cannot provision or self-claim the login of a staff person', async () => {
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const desk = await createStaffMemberFixture(t, { roles: ['front_desk'] });
+    const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const sysadminPerson = await createPersonFixture(t, { kind: 'adult' });
+    await addMembership(sysadminPerson, ['system_administrator']);
+
+    const provisioned = await t.http
+      .post('/v1/accounts')
+      .set(await authHeaderForPerson(t, support.personId))
+      .set('Idempotency-Key', key())
+      .send({
+        issuer: t.config.AUTH_ISSUER,
+        subject: `attacker-${newId()}`,
+        personId: sysadminPerson,
+      });
+    expect(provisioned.status, JSON.stringify(provisioned.body)).toBe(403);
+    const claim = await t.http
+      .post(`/v1/people/${sysadminPerson}/claims`)
+      .set(await authHeaderForPerson(t, desk.personId))
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self' });
+    expect(claim.status, JSON.stringify(claim.body)).toBe(403);
+    expect(
+      await t.db
+        .selectFrom('accounts')
+        .select('id')
+        .where('person_id', '=', sysadminPerson)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('claims')
+        .select('id')
+        .where('subject_person_id', '=', sysadminPerson)
+        .execute(),
+    ).toEqual([]);
+    // a system administrator may provision it
+    const byAdmin = await t.http
+      .post('/v1/accounts')
+      .set(await authHeaderForPerson(t, admin.personId))
+      .set('Idempotency-Key', key())
+      .send({
+        issuer: t.config.AUTH_ISSUER,
+        subject: `staff-${newId()}`,
+        personId: sysadminPerson,
+      });
+    expect(byAdmin.status, JSON.stringify(byAdmin.body)).toBe(201);
+
+    // a self claim issued before the person became staff cannot be accepted afterwards
+    const walkIn = await createPersonFixture(t, { kind: 'adult' });
+    const issued = await t.http
+      .post(`/v1/people/${walkIn}/claims`)
+      .set(await authHeaderForPerson(t, desk.personId))
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self' });
+    expect(issued.status).toBe(201);
+    await addMembership(walkIn, ['general_manager']);
+    const claimant = await createAccountFixture(t, { personId: null });
+    const accepted = await t.http
+      .post('/v1/claims/accept')
+      .set(await authHeaderForAccount(t, claimant.id))
+      .set('Idempotency-Key', key())
+      .send({ token: issued.body.token });
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(403);
+    const stillUnlinked = await t.db
+      .selectFrom('accounts')
+      .select('person_id')
+      .where('id', '=', claimant.id)
+      .executeTakeFirstOrThrow();
+    expect(stillUnlinked.person_id).toBeNull();
+  });
+
+  it('SPK-AT-025: recovery does not re-activate a disabled account', async () => {
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const person = await createPersonFixture(t, { kind: 'adult' });
+    const disabled = await createAccountFixture(t, { personId: person, status: 'disabled' });
+    const res = await t.http
+      .post(`/v1/accounts/${disabled.id}/relink`)
+      .set(await authHeaderForPerson(t, support.personId))
+      .set('Idempotency-Key', key())
+      .send(relinkBody(`recovered-${newId()}`));
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.code).toBe('INVALID_TRANSITION');
+    const row = await t.db
+      .selectFrom('accounts')
+      .select(['status', 'subject', 'revision'])
+      .where('id', '=', disabled.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ status: 'disabled', subject: disabled.subject, revision: 1 });
   });
 
   it('SPK-IAM-002: provisioning accounts is restricted and enforces one active account per person', async () => {

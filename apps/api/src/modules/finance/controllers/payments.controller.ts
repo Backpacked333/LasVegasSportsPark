@@ -9,10 +9,12 @@ import {
   type Refund,
 } from '@sportspark/contracts';
 import {
+  AllowedDuringRecovery,
   CurrentPrincipal,
   Idempotent,
   Inbox,
   Public,
+  RefusedDuringRecovery,
   ZodBody,
   ZodParams,
   ZodValidationPipe,
@@ -28,6 +30,7 @@ const IdParams = z.object({ id: z.uuid() });
 const webhookPipe = new ZodValidationPipe(PaymentWebhookBody);
 
 /** Payment attempts, `POST /v1/payments/{id}/refunds` (SPK-PAY-008) and reconciliation (SPK-PAY-007). */
+@RefusedDuringRecovery()
 @Controller()
 export class PaymentsController {
   constructor(
@@ -54,6 +57,8 @@ export class PaymentsController {
     return this.refunds.request(principal, params.id, body, correlationId);
   }
 
+  // §5.8, SPK-AT-028: reconciling provider facts is how recovery ends.
+  @AllowedDuringRecovery()
   @Post('payments/:id/reconcile')
   @Idempotent()
   reconcilePayment(
@@ -72,6 +77,8 @@ export class PaymentsController {
     return this.refunds.get(principal, params.id);
   }
 
+  // §5.8, SPK-AT-028: reconciling provider facts is how recovery ends.
+  @AllowedDuringRecovery()
   @Post('refunds/:id/reconcile')
   @Idempotent()
   reconcileRefund(
