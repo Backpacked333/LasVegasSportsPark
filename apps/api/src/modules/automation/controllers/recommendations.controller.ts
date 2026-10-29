@@ -4,6 +4,7 @@ import {
   ApproveRecommendationBody,
   ListRecommendationsQuery,
   RejectRecommendationBody,
+  SettleRecommendationApplyBody,
   z,
   type ApplyRecommendationInput,
   type ApproveRecommendationInput,
@@ -11,8 +12,16 @@ import {
   type Principal,
   type Recommendation,
   type RejectRecommendationInput,
+  type SettleRecommendationApplyInput,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  NoRecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { RecommendationsService } from '../services/recommendations.service';
 import { AutomationEnabledGuard } from './automation-enabled.guard';
 import { CorrelationId } from './request-context.decorators';
@@ -80,5 +89,22 @@ export class RecommendationsController {
     @CorrelationId() correlationId: string,
   ): Promise<Recommendation> {
     return this.recommendations.apply(principal, params.id, body, correlationId);
+  }
+
+  /**
+   * AUT-03 (§4.11, §4.12): record the reconciled outcome of an apply whose outcome was unknown.
+   * Never gated by the organization's capability switch; never runs the command again.
+   */
+  @Post(':id/settle-apply')
+  @HttpCode(200)
+  @Idempotent()
+  @NoRecordAuthority('Records the reconciled outcome of an apply already run')
+  settleApply(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: IdParams,
+    @ZodBody(SettleRecommendationApplyBody) body: SettleRecommendationApplyInput,
+    @CorrelationId() correlationId: string,
+  ): Promise<Recommendation> {
+    return this.recommendations.settleApply(principal, params.id, body, correlationId);
   }
 }

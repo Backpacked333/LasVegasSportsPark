@@ -25,6 +25,17 @@ interface Script {
 export const FAKE_ASSISTANT_PROVIDER_NAME = 'fake-assistant';
 
 /**
+ * The §5.2 scenarios the fake reproduces deterministically (AUT-01, integration register):
+ * `success` (scripted tool calls and answers), `failure` (`{ type: 'fail', mode: 'failed' }`) and
+ * `timeout_unknown` (`mode: 'timeout'`; a language model has no side effects, so an unknown
+ * outcome is recorded as a failed request the person may ask again). `duplicate` is not listed:
+ * the provider has no callback or webhook to deliver twice and the module never re-sends a turn;
+ * a replayed request is answered from its idempotency record without a provider call
+ * (`assistant.spec.ts`).
+ */
+export const FAKE_ASSISTANT_SCENARIOS = ['success', 'failure', 'timeout_unknown'] as const;
+
+/**
  * Deterministic stand-in for a language-model provider (no provider is selected, §5.2). Tests
  * script its turns per prompt: tool calls, an answer, a failure or a timeout. It behaves like a
  * model that can be talked into anything — a script may "obey" an instruction hidden in an

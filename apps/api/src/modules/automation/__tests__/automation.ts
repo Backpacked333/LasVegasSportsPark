@@ -1,8 +1,8 @@
-import { newId, type StaffRole } from '@sportspark/contracts';
+import { newId, type CapabilityId, type StaffRole } from '@sportspark/contracts';
 import { pgErrorCode, seedOrganization } from '@sportspark/db';
 import { expect } from 'vitest';
 import { OutboxDispatcher } from '../../../kernel';
-import { createTestApp, type TestApp } from '../../../testing';
+import { DEFAULT_TEST_CAPABILITIES, createTestApp, type TestApp } from '../../../testing';
 import {
   authHeaderForPerson,
   createAccountFixture,
@@ -21,19 +21,33 @@ export const CLOCK_START = '2027-01-16T20:00:00.000Z';
 
 export const key = (): string => `k-${newId()}`;
 
+/**
+ * AUT-02: the seeded organization of an automation test uses the assistant (capability
+ * `assistant`, DEC-016); tests of the switch itself start from the default set.
+ */
+export const ASSISTANT_CAPABILITIES: readonly CapabilityId[] = [
+  ...DEFAULT_TEST_CAPABILITIES,
+  'assistant',
+];
+
 export interface AutomationTestApp {
   t: TestApp;
   fake: FakeAssistantProvider;
 }
 
 export async function automationTestApp(
-  options: { clockStart?: string; settings?: Partial<AutomationSettings> } = {},
+  options: {
+    clockStart?: string;
+    settings?: Partial<AutomationSettings>;
+    capabilities?: readonly CapabilityId[];
+  } = {},
 ): Promise<AutomationTestApp> {
   const t = await createTestApp({
     imports: [AutomationModule],
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
     configure: enableAutomation(options.settings),
+    capabilities: options.capabilities ?? ASSISTANT_CAPABILITIES,
   });
   return { t, fake: fakeAssistant(t.app) };
 }

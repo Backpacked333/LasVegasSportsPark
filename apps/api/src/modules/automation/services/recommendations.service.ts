@@ -20,6 +20,7 @@ import {
   type RecommendationCommand,
   type RecommendationKindValue,
   type RejectRecommendationInput,
+  type SettleRecommendationApplyInput,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import { sql, type Expression, type SqlBool } from 'kysely';
@@ -27,6 +28,7 @@ import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  CapabilityService,
   DATABASE,
   OperationalExceptions,
   OperationsService,
@@ -57,6 +59,8 @@ import {
   organizationOf,
   requirePerson,
   toRecommendation,
+  unknownApplyOf,
+  type ApplySettlementRow,
   type AssistantRequestRow,
   type EvidenceAging,
   type Reader,
@@ -92,12 +96,22 @@ const COMMAND_ACTIONS: ReadonlyArray<RecommendationCommand['actionId']> = [
 
 const Cursor = z.object({ at: z.string(), id: z.uuid() });
 
+/** The operational exception an unknown apply raises (resolved by its settlement, AUT-03). */
+export const APPLY_OUTCOME_UNKNOWN_CATEGORY = 'automation.apply_outcome_unknown';
+
 /** How an apply that did not succeed ended, and what the owning module left behind. */
 interface ApplyFailureFacts {
   error: unknown;
   outcome: 'denied' | 'failed' | 'unknown';
   record: { type: string; id: string } | null;
   carried: Readonly<Record<string, unknown>> | null;
+}
+
+/** A `{ type, id }` record reference from stored apply details, if well formed. */
+function recordOf(value: unknown): { type: string; id: string } | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as { type?: unknown; id?: unknown };
+  return typeof v.type === 'string' && typeof v.id === 'string' ? { type: v.type, id: v.id } : null;
 }
 
 /** What the last failed apply reported for a retry to continue from (`ApplyFailure.carried`). */
@@ -132,6 +146,7 @@ export class RecommendationsService {
     private readonly outbox: Outbox,
     private readonly operations: OperationsService,
     private readonly exceptions: OperationalExceptions,
+    private readonly capabilities: CapabilityService,
     private readonly registry: ToolRegistry,
     private readonly runner: ToolRunner,
   ) {}
@@ -139,6 +154,40 @@ export class RecommendationsService {
   /** SPK-AUTO-002: stored evidence is shown with its freshness at the instant it is read. */
   private aging(): EvidenceAging {
     return { now: this.clock.now(), maxAgeMinutes: this.settings.evidenceMaxAgeMinutes };
+  }
+
+  /**
+   * Recommendations of one organization as the API shows them, with the settlements of their
+   * unknown applies (AUT-03), read in one query.
+   */
+  async present(reader: Reader, rows: readonly RecommendationRow[]): Promise<Recommendation[]> {
+    const first = rows[0];
+    if (!first) return [];
+    const settlements: ApplySettlementRow[] = await reader
+      .selectFrom('recommendation_apply_settlements')
+      .selectAll()
+      .where('organization_id', '=', first.organization_id)
+      .where(
+        'recommendation_id',
+        'in',
+        rows.map((r) => r.id),
+      )
+      .orderBy('settled_at')
+      .orderBy('id')
+      .execute();
+    const aging = this.aging();
+    return rows.map((row) =>
+      toRecommendation(
+        row,
+        aging,
+        settlements.filter((s) => s.recommendation_id === row.id),
+      ),
+    );
+  }
+
+  private async presentOne(reader: Reader, row: RecommendationRow): Promise<Recommendation> {
+    const [one] = await this.present(reader, [row]);
+    return one as Recommendation;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -254,7 +303,7 @@ export class RecommendationsService {
     if (!row || !(await this.visibility(principal, row))) {
       throw errors.protectedNotFound('recommendation');
     }
-    return toRecommendation(row, this.aging());
+    return this.presentOne(this.db, row);
   }
 
   /** The viewer's own recommendations and those whose command they may run on its target. */
@@ -266,7 +315,7 @@ export class RecommendationsService {
     );
     const personId = principal.personId;
     if (!personId && reviewable.length === 0) return { items: [], nextCursor: null };
-    const items: Recommendation[] = [];
+    const items: RecommendationRow[] = [];
     let cursor = decodeCursor(query.cursor, Cursor);
     let last: RecommendationRow | undefined;
     let exhausted = false;
@@ -294,12 +343,11 @@ export class RecommendationsService {
       }
       const rows = await q.execute();
       exhausted = rows.length <= query.limit;
-      const aging = this.aging();
       for (const row of rows) {
         last = row;
         cursor = { at: new Date(row.proposed_at).toISOString(), id: row.id };
         if (await this.visibility(principal, row)) {
-          items.push(toRecommendation(row, aging));
+          items.push(row);
           if (items.length > query.limit) break;
         }
       }
@@ -308,10 +356,10 @@ export class RecommendationsService {
     const page = items.slice(0, query.limit);
     const tail = page.at(-1);
     return {
-      items: page,
+      items: await this.present(this.db, page),
       nextCursor:
         hasMore && tail
-          ? encodeCursor({ at: tail.proposedAt, id: tail.id })
+          ? encodeCursor({ at: new Date(tail.proposed_at).toISOString(), id: tail.id })
           : !exhausted && last
             ? encodeCursor({ at: new Date(last.proposed_at).toISOString(), id: last.id })
             : null,
@@ -352,6 +400,9 @@ export class RecommendationsService {
     const organizationId = person.organizationId;
     const outcome = await this.uow.run(async ({ trx }) => {
       const row = await this.loadVisibleForUpdate(trx, principal, organizationId, id, 'review');
+      // AUT-02 (DEC-016): approving commits the organization to a change the assistant proposed;
+      // a rejection is never gated (K-12 capability rule).
+      if (event === 'approve') await this.capabilities.require(organizationId, 'assistant', trx);
       assertExpectedRevision(body.expectedRevision, row.revision);
       const now = this.clock.now();
       if (this.isDue(row, now)) {
@@ -413,7 +464,7 @@ export class RecommendationsService {
       return { expired: false as const, row: result };
     });
     if (outcome.expired) throw errors.invalidTransition('Recommendation', 'expired', event);
-    return toRecommendation(outcome.row, this.aging());
+    return this.presentOne(this.db, outcome.row);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -434,6 +485,8 @@ export class RecommendationsService {
     // 1. Claim the approved recommendation (one apply at a time, §4.7 invariant 5).
     const claim = await this.uow.run(async ({ trx }) => {
       const row = await this.loadVisibleForUpdate(trx, principal, organizationId, id, 'apply');
+      // AUT-02 (DEC-016): applying runs a change the assistant proposed, a new commitment.
+      await this.capabilities.require(organizationId, 'assistant', trx);
       const command = commandOf(row);
       if (!command) {
         throw new DomainError(
@@ -550,7 +603,7 @@ export class RecommendationsService {
         applied,
         ctx,
       );
-      return toRecommendation(row, this.aging());
+      return this.presentOne(this.db, row);
     }
     const f = failure as NonNullable<typeof failure>;
     await this.completeFailed(principal, claim.row, command, operationId, f, ctx);
@@ -745,7 +798,7 @@ export class RecommendationsService {
         await this.exceptions.raise(trx, {
           organizationId,
           facilityId: row.facility_id,
-          category: 'automation.apply_outcome_unknown',
+          category: APPLY_OUTCOME_UNKNOWN_CATEGORY,
           severity: 'high',
           title: 'An applied recommendation has no known outcome',
           affectedType: 'recommendation',
@@ -769,6 +822,289 @@ export class RecommendationsService {
         operationId,
       });
     });
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Settlement of an unknown apply (AUT-03; §4.11 "unknown kept explicit until reconciled")
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * POST /v1/recommendations/{id}/settle-apply (`automation.settle_apply`: system administrator,
+   * general manager). Only an apply whose outcome the owning module did not report (claim held,
+   * operation `recovery_required`) is settled, once, from the owning module's records:
+   * `applied` → the recommendation becomes applied by the approving reviewer who ran it, the
+   * operation succeeds; `not_applied` → the claim is released (the recommendation may be applied
+   * again or expire), the operation fails. Either way the settlement is recorded append-only with
+   * its evidence, the `automation.apply_outcome_unknown` exception is resolved, and the outcome is
+   * audited and announced. Never gated by the capability switch (a reconciliation ends what was
+   * already done) and never re-runs the command.
+   */
+  async settleApply(
+    principal: Principal,
+    id: string,
+    body: SettleRecommendationApplyInput,
+    correlationId: string | null,
+  ): Promise<Recommendation> {
+    assertEnabled(this.settings);
+    const person = requirePerson(principal);
+    const organizationId = person.organizationId;
+    const row = await this.uow.run(async ({ trx }) => {
+      const row = await this.load(trx, organizationId, id, true);
+      if (!row) throw errors.protectedNotFound('recommendation');
+      const command = commandOf(row);
+      const target = {
+        type: 'recommendation',
+        id,
+        organizationId,
+        facilityId: command?.target.facilityId ?? row.facility_id,
+      };
+      const decision = await this.authorization.decide(
+        principal,
+        AutomationActions.settleApply,
+        target,
+      );
+      if (!decision.allowed) {
+        // §4.10: someone who cannot see the recommendation does not learn that it exists.
+        const visible = (await this.visibility(principal, row)) !== null;
+        await this.authorization.require(principal, AutomationActions.settleApply, {
+          ...target,
+          protected: !visible,
+        });
+      }
+      assertExpectedRevision(body.expectedRevision, row.revision);
+      const unknown = unknownApplyOf(row);
+      if (!command || !unknown) {
+        if (command && row.status === 'approved' && row.apply_operation_id) {
+          throw errors.resourceConflict(
+            'This recommendation is being applied; its outcome is not reported as unknown.',
+            { code: 'APPLY_IN_PROGRESS', operationId: row.apply_operation_id },
+          );
+        }
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          'Only an apply whose outcome is unknown can be settled.',
+          {
+            details: {
+              machine: 'Recommendation',
+              from: row.status,
+              event: 'settle_apply',
+              code: 'APPLY_OUTCOME_NOT_UNKNOWN',
+            },
+          },
+        );
+      }
+      const operationId = unknown.operationId;
+      const now = this.clock.now();
+      const settlementId = newId();
+      const applied = body.outcome === 'applied';
+      const record = recordOf(unknown.details['record']);
+      const auditId = await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: AutomationActions.settleApply.id,
+        targetType: 'recommendation',
+        targetId: id,
+        beforeRevision: row.revision,
+        afterRevision: row.revision + 1,
+        reason: body.reason,
+        correlationId,
+        operationId,
+        details: {
+          settlementId,
+          outcome: body.outcome,
+          commandActionId: command.actionId,
+          applyOperationId: operationId,
+          record,
+          policyReferences: body.policyReferences ?? [],
+        },
+      });
+      // The fact first: the database accepts it only for the claim whose outcome is unknown, and
+      // accepts the recommendation's change below only with it (migration 1401).
+      await trx
+        .insertInto('recommendation_apply_settlements')
+        .values({
+          id: settlementId,
+          organization_id: organizationId,
+          recommendation_id: id,
+          apply_operation_id: operationId,
+          outcome: body.outcome,
+          evidence: body.evidence,
+          reason: body.reason,
+          policy_references: json(body.policyReferences ?? []),
+          settled_by: json(snapshotActor(principal)),
+          settled_by_account_id: person.accountId,
+          settled_by_person_id: person.personId,
+          settled_at: now,
+          audit_record_id: auditId,
+          correlation_id: correlationId,
+        })
+        .execute();
+      let updated: RecommendationRow;
+      if (applied) {
+        // SPK-AUTO-003: applied by the approving reviewer whose principal ran the command (the
+        // apply's tool log names it); the settler is recorded on the settlement.
+        const ran = await this.applyPrincipalOf(trx, row, operationId);
+        updated = await trx
+          .updateTable('recommendations')
+          .set({
+            status: RecommendationMachine.next(row.status, 'apply'),
+            applied_by: json(ran.snapshot),
+            applied_by_account_id: ran.accountId,
+            applied_by_person_id: ran.personId,
+            applied_at: now,
+            applied_audit_record_id: auditId,
+            applied_command_operation_id: null,
+            applied_record_type: record?.type ?? null,
+            applied_record_id: record?.id ?? null,
+            last_apply_error: null,
+            revision: row.revision + 1,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', id)
+          .where('revision', '=', row.revision)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+      } else {
+        const carried = carriedOf(row);
+        updated = await trx
+          .updateTable('recommendations')
+          .set({
+            apply_operation_id: null,
+            apply_started_at: null,
+            last_apply_error: json({
+              code: 'APPLY_SETTLED_NOT_APPLIED',
+              message:
+                'Reconciled: the command did not take effect. The recommendation may be applied again.',
+              details: {
+                operationId,
+                outcome: 'not_applied',
+                settlementId,
+                commandErrorCode: unknown.details['commandErrorCode'] ?? null,
+                ...(record ? { record } : {}),
+                ...(carried ? { carried } : {}),
+              },
+            }),
+            revision: row.revision + 1,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', id)
+          .where('revision', '=', row.revision)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        // The expiry timer fired while the claim was held and did nothing: re-arm it, so a
+        // released proposal past its expiry expires now and a current one at its instant.
+        await this.outbox.enqueue(trx, RecommendationExpiryDue, {
+          organizationId,
+          aggregateType: 'recommendation',
+          aggregateId: id,
+          payload: { recommendationId: id },
+          correlationId,
+          operationId,
+          availableAt: new Date(Math.max(now.getTime(), new Date(row.expires_at).getTime())),
+        });
+      }
+      await this.operations.transition(
+        trx,
+        operationId,
+        applied ? 'succeeded' : 'failed',
+        applied
+          ? {
+              result: {
+                recommendationId: id,
+                commandActionId: command.actionId,
+                settlementId,
+                outcome: 'applied',
+                record,
+              },
+            }
+          : {
+              error: {
+                code: 'APPLY_SETTLED_NOT_APPLIED',
+                message: 'Reconciled: the command did not take effect.',
+                details: { recommendationId: id, settlementId },
+              },
+            },
+      );
+      const open = await this.exceptions.list(
+        organizationId,
+        {
+          category: APPLY_OUTCOME_UNKNOWN_CATEGORY,
+          affectedType: 'recommendation',
+          affectedId: id,
+          statuses: ['open', 'acknowledged'],
+        },
+        trx,
+      );
+      for (const exception of open.items) {
+        await this.exceptions.transition(trx, principal, exception.id, 'resolved', {
+          reason: body.reason,
+          resolution: { settlementId, outcome: body.outcome, recommendationId: id },
+          correlationId: correlationId ?? undefined,
+        });
+      }
+      if (applied) {
+        await this.outbox.enqueue(trx, RecommendationApplied, {
+          organizationId,
+          aggregateType: 'recommendation',
+          aggregateId: id,
+          payload: {
+            recommendationId: id,
+            commandActionId: command.actionId,
+            commandOperationId: null,
+            record,
+            settlementId,
+          },
+          correlationId,
+          operationId,
+        });
+      } else {
+        await this.outbox.enqueue(trx, RecommendationApplyFailed, {
+          organizationId,
+          aggregateType: 'recommendation',
+          aggregateId: id,
+          payload: {
+            recommendationId: id,
+            commandActionId: command.actionId,
+            errorCode: 'APPLY_SETTLED_NOT_APPLIED',
+            outcome: 'failed',
+            settlementId,
+          },
+          correlationId,
+          operationId,
+        });
+      }
+      return updated;
+    });
+    return this.presentOne(this.db, row);
+  }
+
+  /** The principal an apply ran under: its apply-phase tool log entry, else the approving reviewer. */
+  private async applyPrincipalOf(
+    trx: Trx,
+    row: RecommendationRow,
+    operationId: string,
+  ): Promise<{ snapshot: Record<string, unknown>; accountId: string; personId: string | null }> {
+    const invocation = await trx
+      .selectFrom('tool_invocations')
+      .select(['principal', 'principal_account_id', 'principal_person_id'])
+      .where('organization_id', '=', row.organization_id)
+      .where('recommendation_id', '=', row.id)
+      .where('phase', '=', 'apply')
+      .where('operation_id', '=', operationId)
+      .orderBy('sequence', 'desc')
+      .executeTakeFirst();
+    if (invocation && invocation.principal_account_id === row.reviewed_by_account_id) {
+      return {
+        snapshot: invocation.principal as Record<string, unknown>,
+        accountId: invocation.principal_account_id,
+        personId: invocation.principal_person_id,
+      };
+    }
+    return {
+      snapshot: (row.reviewed_by ?? {}) as Record<string, unknown>,
+      accountId: row.reviewed_by_account_id as string,
+      personId: row.reviewed_by_person_id,
+    };
   }
 
   // -------------------------------------------------------------------------------------------

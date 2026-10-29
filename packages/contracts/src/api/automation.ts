@@ -9,7 +9,10 @@ import { ActorSnapshotSchema } from './facilities';
  * Automation API contract (specification §3.21 SPK-AUTO-001..005, §4.2 "Automation: reviewable
  * recommendations", SPK-AT-026). The assistant is optional (feature flag AUTOMATION_ENABLED,
  * default off): while it is off every endpoint answers INTEGRATION_UNAVAILABLE and every other
- * module keeps working (SPK-AUTO-005). The assistant acts only with the caller's own principal,
+ * module keeps working (SPK-AUTO-005). Per organization the capability switch `assistant`
+ * (DEC-016, default off) decides whether new requests, approvals and applies are accepted
+ * (ACCESS_DENIED `CAPABILITY_DISABLED` otherwise); reads, rejections and settlements never are
+ * gated (AUT-02). The assistant acts only with the caller's own principal,
  * through the owning modules' services (SPK-AUTO-004); imported text, attachments and messages are
  * data, never authority. Answers name their supporting records with freshness and keep missing
  * evidence visible (SPK-AUTO-002). Consequential changes are recommendations a person approves and
@@ -226,6 +229,29 @@ export const RecommendationCommandSchema = z
   .openapi('RecommendationCommand');
 export type RecommendationCommand = z.infer<typeof RecommendationCommandSchema>;
 
+/** AUT-03 (§4.11): the reconciled outcome a person recorded for an apply with an unknown outcome. */
+export const ApplySettlementOutcomeSchema = z
+  .enum(['applied', 'not_applied'])
+  .openapi('ApplySettlementOutcome');
+export type ApplySettlementOutcomeValue = z.infer<typeof ApplySettlementOutcomeSchema>;
+
+export const RecommendationApplySettlementSchema = z
+  .object({
+    id: z.uuid(),
+    /** The apply (its coordinating operation) whose outcome was unknown. */
+    applyOperationId: z.uuid(),
+    outcome: ApplySettlementOutcomeSchema,
+    /** What in the owning module's records shows the outcome (a refund state, a published version). */
+    evidence: z.string(),
+    reason: z.string(),
+    policyReferences: z.array(z.string()),
+    settledBy: ActorSnapshotSchema,
+    settledAt: Instant,
+    auditRecordId: z.uuid(),
+  })
+  .openapi('RecommendationApplySettlement');
+export type RecommendationApplySettlement = z.infer<typeof RecommendationApplySettlementSchema>;
+
 export const RecommendationSchema = z
   .object({
     id: z.uuid(),
@@ -266,6 +292,8 @@ export const RecommendationSchema = z
       lastError: z
         .object({ code: z.string(), message: z.string(), details: z.unknown().optional() })
         .nullable(),
+      /** Reconciled outcomes of applies whose outcome was unknown, oldest first (AUT-03). */
+      settlements: z.array(RecommendationApplySettlementSchema),
     }),
     expiredAt: Instant.nullable(),
     revision: Revision,
@@ -322,6 +350,23 @@ export const ApplyRecommendationBody = withCommandMeta({})
   .openapi('ApplyRecommendationRequest');
 export type ApplyRecommendationInput = z.infer<typeof ApplyRecommendationBody>;
 
+/**
+ * AUT-03 (§4.11, §4.12): record the reconciled outcome of an apply whose outcome was unknown (its
+ * operation `recovery_required`), from the owning module's records. `applied`: the recommendation
+ * becomes applied (by the approving reviewer who ran it); `not_applied`: its claim is released so
+ * it may be applied again or expire.
+ */
+export const SettleRecommendationApplyBody = withCommandMeta({})
+  .extend({
+    expectedRevision: Revision,
+    outcome: ApplySettlementOutcomeSchema,
+    evidence: Text(2000),
+    reason: Reason,
+  })
+  .strict()
+  .openapi('SettleRecommendationApplyRequest');
+export type SettleRecommendationApplyInput = z.infer<typeof SettleRecommendationApplyBody>;
+
 export const ListRecommendationsQuery = PageRequestSchema.extend({
   status: RecommendationStatusSchema.optional(),
   kind: RecommendationKindSchema.optional(),
@@ -369,7 +414,9 @@ function command(
     responses: {
       [status]: ok('Command outcome', response),
       400: err('Validation failed'),
-      403: err('Access denied (raised by the owning module when applying)'),
+      403: err(
+        'Access denied (raised by the owning module when applying; CAPABILITY_DISABLED while the organization has not enabled the assistant)',
+      ),
       404: err('Not found or not visible'),
       409: err('Conflict (STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)'),
       503: unavailable,
@@ -443,6 +490,13 @@ command(
   '/recommendations/{id}/apply',
   'Apply an approved recommendation through the owning module’s command with the reviewer’s principal (SPK-AUTO-003, SPK-AUTO-004)',
   ApplyRecommendationBody,
+  RecommendationSchema,
+  200,
+);
+command(
+  '/recommendations/{id}/settle-apply',
+  'Record the reconciled outcome of an apply whose outcome was unknown, with its evidence (AUT-03, §4.11; system administrator or general manager; never gated by the capability)',
+  SettleRecommendationApplyBody,
   RecommendationSchema,
   200,
 );
