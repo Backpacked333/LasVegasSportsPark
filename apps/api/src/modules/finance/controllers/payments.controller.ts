@@ -1,10 +1,14 @@
 import { Body, Controller, Get, Headers, HttpCode, Param, Post } from '@nestjs/common';
 import {
   CreateRefundBody,
+  ListPaymentsQuery,
+  ListRefundsQuery,
   PaymentWebhookBody,
   errors,
   z,
+  type Page,
   type PaymentAttempt,
+  type PaymentDetail,
   type Principal,
   type Refund,
 } from '@sportspark/contracts';
@@ -17,12 +21,14 @@ import {
   RefusedDuringRecovery,
   ZodBody,
   ZodParams,
+  ZodQuery,
   ZodValidationPipe,
 } from '../../../kernel';
 import { CorrelationId } from '../finance.shared';
 import { Inject } from '@nestjs/common';
 import { PAYMENT_PROVIDER_PORT, type PaymentProviderPort } from '../finance.ports';
 import { FAKE_PAYMENTS_SIGNATURE_HEADER } from '../providers/fake-payment.provider';
+import { MoneyReadsService } from '../services/money-reads.service';
 import { PaymentsService } from '../services/payments.service';
 import { RefundsService } from '../services/refunds.service';
 
@@ -36,14 +42,33 @@ export class PaymentsController {
   constructor(
     private readonly payments: PaymentsService,
     private readonly refunds: RefundsService,
+    private readonly reads: MoneyReadsService,
   ) {}
+
+  /** FIN-02 (SPK-PAY-007, SCR-S-36): finance readers list attempts by state and target. */
+  @Get('payments')
+  list(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListPaymentsQuery) query: z.infer<typeof ListPaymentsQuery>,
+  ): Promise<Page<PaymentAttempt>> {
+    return this.reads.listPayments(principal, query);
+  }
 
   @Get('payments/:id')
   get(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
-  ): Promise<PaymentAttempt> {
+  ): Promise<PaymentDetail> {
     return this.payments.get(principal, params.id);
+  }
+
+  /** FIN-02 (SPK-PAY-008, SCR-S-37): finance readers list refunds by payment and state. */
+  @Get('refunds')
+  listRefunds(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListRefundsQuery) query: z.infer<typeof ListRefundsQuery>,
+  ): Promise<Page<Refund>> {
+    return this.reads.listRefunds(principal, query);
   }
 
   @Post('payments/:id/refunds')

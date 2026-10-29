@@ -8,16 +8,24 @@ import {
   type ReportResponse,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  UnitOfWork,
   type Clock,
+  type Trx,
   listFacilityScope,
 } from '../../../kernel';
 import type { FacilityRef, ReportContext, ReportDefinition } from '../engine/report-definition';
 import { metricsForReport } from '../reporting.metrics';
-import { REPORTING_POLICY, type ReportingPolicy } from '../reporting.policy';
+import {
+  dayStartOf,
+  REPORTING_POLICY,
+  settingUse,
+  type ReportingPolicy,
+} from '../reporting.policy';
 import { iso, organizationOf, toMetricDefinition } from '../reporting.shared';
 import { EconomicsReport } from '../reports/economics.report';
 import { FinanceReports } from '../reports/finance.reports';
@@ -42,13 +50,17 @@ export interface Evaluation {
  * through `evaluate`: validate the parameters, resolve the facility inside the principal's
  * organization (§4.8: organization scope never comes from the request), authorize the report's
  * view action against the real scope, fix the as-of instant (never in the future; live-only
- * reports refuse a past instant), compute, and wrap the result with the metric definitions and
- * the as-of instant (SPK-REPORT-001, SPK-REPORT-007).
+ * reports refuse a past instant), compute, and wrap the result with the metric definitions, the
+ * as-of instant and the module settings used (SPK-REPORT-001, SPK-REPORT-007, REP-03).
  *
- * Computations read through the root database outside any transaction: one report may call
- * another module's query service (match readiness) that reads through its own connection, which
- * would deadlock inside a transaction under PGlite. Reads are therefore not one snapshot; the
- * as-of filter bounds every clock-stamped fact, and a stored run is the reproducible record.
+ * REP-03 (one snapshot): the metric definitions and the whole computation run inside one
+ * read-only repeatable-read `UnitOfWork.run`, and the transaction is handed to every port (the
+ * workforce coverage port, the enrollment booking port), so a report never mixes states read
+ * before and after another transaction committed. Seeding the metric definitions writes, so it
+ * happens before the snapshot opens. Called inside an active transaction (a command or handler),
+ * the report reads through that transaction instead. A report whose owning module's query service
+ * still reads through its own connection (`consistency: 'owner_reads'`: match readiness, the
+ * competition module's ReadinessService) computes outside a transaction, and says so.
  */
 @Injectable()
 export class ReportsService {
@@ -58,6 +70,7 @@ export class ReportsService {
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(REPORTING_POLICY) private readonly policy: ReportingPolicy,
+    private readonly unitOfWork: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly metricDefinitions: MetricDefinitionsService,
     schedule: ScheduleReports,
@@ -184,18 +197,35 @@ export class ReportsService {
 
     await this.metricDefinitions.ensureSeeded(organizationId);
     const metricKeys = metricsForReport(key).map((m) => m.key);
-    const metrics = await this.metricDefinitions.activeFor(organizationId, metricKeys);
+    const consistency = definition.consistency ?? 'snapshot';
 
-    const ctx: ReportContext = {
-      organizationId,
-      facility,
-      asOf,
-      now,
-      db: this.db,
-      policy: this.policy,
-      system: systemPrincipal(organizationId, `reporting.${key}`),
+    const compute = async (db: Db | Trx, trx: Trx | null) => {
+      const metrics = await this.metricDefinitions.activeFor(organizationId, metricKeys, db);
+      const ctx: ReportContext = {
+        organizationId,
+        facility,
+        asOf,
+        now,
+        db,
+        trx,
+        policy: this.policy,
+        dayStart: dayStartOf(this.policy),
+        system: systemPrincipal(organizationId, `reporting.${key}`),
+      };
+      return { metrics, computation: await definition.compute(ctx, params as never) };
     };
-    const computation = await definition.compute(ctx, params as never);
+    const enclosing = this.unitOfWork.current();
+    const { metrics, computation } = enclosing
+      ? await compute(enclosing, enclosing)
+      : consistency === 'owner_reads'
+        ? await compute(this.db, null)
+        : await this.unitOfWork.run(
+            async ({ trx }) => {
+              await sql`set transaction read only`.execute(trx);
+              return compute(trx, trx);
+            },
+            { isolationLevel: 'repeatable read' },
+          );
     for (const value of computation.values) {
       if (!metricKeys.includes(value.metric)) {
         throw errors.internal(
@@ -203,6 +233,13 @@ export class ReportsService {
         );
       }
     }
+    const settings = (computation.settings ?? definition.settings ?? []).map((s) =>
+      settingUse(this.policy, s),
+    );
+    const consistencyNote =
+      consistency === 'owner_reads'
+        ? 'Read through the owning module at the request instant, outside a single snapshot.'
+        : 'Every source was read in one snapshot.';
 
     const response: ReportResponse = {
       report: {
@@ -226,9 +263,11 @@ export class ReportsService {
         class: options.runId ? 'F3' : 'F1',
         pointInTime: definition.pointInTime,
         note: options.runId
-          ? `Snapshot stored at ${iso(now)}. ${definition.pointInTimeNote}`
-          : `Read live at ${iso(now)}. ${definition.pointInTimeNote}`,
+          ? `Snapshot stored at ${iso(now)}. ${consistencyNote} ${definition.pointInTimeNote}`
+          : `Read live at ${iso(now)}. ${consistencyNote} ${definition.pointInTimeNote}`,
+        consistency,
       },
+      settings,
       metrics: metrics.map(toMetricDefinition),
       disclosures: computation.disclosures,
       values: computation.values,

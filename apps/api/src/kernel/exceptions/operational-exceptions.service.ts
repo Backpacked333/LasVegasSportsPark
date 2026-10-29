@@ -1,13 +1,31 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { DomainError, errors, newId, type Principal } from '@sportspark/contracts';
-import { json, type Db, type ExceptionSeverity, type ExceptionStatus } from '@sportspark/db';
-import { sql, type SqlBool } from 'kysely';
+import {
+  decodeCursor,
+  DomainError,
+  encodeCursor,
+  errors,
+  newId,
+  StaffRole,
+  z,
+  type Page,
+  type Principal,
+} from '@sportspark/contracts';
+import {
+  json,
+  type Db,
+  type ExceptionSeverity,
+  type ExceptionStatus,
+  type OperationalExceptionsTable,
+} from '@sportspark/db';
+import { sql, type Selectable, type SqlBool } from 'kysely';
+import { AuditReader, type AuditRecord } from '../audit/audit-reader';
 import { AuditWriter } from '../audit/audit.writer';
-import { defineActions } from '../authorization/actions';
+import { defineActions, type ActionDefinition } from '../authorization/actions';
 import { AuthorizationService } from '../authorization/authorization.service';
 import { listFacilityScope } from '../authorization/facility-scope';
 import type { Clock } from '../clock';
 import { ensureUpdated } from '../database/revision';
+import { executorFor } from '../database/transaction-context';
 import type { Trx } from '../database/unit-of-work';
 import { CLOCK, DATABASE } from '../tokens';
 
@@ -34,7 +52,45 @@ export const ExceptionActions = defineActions({
     staffRoles: ['general_manager', 'system_administrator', 'support_operator'],
     requirements: ['SPK-UX-006'],
   },
+  /**
+   * K-10, §4.12 failure owner: the owner of a queue settles its own exceptions. Allowed in
+   * `transition` only when the principal holds the staff role named by the exception's
+   * `owner_queue` (within that role's facility scope); every other queue still needs
+   * `exceptions.manage`. Proposed roles (permission matrix C.1).
+   */
+  manageOwnQueue: {
+    id: 'exceptions.manage_own_queue',
+    description: "Acknowledge, resolve or close an exception in the queue of one's own staff role",
+    staffRoles: [
+      'front_desk',
+      'league_manager',
+      'program_manager',
+      'scheduler',
+      'finance_operator',
+      'facilities_operator',
+      'general_manager',
+      'system_administrator',
+      'support_operator',
+    ],
+    requirements: ['SPK-UX-006', '§4.12'],
+  },
 });
+
+export type OperationalExceptionRow = Selectable<OperationalExceptionsTable>;
+
+export interface ListExceptionsFilter {
+  statuses?: readonly ExceptionStatus[];
+  ownerQueue?: string;
+  category?: string;
+  facilityId?: string;
+  affectedType?: string;
+  affectedId?: string;
+  cursor?: string;
+  /** 1..200, default 50. */
+  limit?: number;
+}
+
+const ExceptionCursor = z.object({ at: z.string(), id: z.uuid() });
 
 export interface RaiseExceptionInput {
   organizationId: string;
@@ -62,7 +118,83 @@ export class OperationalExceptions {
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly audit: AuditWriter,
     private readonly authorization: AuthorizationService,
+    private readonly auditReader: AuditReader,
   ) {}
+
+  /** One exception of the organization, or null (another organization's id reads as null). */
+  async get(
+    organizationId: string,
+    id: string,
+    db?: Db | Trx,
+  ): Promise<OperationalExceptionRow | null> {
+    const row = await (db ?? executorFor(this.db))
+      .selectFrom('operational_exceptions')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .executeTakeFirst();
+    return row ?? null;
+  }
+
+  /**
+   * Exceptions of the organization, newest first (opened_at desc, id desc), with a keyset cursor
+   * (K-10, IF-29). The caller authorizes its own context; an invalid cursor reads the first page.
+   */
+  async list(
+    organizationId: string,
+    filter: ListExceptionsFilter = {},
+    db?: Db | Trx,
+  ): Promise<Page<OperationalExceptionRow>> {
+    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+    let query = (db ?? executorFor(this.db))
+      .selectFrom('operational_exceptions')
+      .selectAll()
+      .where('organization_id', '=', organizationId);
+    if (filter.statuses) {
+      if (filter.statuses.length === 0) return { items: [], nextCursor: null };
+      query = query.where('status', 'in', [...filter.statuses]);
+    }
+    if (filter.ownerQueue) query = query.where('owner_queue', '=', filter.ownerQueue);
+    if (filter.category) query = query.where('category', '=', filter.category);
+    if (filter.facilityId) query = query.where('facility_id', '=', filter.facilityId);
+    if (filter.affectedType) query = query.where('affected_type', '=', filter.affectedType);
+    if (filter.affectedId) query = query.where('affected_id', '=', filter.affectedId);
+    const cursor = decodeCursor(filter.cursor, ExceptionCursor);
+    if (cursor) {
+      const at = new Date(cursor.at);
+      query = query.where((eb) =>
+        eb.or([
+          eb('opened_at', '<', at),
+          eb.and([eb('opened_at', '=', at), eb('id', '<', cursor.id)]),
+        ]),
+      );
+    }
+    const rows = await query
+      .orderBy('opened_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(limit + 1)
+      .execute();
+    const items = rows.slice(0, limit);
+    const last = items[items.length - 1];
+    return {
+      items,
+      nextCursor:
+        rows.length > limit && last
+          ? encodeCursor({ at: new Date(last.opened_at).toISOString(), id: last.id })
+          : null,
+    };
+  }
+
+  /** The audited transitions of one exception, newest first (through AuditReader, IF-44). */
+  async history(organizationId: string, id: string, db?: Db | Trx): Promise<AuditRecord[]> {
+    return this.auditReader.forTarget(
+      organizationId,
+      'operational_exception',
+      id,
+      { limit: 200 },
+      db,
+    );
+  }
 
   async raise(
     trx: Trx,
@@ -125,19 +257,39 @@ export class OperationalExceptions {
   ): Promise<void> {
     // §4.9, §4.7 invariant 9: lock the row so the revision and state checks run against the
     // current row, and a concurrent transition can never be audited without having happened.
-    const current = await trx
-      .selectFrom('operational_exceptions')
-      .select(['organization_id', 'facility_id', 'status', 'revision', 'category'])
-      .where('id', '=', id)
-      .forUpdate()
-      .executeTakeFirst();
+    // §4.10: loaded by the principal's organization, so another organization's id is not found.
+    const current = principal.organizationId
+      ? await trx
+          .selectFrom('operational_exceptions')
+          .select([
+            'organization_id',
+            'facility_id',
+            'status',
+            'revision',
+            'category',
+            'owner_queue',
+          ])
+          .where('organization_id', '=', principal.organizationId)
+          .where('id', '=', id)
+          .forUpdate()
+          .executeTakeFirst()
+      : undefined;
     if (!current) throw errors.notFound('exception', id);
-    await this.authorization.require(principal, ExceptionActions.manage, {
+    const target = {
       type: 'operational_exception',
       id,
       organizationId: current.organization_id,
       facilityId: current.facility_id,
-    });
+    };
+    // K-10: the owner of the exception's queue settles it with its own role (in that role's
+    // facility scope); any other queue needs exceptions.manage.
+    const ownQueue = ownQueueAction(principal, current.owner_queue);
+    const ownQueueAllowed = ownQueue
+      ? (await this.authorization.decide(principal, ownQueue, target)).allowed
+      : false;
+    if (!ownQueueAllowed) {
+      await this.authorization.require(principal, ExceptionActions.manage, target);
+    }
     if (options.expectedRevision !== undefined && options.expectedRevision !== current.revision) {
       throw errors.staleRevision(options.expectedRevision, current.revision);
     }
@@ -231,4 +383,16 @@ export class OperationalExceptions {
     if (filter.ownerQueue) query = query.where('owner_queue', '=', filter.ownerQueue);
     return query.execute();
   }
+}
+
+/**
+ * `exceptions.manage_own_queue` narrowed to the one staff role the queue names, so a role held
+ * elsewhere never settles it (identity-05), or null when the queue is not a role the principal holds.
+ */
+function ownQueueAction(principal: Principal, ownerQueue: string): ActionDefinition | null {
+  if (principal.kind !== 'staff') return null;
+  const role = StaffRole.safeParse(ownerQueue);
+  if (!role.success || !principal.staffRoles.includes(role.data)) return null;
+  if (!ExceptionActions.manageOwnQueue.staffRoles.includes(role.data)) return null;
+  return { ...ExceptionActions.manageOwnQueue, staffRoles: [role.data] };
 }

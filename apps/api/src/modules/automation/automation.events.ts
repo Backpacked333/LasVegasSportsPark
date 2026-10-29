@@ -62,6 +62,10 @@ export const RecommendationReviewed = defineEvent(
   }),
 );
 
+/**
+ * The recommendation's command took effect: reported by the apply itself, or by the settlement of
+ * an apply whose outcome was unknown (AUT-03; `settlementId` set, `commandOperationId` null).
+ */
 export const RecommendationApplied = defineEvent(
   'automation.recommendation_applied',
   z.object({
@@ -69,9 +73,14 @@ export const RecommendationApplied = defineEvent(
     commandActionId: z.string(),
     commandOperationId: z.uuid().nullable(),
     record: z.object({ type: z.string(), id: z.string() }).nullable(),
+    settlementId: z.uuid().optional(),
   }),
 );
 
+/**
+ * An apply did not take effect: refused or failed by the owning module, of unknown outcome, or
+ * settled as not applied after reconciliation (AUT-03; `settlementId` set, outcome `failed`).
+ */
 export const RecommendationApplyFailed = defineEvent(
   'automation.recommendation_apply_failed',
   z.object({
@@ -79,6 +88,7 @@ export const RecommendationApplyFailed = defineEvent(
     commandActionId: z.string(),
     errorCode: z.string(),
     outcome: z.enum(['denied', 'failed', 'unknown']),
+    settlementId: z.uuid().optional(),
   }),
 );
 

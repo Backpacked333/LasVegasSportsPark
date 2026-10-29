@@ -15,9 +15,11 @@ import {
   type DeclineAssignmentBody,
   type DomainEvent,
   type EventPayload,
+  type AssignmentEventValue,
   type ListAssignmentsQuery,
   type Page,
   type Principal,
+  type StaffAssignment,
   type WithdrawAssignmentBody,
 } from '@sportspark/contracts';
 import {
@@ -25,6 +27,7 @@ import {
   isUniqueViolation,
   json,
   pgConstraintName,
+  pgErrorCode,
   type AssignmentKind,
   type Database,
   type Db,
@@ -48,10 +51,11 @@ import {
 import type { CatalogEvents } from '../../catalog';
 import type { CompetitionEvents } from '../../competition';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
-import type { EventChanged } from '../../scheduling';
+import { localDateOf, type EventChanged } from '../../scheduling';
 import { WorkforceActions } from '../workforce.actions';
 import { WorkforceEvents } from '../workforce.events';
 import {
+  turnaroundFor,
   WORKFORCE_POLICY,
   workforcePolicyForFacility,
   type WorkforcePolicy,
@@ -73,6 +77,27 @@ import { TargetResolver, type FacilityFacts, type ResolvedTarget } from './targe
 import { TemporaryAccessService } from './temporary-access.service';
 
 const Cursor = z.object({ start: z.string(), id: z.string() });
+
+/** The staff action that performs each machine event (§4.6, WRK-01 availableActions). */
+const EVENT_ACTIONS = {
+  offer: WorkforceActions.proposeAssignment,
+  accept: WorkforceActions.acceptAssignment,
+  decline: WorkforceActions.declineAssignment,
+  withdraw: WorkforceActions.withdrawAssignment,
+  complete: WorkforceActions.completeAssignment,
+} as const satisfies Record<AssignmentEventValue, unknown>;
+/** Events whose command authorizes against the assignee as subject (the assignee's own authority). */
+const SUBJECT_EVENTS: ReadonlySet<AssignmentEventValue> = new Set([
+  'accept',
+  'decline',
+  'withdraw',
+]);
+
+/** `restrict_violation` from `assignments_requirement_not_retired` (migration 0704, WRK-02). */
+const requirementRetired = (role: string) =>
+  errors.resourceConflict(`The ${role} requirement of this activity was retired.`, {
+    conflicts: [{ code: 'requirement_retired', role }],
+  });
 
 export interface AssignabilityInput {
   organizationId: string;
@@ -169,7 +194,8 @@ export class AssignmentsService {
       throw errors.validation('The activity has already ended.', { code: 'target_ended' });
     }
     const policy = workforcePolicyForFacility(this.policy, target.facilitySettings);
-    const policyTurnaround = policy.turnaroundMinutes[body.kind];
+    // WRK-06: an unconfigured turnaround is 0 (only overlaps are refused, DEC-011 pending).
+    const policyTurnaround = turnaroundFor(policy, body.kind);
     const turnaround = body.turnaroundMinutes ?? policyTurnaround;
     if (turnaround < policyTurnaround) {
       // §4.9, SPK-STAFF-003: shortening the required turnaround is an override: it needs its own
@@ -188,13 +214,16 @@ export class AssignmentsService {
       }
     }
     const row = await this.uow.run(async ({ trx }) => {
-      const requirement = await this.coverage.requirementFor(
+      // WRK-02: the requirement's share lock comes first (the order a retirement takes too).
+      const locked = await this.coverage.lockRequirementShared(
         trx,
         organizationId,
         target.targetType,
         target.targetId,
         body.role,
       );
+      if (locked?.retired_at) throw requirementRetired(body.role);
+      const requirement = locked;
       if (requirement && requirement.kind !== body.kind) {
         throw errors.validation(`The ${body.role} requirement is for kind ${requirement.kind}.`, {
           requirementId: requirement.id,
@@ -245,6 +274,7 @@ export class AssignmentsService {
     await this.assertTargetScheduled(organizationId, existing);
     const facility = await this.targets.facility(this.db, organizationId, existing.facility_id);
     const row = await this.uow.run(async ({ trx }) => {
+      await this.lockRequirementOf(trx, existing);
       const current = await this.lock(trx, organizationId, id);
       assertExpectedRevision(body.expectedRevision, current.revision);
       const next = AssignmentMachine.next(current.status, 'offer');
@@ -298,6 +328,7 @@ export class AssignmentsService {
     await this.assertTargetScheduled(organizationId, existing);
     const facility = await this.targets.facility(this.db, organizationId, existing.facility_id);
     const { row, operationId } = await this.uow.run(async ({ trx }) => {
+      await this.lockRequirementOf(trx, existing);
       const current = await this.lock(trx, organizationId, id);
       assertExpectedRevision(body.expectedRevision, current.revision);
       const next = AssignmentMachine.next(current.status, 'accept');
@@ -320,6 +351,8 @@ export class AssignmentsService {
         ignoreAssignmentIds: [current.id],
         checkAvailability: false,
       });
+      // WRK-06: read under the person's party lock taken by the commitment check above.
+      await this.assertOfficialDailyLimit(trx, current, facility);
       const needsAccess = this.access.required(current);
       const opId = needsAccess
         ? await this.operations.create(trx, {
@@ -374,6 +407,14 @@ export class AssignmentsService {
     });
     const facility = await this.targets.facility(this.db, organizationId, existing.facility_id);
     const { row, uncovered } = await this.uow.run(async ({ trx }) => {
+      // WRK-02: requirement before assignment (the escalation below reads the requirement).
+      await this.coverage.lockRequirementShared(
+        trx,
+        organizationId,
+        existing.target_type,
+        existing.target_id,
+        existing.role,
+      );
       const current = await this.lock(trx, organizationId, id);
       assertExpectedRevision(body.expectedRevision, current.revision);
       const next = AssignmentMachine.next(current.status, 'decline');
@@ -413,6 +454,14 @@ export class AssignmentsService {
     });
     const facility = await this.targets.facility(this.db, organizationId, existing.facility_id);
     const result = await this.uow.run(async ({ trx }) => {
+      // WRK-02: requirement before assignment (the escalation below reads the requirement).
+      await this.coverage.lockRequirementShared(
+        trx,
+        organizationId,
+        existing.target_type,
+        existing.target_id,
+        existing.role,
+      );
       const current = await this.lock(trx, organizationId, id);
       assertExpectedRevision(body.expectedRevision, current.revision);
       const withdrawn = await this.withdrawInTransaction(trx, principal, current, {
@@ -486,7 +535,7 @@ export class AssignmentsService {
     return toAssignment(row, this.clock.now());
   }
 
-  async list(principal: Principal, query: ListAssignmentsQuery): Promise<Page<Assignment>> {
+  async list(principal: Principal, query: ListAssignmentsQuery): Promise<Page<StaffAssignment>> {
     const organizationId = organizationOf(principal);
     await this.authorization.require(principal, WorkforceActions.viewAssignments, {
       type: 'assignment',
@@ -525,13 +574,61 @@ export class AssignmentsService {
     const now = this.clock.now();
     const page = rows.slice(0, query.limit);
     const last = page[page.length - 1];
+    const decisions = new Map<string, Promise<boolean>>();
+    const items: StaffAssignment[] = [];
+    for (const row of page) {
+      items.push({
+        ...toAssignment(row, now),
+        availableActions: await this.availableActions(principal, row, now, decisions),
+      });
+    }
     return {
-      items: page.map((r) => toAssignment(r, now)),
+      items,
       nextCursor:
         rows.length > query.limit && last
           ? encodeCursor({ start: new Date(last.scheduled_start).toISOString(), id: last.id })
           : null,
     };
+  }
+
+  /**
+   * WRK-01 (SPK-STAFF-001..004, SCR-S-32/33): the machine events allowed from the assignment's
+   * current state that the caller may perform now. Offer and accept are refused once the activity
+   * has ended and completion before it starts, as the commands refuse them; each remaining event
+   * is kept only when AuthorizationService.decide allows the action that performs it, against the
+   * same target the command authorizes (the assignment's facility, and the assignee as subject for
+   * accept, decline and withdraw). Decisions are shared across one response.
+   */
+  private async availableActions(
+    principal: Principal,
+    row: AssignmentRow,
+    now: Date,
+    decisions: Map<string, Promise<boolean>>,
+  ): Promise<AssignmentEventValue[]> {
+    const ended = now.getTime() >= new Date(row.scheduled_end).getTime();
+    const started = now.getTime() >= new Date(row.scheduled_start).getTime();
+    const out: AssignmentEventValue[] = [];
+    for (const event of AssignmentMachine.eventsFrom(row.status)) {
+      if ((event === 'offer' || event === 'accept') && ended) continue;
+      if (event === 'complete' && !started) continue;
+      const subject = SUBJECT_EVENTS.has(event) ? row.person_id : null;
+      const key = `${event}:${row.facility_id}:${subject ?? ''}`;
+      let allowed = decisions.get(key);
+      if (!allowed) {
+        allowed = this.authorization
+          .decide(principal, EVENT_ACTIONS[event], {
+            type: 'assignment',
+            id: row.id,
+            organizationId: row.organization_id,
+            facilityId: row.facility_id,
+            subjectPersonIds: subject ? [subject] : [],
+          })
+          .then((decision) => decision.allowed);
+        decisions.set(key, allowed);
+      }
+      if (await allowed) out.push(event);
+    }
+    return out;
   }
 
   /** Loads the assignment and requires view authority; otherwise NOT_FOUND (§4.10). */
@@ -649,13 +746,16 @@ export class AssignmentsService {
       input.organizationId,
       input.target.facilityId,
     );
-    const requirement = await this.coverage.requirementFor(
+    // WRK-02: the share lock first (see lockRequirementShared); a retired requirement takes no one.
+    const locked = await this.coverage.lockRequirementShared(
       trx,
       input.organizationId,
       input.target.targetType,
       input.target.targetId,
       input.role,
     );
+    if (locked?.retired_at) throw requirementRetired(input.role);
+    const requirement = locked;
     await this.assertAssignable(trx, {
       organizationId: input.organizationId,
       facility,
@@ -721,6 +821,7 @@ export class AssignmentsService {
           conflicts: [{ code: 'already_assigned_to_slot', constraint: pgConstraintName(error) }],
         });
       }
+      if (pgErrorCode(error) === '23001') throw requirementRetired(input.role);
       throw error;
     }
     await this.audit.record(trx, {
@@ -1161,6 +1262,70 @@ export class AssignmentsService {
     });
   }
 
+  /**
+   * WRK-02: takes the share lock of the assignment's requirement before the assignment row lock
+   * (the order a retirement takes them in), and refuses a retired requirement early (the trigger
+   * `assignments_requirement_not_retired` is the guarantee).
+   */
+  private async lockRequirementOf(trx: Trx, row: AssignmentRow): Promise<void> {
+    const requirement = await this.coverage.lockRequirementShared(
+      trx,
+      row.organization_id,
+      row.target_type,
+      row.target_id,
+      row.role,
+    );
+    if (requirement?.retired_at) throw requirementRetired(row.role);
+  }
+
+  /**
+   * WRK-06 (DEC-011 / POL-033 pending): with `WORKFORCE_OFFICIAL_MAX_ASSIGNMENTS_PER_DAY` set, an
+   * official holding that many accepted or completed official assignments starting on the
+   * facility-local day of this one (the facility's IANA zone, SPK-SCHED-008) cannot accept
+   * another: VALIDATION_FAILED `OFFICIAL_DAILY_LIMIT`. Unset, nothing is checked. Read under the
+   * person's party lock, so two acceptances for one person are counted one after the other.
+   */
+  private async assertOfficialDailyLimit(
+    trx: Trx,
+    current: AssignmentRow,
+    facility: FacilityFacts,
+  ): Promise<void> {
+    const limit = this.policy.officialMaxAssignmentsPerDay;
+    if (limit === null || current.kind !== 'official') return;
+    const start = new Date(current.scheduled_start);
+    const localDate = localDateOf(facility.timezone, start);
+    // A local day spans at most 26 hours; the margin keeps every same-day start in the read.
+    const margin = 36 * 3_600_000;
+    const held = await trx
+      .selectFrom('assignments')
+      .select(['id', 'scheduled_start'])
+      .where('organization_id', '=', current.organization_id)
+      .where('person_id', '=', current.person_id)
+      .where('kind', '=', 'official')
+      .where('status', 'in', [...COVERING_STATUSES])
+      .where('id', '<>', current.id)
+      .where('scheduled_start', '>', new Date(start.getTime() - margin))
+      .where('scheduled_start', '<', new Date(start.getTime() + margin))
+      .orderBy('scheduled_start')
+      .orderBy('id')
+      .execute();
+    const sameDay = held.filter(
+      (r) => localDateOf(facility.timezone, new Date(r.scheduled_start)) === localDate,
+    );
+    if (sameDay.length >= limit) {
+      throw errors.validation(
+        `The official already holds ${sameDay.length} accepted assignment(s) on ${localDate}; the configured limit is ${limit} per day.`,
+        {
+          code: 'OFFICIAL_DAILY_LIMIT',
+          limit,
+          localDate,
+          timezone: facility.timezone,
+          assignmentIds: sameDay.map((r) => r.id),
+        },
+      );
+    }
+  }
+
   private assertNotEnded(row: AssignmentRow): void {
     if (this.clock.now().getTime() >= new Date(row.scheduled_end).getTime()) {
       throw errors.validation('The activity has already ended.', { code: 'target_ended' });
@@ -1229,6 +1394,7 @@ export class AssignmentsService {
           constraint: pgConstraintName(error),
         });
       }
+      if (pgErrorCode(error) === '23001') throw requirementRetired(current.role);
       throw error;
     }
     await this.audit.record(trx, {

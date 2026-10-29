@@ -7,7 +7,7 @@ import {
   type Provider,
 } from '@nestjs/common';
 import { Test, type TestingModuleBuilder } from '@nestjs/testing';
-import { newId, type Principal } from '@sportspark/contracts';
+import { newId, type CapabilityId, type Principal } from '@sportspark/contracts';
 import { createTestDatabase, seedOrganization, type Db, type TestDatabase } from '@sportspark/db';
 import supertest from 'supertest';
 import { configureApp } from '../kernel/app-setup';
@@ -18,6 +18,19 @@ import { FixedClock } from '../kernel/clock';
 import { loadConfig, type AppConfig } from '../kernel/config';
 import { KernelModule, PRINCIPAL_RESOLVER_IMPL } from '../kernel/kernel.module';
 import { CLOCK, IDENTITY_PROVIDER } from '../kernel/tokens';
+import {
+  PeriodicJobRunner,
+  type PeriodicJobRunSummary,
+  type RunOnceOptions,
+} from '../kernel/jobs/periodic-jobs';
+import { setCapability } from './capabilities';
+
+/**
+ * Capabilities a test organization starts with (K-12): pickup sessions, the one enforced
+ * capability whose commands predate the capability switches. Every other capability is off, as
+ * in a new organization (DEC-016).
+ */
+export const DEFAULT_TEST_CAPABILITIES: readonly CapabilityId[] = ['pickup_sessions'];
 
 export const TEST_CONFIG_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'test',
@@ -53,6 +66,8 @@ export interface TestAppOptions {
   env?: NodeJS.ProcessEnv;
   /** Start the test clock at a fixed instant (defaults to the real clock, frozen at creation). */
   clockStart?: Date | string;
+  /** Capabilities enabled for the seeded organization (default `DEFAULT_TEST_CAPABILITIES`). */
+  capabilities?: readonly CapabilityId[];
 }
 
 export interface TestApp {
@@ -69,12 +84,27 @@ export interface TestApp {
   /** Registers the principal (fake resolver) and mints a bearer token for it. */
   tokenFor(principal: Principal): Promise<string>;
   authHeader(principal: Principal): Promise<{ Authorization: string }>;
+  /** Fixture: turns a capability on for an organization (default: the seeded one), ungated. */
+  enableCapability(capability: CapabilityId, organizationId?: string): Promise<void>;
+  /** Fixture: turns a capability off for an organization (default: the seeded one), ungated. */
+  disableCapability(capability: CapabilityId, organizationId?: string): Promise<void>;
+  /**
+   * Runs the registered periodic jobs once (K-06), at the FixedClock's instant. By default a job
+   * runs even when its interval has not elapsed since the last run; the lease is still respected.
+   */
+  runPeriodicJobs(
+    names?: readonly string[],
+    options?: RunOnceOptions,
+  ): Promise<PeriodicJobRunSummary[]>;
   close(): Promise<void>;
 }
 
 export async function createTestApp(options: TestAppOptions = {}): Promise<TestApp> {
   const database = await createTestDatabase();
   const { organizationId, facilityId } = await seedOrganization(database.db);
+  for (const capability of options.capabilities ?? DEFAULT_TEST_CAPABILITIES) {
+    await setCapability(database.db, organizationId, capability, true);
+  }
   const config = loadConfig({ ...TEST_CONFIG_ENV, ...(options.env ?? {}) });
   const identityProvider = new LocalJwtIdentityProvider(config);
   const principals = new FakePrincipalResolver();
@@ -111,7 +141,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   if (options.configure) builder = options.configure(builder);
   const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication({ logger: ['error'] });
-  configureApp(app);
+  configureApp(app, config);
   await app.init();
 
   const tokenFor = async (principal: Principal): Promise<string> => {
@@ -132,6 +162,12 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     facilityId,
     tokenFor,
     authHeader: async (principal) => ({ Authorization: `Bearer ${await tokenFor(principal)}` }),
+    enableCapability: (capability, org = organizationId) =>
+      setCapability(database.db, org, capability, true),
+    disableCapability: (capability, org = organizationId) =>
+      setCapability(database.db, org, capability, false),
+    runPeriodicJobs: (names, runOptions = { ignoreInterval: true }) =>
+      app.get(PeriodicJobRunner).runOnce(names, runOptions),
     close: async () => {
       await app.close();
       await database.close();

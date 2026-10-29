@@ -4,11 +4,21 @@ import {
   type ExecutionContext,
   type NestInterceptor,
 } from '@nestjs/common';
-import { isUuid } from '@sportspark/contracts';
+import { Reflector } from '@nestjs/core';
+import { isUuid, type ImportEntityTypeValue } from '@sportspark/contracts';
 import type { Observable } from 'rxjs';
-import type { RequestWithContext } from '../../../kernel';
+import {
+  RECORD_AUTHORITY_KEY,
+  type RecordAuthorityClassification,
+  type RequestWithContext,
+} from '../../../kernel';
 import type { AuthorityScopeRef } from '../migration.ports';
-import { matchAuthorityRoute, type DeclaredScope, type ScopeSourceField } from './authority-routes';
+import {
+  matchAuthorityRoute,
+  type AuthorityScopeSource,
+  type DeclaredScope,
+  type ScopeSourceField,
+} from './authority-routes';
 import { AuthorityService } from './authority.service';
 
 type RoutedRequest = RequestWithContext & {
@@ -41,13 +51,24 @@ function declaredScope(request: RoutedRequest, scope: DeclaredScope): AuthorityS
   };
 }
 
+/** What a write route is guarded for, or null when it changes no record of a §5.3 category. */
+interface Guard {
+  category: ImportEntityTypeValue;
+  scope: AuthorityScopeSource;
+}
+
 /**
  * Global interceptor registered by MigrationModule (§5.6, §4.7 invariant 11): refuses the write
  * commands of a record category while the legacy system is authoritative for it, with
  * ACCESS_DENIED and `nextAction: write_in_authoritative_system`. It runs after authentication
- * (guards run before interceptors) and only for the routes in AUTHORITY_ROUTES; with no authority
- * assignment SportsPark is authoritative and nothing changes. It never relaxes any other check:
- * an allowed write still goes through the owning module's own authorization.
+ * (guards run before interceptors); with no authority assignment SportsPark is authoritative and
+ * nothing changes. It never relaxes any other check: an allowed write still goes through the
+ * owning module's own authorization.
+ *
+ * Classification (MIG-00, IF-41): the handler's K-11 decorator is read first (`@RecordAuthority`
+ * guards it, `@NoRecordAuthority` exempts it); a handler without one falls back to the static
+ * lists in `authority-routes.ts`. A route both decorated and listed fails the classification test,
+ * so the two sources never disagree at run time.
  *
  * The scope is never taken from whatever identifiers a client puts in the body (§4.8): a route
  * either creates a top-level record (organization scope), names the validated field its handler
@@ -56,7 +77,24 @@ function declaredScope(request: RoutedRequest, scope: DeclaredScope): AuthorityS
  */
 @Injectable()
 export class AuthorityWriteInterceptor implements NestInterceptor {
-  constructor(private readonly authority: AuthorityService) {}
+  constructor(
+    private readonly authority: AuthorityService,
+    private readonly reflector: Reflector,
+  ) {}
+
+  private guardOf(context: ExecutionContext, method: string, routePath: string | undefined) {
+    const declared = this.reflector.get<RecordAuthorityClassification | undefined>(
+      RECORD_AUTHORITY_KEY,
+      context.getHandler(),
+    );
+    if (declared) {
+      return declared.kind === 'guarded'
+        ? ({ category: declared.category, scope: declared.scope } satisfies Guard)
+        : null;
+    }
+    const listed = matchAuthorityRoute(method, routePath);
+    return listed ? ({ category: listed.category, scope: listed.scope } satisfies Guard) : null;
+  }
 
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
     if (context.getType() !== 'http') return next.handle();
@@ -67,18 +105,18 @@ export class AuthorityWriteInterceptor implements NestInterceptor {
     if (!principal || principal.kind === 'anonymous' || !principal.organizationId) {
       return next.handle();
     }
-    const route = matchAuthorityRoute(method, request.route?.path);
-    if (!route) return next.handle();
-    if (route.scope === 'unproven') {
+    const guard = this.guardOf(context, method, request.route?.path);
+    if (!guard) return next.handle();
+    if (guard.scope === 'unproven') {
       await this.authority.assertNoLegacyAuthorityInEffect(
         principal.organizationId,
-        route.category,
+        guard.category,
       );
     } else {
       await this.authority.assertSportsparkAuthority(
         principal.organizationId,
-        route.category,
-        route.scope === 'organization' ? {} : declaredScope(request, route.scope),
+        guard.category,
+        guard.scope === 'organization' ? {} : declaredScope(request, guard.scope),
       );
     }
     return next.handle();

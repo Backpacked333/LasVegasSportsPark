@@ -1,14 +1,23 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  AmbiguousTimePolicy,
+  DomainError,
   errors,
+  EventKind,
+  LocalTime,
   newId,
+  NonexistentTimePolicy,
   PartyCommitmentSchema,
   RecurrenceRuleSchema,
+  z,
+  type ConflictDetail,
   type CreateEventSeriesBody,
   type EditEventSeriesBody,
   type EventDetails,
   type EventSeries,
+  type PartyCommitment,
   type Principal,
+  type RecurrenceRule,
   type SeriesEditPreview,
 } from '@sportspark/contracts';
 import { json, type Db, type EventSeriesTable } from '@sportspark/db';
@@ -24,14 +33,92 @@ import {
 } from '../../../kernel';
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
 import type { ProposedEvent } from '../conflicts/conflict-detector';
+import type { CancelEventSeriesInput, CreateEventSeriesInput, EventSeriesCreated } from '../ports';
 import { SchedulingActions } from '../scheduling.actions';
 import type { EventChangeKind } from '../scheduling.events';
 import { localDateOf, localTimeOf, resolveLocal } from '../time/local-time';
-import { materializeOccurrences } from '../time/recurrence';
-import { EventWriter, sameResourceSet, type EventRow } from './event-writer';
-import { organizationOf } from './events.service';
+import { candidateDates, materializeOccurrences } from '../time/recurrence';
+import { EventWriter, sameResourceSet, type EventRow, type FacilityRow } from './event-writer';
+import { organizationOf } from './organization';
 
 type SeriesRow = Selectable<EventSeriesTable>;
+
+/** SCH-02 (IF-31): a series through the scheduling port holds at most 52 weekly occurrences. */
+export const PORT_SERIES_MAX_OCCURRENCES = 52;
+
+const BufferMinutes = z
+  .number()
+  .int()
+  .min(0)
+  .max(24 * 60);
+
+/** EventSchedulingPort.createEventSeries input (IF-31): weekly, `count <= 52` or `until`. */
+const PortSeriesInput = z.object({
+  kind: EventKind,
+  title: z.string().min(1).max(200),
+  facilityId: z.uuid(),
+  resourceIds: z.array(z.uuid()).min(1).max(20),
+  recurrence: RecurrenceRuleSchema.refine((r) => r.frequency === 'weekly', {
+    message: 'a series through the scheduling port recurs weekly',
+  }).refine((r) => r.count === undefined || r.count <= PORT_SERIES_MAX_OCCURRENCES, {
+    message: `count is at most ${PORT_SERIES_MAX_OCCURRENCES}`,
+  }),
+  localStartTime: LocalTime.refine((v) => v !== '24:00', 'a start time is before 24:00'),
+  durationMinutes: z
+    .number()
+    .int()
+    .min(5)
+    .max(24 * 60),
+  setupMinutes: BufferMinutes.optional(),
+  cleanupMinutes: BufferMinutes.optional(),
+  nonexistentPolicy: NonexistentTimePolicy.optional(),
+  ambiguousPolicy: AmbiguousTimePolicy.optional(),
+  commitments: z.array(PartyCommitmentSchema).max(100).optional(),
+  sourceType: z.string().min(1).max(100),
+  sourceId: z.uuid(),
+});
+
+interface SeriesSpec {
+  kind: EventKind;
+  title: string;
+  resourceIds: string[];
+  recurrence: RecurrenceRule;
+  localStartTime: string;
+  durationMinutes: number;
+  setupMinutes?: number;
+  cleanupMinutes?: number;
+  nonexistentPolicy?: NonexistentTimePolicy;
+  ambiguousPolicy?: AmbiguousTimePolicy;
+  exceptions: string[];
+  commitments: PartyCommitment[];
+  sourceType: string | null;
+  sourceId: string | null;
+}
+
+/**
+ * SPK-COND-003, IF-31: RESOURCE_CONFLICT naming each conflicting occurrence by its start, with the
+ * conflicting event ids and the detector's details.
+ */
+function occurrenceConflictError(
+  occurrences: Array<{
+    occurrenceIndex: number;
+    occurrenceStart: string;
+    details: ConflictDetail[];
+  }>,
+): Error {
+  const conflicts = occurrences
+    .filter((o) => o.details.length > 0)
+    .map((o) => ({
+      occurrenceIndex: o.occurrenceIndex,
+      occurrenceStart: o.occurrenceStart,
+      conflictingEventIds: [...new Set(o.details.flatMap((d) => d.conflictingEventIds))].sort(),
+      details: o.details,
+    }));
+  return errors.resourceConflict('One or more occurrences of the series conflict.', {
+    conflicts,
+    conflictingEventIds: [...new Set(conflicts.flatMap((c) => c.conflictingEventIds))].sort(),
+  });
+}
 
 /**
  * Recurring series (SPK-SCHED-007/008): the rule is stored as facility-local wall-clock time plus
@@ -65,142 +152,393 @@ export class EventSeriesService {
         organizationId,
         facilityId: facility.id,
       });
-      const resources = await this.writer.loadResources(
-        trx,
-        organizationId,
-        facility.id,
-        body.resourceIds,
-      );
-      // SPK-SCHED-003: the reserved resources' turnover requirement is the minimum buffer
-      const buffers = this.writer.effectiveBuffers(resources, body);
-      const policy = this.writer.policyFor(facility);
-      const occurrences = materializeOccurrences(body.recurrence, {
-        localStartTime: body.localStartTime,
-        durationMinutes: body.durationMinutes,
-        timezone: facility.timezone,
-        policy: {
-          nonexistent: body.nonexistentPolicy ?? 'shift_forward',
-          ambiguous: body.ambiguousPolicy ?? 'first',
-        },
-        exceptions: body.exceptions ?? [],
-        maxOccurrences: policy.maxSeriesOccurrences,
-      });
-      if (occurrences.length === 0) {
-        throw errors.validation('The recurrence rule produces no occurrences.');
-      }
-      // SPK-SCHED-008 "ambiguous or nonexistent times require resolution": a rule whose local start
-      // time falls in a daylight-saving gap or overlap on some date is refused until the scheduler
-      // chooses how to resolve it; the policy defaults are never applied silently.
-      const unresolvedGap = occurrences
-        .filter(
-          (o) => o.dstResolution === 'shifted_forward' && body.nonexistentPolicy === undefined,
-        )
-        .map((o) => o.localDate);
-      const unresolvedOverlap = occurrences
-        .filter((o) => o.dstResolution === 'first' && body.ambiguousPolicy === undefined)
-        .map((o) => o.localDate);
-      if (unresolvedGap.length > 0 || unresolvedOverlap.length > 0) {
-        throw errors.validation(
-          'The local start time does not exist or occurs twice on some dates; choose how to resolve them.',
-          {
-            code: 'dst_resolution_required',
-            nonexistentLocalDates: unresolvedGap,
-            ambiguousLocalDates: unresolvedOverlap,
-            options: {
-              nonexistentPolicy: unresolvedGap.length > 0 ? ['shift_forward', 'skip'] : [],
-              ambiguousPolicy: unresolvedOverlap.length > 0 ? ['first', 'second'] : [],
-            },
-          },
-        );
-      }
-      const commitments = (body.commitments ?? []).map((c) => PartyCommitmentSchema.parse(c));
-      const { setupMinutes, cleanupMinutes } = buffers;
-      const resourceIds = resources.map((r) => r.id);
-      const proposals: ProposedEvent[] = occurrences.map((o) => ({
-        key: `occurrence:${o.occurrenceIndex}`,
-        eventId: null,
-        kind: body.kind,
-        format: null,
-        scheduledStart: o.start,
-        scheduledEnd: o.end,
-        setupMinutes,
-        cleanupMinutes,
-        resourceIds,
-        commitments,
-      }));
-      await this.writer.detectOrThrow(trx, organizationId, facility, proposals);
-
-      const seriesId = newId();
-      const series = await trx
-        .insertInto('event_series')
-        .values({
-          id: seriesId,
-          organization_id: organizationId,
-          facility_id: facility.id,
+      // SCH-02: the booking source holds rental and party series only, on HTTP as on the port.
+      this.writer.assertPortSource(principal, body.kind, body.sourceType ?? null);
+      const { series, eventIds } = await this.writeSeries(trx, principal, facility, {
+        spec: {
           kind: body.kind,
           title: body.title,
-          timezone: facility.timezone,
-          recurrence: json(body.recurrence),
-          local_start_time: body.localStartTime,
-          duration_minutes: body.durationMinutes,
-          setup_minutes: setupMinutes,
-          cleanup_minutes: cleanupMinutes,
-          nonexistent_policy: body.nonexistentPolicy ?? 'shift_forward',
-          ambiguous_policy: body.ambiguousPolicy ?? 'first',
-          exceptions: json(body.exceptions ?? []),
-          resource_ids: resourceIds,
-          commitments: json(commitments),
-          source_type: body.sourceType ?? null,
-          source_id: body.sourceId ?? null,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      const eventIds: string[] = [];
-      for (const occurrence of occurrences) {
-        const event = await this.writer.insertEvent(trx, {
-          organizationId,
-          facilityId: facility.id,
-          timezone: facility.timezone,
-          kind: body.kind,
-          title: body.title,
-          format: null,
-          seriesId,
-          occurrenceIndex: occurrence.occurrenceIndex,
-          scheduledStart: occurrence.start,
-          scheduledEnd: occurrence.end,
-          setupMinutes,
-          cleanupMinutes,
-          dstResolution: occurrence.dstResolution,
-          status: 'published',
-          resourceIds,
-          commitments,
+          resourceIds: body.resourceIds,
+          recurrence: body.recurrence,
+          localStartTime: body.localStartTime,
+          durationMinutes: body.durationMinutes,
+          setupMinutes: body.setupMinutes,
+          cleanupMinutes: body.cleanupMinutes,
+          nonexistentPolicy: body.nonexistentPolicy,
+          ambiguousPolicy: body.ambiguousPolicy,
+          exceptions: body.exceptions ?? [],
+          commitments: body.commitments ?? [],
           sourceType: body.sourceType ?? null,
           sourceId: body.sourceId ?? null,
-        });
-        await this.writer.reserve(trx, event, facility);
-        await this.writer.notifyChanged(trx, {
-          organizationId,
-          event,
-          change: 'created',
-          before: null,
-          after: await this.writer.details(trx, event),
-          correlationId: correlationId ?? null,
-        });
-        eventIds.push(event.id);
-      }
-      await this.audit.record(trx, {
-        organizationId,
-        actor: principal,
-        action: 'scheduling.series_created',
-        targetType: 'event_series',
-        targetId: seriesId,
-        afterRevision: series.revision,
+        },
+        maxOccurrences: this.writer.policyFor(facility).maxSeriesOccurrences,
+        conflicts: 'per_event',
         reason: body.reason ?? null,
         correlationId: correlationId ?? null,
-        details: { occurrences: eventIds.length },
       });
       return this.view(series, eventIds);
     });
+  }
+
+  /**
+   * EventSchedulingPort.createEventSeries (SCH-02, IF-31; SPK-COND-003 "reserve all required
+   * resources together", SPK-SCHED-007/008). A weekly series for an owning record (a recurring
+   * rental or party booking, enrollment's `sourceType 'enrollment.booking'`), joined to the
+   * caller's unit of work so the reservations commit or roll back with the booking. Every
+   * occurrence is detected first: any conflict answers RESOURCE_CONFLICT `{ conflicts:
+   * [{ occurrenceIndex, occurrenceStart, conflictingEventIds, details }] }` and nothing is written;
+   * otherwise every occurrence is reserved, the exclusion constraints staying the guarantee (a
+   * concurrent winner fails the reservation and the whole joined unit rolls back).
+   */
+  async createPortSeries(
+    principal: Principal,
+    input: CreateEventSeriesInput,
+  ): Promise<EventSeriesCreated> {
+    const organizationId = organizationOf(principal);
+    const parsed = PortSeriesInput.safeParse(input);
+    if (!parsed.success) {
+      throw errors.validation(
+        'The series request is not valid.',
+        parsed.error.issues.map((i) => ({
+          path: i.path.join('.'),
+          message: i.message,
+          code: i.code,
+        })),
+      );
+    }
+    const data = parsed.data;
+    return this.uow.run(async ({ trx }) => {
+      const facility = await this.writer.loadFacility(trx, organizationId, data.facilityId);
+      await this.authorization.require(principal, SchedulingActions.manageEvents, {
+        type: 'event_series',
+        organizationId,
+        facilityId: facility.id,
+      });
+      await this.writer.assertScheduleAuthority(trx, organizationId, facility.id);
+      this.writer.assertPortSource(principal, data.kind, data.sourceType);
+      const { series, eventIds } = await this.writeSeries(trx, principal, facility, {
+        spec: {
+          kind: data.kind,
+          title: data.title,
+          resourceIds: data.resourceIds,
+          recurrence: data.recurrence,
+          localStartTime: data.localStartTime,
+          durationMinutes: data.durationMinutes,
+          setupMinutes: data.setupMinutes,
+          cleanupMinutes: data.cleanupMinutes,
+          nonexistentPolicy: data.nonexistentPolicy,
+          ambiguousPolicy: data.ambiguousPolicy,
+          exceptions: [],
+          commitments: data.commitments ?? [],
+          sourceType: data.sourceType,
+          sourceId: data.sourceId,
+        },
+        maxOccurrences: PORT_SERIES_MAX_OCCURRENCES,
+        conflicts: 'per_occurrence',
+        reason: null,
+        correlationId: input.correlationId ?? null,
+      });
+      return { seriesId: series.id, eventIds };
+    });
+  }
+
+  /**
+   * EventSchedulingPort.cancelEventSeries (SCH-02, IF-31): cancels every occurrence that starts at
+   * or after `fromInstant` (default now) and is not already canceled, releasing its reservations,
+   * with one `scheduling.event_changed` per published occurrence; the series ends. Occurrences
+   * that started earlier keep their identity (SPK-SCHED-007). Joins the caller's unit of work;
+   * replayed on an ended series it cancels nothing more.
+   */
+  async cancelPortSeries(
+    principal: Principal,
+    seriesId: string,
+    input: CancelEventSeriesInput,
+  ): Promise<{ canceledEventIds: string[] }> {
+    const organizationId = organizationOf(principal);
+    if (!input.reason || input.reason.length > 2000) {
+      throw errors.validation('A cancellation reason of 1 to 2000 characters is required.');
+    }
+    const from = input.fromInstant ? new Date(input.fromInstant) : null;
+    if (from && Number.isNaN(from.getTime())) {
+      throw errors.validation('fromInstant must be an instant.');
+    }
+    return this.uow.run(async ({ trx }) => {
+      const series = await this.load(trx, organizationId, seriesId, true);
+      if (!series) throw errors.notFound('event series', seriesId);
+      await this.authorization.require(principal, SchedulingActions.manageEvents, {
+        type: 'event_series',
+        id: seriesId,
+        organizationId,
+        facilityId: series.facility_id,
+      });
+      await this.writer.assertScheduleAuthority(trx, organizationId, series.facility_id);
+      this.writer.assertPortSource(principal, series.kind, series.source_type);
+      // History keeps its identity (SPK-SCHED-007): an instant in the past never cancels an
+      // occurrence that already started, so the effective start is never before now.
+      const now = this.clock.now();
+      const fromInstant = from && from.getTime() > now.getTime() ? from : now;
+      const occurrences = await trx
+        .selectFrom('events')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('series_id', '=', seriesId)
+        .where('status', '<>', 'canceled')
+        .where('scheduled_start', '>=', fromInstant)
+        .orderBy('occurrence_index')
+        .forUpdate()
+        .execute();
+      const canceledEventIds: string[] = [];
+      for (const event of occurrences) {
+        const wasPublished = event.status === 'published';
+        const before = await this.writer.details(trx, event);
+        const canceled = await this.writer.cancel(trx, event, input.reason);
+        if (wasPublished) {
+          await this.writer.notifyChanged(trx, {
+            organizationId,
+            event: canceled,
+            change: 'canceled',
+            before,
+            after: null,
+            reason: input.reason,
+            correlationId: input.correlationId ?? null,
+          });
+        }
+        canceledEventIds.push(event.id);
+      }
+      if (canceledEventIds.length === 0 && series.status === 'ended') {
+        return { canceledEventIds };
+      }
+      await trx
+        .updateTable('event_series')
+        .set({ status: 'ended', revision: series.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', seriesId)
+        .where('revision', '=', series.revision)
+        .execute();
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: 'scheduling.series_canceled',
+        targetType: 'event_series',
+        targetId: seriesId,
+        beforeRevision: series.revision,
+        afterRevision: series.revision + 1,
+        reason: input.reason,
+        correlationId: input.correlationId ?? null,
+        details: { fromInstant: fromInstant.toISOString(), canceledEventIds },
+      });
+      return { canceledEventIds };
+    });
+  }
+
+  /**
+   * Materializes a series inside the caller's transaction (HTTP create and the port): buffers
+   * (SPK-SCHED-003), occurrences in the facility zone with the required DST resolution
+   * (SPK-SCHED-008), conflict detection over every occurrence before anything is written, then
+   * the series row, each occurrence's event, its reservations and its `created` notice.
+   */
+  private async writeSeries(
+    trx: Trx,
+    principal: Principal,
+    facility: FacilityRow,
+    options: {
+      spec: SeriesSpec;
+      maxOccurrences: number;
+      /** `per_event`: the HTTP conflict details; `per_occurrence`: grouped by occurrence (IF-31). */
+      conflicts: 'per_event' | 'per_occurrence';
+      reason: string | null;
+      correlationId: string | null;
+    },
+  ): Promise<{ series: SeriesRow; eventIds: string[] }> {
+    const { spec } = options;
+    const organizationId = facility.organization_id;
+    const resources = await this.writer.loadResources(
+      trx,
+      organizationId,
+      facility.id,
+      spec.resourceIds,
+    );
+    // SPK-SCHED-003: the reserved resources' turnover requirement is the minimum buffer
+    const buffers = this.writer.effectiveBuffers(resources, spec);
+    if (
+      options.conflicts === 'per_occurrence' &&
+      candidateDates(spec.recurrence, options.maxOccurrences + 1).length > options.maxOccurrences
+    ) {
+      throw errors.validation(
+        `A series through the scheduling port holds at most ${options.maxOccurrences} occurrences.`,
+        { code: 'SERIES_TOO_LONG', maxOccurrences: options.maxOccurrences },
+      );
+    }
+    const occurrences = materializeOccurrences(spec.recurrence, {
+      localStartTime: spec.localStartTime,
+      durationMinutes: spec.durationMinutes,
+      timezone: facility.timezone,
+      policy: {
+        nonexistent: spec.nonexistentPolicy ?? 'shift_forward',
+        ambiguous: spec.ambiguousPolicy ?? 'first',
+      },
+      exceptions: spec.exceptions,
+      maxOccurrences: options.maxOccurrences,
+    });
+    if (occurrences.length === 0) {
+      throw errors.validation('The recurrence rule produces no occurrences.');
+    }
+    // SPK-SCHED-008 "ambiguous or nonexistent times require resolution": a rule whose local start
+    // time falls in a daylight-saving gap or overlap on some date is refused until the scheduler
+    // chooses how to resolve it; the policy defaults are never applied silently.
+    const unresolvedGap = occurrences
+      .filter((o) => o.dstResolution === 'shifted_forward' && spec.nonexistentPolicy === undefined)
+      .map((o) => o.localDate);
+    const unresolvedOverlap = occurrences
+      .filter((o) => o.dstResolution === 'first' && spec.ambiguousPolicy === undefined)
+      .map((o) => o.localDate);
+    if (unresolvedGap.length > 0 || unresolvedOverlap.length > 0) {
+      throw errors.validation(
+        'The local start time does not exist or occurs twice on some dates; choose how to resolve them.',
+        {
+          code: 'dst_resolution_required',
+          nonexistentLocalDates: unresolvedGap,
+          ambiguousLocalDates: unresolvedOverlap,
+          options: {
+            nonexistentPolicy: unresolvedGap.length > 0 ? ['shift_forward', 'skip'] : [],
+            ambiguousPolicy: unresolvedOverlap.length > 0 ? ['first', 'second'] : [],
+          },
+        },
+      );
+    }
+    const commitments = spec.commitments.map((c) => PartyCommitmentSchema.parse(c));
+    const { setupMinutes, cleanupMinutes } = buffers;
+    const resourceIds = resources.map((r) => r.id);
+    const proposals: ProposedEvent[] = occurrences.map((o) => ({
+      key: `occurrence:${o.occurrenceIndex}`,
+      eventId: null,
+      kind: spec.kind,
+      format: null,
+      scheduledStart: o.start,
+      scheduledEnd: o.end,
+      setupMinutes,
+      cleanupMinutes,
+      resourceIds,
+      commitments,
+    }));
+    if (options.conflicts === 'per_event') {
+      await this.writer.detectOrThrow(trx, organizationId, facility, proposals);
+    } else {
+      // SPK-COND-003: one detection over every occurrence; any conflict refuses the whole series
+      const blocking = (
+        await this.writer.detectConflicts(trx, organizationId, facility, proposals)
+      ).filter((c) => c.severity === 'error');
+      if (blocking.length > 0) {
+        throw occurrenceConflictError(
+          occurrences.map((o) => ({
+            occurrenceIndex: o.occurrenceIndex,
+            occurrenceStart: o.start.toISOString(),
+            details: blocking
+              .filter((c) => c.key === `occurrence:${o.occurrenceIndex}`)
+              .map((c) => c.detail),
+          })),
+        );
+      }
+      // the same lock order as publication and series edits (no deadlock between them)
+      await this.writer.lockHolds(trx, organizationId, facility, [{ resourceIds, commitments }]);
+    }
+
+    const seriesId = newId();
+    const now = this.clock.now();
+    const series = await trx
+      .insertInto('event_series')
+      .values({
+        id: seriesId,
+        organization_id: organizationId,
+        facility_id: facility.id,
+        kind: spec.kind,
+        title: spec.title,
+        timezone: facility.timezone,
+        recurrence: json(spec.recurrence),
+        local_start_time: spec.localStartTime,
+        duration_minutes: spec.durationMinutes,
+        setup_minutes: setupMinutes,
+        cleanup_minutes: cleanupMinutes,
+        nonexistent_policy: spec.nonexistentPolicy ?? 'shift_forward',
+        ambiguous_policy: spec.ambiguousPolicy ?? 'first',
+        exceptions: json(spec.exceptions),
+        resource_ids: resourceIds,
+        commitments: json(commitments),
+        source_type: spec.sourceType,
+        source_id: spec.sourceId,
+        // SCH-03: the injected Clock, not the database default
+        created_at: now,
+        updated_at: now,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    const eventIds: string[] = [];
+    for (const occurrence of occurrences) {
+      const event = await this.writer.insertEvent(trx, {
+        organizationId,
+        facilityId: facility.id,
+        timezone: facility.timezone,
+        kind: spec.kind,
+        title: spec.title,
+        format: null,
+        seriesId,
+        occurrenceIndex: occurrence.occurrenceIndex,
+        scheduledStart: occurrence.start,
+        scheduledEnd: occurrence.end,
+        setupMinutes,
+        cleanupMinutes,
+        dstResolution: occurrence.dstResolution,
+        status: 'published',
+        resourceIds,
+        commitments,
+        sourceType: spec.sourceType,
+        sourceId: spec.sourceId,
+      });
+      try {
+        await this.writer.reserve(trx, event, facility);
+      } catch (error) {
+        // a concurrent command took the space after detection: the whole series is refused
+        if (options.conflicts === 'per_occurrence' && DomainError.is(error)) {
+          if (error.code === 'RESOURCE_CONFLICT') {
+            const details = (error.details ?? {}) as { conflicts?: ConflictDetail[] };
+            throw occurrenceConflictError([
+              {
+                occurrenceIndex: occurrence.occurrenceIndex,
+                occurrenceStart: occurrence.start.toISOString(),
+                details: details.conflicts ?? [],
+              },
+            ]);
+          }
+        }
+        throw error;
+      }
+      await this.writer.notifyChanged(trx, {
+        organizationId,
+        event,
+        change: 'created',
+        before: null,
+        after: await this.writer.details(trx, event),
+        reason: options.reason,
+        correlationId: options.correlationId,
+      });
+      eventIds.push(event.id);
+    }
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: 'scheduling.series_created',
+      targetType: 'event_series',
+      targetId: seriesId,
+      afterRevision: series.revision,
+      reason: options.reason,
+      correlationId: options.correlationId,
+      details: {
+        occurrences: eventIds.length,
+        sourceType: spec.sourceType,
+        sourceId: spec.sourceId,
+      },
+    });
+    return { series, eventIds };
   }
 
   async getSeries(principal: Principal, seriesId: string): Promise<EventSeries> {

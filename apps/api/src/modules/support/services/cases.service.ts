@@ -11,8 +11,11 @@ import {
   type AssignCaseInput,
   type Case,
   type CaseDetail,
+  type CustomerCase,
+  type CustomerSupportRequestInput,
   type DomainEvent,
   type ListCasesQuery,
+  type ListMyCasesQuery,
   type OpenCaseInput,
   type Page,
   type Principal,
@@ -24,10 +27,12 @@ import {
   isUniqueViolation,
   json,
   type CaseEventKind,
+  type CaseOpenedVia,
   type CasePriority,
   type CaseStatus,
   type Database,
   type Db,
+  type RecordReference,
 } from '@sportspark/db';
 import { sql, type SqlBool, type UpdateObject } from 'kysely';
 import {
@@ -35,6 +40,9 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
+  OperationalExceptions,
+  OperationsService,
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
@@ -66,6 +74,7 @@ import type { SupportCasesPort, SystemCaseInput } from '../support.ports';
 import {
   addMinutesTo,
   iso,
+  isoOrNull,
   organizationOf,
   recordRefs,
   toCase,
@@ -76,8 +85,16 @@ import {
   type Reader,
 } from '../support.shared';
 import { ExceptionQueuesService } from './exception-queues.service';
+import { RelatedRecordsVerifier } from './related-records';
 
 const ListCursor = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
+
+/** An operation linked to a case that waits for recovery (SUP-04, §4.11). */
+export interface RecoveryOperation {
+  operationId: string;
+  kind: string;
+  status: 'recovery_required';
+}
 
 export interface AppendEventInput {
   kind: CaseEventKind;
@@ -111,6 +128,10 @@ export class CasesService implements SupportCasesPort {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly facilities: FacilityDirectory,
+    private readonly kernelExceptions: OperationalExceptions,
+    private readonly operations: OperationsService,
+    private readonly relatedRecords: RelatedRecordsVerifier,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -149,12 +170,12 @@ export class CasesService implements SupportCasesPort {
         if (input.ownerQueue) await this.queues.assertKnown(trx, organizationId, input.ownerQueue);
         const relatedRecords = uniqueRefs(input.relatedRecords);
         if (input.originExceptionId) {
-          const exception = await trx
-            .selectFrom('operational_exceptions')
-            .select(['id', 'affected_type', 'affected_id'])
-            .where('organization_id', '=', organizationId)
-            .where('id', '=', input.originExceptionId)
-            .executeTakeFirst();
+          // §4.2 (SUP-02): the kernel's exception read, never its table.
+          const exception = await this.kernelExceptions.get(
+            organizationId,
+            input.originExceptionId,
+            trx,
+          );
           if (!exception) throw errors.notFound('exception', input.originExceptionId);
           relatedRecords.push({ type: 'operational_exception', id: exception.id });
           if (exception.affected_type && exception.affected_id) {
@@ -188,6 +209,8 @@ export class CasesService implements SupportCasesPort {
             closed_at: null,
             opened_by: json(snapshotActor(principal)),
             opened_by_person_id: await this.knownPerson(trx, organizationId, principal.personId),
+            // A case that coordinates an exception was opened for that origin record (1102).
+            opened_via: input.originExceptionId ? 'hook' : 'staff',
             created_at: now,
             updated_at: now,
           })
@@ -198,6 +221,7 @@ export class CasesService implements SupportCasesPort {
             ? { type: 'operational_exception', id: input.originExceptionId }
             : null,
           reason: input.reason ?? null,
+          action: SupportActions.openCase,
         });
         return this.detail(trx, organizationId, id);
       });
@@ -261,6 +285,8 @@ export class CasesService implements SupportCasesPort {
         closed_at: null,
         opened_by: json(snapshotActor(actor)),
         opened_by_person_id: null,
+        // An origin record makes it a hook case; without one it is an internal case (1102).
+        opened_via: input.origin ? 'hook' : 'staff',
         created_at: now,
         updated_at: now,
       })
@@ -286,8 +312,177 @@ export class CasesService implements SupportCasesPort {
       priority: input.priority,
       origin: input.origin ?? null,
       reason: null,
+      action: SupportActions.openCase,
     });
     return { caseId: id, deduplicated: false };
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Customer support requests (SUP-01: SPK-SUPPORT-002, SPK-CAP-001, SCR-C-22, SCR-C-38)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * POST /me/support-requests: a customer contacts the operating team about themselves, someone
+   * they hold `view` over, or a team entry they captain (`support.request_support`). The subject,
+   * the team and every linked record are authorized with the customer's own principal; anything
+   * they may not see is not found (§4.10). The case is routed to the queue the support policy
+   * names for its category (pending DEC-015) and the customer later reads only its status.
+   */
+  async requestSupport(
+    principal: Principal,
+    input: CustomerSupportRequestInput,
+    correlationId: string | null,
+  ): Promise<CustomerCase> {
+    const organizationId = organizationOf(principal);
+    if (!principal.personId) throw errors.authenticationRequired();
+    const subjectPersonId = input.subjectPersonId ?? principal.personId;
+    await this.authorization.require(principal, SupportActions.requestSupport, {
+      type: 'support_request',
+      organizationId,
+      subjectPersonIds: [subjectPersonId],
+      protected: true,
+    });
+    if (input.teamEntryId) {
+      // SPK-CAP-001: only the entry's captain contacts the operating team for the team.
+      await this.authorization.require(principal, SupportActions.requestSupport, {
+        type: 'team_entry',
+        id: input.teamEntryId,
+        organizationId,
+        teamEntryId: input.teamEntryId,
+        subjectPersonIds: [],
+        protected: true,
+      });
+    }
+    // The owning modules read through the root database: verify before support's transaction.
+    const linked = await this.relatedRecords.verify(
+      principal,
+      input.relatedRecords.filter((r) => !(r.type === 'team_entry' && r.id === input.teamEntryId)),
+    );
+    const relatedRecords: RecordReference[] = uniqueRefs([
+      ...(input.teamEntryId ? [{ type: 'team_entry', id: input.teamEntryId }] : []),
+      ...linked,
+    ]);
+    const ownerQueue = this.policy.customerRequestQueues[input.category];
+    const priority = this.policy.customerRequestPriority;
+    return this.uow.run(async ({ trx }) => {
+      const subject = await this.persons.findPerson(organizationId, subjectPersonId, trx);
+      if (!subject) throw errors.protectedNotFound('person');
+      if (subject.status === 'merged') {
+        throw errors.validation(
+          'The person was merged; open the request for the surviving record.',
+          {
+            code: 'PERSON_MERGED',
+          },
+        );
+      }
+      const opener = await this.knownPerson(trx, organizationId, principal.personId);
+      if (!opener) throw errors.protectedNotFound('person');
+      await this.queues.assertKnown(trx, organizationId, ownerQueue);
+      const id = newId();
+      const now = this.clock.now();
+      await trx
+        .insertInto('cases')
+        .values({
+          id,
+          organization_id: organizationId,
+          facility_id: null,
+          category: input.category,
+          priority,
+          title: input.title,
+          description: input.description,
+          subject_person_id: subjectPersonId,
+          subject_household_id: null,
+          owner_person_id: null,
+          owner_queue: ownerQueue,
+          related_records: json(relatedRecords),
+          origin_access_review_id: null,
+          origin_exception_id: null,
+          due_at: this.dueAt(now, priority),
+          resolution_kind: null,
+          resolution_summary: null,
+          resolved_at: null,
+          resolved_by: null,
+          closed_at: null,
+          opened_by: json(snapshotActor(principal)),
+          opened_by_person_id: opener,
+          opened_via: 'customer',
+          created_at: now,
+          updated_at: now,
+        })
+        .execute();
+      await this.afterOpen(trx, principal, id, correlationId, {
+        priority,
+        origin: null,
+        reason: input.reason ?? null,
+        action: SupportActions.requestSupport,
+      });
+      const row = await this.load(trx, organizationId, id);
+      if (!row) throw errors.internal('opened case vanished');
+      return toCustomerCase(row);
+    });
+  }
+
+  /** GET /me/cases: the caller's own requests (opened under any of their merged records). */
+  async myCases(principal: Principal, query: ListMyCasesQuery): Promise<Page<CustomerCase>> {
+    const organizationId = organizationOf(principal);
+    const openers = await this.requireOwnRequests(principal, organizationId);
+    const cursor = decodeCursor(query.cursor, ListCursor);
+    let q = this.db
+      .selectFrom('cases')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('opened_via', '=', 'customer')
+      .where('opened_by_person_id', 'in', openers)
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
+    if (query.status) q = q.where('status', '=', query.status);
+    if (cursor) {
+      q = q.where(
+        sql<SqlBool>`(created_at, id) < (${new Date(cursor.createdAt)}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const rows = await q.execute();
+    const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
+    return {
+      items: rows.slice(0, query.limit).map(toCustomerCase),
+      nextCursor: last ? encodeCursor({ createdAt: iso(last.created_at), id: last.id }) : null,
+    };
+  }
+
+  /** GET /me/cases/{id}: one of the caller's own requests; anyone else's is not found. */
+  async myCase(principal: Principal, id: string): Promise<CustomerCase> {
+    const organizationId = organizationOf(principal);
+    const openers = await this.requireOwnRequests(principal, organizationId);
+    const row = await this.load(this.db, organizationId, id);
+    if (
+      !row ||
+      row.opened_via !== 'customer' ||
+      !row.opened_by_person_id ||
+      !openers.includes(row.opened_by_person_id)
+    ) {
+      throw errors.protectedNotFound('case');
+    }
+    return toCustomerCase(row);
+  }
+
+  /** The people whose requests are the caller's (SUP-05: their merged records resolve to them). */
+  private async requireOwnRequests(principal: Principal, organizationId: string) {
+    const personId = principal.personId;
+    if (!personId) throw errors.protectedNotFound('case');
+    await this.authorization.require(principal, SupportActions.requestSupport, {
+      type: 'support_request',
+      organizationId,
+      subjectPersonIds: [personId],
+      protected: true,
+    });
+    return this.resolvingIds(organizationId, personId);
+  }
+
+  /** `[canonical, ...merged into it]` (IF-09, SPK-IAM-007); the id itself when unknown. */
+  async resolvingIds(organizationId: string, personId: string, trx?: Trx): Promise<string[]> {
+    const ids = await this.persons.personIdsResolvingTo(organizationId, personId, trx);
+    return ids.length > 0 ? ids : [personId];
   }
 
   private async afterOpen(
@@ -299,6 +494,7 @@ export class CasesService implements SupportCasesPort {
       priority: CasePriority;
       origin: { type: string; id: string } | null;
       reason: string | null;
+      action: ActionDefinition;
     },
   ): Promise<void> {
     const row = await this.loadForUpdate(trx, actor.organizationId as string, id);
@@ -313,7 +509,7 @@ export class CasesService implements SupportCasesPort {
     await this.audit.record(trx, {
       organizationId: row.organization_id,
       actor,
-      action: SupportActions.openCase.id,
+      action: extra.action.id,
       targetType: 'support_case',
       targetId: id,
       afterRevision: 1,
@@ -325,6 +521,7 @@ export class CasesService implements SupportCasesPort {
         priority: row.priority,
         subjectPersonId: row.subject_person_id,
         origin: extra.origin,
+        openedVia: row.opened_via,
       },
     });
     await this.outbox.enqueue(trx, CaseOpened, {
@@ -340,6 +537,7 @@ export class CasesService implements SupportCasesPort {
         ownerPersonId: row.owner_person_id,
         ownerQueue: row.owner_queue,
         origin: extra.origin,
+        openedVia: row.opened_via,
       },
       correlationId,
     });
@@ -355,6 +553,31 @@ export class CasesService implements SupportCasesPort {
     if (!row) throw errors.protectedNotFound('case');
     await this.requireOn(principal, SupportActions.readCase, row);
     return this.detail(this.db, organizationId, id);
+  }
+
+  /** Case views with each subject's surviving person (SUP-05; the subject id is never rewritten). */
+  async views(db: Reader, rows: readonly CaseRow[]): Promise<Case[]> {
+    const now = this.clock.now();
+    const canonical = new Map<string, string>();
+    for (const row of rows) {
+      const subject = row.subject_person_id;
+      if (!subject || canonical.has(subject)) continue;
+      canonical.set(
+        subject,
+        await this.persons.resolveCanonicalPersonId(
+          row.organization_id,
+          subject,
+          transactionOf(db),
+        ),
+      );
+    }
+    return rows.map((row) =>
+      toCase(
+        row,
+        now,
+        row.subject_person_id ? (canonical.get(row.subject_person_id) ?? null) : null,
+      ),
+    );
   }
 
   async list(principal: Principal, query: ListCasesQuery): Promise<Page<Case>> {
@@ -376,8 +599,26 @@ export class CasesService implements SupportCasesPort {
     if (query.category) q = q.where('category', '=', query.category);
     if (query.ownerPersonId) q = q.where('owner_person_id', '=', query.ownerPersonId);
     if (query.ownerQueue) q = q.where('owner_queue', '=', query.ownerQueue);
-    if (query.subjectPersonId) q = q.where('subject_person_id', '=', query.subjectPersonId);
+    if (query.subjectPersonId) {
+      // SUP-05 (SPK-IAM-007): a survivor's search includes the cases of people merged into it.
+      const ids = await this.resolvingIds(organizationId, query.subjectPersonId);
+      q = q.where('subject_person_id', 'in', ids);
+    }
     if (query.facilityId) q = q.where('facility_id', '=', query.facilityId);
+    switch (query.origin) {
+      case 'staff':
+      case 'customer':
+        q = q.where('opened_via', '=', query.origin);
+        break;
+      case 'access_review':
+        q = q.where('origin_access_review_id', 'is not', null);
+        break;
+      case 'exception':
+        q = q.where('origin_exception_id', 'is not', null);
+        break;
+      default:
+        break;
+    }
     // Facility-scoped staff see cases of their facilities and organization-wide cases (§4.3),
     // through the roles that hold the read action (§4.14, identity-05).
     const scope = listFacilityScope(principal, SupportActions.readCase);
@@ -395,8 +636,7 @@ export class CasesService implements SupportCasesPort {
       );
     }
     const rows = await q.execute();
-    const now = this.clock.now();
-    const items = rows.slice(0, query.limit).map((r) => toCase(r, now));
+    const items = await this.views(this.db, rows.slice(0, query.limit));
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
     return {
       items,
@@ -404,27 +644,44 @@ export class CasesService implements SupportCasesPort {
     };
   }
 
-  /** Cases about any of the people (timeline source); authorization is the caller's. */
-  async casesAbout(organizationId: string, personIds: readonly string[], limit: number) {
+  /**
+   * Timeline source (SPK-SUPPORT-001, SUP-03): the opening, reopening, resolution and closure of
+   * the cases about any of `personIds`, newest first after `after` (case history keyset).
+   * Authorization is the caller's.
+   */
+  async statusHistoryAbout(
+    organizationId: string,
+    personIds: readonly string[],
+    after: { at: string; id: string } | null,
+    limit: number,
+  ) {
     if (personIds.length === 0) return [];
-    return this.db
-      .selectFrom('cases')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .where('subject_person_id', 'in', [...personIds])
-      .orderBy('created_at', 'desc')
-      .limit(limit)
-      .execute();
-  }
-
-  async casesByIds(organizationId: string, ids: readonly string[]) {
-    if (ids.length === 0) return [];
-    return this.db
-      .selectFrom('cases')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .where('id', 'in', [...ids])
-      .execute();
+    let q = this.db
+      .selectFrom('case_events as e')
+      .innerJoin('cases as c', (join) =>
+        join.onRef('c.organization_id', '=', 'e.organization_id').onRef('c.id', '=', 'e.case_id'),
+      )
+      .selectAll('c')
+      .select([
+        'e.id as event_id',
+        'e.occurred_at as event_at',
+        'e.from_status as event_from',
+        'e.to_status as event_to',
+        'e.details as event_details',
+      ])
+      .where('e.organization_id', '=', organizationId)
+      .where('e.kind', '=', 'status')
+      .where('e.to_status', 'in', ['open', 'resolved', 'closed'])
+      .where('c.subject_person_id', 'in', [...personIds])
+      .orderBy('e.occurred_at', 'desc')
+      .orderBy('e.id', 'desc')
+      .limit(limit);
+    if (after) {
+      q = q.where(
+        sql<SqlBool>`(e.occurred_at, e.id) < (${new Date(after.at)}::timestamptz, ${after.id}::uuid)`,
+      );
+    }
+    return q.execute();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -565,6 +822,13 @@ export class CasesService implements SupportCasesPort {
     correlationId: string | null,
   ): Promise<CaseDetail> {
     const organizationId = organizationOf(principal);
+    // SUP-04: the operations linked to the case are read before support's transaction (the
+    // kernel's operation read uses the root database); the refusal itself comes after the case's
+    // own authorization, so a caller who may not see the case learns nothing from it.
+    const recovery =
+      input.event === 'resolve' || input.event === 'close'
+        ? await this.relatedRecovery(organizationId, id)
+        : [];
     return this.uow.run(async ({ trx }) => {
       const row = await this.loadForUpdate(trx, organizationId, id);
       if (!row) throw errors.protectedNotFound('case');
@@ -614,6 +878,20 @@ export class CasesService implements SupportCasesPort {
           );
         }
       }
+      // SUP-04, after the rules no acknowledgment overrides (unsettled actions, action taken).
+      if (recovery.length > 0 && !input.acknowledgeOpenRecovery) {
+        // §4.11 "unknown kept explicit until reconciled": a case is not resolved or closed as if
+        // its related work were done while that work still waits for recovery.
+        throw new DomainError(
+          'RESOURCE_CONFLICT',
+          'A record related to this case is still in recovery; acknowledge it with a reason to resolve or close the case anyway.',
+          { details: { code: 'RELATED_RECORD_IN_RECOVERY', operations: recovery } },
+        );
+      }
+      const acknowledgedRecovery =
+        recovery.length > 0 && input.acknowledgeOpenRecovery
+          ? recovery.map((r) => r.operationId)
+          : null;
       await this.updateRow(trx, row, {
         status: to,
         ...(to === 'resolved'
@@ -640,7 +918,11 @@ export class CasesService implements SupportCasesPort {
         fromStatus: row.status,
         toStatus: to,
         body: input.resolution?.summary ?? null,
-        details: { event: input.event, resolutionKind: input.resolution?.kind ?? null },
+        details: {
+          event: input.event,
+          resolutionKind: input.resolution?.kind ?? null,
+          ...(acknowledgedRecovery ? { acknowledgedOpenRecovery: acknowledgedRecovery } : {}),
+        },
         actor: principal,
       });
       await this.audit.record(trx, {
@@ -659,6 +941,8 @@ export class CasesService implements SupportCasesPort {
           from: row.status,
           to,
           resolutionKind: input.resolution?.kind ?? null,
+          // SUP-04: who resolved or closed past an open recovery, of which operations, and why.
+          ...(acknowledgedRecovery ? { acknowledgedOpenRecovery: acknowledgedRecovery } : {}),
         },
       });
       await this.outbox.enqueue(trx, CaseStatusChanged, {
@@ -766,65 +1050,42 @@ export class CasesService implements SupportCasesPort {
   }
 
   /**
-   * `identity.persons_merged`: live cases about the merged person move to the survivor with a
-   * history entry; closed cases keep their history and are indexed for the survivor's timeline
-   * (SPK-IAM-007 "preserve history").
+   * SUP-04 (§4.11, SPK-UX-006): the operations linked to a case — its case actions' command and
+   * coordinating operations and related records of type `operation` — that are
+   * `recovery_required`, read through the kernel's OperationsService (a lookup by id, after which
+   * the case's own authorization applies). Other record types keep their recovery state in their
+   * owning module, which exposes no such read yet.
    */
-  async onPersonsMerged(
-    trx: Trx,
-    event: DomainEvent<{ survivorPersonId: string; mergedPersonId: string }>,
-  ): Promise<void> {
-    const organizationId = event.organizationId;
-    const { survivorPersonId, mergedPersonId } = event.payload;
-    const actor = systemPrincipal(organizationId, 'support.person_merge');
-    const rows = await trx
-      .selectFrom('cases')
-      .selectAll()
+  async relatedRecovery(organizationId: string, caseId: string): Promise<RecoveryOperation[]> {
+    const row = await this.load(this.db, organizationId, caseId);
+    if (!row) return [];
+    const actions = await this.db
+      .selectFrom('case_actions')
+      .select(['command_operation_id', 'support_operation_id'])
       .where('organization_id', '=', organizationId)
-      .where('subject_person_id', '=', mergedPersonId)
-      .forUpdate()
+      .where('case_id', '=', caseId)
       .execute();
-    for (const row of rows) {
-      await trx
-        .insertInto('timeline_references')
-        .values({
-          id: newId(),
-          organization_id: organizationId,
-          person_id: survivorPersonId,
-          record_type: 'support_case',
-          record_id: row.id,
-          relation: 'subject',
-          facility_id: row.facility_id,
-          occurred_at: row.created_at,
-          source_event_id: event.id,
-          source_event_type: event.type,
-          summary: json({ mergedPersonId }),
-        })
-        .onConflict((oc) =>
-          oc
-            .columns([
-              'organization_id',
-              'source_event_id',
-              'person_id',
-              'record_type',
-              'record_id',
-            ])
-            .doNothing(),
-        )
-        .execute();
-      if (row.status === 'closed') continue;
-      await this.updateRow(trx, row, { subject_person_id: survivorPersonId });
-      const updated = await this.reload(trx, row);
-      await this.appendEvent(trx, updated, {
-        kind: 'update',
-        details: {
-          fields: ['subjectPersonId'],
-          merge: { from: mergedPersonId, to: survivorPersonId },
-          sourceEventId: event.id,
-        },
-        actor,
-      });
+    const ids = new Set<string>();
+    for (const a of actions) {
+      if (a.command_operation_id) ids.add(a.command_operation_id);
+      if (a.support_operation_id) ids.add(a.support_operation_id);
     }
+    for (const ref of recordRefs(row.related_records)) {
+      if (ref.type === 'operation' && OperationId.safeParse(ref.id).success) ids.add(ref.id);
+    }
+    const lookup = systemPrincipal(organizationId, 'support.case_recovery_check');
+    const out: RecoveryOperation[] = [];
+    for (const operationId of [...ids].sort()) {
+      try {
+        const operation = await this.operations.find(lookup, operationId);
+        if (operation.status === 'recovery_required') {
+          out.push({ operationId, kind: operation.kind, status: 'recovery_required' });
+        }
+      } catch (error) {
+        if (!DomainError.is(error) || error.code !== 'NOT_FOUND') throw error;
+      }
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -930,8 +1191,10 @@ export class CasesService implements SupportCasesPort {
       .orderBy('requested_at')
       .orderBy('id')
       .execute();
+    const [view] = await this.views(db, [row]);
+    if (!view) throw errors.internal('case view vanished');
     return {
-      ...toCase(row, this.clock.now()),
+      ...view,
       events: events.map(toCaseEvent),
       actions: actions.map(toCaseAction),
     };
@@ -984,13 +1247,9 @@ export class CasesService implements SupportCasesPort {
   }
 
   private async assertFacility(db: Reader, organizationId: string, facilityId: string) {
-    const facility = await db
-      .selectFrom('facilities')
-      .select('id')
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', facilityId)
-      .executeTakeFirst();
-    if (!facility) throw errors.notFound('facility', facilityId);
+    // §4.2 (SUP-02): the kernel's facility directory, never its table.
+    const found = await this.facilities.describe(organizationId, [facilityId], db);
+    if (!found.has(facilityId)) throw errors.notFound('facility', facilityId);
   }
 
   private async assertPerson(trx: Trx, organizationId: string, personId: string): Promise<void> {
@@ -1031,3 +1290,25 @@ export class CasesService implements SupportCasesPort {
     return person ? person.id : null;
   }
 }
+
+const OperationId = z.uuid();
+
+/** The handle to pass a port: the transaction itself, or none (the port reads the root database). */
+function transactionOf(db: Reader): Trx | undefined {
+  return 'isTransaction' in db && db.isTransaction ? (db as Trx) : undefined;
+}
+
+/** SUP-01: what a customer sees of their own request — never notes, owner or internals (§4.14). */
+export function toCustomerCase(row: CaseRow): CustomerCase {
+  return {
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    status: row.status,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    resolvedAt: isoOrNull(row.resolved_at),
+  };
+}
+
+export type { CaseOpenedVia };

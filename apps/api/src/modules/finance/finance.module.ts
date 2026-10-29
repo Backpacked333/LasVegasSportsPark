@@ -1,4 +1,5 @@
 import {
+  Inject,
   Logger,
   Module,
   type OnModuleDestroy,
@@ -10,21 +11,32 @@ import type { EventPayload } from '@sportspark/contracts';
 import {
   APP_CONFIG,
   BackgroundWorkers,
+  INTEGRATION_REGISTRY,
+  PeriodicJobRegistry,
   RecoveryChecks,
   EventHandlerRegistry,
   Inbox,
+  moduleSettings,
   runWithTransaction,
   type AppConfig,
+  type IntegrationRegistryPort,
 } from '../../kernel';
 import { CatalogModule } from '../catalog';
+import { CommunicationsModule } from '../communications';
 import { CompetitionModule, FINANCIAL_CONDITIONS_IMPL } from '../competition';
 import { EnrollmentModule, FINANCE_POLICY_IMPL } from '../enrollment';
+// IF-39: entry declares the port finance provides; its declaration file is imported directly
+// because entry's module imports finance (an import of entry's index would be a cycle).
+import { FINANCIAL_STANDING_IMPL } from '../entry/entry.ports';
 import { IdentityModule } from '../identity';
+import { AccountingController } from './controllers/accounting.controller';
 import {
   CheckoutsController,
+  MeMoneyController,
   OrdersController,
   QuotesController,
 } from './controllers/checkouts.controller';
+import { PosSalesController, PosSetupController } from './controllers/pos.controller';
 import {
   CreditsController,
   InstallmentsController,
@@ -35,23 +47,45 @@ import { PaymentWebhooksController, PaymentsController } from './controllers/pay
 import {
   CheckoutExpiryDue,
   CheckoutPaymentReceived,
+  ContributionRequested,
+  InstallmentFailed,
+  InstallmentNotice,
   InstallmentNoticeDue,
+  PaymentFailed,
   RefundSettled,
 } from './finance.events';
+import { FinanceSettings } from './finance.settings';
 import { DEFAULT_FINANCE_POLICY, FINANCE_POLICY_CONFIG } from './finance.policy';
 import {
+  ACCOUNTING_EXPORT_PORT,
   PAYMENT_PROVIDER_PORT,
   RECORD_AUTHORITY_IMPL,
   RECORD_AUTHORITY_PORT,
+  type AccountingExportPort,
   type PaymentProviderPort,
   type RecordAuthorityPort,
 } from './finance.ports';
 import { LedgerService } from './ledger/ledger.service';
+import {
+  FAKE_ACCOUNTING_PROVIDER,
+  FakeAccountingProvider,
+} from './providers/fake-accounting.provider';
 import { FAKE_PAYMENTS_PROVIDER, FakePaymentProvider } from './providers/fake-payment.provider';
+import {
+  AccountingExportService,
+  RECONCILE_ACCOUNTING_JOB,
+} from './services/accounting/accounting-export.service';
 import { CashTendersService } from './services/cash-tenders.service';
 import { CheckoutFinalizer } from './services/checkout-finalizer.service';
 import { CheckoutService } from './services/checkout.service';
 import { CreditsService } from './services/credits.service';
+import { FinanceCustomerScope } from './services/customer-scope';
+import { FinanceNotices } from './services/finance-notices.service';
+import { FinancialStandingService } from './services/financial-standing.service';
+import { MoneyReadsService } from './services/money-reads.service';
+import { PosSaleFinalizer } from './services/pos/pos-sale-finalizer.service';
+import { PosSalesService } from './services/pos/pos-sales.service';
+import { PosSetupService } from './services/pos/pos-setup.service';
 import { FinancePolicyAdapter } from './services/finance-policy.adapter';
 import { ParticipationStandingService } from './services/participation-standing.service';
 import { FinancePolicyResolver } from './services/finance-policy.resolver';
@@ -109,6 +143,21 @@ const providers: Provider[] = [
   // Provider-selection gate (§5.2, DEC-019): only the deterministic fake exists; it is refused in
   // production so no real money is ever "taken" by a fake.
   FakePaymentProvider,
+  // IF-37 (declared by stage 3; FIN-07 uses it): the accounting connection is not selected
+  // (DEC-022); only the deterministic fake exists, refused in production like the payment fake.
+  FakeAccountingProvider,
+  {
+    provide: ACCOUNTING_EXPORT_PORT,
+    inject: [APP_CONFIG, FakeAccountingProvider],
+    useFactory: (config: AppConfig, fake: FakeAccountingProvider): AccountingExportPort => {
+      if (config.NODE_ENV === 'production') {
+        throw new Error(
+          'No accounting connection is selected (specification §5.2, DEC-022): implement the adapter behind AccountingExportPort before production.',
+        );
+      }
+      return fake;
+    },
+  },
   {
     provide: PAYMENT_PROVIDER_PORT,
     inject: [APP_CONFIG, FakePaymentProvider],
@@ -139,10 +188,25 @@ const providers: Provider[] = [
   // Enrollment's FinancePolicyPort (transfer/cancellation consequences), resolved lazily there.
   FinancePolicyAdapter,
   { provide: FINANCE_POLICY_IMPL, useExisting: FinancePolicyAdapter },
-  // Fixture readiness "Applicable financial conditions" (SPK-READY-001) and the arrival standing
-  // entry reads (SPK-ENTRY-004).
+  // Fixture readiness "Applicable financial conditions" (SPK-READY-001).
   ParticipationStandingService,
   { provide: FINANCIAL_CONDITIONS_IMPL, useExisting: ParticipationStandingService },
+  // FIN-03, IF-39: entry's arrival checks read real balances (SPK-ENTRY-004); entry's approved
+  // policy decides whether one blocks (POL-017, DEC-056).
+  FinancialStandingService,
+  { provide: FINANCIAL_STANDING_IMPL, useExisting: FinancialStandingService },
+  // FIN-01/02: customer and staff money lists.
+  FinanceCustomerScope,
+  MoneyReadsService,
+  // FIN-05: finance-owned customer notices (IF-22).
+  FinanceNotices,
+  // FIN-06: point of sale (capability point_of_sale, DEC-016, DEC-079).
+  PosSaleFinalizer,
+  PosSetupService,
+  PosSalesService,
+  // FIN-07: accounting export (capability accounting, DEC-016, DEC-081; connection DEC-022).
+  moduleSettings(FinanceSettings.module),
+  AccountingExportService,
 ];
 
 /**
@@ -156,12 +220,22 @@ const providers: Provider[] = [
  * entries through competition's query port. Never writes another module's tables. See README.md.
  */
 @Module({
-  imports: [IdentityModule, CatalogModule, CompetitionModule, EnrollmentModule],
+  imports: [
+    IdentityModule,
+    CatalogModule,
+    CompetitionModule,
+    CommunicationsModule,
+    EnrollmentModule,
+  ],
   providers,
   controllers: [
     QuotesController,
     CheckoutsController,
     OrdersController,
+    MeMoneyController,
+    PosSetupController,
+    PosSalesController,
+    AccountingController,
     PaymentsController,
     PaymentWebhooksController,
     ObligationsController,
@@ -172,6 +246,8 @@ const providers: Provider[] = [
   exports: [
     PAYMENT_PROVIDER_PORT,
     FakePaymentProvider,
+    ACCOUNTING_EXPORT_PORT,
+    FakeAccountingProvider,
     FINANCE_POLICY_CONFIG,
     LedgerService,
     FinancePolicyResolver,
@@ -188,6 +264,11 @@ const providers: Provider[] = [
     ReconciliationService,
     FinanceWorker,
     ParticipationStandingService,
+    FinancialStandingService,
+    MoneyReadsService,
+    PosSalesService,
+    PosSetupService,
+    AccountingExportService,
   ],
 })
 export class FinanceModule implements OnModuleInit, OnModuleDestroy {
@@ -200,9 +281,41 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
     private readonly webhooks: PaymentWebhooksService,
     private readonly worker: FinanceWorker,
     private readonly recoveryChecks: RecoveryChecks,
+    private readonly notices: FinanceNotices,
+    private readonly posSales: PosSaleFinalizer,
+    private readonly accounting: AccountingExportService,
+    private readonly periodicJobs: PeriodicJobRegistry,
+    @Inject(INTEGRATION_REGISTRY) private readonly integrations: IntegrationRegistryPort,
   ) {}
 
   onModuleInit(): void {
+    // §5.1, §5.2 (FIN-02, FIN-07; K-09): the adapters finance runs, all deterministic fakes refused
+    // in production; their outcomes are reconciled by the finance operator.
+    this.integrations.register({
+      id: 'finance.payment_provider',
+      gate: 'payments',
+      port: 'PAYMENT_PROVIDER_PORT',
+      adapter: { name: FAKE_PAYMENTS_PROVIDER, kind: 'fake' },
+      productionAllowed: false,
+      scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
+      reconciliationOwner: 'finance_operator',
+    });
+    this.integrations.register({
+      id: 'finance.accounting_export',
+      gate: 'accounting',
+      port: 'ACCOUNTING_EXPORT_PORT',
+      adapter: { name: FAKE_ACCOUNTING_PROVIDER, kind: 'fake' },
+      productionAllowed: false,
+      scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
+      reconciliationOwner: 'finance_operator',
+    });
+    // FIN-07 (§4.12, IF-24): an unknown or stale submitted batch is asked about, never stranded.
+    this.periodicJobs.register({
+      name: RECONCILE_ACCOUNTING_JOB,
+      intervalSeconds: 60,
+      failureOwner: 'finance_operator',
+      run: (context) => this.accounting.reconcile(context),
+    });
     // §5.8, SPK-AT-028: after a restore, normal operation resumes only once payment and refund
     // facts are reconciled with the provider.
     this.recoveryChecks.register('finance.provider_facts', financeRecoveryBlockers);
@@ -275,6 +388,45 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
             event.payload.installmentId,
             event.correlationId,
           ),
+        ),
+      { failureOwner: 'finance_operator' },
+    );
+    // FIN-05 (SPK-COMMS-002, SPK-PAY-004, SPK-PAY-006): finance composes its own notices in the
+    // handler's transaction, one per event (IF-22).
+    this.registry.on<EventPayload<typeof ContributionRequested>>(
+      ContributionRequested.type,
+      'finance.notify_contribution_requested',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.contributionRequested(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    this.registry.on<EventPayload<typeof PaymentFailed>>(
+      PaymentFailed.type,
+      'finance.notify_payment_failed',
+      (event, ctx) => runWithTransaction(ctx.trx, () => this.notices.paymentFailed(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    this.registry.on<EventPayload<typeof InstallmentFailed>>(
+      InstallmentFailed.type,
+      'finance.notify_installment_failed',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.installmentFailed(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    this.registry.on<EventPayload<typeof InstallmentNotice>>(
+      InstallmentNotice.type,
+      'finance.notify_installment_due',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.installmentNotice(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    // FIN-06: a failed card refund of a point-of-sale return is owned by the finance operator.
+    this.registry.on<EventPayload<typeof RefundSettled>>(
+      RefundSettled.type,
+      'finance.pos_return_refund_outcome',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.posSales.onRefundSettled(ctx.trx, event.organizationId, event.payload),
         ),
       { failureOwner: 'finance_operator' },
     );

@@ -85,6 +85,7 @@ describe('SCR-C-25 ContributionScreen', () => {
       status: 200,
       body: paymentAttempt({ status: 'succeeded' }),
     });
+    await app.settle(); // no read from before the answer is still in flight
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });
@@ -162,6 +163,9 @@ describe('SCR-C-25 ContributionScreen', () => {
       status: 200,
       body: paymentAttempt({ status: 'failed', failureReason: 'Declined.' }),
     });
+    // A read that started before the provider answered may still be in flight; let it finish so
+    // "Check again" is not merged into it and reads the new answer.
+    await app.settle();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });

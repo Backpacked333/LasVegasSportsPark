@@ -1,4 +1,4 @@
-import type { ObservedState } from '@sportspark/contracts';
+import { z, type ObservedState } from '@sportspark/contracts';
 import type { Trx } from '../../kernel';
 
 /**
@@ -65,3 +65,41 @@ export interface AttendancePort {
   ): Promise<{ visitId: string; arrivedAt: Date } | null>;
 }
 export const ATTENDANCE_PORT = Symbol('ATTENDANCE_PORT');
+
+// ---------------------------------------------------------------------------------------------
+// Access hardware (ENT-05, IF-38; §3.16 Access hardware, SPK-COND-004, §5.2 hardware gate)
+// ---------------------------------------------------------------------------------------------
+
+/** A command for one access device; a missing policy means deny-all. */
+export interface AccessDeviceCommand {
+  organizationId: string;
+  /** The provider's reference of the device. */
+  deviceRef: string;
+  /** Deduplication key: the device applies one command once. */
+  commandId: string;
+  kind: 'revoke_credential' | 'sync_policy';
+  payload: { passReferenceHash?: string; policy?: Record<string, unknown> };
+}
+
+export type AccessDeviceCommandResult =
+  { outcome: 'delivered' } | { outcome: 'failed' | 'unknown'; error: string };
+
+/**
+ * Commands to access devices (the hardware vendor is not selected, DEC-023). Called OUTSIDE any
+ * database transaction (§4.11); never throws for an outcome: a lost answer is `unknown` and the
+ * device's receipt (inbox type `device.command_receipt`) settles it. The deterministic
+ * `FakeAccessControlProvider` is the only adapter (success, failure, timeout with an unknown
+ * outcome, duplicate receipts).
+ */
+export interface AccessDevicePort {
+  readonly name: string;
+  sendCommand(command: AccessDeviceCommand): Promise<AccessDeviceCommandResult>;
+}
+export const ACCESS_DEVICE_PORT = Symbol('ACCESS_DEVICE_PORT');
+
+/** Fake provider inbox payloads ENT-05 ingests (`device.heartbeat`, `device.command_receipt`). */
+export const DeviceHeartbeatSchema = z.object({ deviceRef: z.string().min(1), at: z.string() });
+export const DeviceCommandReceiptSchema = z.object({
+  commandId: z.string().min(1),
+  outcome: z.enum(['delivered', 'failed']),
+});

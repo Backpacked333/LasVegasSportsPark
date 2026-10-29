@@ -24,7 +24,11 @@ import {
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { FinanceActions } from '../finance.actions';
 import {
+  afterKeysetAsc,
+  decodeKeyset,
   isStaffLike,
+  keysetAt,
+  keysetPage,
   organizationOf,
   toCredit,
   type CreditRow,
@@ -87,18 +91,22 @@ export class CreditsService {
       subjectPersonIds: [query.ownerPersonId],
       protected: true,
     });
-    const rows = await this.db
+    // FIN-02 (§4.5): keyset pages in (created_at, id) order.
+    const cursor = decodeKeyset(query.cursor);
+    let q = this.db
       .selectFrom('credits')
       .selectAll()
+      .select(keysetAt('credits').as('cursor_at'))
       .where('organization_id', '=', organizationId)
       .where('owner_person_id', '=', query.ownerPersonId)
       .orderBy('created_at')
       .orderBy('id')
-      .limit(query.limit)
-      .execute();
+      .limit(query.limit + 1);
+    if (cursor) q = q.where(afterKeysetAsc('credits', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
     const items: Credit[] = [];
-    for (const row of rows) items.push(await this.view(this.db, row));
-    return { items, nextCursor: null };
+    for (const row of page.rows) items.push(await this.view(this.db, row));
+    return { items, nextCursor: page.nextCursor };
   }
 
   /**

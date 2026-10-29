@@ -36,8 +36,19 @@ export type ImportEntityType =
   | 'communication_preference';
 
 /** Entity types whose rows the module applies through the owning module's public service. */
+/** Entity types an external mapping can link (migrations 1200 and 1201, MIG-02). */
 export type MappedEntityType =
-  'person' | 'household' | 'relationship_evidence' | 'program' | 'open_obligation' | 'credit';
+  | 'person'
+  | 'household'
+  | 'relationship_evidence'
+  | 'program'
+  | 'open_obligation'
+  | 'credit'
+  | 'season'
+  | 'team'
+  | 'roster'
+  | 'future_schedule'
+  | 'communication_preference';
 
 export type ImportBatchStatus = 'received' | 'validated' | 'reviewed' | 'applied' | 'aborted';
 export type ImportRowOutcome = 'created' | 'matched' | 'updated' | 'skipped' | 'exception';
@@ -132,6 +143,15 @@ export interface ExternalMappingsTable {
   program_id: string | null;
   obligation_id: string | null;
   credit_id: string | null;
+  /** MIG-02 (migration 1201): operational targets; a `team` row maps a team or a team entry. */
+  season_id: Generated<string | null>;
+  team_id: Generated<string | null>;
+  team_entry_id: Generated<string | null>;
+  roster_membership_id: Generated<string | null>;
+  event_id: Generated<string | null>;
+  preference_import_id: Generated<string | null>;
+  /** The record id reserved before the owning module's import command runs; never changes. */
+  reserved_record_id: Generated<string | null>;
   internal_id: MigrationGenerated<string | null>;
   applied_payload_hash: string | null;
   first_seen_batch_id: string;

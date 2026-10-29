@@ -36,7 +36,7 @@ import {
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
 import { SchedulingActions } from '../scheduling.actions';
 import { EventWriter } from './event-writer';
-import { organizationOf } from './events.service';
+import { organizationOf } from './organization';
 
 type ResourceRow = Selectable<ResourcesTable>;
 type ConfigurationRow = Selectable<ResourceConfigurationsTable>;
@@ -704,6 +704,8 @@ export class ResourcesService {
           ...colliding.map((c) => c.event_id).sort(),
         ]);
       }
+      // SCH-03: holds are stamped from the injected Clock, like every other hold writer.
+      const stampedAt = this.clock.now();
       for (const unitId of missing) {
         try {
           await trx
@@ -715,6 +717,8 @@ export class ResourcesService {
               event_id: reservation.event_id,
               conflict_unit_id: unitId,
               occupied,
+              created_at: stampedAt,
+              updated_at: stampedAt,
             })
             .execute();
         } catch (error) {

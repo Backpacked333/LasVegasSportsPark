@@ -90,10 +90,16 @@ export class DomainExceptionFilter implements ExceptionFilter {
     const { status, body } = toErrorResponse(exception, correlationId);
     if (DomainError.is(exception)) {
       if (status >= 500) {
-        this.logger.error(
-          `[${correlationId}] ${exception.code}: ${exception.message}`,
-          exception.stack,
-        );
+        // K-10: a raised 5xx outcome (INTEGRATION_UNAVAILABLE: a provider or recovery pause) is an
+        // expected domain answer, logged at warn; an INTERNAL_ERROR is a fault, logged at error.
+        if (exception.code === 'INTERNAL_ERROR') {
+          this.logger.error(
+            `[${correlationId}] ${exception.code}: ${exception.message}`,
+            exception.stack,
+          );
+        } else {
+          this.logger.warn(`[${correlationId}] ${exception.code}: ${exception.message}`);
+        }
       }
     } else if (exception instanceof HttpException) {
       if (status >= 500) this.logger.error(`[${correlationId}] ${body.message}`, exception.stack);

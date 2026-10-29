@@ -49,6 +49,9 @@ export const INTENT_LABELS: Record<Enrollment['intent'], string> = {
   makeup: 'Makeup session',
   pickup: 'Pickup session',
   rental_request: 'Rental request',
+  membership: 'Membership',
+  package_purchase: 'Session package',
+  party_request: 'Party booking',
 };
 
 export function offeringLabel(

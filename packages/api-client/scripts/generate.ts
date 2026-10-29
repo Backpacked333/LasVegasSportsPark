@@ -30,9 +30,12 @@ const BANNER = [
 export async function renderPaths(documentPath: string = OPENAPI_DOCUMENT): Promise<string> {
   const document = JSON.parse(readFileSync(documentPath, 'utf8')) as OpenAPI3;
   // `alphabetize` keeps the output stable when the emitter reorders paths or schemas.
+  // `defaultNonNullable: false`: a field with a default is optional in a request (the API applies
+  // the default), never typed as a value the client must send (K-01, §4.8).
   const ast = await openapiTS(document, {
     alphabetize: true,
     exportType: true,
+    defaultNonNullable: false,
   });
   return `${BANNER}${astToString(ast)}`;
 }

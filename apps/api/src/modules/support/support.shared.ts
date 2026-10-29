@@ -90,7 +90,12 @@ export function uniqueRefs(refs: readonly RecordReference[]): RecordReference[] 
   return out;
 }
 
-export function toCase(row: CaseRow, now: Date): Case {
+/**
+ * The staff view of a case. `canonicalPersonId` is the subject's surviving person (SUP-05,
+ * SPK-IAM-007), resolved by the caller through identity's person directory; the subject itself
+ * is never rewritten.
+ */
+export function toCase(row: CaseRow, now: Date, canonicalPersonId: string | null = null): Case {
   const dueAt = row.due_at ? new Date(row.due_at) : null;
   const live = row.status !== 'resolved' && row.status !== 'closed';
   return {
@@ -101,7 +106,13 @@ export function toCase(row: CaseRow, now: Date): Case {
     status: row.status,
     title: row.title,
     description: row.description,
-    subject: { personId: row.subject_person_id, householdId: row.subject_household_id },
+    subject: {
+      personId: row.subject_person_id,
+      householdId: row.subject_household_id,
+      canonicalPersonId: row.subject_person_id
+        ? (canonicalPersonId ?? row.subject_person_id)
+        : null,
+    },
     owner: { personId: row.owner_person_id, queue: row.owner_queue },
     relatedRecords: recordRefs(row.related_records),
     origin: row.origin_access_review_id
@@ -118,6 +129,7 @@ export function toCase(row: CaseRow, now: Date): Case {
     resolvedAt: isoOrNull(row.resolved_at),
     closedAt: isoOrNull(row.closed_at),
     openedBy: actorOf(row.opened_by),
+    openedVia: row.opened_via,
     allowedEvents: CaseMachine.eventsFrom(row.status),
     revision: row.revision,
     createdAt: iso(row.created_at),

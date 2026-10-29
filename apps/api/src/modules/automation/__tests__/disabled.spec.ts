@@ -69,6 +69,7 @@ describe('SPK-AUTO-005: the assistant is optional', () => {
         () => t.http.post(`/v1/recommendations/${id}/approve`).set(operator.header).send({}),
         () => t.http.post(`/v1/recommendations/${id}/reject`).set(operator.header).send({}),
         () => t.http.post(`/v1/recommendations/${id}/apply`).set(operator.header).send({}),
+        () => t.http.post(`/v1/recommendations/${id}/settle-apply`).set(operator.header).send({}),
       ];
       for (const call of calls) {
         const res = await call();

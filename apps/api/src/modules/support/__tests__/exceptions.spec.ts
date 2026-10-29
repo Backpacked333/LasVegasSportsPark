@@ -197,12 +197,13 @@ describe('operational exceptions (SPK-UX-006)', () => {
     expect(await snapshot()).toEqual(before);
   });
 
-  it('authorization: managing needs the kernel exceptions.manage; queues outside the viewer scope are refused; other organizations are not found', async () => {
+  it('authorization: managing needs the kernel exceptions.manage or ownership of the queue (K-10); queues outside the viewer scope are refused; other organizations are not found', async () => {
     const id = await raise();
-    // The desk owns the queue and sees it, but the kernel reserves management to GM/sysadmin/support.
+    // The desk owns the front_desk queue: it sees the exception and, since K-10
+    // (exceptions.manage_own_queue), settles it with its own role.
     expect((await get(t, `/v1/exceptions/${id}`, desk)).status).toBe(200);
     const deskAck = await post(t, `/v1/exceptions/${id}/acknowledge`, desk, {});
-    expect(deskAck.status).toBe(403);
+    expect(deskAck.status, JSON.stringify(deskAck.body)).toBe(200);
     // A finance operator neither sees nor manages the front desk's queue.
     expect((await get(t, `/v1/exceptions/${id}`, finance)).status).toBe(403);
     expect((await get(t, '/v1/exceptions?queue=front_desk', finance)).status).toBe(403);
@@ -237,7 +238,8 @@ describe('operational exceptions (SPK-UX-006)', () => {
       desk,
     );
     const open = [...firstPage.body.items, ...rest.body.items].map((e: { id: string }) => e.id);
-    expect(open).toEqual(raised.slice(0, 4));
+    // Newest first: the order of the kernel's exception list (K-10), which support reads (SUP-02).
+    expect(open).toEqual(raised.slice(0, 4).reverse());
     const closed = await get(t, `/v1/exceptions?queue=${queue}&status=closed`, desk);
     expect(closed.body.items.map((e: { id: string }) => e.id)).toEqual([raised[4]]);
   });

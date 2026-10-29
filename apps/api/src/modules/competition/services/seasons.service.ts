@@ -17,6 +17,7 @@ import {
   AuditWriter,
   AuthorizationService,
   DATABASE,
+  FacilityDirectory,
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
@@ -48,6 +49,7 @@ export class SeasonsService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly facilities: FacilityDirectory,
   ) {}
 
   async createSeason(
@@ -487,12 +489,8 @@ export class SeasonsService {
     organizationId: string,
     facilityId: string,
   ): Promise<void> {
-    const facility = await db
-      .selectFrom('facilities')
-      .select('id')
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', facilityId)
-      .executeTakeFirst();
-    if (!facility) throw errors.notFound('facility', facilityId);
+    // CMP-11 (§4.2): the kernel's facility directory (IF-03), never the facilities table.
+    const known = await this.facilities.describe(organizationId, [facilityId], db);
+    if (!known.has(facilityId)) throw errors.notFound('facility', facilityId);
   }
 }

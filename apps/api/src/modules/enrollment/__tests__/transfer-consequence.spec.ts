@@ -115,7 +115,12 @@ describe('transfer financial consequence is recorded and owned (SPK-REG-010, §4
         .post(`/v1/enrollments/${enrollmentId}/transfer`)
         .set(parent.header)
         .set('Idempotency-Key', idempotencyKey)
-        .send({ targetOfferingId, expectedRevision: 2, commit: true, acceptConsequence: true });
+        .send({
+          targetOfferingId,
+          expectedRevision: 2,
+          commit: true,
+          acceptedConsequence: { kind: 'charge', amountMinor: 5_000, currency: 'USD' },
+        });
     const committed = await transfer();
     expect(committed.status, JSON.stringify(committed.body)).toBe(200);
     const charge = {
@@ -190,7 +195,7 @@ describe('transfer financial consequence is recorded and owned (SPK-REG-010, §4
       targetOfferingId: cheaper,
       expectedRevision: 2,
       commit: true,
-      acceptConsequence: true,
+      acceptedConsequence: { kind: 'credit', amountMinor: 5_000, currency: 'USD' },
     });
     expect(down.status).toBe(200);
     expect(down.body.previousEnrollment.transferConsequence).toMatchObject({

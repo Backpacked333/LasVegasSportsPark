@@ -1,5 +1,7 @@
 import os from 'node:os';
-import { z } from '@sportspark/contracts';
+import type { FactoryProvider } from '@nestjs/common';
+import { CLIENT_APPS, CLIENT_PLATFORMS, z } from '@sportspark/contracts';
+import { APP_CONFIG } from './tokens';
 
 /**
  * The `AUTH_LOCAL_SECRET` value once published in `.env.example`. Anyone can read it, so a host
@@ -52,6 +54,14 @@ export const ConfigSchema = z
     /** How often the worker deletes idempotency records past their expiry (§4.9, §4.14). */
     IDEMPOTENCY_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
     LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
+    /** How often the worker looks for due periodic jobs (K-06, §4.12; technical value). */
+    PERIODIC_JOBS_TICK_MS: z.coerce.number().int().min(100).default(5000),
+    /** How long a claimed periodic job stays reserved for its runner (SPK-AT-023 takeover after). */
+    PERIODIC_JOBS_LEASE_SECONDS: z.coerce.number().int().min(5).default(300),
+    /** How many passes one run makes while a job reports remaining work. */
+    PERIODIC_JOBS_MAX_PASSES: z.coerce.number().int().min(1).max(1000).default(10),
+    /** Consecutive failures after which the job's failure owner gets an exception (§4.12). */
+    PERIODIC_JOBS_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(3),
     /**
      * Minimum supported app version per client (§4.13, SPK-AT-027), as a comma-separated list of
      * `<app>-<platform>=<major.minor.patch>` (apps `mobile`, `staff`; platforms `ios`, `android`,
@@ -72,6 +82,18 @@ export const ConfigSchema = z
      * resumed is not re-entered when the process restarts with the same reference.
      */
     RECOVERY_RESTORE_REFERENCE: z.string().trim().min(1).max(200).optional(),
+    /**
+     * Browser origins allowed to call the API cross-origin (K-03), as a comma-separated list of
+     * exact origins (`https://staff.example.org`). Unset: CORS is off (same-origin hosting). Which
+     * origins serve the staff dashboard is DEC-021 (hosting, pending); production refuses `*` and
+     * plain `http` origins.
+     */
+    CORS_ALLOWED_ORIGINS: z
+      .string()
+      .optional()
+      .transform((value, ctx) => parseOrigins(value, ctx)),
+    /** How long a browser may cache a CORS preflight answer (technical value). */
+    CORS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(600),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {
@@ -98,6 +120,17 @@ export const ConfigSchema = z
         });
       }
     }
+    if (cfg.NODE_ENV === 'production') {
+      for (const origin of cfg.CORS_ALLOWED_ORIGINS ?? []) {
+        if (origin === '*' || origin.startsWith('http://')) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CORS_ALLOWED_ORIGINS'],
+            message: `CORS_ALLOWED_ORIGINS may not contain "${origin}" in production (only exact https origins)`,
+          });
+        }
+      }
+    }
     if (cfg.NODE_ENV === 'production' && !cfg.DATABASE_URL) {
       ctx.addIssue({
         code: 'custom',
@@ -108,10 +141,117 @@ export const ConfigSchema = z
     }
   });
 
-export type AppConfig = z.infer<typeof ConfigSchema>;
+export type AppConfig = z.infer<typeof ConfigSchema> & {
+  /** Each module's parsed settings section (`defineModuleSettings`, K-15), by module name. */
+  readonly moduleSettings: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+};
 
-export const CLIENT_APPS = ['mobile', 'staff'] as const;
-export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
+// ---------------------------------------------------------------------------------------------
+// Module settings (K-15, IF-43)
+// ---------------------------------------------------------------------------------------------
+
+export interface ModuleSettingsDefinition<S extends z.ZodRawShape> {
+  readonly module: string;
+  /** The environment variable prefix: the upper-case module name and `_`. */
+  readonly prefix: string;
+  readonly schema: z.ZodObject<S>;
+  /** The injection token of the parsed section (`MODULE_SETTINGS(module)`). */
+  readonly token: symbol;
+}
+
+/** The parsed settings type of a definition. */
+export type ModuleSettingsOf<D> =
+  D extends ModuleSettingsDefinition<infer S> ? z.infer<z.ZodObject<S>> : never;
+
+const moduleSettingsDefinitions = new Map<string, ModuleSettingsDefinition<z.ZodRawShape>>();
+const MODULE_NAME = /^[a-z]+$/;
+const SETTING_KEY = /^[A-Z][A-Z0-9_]*$/;
+
+/** The injection token of a module's parsed settings section. */
+export function MODULE_SETTINGS(module: string): symbol {
+  return Symbol.for(`sportspark:module-settings:${module}`);
+}
+
+/**
+ * Registers a module's settings section (K-15, IF-43): each key is read from the environment
+ * variable `<MODULE>_<KEY>` (for example `WORKFORCE_OFFICIAL_TURNAROUND_MINUTES`) and validated by
+ * `loadConfig` at boot like the kernel's own settings, so a malformed value refuses boot. A policy
+ * value is declared optional with no default (`policySetting`, K-00 (i)): absent, the module
+ * applies its documented conservative behaviour; a technical value may default
+ * (`technicalSetting`). Call it at module top level, before the configuration is loaded.
+ */
+export function defineModuleSettings<S extends z.ZodRawShape>(
+  module: string,
+  shape: S,
+): ModuleSettingsDefinition<S> {
+  if (!MODULE_NAME.test(module))
+    throw new Error(`module settings name ${module} must be lower-case`);
+  for (const key of Object.keys(shape)) {
+    if (!SETTING_KEY.test(key)) {
+      throw new Error(
+        `module setting ${module}.${key} must be an upper-case name such as LEAD_DAYS`,
+      );
+    }
+  }
+  const existing = moduleSettingsDefinitions.get(module);
+  if (existing) {
+    if (existing.schema.shape === shape) return existing as unknown as ModuleSettingsDefinition<S>;
+    throw new Error(`module settings for ${module} are already defined`);
+  }
+  const definition: ModuleSettingsDefinition<S> = {
+    module,
+    prefix: `${module.toUpperCase()}_`,
+    schema: z.object(shape),
+    token: MODULE_SETTINGS(module),
+  };
+  moduleSettingsDefinitions.set(
+    module,
+    definition as unknown as ModuleSettingsDefinition<z.ZodRawShape>,
+  );
+  return definition;
+}
+
+/** A policy value: optional, no default (absent = the item's conservative behaviour). */
+export function policySetting<T extends z.ZodType>(schema: T) {
+  return schema.optional();
+}
+
+/** A technical value (interval, batch size, retry threshold): may default. */
+export function technicalSetting<T extends z.ZodType>(schema: T, fallback: z.input<T>) {
+  return schema.default(fallback as never);
+}
+
+/** The defined module settings sections (for .env documentation and tests). */
+export function moduleSettingsDefinitionList(): ReadonlyArray<
+  ModuleSettingsDefinition<z.ZodRawShape>
+> {
+  return [...moduleSettingsDefinitions.values()].sort((a, b) => a.module.localeCompare(b.module));
+}
+
+function parseModuleSettings(env: NodeJS.ProcessEnv): {
+  settings: Record<string, Record<string, unknown>>;
+  issues: string[];
+} {
+  const settings: Record<string, Record<string, unknown>> = {};
+  const issues: string[] = [];
+  for (const definition of moduleSettingsDefinitions.values()) {
+    const raw: Record<string, unknown> = {};
+    for (const key of Object.keys(definition.schema.shape)) {
+      const value = env[`${definition.prefix}${key}`];
+      if (value !== undefined && value !== '') raw[key] = value;
+    }
+    const parsed = definition.schema.safeParse(raw);
+    if (parsed.success) settings[definition.module] = parsed.data as Record<string, unknown>;
+    else {
+      for (const issue of parsed.error.issues) {
+        issues.push(`  ${definition.prefix}${issue.path.join('.')}: ${issue.message}`);
+      }
+    }
+  }
+  return { settings, issues };
+}
+
+export { CLIENT_APPS, CLIENT_PLATFORMS };
 /** `<app>-<platform>` → minimum supported version (DEC-061 pending; empty by default). */
 export type ClientMinimums = Readonly<Record<string, string>>;
 
@@ -142,11 +282,60 @@ function parseClientMinimums(value: string, ctx: z.RefinementCtx): ClientMinimum
   return out;
 }
 
+const ORIGIN = /^https?:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?$/;
+
+/** `https://a.example,https://b.example` → exact origins; `*` is kept so production can refuse it. */
+function parseOrigins(
+  value: string | undefined,
+  ctx: z.RefinementCtx,
+): readonly string[] | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const origins = value
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  for (const origin of origins) {
+    if (origin !== '*' && !ORIGIN.test(origin)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `CORS_ALLOWED_ORIGINS entry "${origin}" must be an exact origin such as https://staff.example.org (scheme, host, optional port; no path)`,
+      });
+    }
+  }
+  return origins;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = ConfigSchema.safeParse(env);
-  if (!parsed.success) {
-    const lines = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`);
+  const modules = parseModuleSettings(env);
+  const lines = [
+    ...(parsed.success
+      ? []
+      : parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`)),
+    ...modules.issues,
+  ];
+  if (!parsed.success || lines.length > 0) {
     throw new Error(`Invalid configuration:\n${lines.join('\n')}`);
   }
-  return parsed.data;
+  return { ...parsed.data, moduleSettings: modules.settings };
+}
+
+/**
+ * The provider of a module's parsed settings section, injected with
+ * `@Inject(MODULE_SETTINGS('<module>'))` (K-15, IF-43). Add it to the module's providers.
+ */
+export function moduleSettings(module: string): FactoryProvider {
+  return {
+    provide: MODULE_SETTINGS(module),
+    inject: [APP_CONFIG],
+    useFactory: (config: AppConfig) => {
+      const section = config.moduleSettings[module];
+      if (!section) {
+        throw new Error(
+          `no settings section for module ${module}: defineModuleSettings must run before the configuration is loaded`,
+        );
+      }
+      return section;
+    },
+  };
 }

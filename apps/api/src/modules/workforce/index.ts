@@ -2,6 +2,7 @@ export * from './workforce.module';
 export * from './workforce.actions';
 export * from './workforce.events';
 export * from './workforce.policy';
+export * from './workforce.settings';
 export * from './workforce.state-machines';
 export * from './ports';
 export { computeFeeAmount, COVERING_STATUSES, LIVE_STATUSES } from './workforce.shared';

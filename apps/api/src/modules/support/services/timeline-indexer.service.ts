@@ -7,20 +7,35 @@ import {
   type TimelineRelation,
 } from '@sportspark/db';
 import { runWithTransaction, type HandlerContext, type Trx } from '../../../kernel';
-import type { NotificationDispatched } from '../../communications';
-import { NotificationsService } from '../../communications';
+import { NotificationDispatched, NotificationsService } from '../../communications';
 import { ROSTER_PORT, type RosterPort } from '../../competition';
-import type {
+import {
   OrderPaid,
   PaymentFailed,
   PaymentOutcomeUnknown,
   PaymentReceived,
+  PaymentsService,
   RefundRequested,
   RefundSettled,
+  RefundsService,
 } from '../../finance';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
-import { PaymentsService, RefundsService } from '../../finance';
-import type { EventChanged } from '../../scheduling';
+import { EventChanged } from '../../scheduling';
+
+/**
+ * The event types the timeline index is built from (SPK-SUPPORT-001): the live handlers in
+ * SupportModule and the replay of the outbox history (SUP-03) index exactly these.
+ */
+export const INDEXED_EVENT_TYPES: readonly string[] = [
+  PaymentReceived.type,
+  PaymentFailed.type,
+  PaymentOutcomeUnknown.type,
+  RefundRequested.type,
+  RefundSettled.type,
+  OrderPaid.type,
+  NotificationDispatched.type,
+  EventChanged.type,
+];
 
 interface IndexRow {
   personId: string;
@@ -39,6 +54,9 @@ interface IndexRow {
  * through the owning modules' exported services inside the handler's transaction; the index holds
  * identifiers and non-sensitive change facts only. Handlers are idempotent under replay: the
  * kernel records one consumption per handler and event, and the unique key refuses duplicates.
+ * The same key makes a replay of the outbox history (SUP-03) a no-op for events already indexed.
+ * A person merge rewrites nothing here (SUP-05): reads expand a person with identity's
+ * `personIdsResolvingTo`, so the merged person's references belong to the survivor's timeline.
  */
 @Injectable()
 export class TimelineIndexer {
@@ -59,7 +77,8 @@ export class TimelineIndexer {
     ctx: HandlerContext,
   ): Promise<void> {
     const paymentAttemptId = event.payload.paymentAttemptId;
-    if (!paymentAttemptId) return; // cash tenders carry no payment attempt (README "Known gaps")
+    // A cash tender carries no payment attempt: the timeline reads tenders from finance (SUP-03).
+    if (!paymentAttemptId) return;
     const payment = await this.payments.load(ctx.trx, event.organizationId, paymentAttemptId);
     if (!payment) return;
     await this.insert(ctx.trx, event, [
@@ -219,44 +238,36 @@ export class TimelineIndexer {
     await this.insert(ctx.trx, event, rows);
   }
 
-  /** SPK-IAM-007: the survivor of a merge inherits the merged person's timeline references. */
-  async onPersonsMerged(
-    event: DomainEvent<{ survivorPersonId: string; mergedPersonId: string }>,
-    ctx: HandlerContext,
-  ): Promise<void> {
-    const rows = await ctx.trx
-      .selectFrom('timeline_references')
-      .selectAll()
-      .where('organization_id', '=', event.organizationId)
-      .where('person_id', '=', event.payload.mergedPersonId)
-      .execute();
-    if (rows.length === 0) return;
-    await ctx.trx
-      .insertInto('timeline_references')
-      .values(
-        rows.map((r) => ({
-          id: newId(),
-          organization_id: r.organization_id,
-          person_id: event.payload.survivorPersonId,
-          record_type: r.record_type,
-          record_id: r.record_id,
-          relation: r.relation,
-          facility_id: r.facility_id,
-          occurred_at: r.occurred_at,
-          source_event_id: event.id,
-          source_event_type: event.type,
-          summary: json({
-            ...(r.summary as Record<string, unknown>),
-            mergedPersonId: event.payload.mergedPersonId,
-          }),
-        })),
-      )
-      .onConflict((oc) =>
-        oc
-          .columns(['organization_id', 'source_event_id', 'person_id', 'record_type', 'record_id'])
-          .doNothing(),
-      )
-      .execute();
+  /**
+   * Indexes one committed event of an indexed type (SUP-03 replay), as its live handler would;
+   * other types are ignored. Returns whether the type is indexed.
+   */
+  async index(event: DomainEvent<unknown>, ctx: HandlerContext): Promise<boolean> {
+    switch (event.type) {
+      case PaymentReceived.type:
+      case PaymentFailed.type:
+      case PaymentOutcomeUnknown.type:
+        await this.onPayment(event as Parameters<TimelineIndexer['onPayment']>[0], ctx);
+        return true;
+      case RefundRequested.type:
+      case RefundSettled.type:
+        await this.onRefund(event as Parameters<TimelineIndexer['onRefund']>[0], ctx);
+        return true;
+      case OrderPaid.type:
+        await this.onOrderPaid(event as Parameters<TimelineIndexer['onOrderPaid']>[0], ctx);
+        return true;
+      case NotificationDispatched.type:
+        await this.onNotificationDispatched(
+          event as Parameters<TimelineIndexer['onNotificationDispatched']>[0],
+          ctx,
+        );
+        return true;
+      case EventChanged.type:
+        await this.onEventChanged(event as Parameters<TimelineIndexer['onEventChanged']>[0], ctx);
+        return true;
+      default:
+        return false;
+    }
   }
 
   private async insert(trx: Trx, event: DomainEvent<unknown>, rows: IndexRow[]): Promise<void> {

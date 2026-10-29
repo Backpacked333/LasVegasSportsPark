@@ -8,7 +8,7 @@ import {
 } from '@sportspark/contracts';
 import { json, type Db, type MappedEntityType } from '@sportspark/db';
 import type { Clock } from '../../../kernel';
-import { MAPPING_COLUMN } from '../migration.shared';
+import { MAPPING_COLUMN, NO_TARGETS, TEAM_ENTRY_COLUMN } from '../migration.shared';
 import { payloadHash } from '../staging/checksum';
 
 /**
@@ -178,6 +178,119 @@ export function stagedCredit(
   return { entityType: 'credit', externalId, payload: { currency: 'USD', ...payload } };
 }
 
+// MIG-02: operational categories created through the owning modules' import commands.
+
+export function stagedSeason(
+  externalId: string,
+  payload: {
+    competitionId: string;
+    ruleSetId: string;
+    name?: string;
+    startsOn?: string;
+    endsOn?: string;
+    status?: 'draft' | 'open' | 'active' | 'completed' | 'archived';
+  },
+): StagedRow {
+  return {
+    entityType: 'season',
+    externalId,
+    payload: {
+      name: `Season ${externalId}`,
+      startsOn: '2027-01-04',
+      endsOn: '2027-04-30',
+      status: 'active',
+      ...payload,
+    },
+  };
+}
+
+export function stagedTeam(
+  externalId: string,
+  payload: Partial<{ name: string; primaryColor: string; status: 'active' | 'inactive' }> = {},
+): StagedRow {
+  return {
+    entityType: 'team',
+    externalId,
+    payload: { record: 'team', name: `Team ${externalId}`, ...payload },
+  };
+}
+
+export function stagedTeamEntry(
+  externalId: string,
+  payload: {
+    teamExternalId: string;
+    seasonExternalId: string;
+    status?: 'applied' | 'approved';
+    appliedAt?: string;
+    approvedAt?: string;
+    captainExternalId?: string;
+    divisionId?: string;
+  },
+): StagedRow {
+  const status = payload.status ?? 'approved';
+  return {
+    entityType: 'team',
+    externalId,
+    payload: {
+      record: 'entry',
+      appliedAt: '2026-12-01T18:00:00.000Z',
+      ...(status === 'approved' ? { approvedAt: '2026-12-05T18:00:00.000Z' } : {}),
+      ...payload,
+      status,
+    },
+  };
+}
+
+export function stagedRoster(
+  externalId: string,
+  payload: {
+    entryExternalId: string;
+    personExternalId: string;
+    status?: 'active' | 'guest' | 'substitute';
+    effectiveFrom?: string;
+    effectiveTo?: string;
+    jerseyNumber?: number;
+  },
+): StagedRow {
+  return {
+    entityType: 'roster',
+    externalId,
+    payload: { status: 'active', effectiveFrom: '2026-12-05T18:00:00.000Z', ...payload },
+  };
+}
+
+export function stagedEvent(
+  externalId: string,
+  payload: {
+    facilityId: string;
+    resourceIds: string[];
+    scheduledStart: string;
+    scheduledEnd: string;
+    kind?: string;
+    title?: string;
+  },
+): StagedRow {
+  return {
+    entityType: 'future_schedule',
+    externalId,
+    payload: { kind: 'game', title: `Event ${externalId}`, ...payload },
+  };
+}
+
+export function stagedPreferences(
+  externalId: string,
+  payload: {
+    personExternalId: string;
+    preferences: Array<{
+      channel: 'in_app' | 'push' | 'email' | 'sms';
+      category: 'operational' | 'promotional';
+      enabled: boolean;
+    }>;
+  },
+): StagedRow {
+  return { entityType: 'communication_preference', externalId, payload };
+}
+
 /** Control totals that match the staged rows exactly (counts per type, amounts per currency). */
 export function controlTotalsFor(rows: readonly StagedRow[]): ControlTotals {
   const counts: Record<string, number> = {};
@@ -280,6 +393,15 @@ export async function createImportBatchFixture(
   return { batchId, rowIds };
 }
 
+/** Mapped types created through an import command: their mapping always carries a reservation. */
+const RESERVED_TYPES: ReadonlySet<MappedEntityType> = new Set([
+  'season',
+  'team',
+  'roster',
+  'future_schedule',
+  'communication_preference',
+]);
+
 /** A linked external mapping to an existing internal record (creates a fixture batch if needed). */
 export async function createExternalMappingFixture(
   ctx: MigrationFixtureContext,
@@ -287,6 +409,8 @@ export async function createExternalMappingFixture(
     entityType: MappedEntityType;
     externalId: string;
     internalId: string;
+    /** For `team`: the internal record is a team entry rather than a team. */
+    teamEntry?: boolean;
     sourceSystem?: string;
     batchId?: string;
     organizationId?: string;
@@ -307,13 +431,9 @@ export async function createExternalMappingFixture(
       entity_type: input.entityType,
       external_id: input.externalId,
       status: 'linked',
-      person_id: null,
-      household_id: null,
-      relationship_id: null,
-      program_id: null,
-      obligation_id: null,
-      credit_id: null,
-      [MAPPING_COLUMN[input.entityType]]: input.internalId,
+      ...NO_TARGETS,
+      [input.teamEntry ? TEAM_ENTRY_COLUMN : MAPPING_COLUMN[input.entityType]]: input.internalId,
+      reserved_record_id: RESERVED_TYPES.has(input.entityType) ? input.internalId : null,
       applied_payload_hash: null,
       first_seen_batch_id: batchId,
       last_seen_batch_id: batchId,

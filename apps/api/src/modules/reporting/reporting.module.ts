@@ -1,14 +1,21 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry, runWithTransaction } from '../../kernel';
+import {
+  EventHandlerRegistry,
+  MODULE_SETTINGS,
+  moduleSettings,
+  runWithTransaction,
+} from '../../kernel';
 import { CompetitionModule } from '../competition';
+import { EnrollmentModule } from '../enrollment';
 import { WorkforceModule } from '../workforce';
 import { CostInputsController } from './controllers/cost-inputs.controller';
 import { ExportsController } from './controllers/exports.controller';
 import { ReportRunsController } from './controllers/report-runs.controller';
 import { ReportsController } from './controllers/reports.controller';
 import { ExportExpiryDue } from './reporting.events';
-import { DEFAULT_REPORTING_POLICY, REPORTING_POLICY } from './reporting.policy';
+import { REPORTING_POLICY, reportingPolicyFrom } from './reporting.policy';
+import { ReportingSettings, type ReportingSettingsValue } from './reporting.settings';
 import { EconomicsReport } from './reports/economics.report';
 import { FinanceReports } from './reports/finance.reports';
 import { OperationsReports } from './reports/operations.reports';
@@ -26,15 +33,21 @@ import { ReportsService } from './services/reports.service';
  * ReportingModule (specification §3.20 SPK-REPORT-001..007, §4.2 "Reporting: derived metrics and
  * exports", §4.14 expiring exports, §1.2 success measures). Owns metric definitions, report runs,
  * exports and agreed cost inputs. It never writes another module's records: it reads them through
- * the read-only views of migration 1300 and through the competition module's ReadinessService and
- * the workforce module's ASSIGNMENT_COVERAGE_PORT. Its one durable follow-up is the export expiry
- * timer (`reporting.export_expiry_due` → handler `reporting.expire_export`). See README.md.
+ * the read-only views of migration 1300 and through the competition module's ReadinessService, the
+ * workforce module's ASSIGNMENT_COVERAGE_PORT and the enrollment module's BOOKING_QUERY_PORT
+ * (IF-36). Its one durable follow-up is the export expiry timer (`reporting.export_expiry_due` →
+ * handler `reporting.expire_export`). See README.md.
  */
 @Module({
-  imports: [CompetitionModule, WorkforceModule],
+  imports: [CompetitionModule, WorkforceModule, EnrollmentModule],
   providers: [
-    // Policy values left to operators (§6.6): proposed defaults, replaceable by approval.
-    { provide: REPORTING_POLICY, useValue: DEFAULT_REPORTING_POLICY },
+    // Policy values left to operators (§6.6, K-00 (i)): module settings without defaults (REP-03).
+    moduleSettings(ReportingSettings.module),
+    {
+      provide: REPORTING_POLICY,
+      inject: [MODULE_SETTINGS(ReportingSettings.module)],
+      useFactory: (settings: ReportingSettingsValue) => reportingPolicyFrom(settings),
+    },
     MetricDefinitionsService,
     ScheduleReports,
     OperationsReports,

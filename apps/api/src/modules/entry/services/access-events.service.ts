@@ -7,6 +7,7 @@ import {
   type Trx,
 } from '../../../kernel';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
+import { HARDWARE_QUEUE, UNREGISTERED_ACCESS_DEVICE } from '../access-hardware.shared';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
 import { hashPassReference } from '../entry.shared';
 import { ActivityResolver } from './activity-resolver';
@@ -19,6 +20,12 @@ import { VisitsService } from './visits.service';
  * authorization. Denied entries record nothing; an unknown outcome (the device lost contact)
  * records no visit and raises an operational exception so staff can check the device. Duplicate
  * deliveries are absorbed by the inbox and by the unique access-event reference on visits.
+ *
+ * ENT-05: an arrival names the registered access device it came through when the event's device
+ * reference matches an active device of that facility. An unregistered or retired reference still
+ * yields the arrival (the person did come in), and, when the organization keeps a device inventory,
+ * one `entry.unregistered_access_device` exception per reference asks the facilities operator to
+ * reconcile it. Heartbeats and command receipts are handled by DeviceDeliveryService.
  */
 @Injectable()
 export class AccessEventsService {
@@ -33,6 +40,7 @@ export class AccessEventsService {
   ) {}
 
   async handle(event: InboundEvent, trx: Trx): Promise<void> {
+    if (!event.eventType.startsWith('access.')) return;
     await runWithTransaction(trx, () => this.apply(event, trx));
   }
 
@@ -50,6 +58,13 @@ export class AccessEventsService {
       .catch(() => null);
     if (!facility) return;
     const system = systemPrincipal(organizationId, 'entry.access_control');
+    const accessDeviceId = await this.registeredDevice(
+      trx,
+      organizationId,
+      facility.id,
+      body.data.deviceId,
+      event.providerEventId,
+    );
     if (body.type === 'access.denied') return;
     if (body.type === 'access.unknown') {
       const policy = policyForFacility(this.policy, facility.settings);
@@ -79,7 +94,10 @@ export class AccessEventsService {
         .executeTakeFirst();
       if (!pass || pass.status !== 'active') return;
       passId = pass.id;
-      personId = pass.holder_person_id;
+      // ENT-04, SPK-IAM-007: a pass issued to a person later merged arrives as the survivor.
+      personId = pass.holder_person_id
+        ? await this.people.resolveCanonicalPersonId(organizationId, pass.holder_person_id, trx)
+        : null;
     } else if (body.data.personId) {
       const person = await this.people.findPerson(organizationId, body.data.personId, trx);
       if (!person || person.status !== 'active') return;
@@ -104,8 +122,57 @@ export class AccessEventsService {
       passId,
       source: 'access_control',
       deviceId: body.data.deviceId,
+      accessDeviceId,
       accessEventRef: `${event.provider}:${event.providerEventId}`,
     });
     if (row) await this.visits.afterVisit(trx, system, organizationId, row, null);
+  }
+
+  /**
+   * The active registered device the reference names at this facility, or null. An unmatched
+   * reference raises one exception per reference while the organization keeps a device inventory
+   * (before any device is registered, refs are not reconciled: access hardware may not be in use).
+   */
+  private async registeredDevice(
+    trx: Trx,
+    organizationId: string,
+    facilityId: string,
+    deviceRef: string,
+    providerEventId: string,
+  ): Promise<string | null> {
+    const device = await trx
+      .selectFrom('access_devices')
+      .select(['id', 'status', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('provider_device_ref', '=', deviceRef)
+      .executeTakeFirst();
+    if (device?.status === 'active' && device.facility_id === facilityId) return device.id;
+    const inventory = await trx
+      .selectFrom('access_devices')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .limit(1)
+      .executeTakeFirst();
+    if (!inventory) return null;
+    await this.exceptions.raise(trx, {
+      organizationId,
+      facilityId,
+      category: UNREGISTERED_ACCESS_DEVICE,
+      severity: 'warning',
+      title: 'Access events arrive from a device that is not registered (or is retired) here',
+      affectedType: 'access_device_ref',
+      affectedId: deviceRef,
+      ownerQueue: HARDWARE_QUEUE,
+      dedupeKey: `${UNREGISTERED_ACCESS_DEVICE}:${deviceRef}`,
+      details: {
+        deviceRef,
+        facilityId,
+        registeredDeviceId: device?.id ?? null,
+        registeredStatus: device?.status ?? null,
+        firstProviderEventId: providerEventId,
+        nextAction: 'register_the_device_or_disconnect_it',
+      },
+    });
+    return null;
   }
 }

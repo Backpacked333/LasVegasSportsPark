@@ -92,6 +92,8 @@ export const WorkforceEvents = {
       role: z.string(),
       requiredCount: z.number().int(),
       mustBeAccepted: z.boolean(),
+      /** WRK-02: set when the requirement was retired (it then never counts again). */
+      retiredAt: z.iso.datetime().nullable().optional(),
     }),
   ),
   feeSubmitted: defineEvent(

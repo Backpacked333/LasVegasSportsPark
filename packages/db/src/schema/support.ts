@@ -9,9 +9,10 @@ import type {
 } from './core';
 
 /**
- * Support module tables (migration 1100, specification §3.19 SPK-SUPPORT-001..003, §2.3
+ * Support module tables (migrations 1100 to 1103, specification §3.19 SPK-SUPPORT-001..003, §2.3
  * SPK-UX-006, §4.4 Operations: Case and Exception). Cases and their history, links from cases to
- * authorized command outcomes, exception queues, and the append-only timeline reference index.
+ * authorized command outcomes, exception queues, the append-only timeline reference index and the
+ * per-organization timeline backfill cursor.
  */
 
 export type CaseCategory =
@@ -24,6 +25,11 @@ export type CaseResolutionKind =
   | 'no_action_needed'
   | 'duplicate'
   | 'customer_unreachable';
+/**
+ * How a case was opened (migration 1102, SUP-01): by staff, as a customer's own request, or to
+ * coordinate an origin record (escalated access review or operational exception). Immutable.
+ */
+export type CaseOpenedVia = 'staff' | 'customer' | 'hook';
 
 /** A reference to a record owned by any module: `{ type: 'order', id: '…' }`. */
 export interface RecordReference {
@@ -55,6 +61,7 @@ export interface CasesTable {
   closed_at: NullableTimestamp;
   opened_by: Json<Record<string, unknown>>;
   opened_by_person_id: string | null;
+  opened_via: Generated<CaseOpenedVia>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -144,10 +151,24 @@ export interface TimelineReferencesTable {
   recorded_at: GeneratedTimestamp;
 }
 
+/**
+ * SUP-03 (migration 1103): how far `support.backfill_timeline` has replayed one organization's
+ * outbox history into the timeline index (keyset position), and when it caught up.
+ */
+export interface SupportTimelineBackfillCursorsTable {
+  organization_id: string;
+  last_occurred_at: NullableTimestamp;
+  last_event_id: string | null;
+  completed_at: NullableTimestamp;
+  requested_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
 export interface SupportTables {
   cases: CasesTable;
   case_actions: CaseActionsTable;
   case_events: CaseEventsTable;
   exception_queues: ExceptionQueuesTable;
   timeline_references: TimelineReferencesTable;
+  support_timeline_backfill_cursors: SupportTimelineBackfillCursorsTable;
 }

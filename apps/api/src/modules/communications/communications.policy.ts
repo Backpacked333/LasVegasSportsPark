@@ -61,12 +61,17 @@ export const DEFAULT_COMMUNICATIONS_POLICY: CommunicationsPolicy = {
     assignment_offer: 'operational',
     result_published: 'operational',
     youth_feedback: 'operational',
+    // SPK-CAP-001 "request availability, remind" (COM-06): both concern a scheduled activity.
+    availability_request: 'operational',
+    activity_reminder: 'operational',
     renewal_opportunity: 'promotional',
     staff_broadcast: 'choose',
   },
   deliveryLeaseSeconds: 60,
   deliveryBatchSize: 25,
-  supersedableKinds: ['schedule_published', 'schedule_changed'],
+  // SPK-COMMS-005 "suppress obsolete unsent reminders": an unsent activity reminder about an event
+  // that is then changed or canceled is obsolete like an unsent schedule notice.
+  supersedableKinds: ['schedule_published', 'schedule_changed', 'activity_reminder'],
   supersedingKinds: ['schedule_changed', 'cancellation'],
   feedPastDays: 30,
   feedFutureDays: 365,

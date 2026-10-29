@@ -10,7 +10,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule.forRoot({ config }), {
     logger: [config.LOG_LEVEL],
   });
-  configureApp(app);
+  configureApp(app, config);
   await app.listen(config.PORT);
   new Logger('Bootstrap').log(`Sportspark API listening on :${config.PORT} (${config.NODE_ENV})`);
 }

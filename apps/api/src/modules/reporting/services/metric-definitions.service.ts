@@ -165,10 +165,13 @@ export class MetricDefinitionsService {
   }
 
   /** The active definitions of these metrics, in the order given. */
-  async activeFor(organizationId: string, keys: readonly string[]): Promise<MetricDefinitionRow[]> {
+  async activeFor(
+    organizationId: string,
+    keys: readonly string[],
+    db: Db | Trx = this.unitOfWork.reader(),
+  ): Promise<MetricDefinitionRow[]> {
     if (keys.length === 0) return [];
-    const rows = await this.unitOfWork
-      .reader()
+    const rows = await db
       .selectFrom('metric_definitions')
       .selectAll()
       .where('organization_id', '=', organizationId)

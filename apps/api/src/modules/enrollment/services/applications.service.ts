@@ -36,8 +36,12 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  beforeCursor,
+  cursorAt,
+  decodeCreatedCursor,
   hiddenFrom,
   isStaffLike,
+  keysetPage,
   organizationOf,
   redactApplication,
   resolveCustomerPayer,
@@ -422,22 +426,26 @@ export class ApplicationsService {
       query.participantPersonId,
     );
     if (offerings?.length === 0) return { items: [], nextCursor: null };
+    // ENR-02 (§4.5): keyset pages, newest first (created_at desc, id desc).
+    const cursor = decodeCreatedCursor(query.cursor);
     let q = this.db
       .selectFrom('applications')
       .selectAll()
+      .select(cursorAt('applications').as('cursor_at'))
       .where('organization_id', '=', organizationId)
-      .orderBy('submitted_at', 'desc')
+      .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
-      .limit(query.limit);
+      .limit(query.limit + 1);
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
     if (offerings) q = q.where('offering_id', 'in', offerings);
     if (query.participantPersonId)
       q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.status) q = q.where('status', '=', query.status);
-    const rows = await q.execute();
+    if (cursor) q = q.where(beforeCursor('applications', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
     return {
-      items: rows.map((r) => redactApplication(principal, toApplication(r))),
-      nextCursor: null,
+      items: page.rows.map((r) => redactApplication(principal, toApplication(r))),
+      nextCursor: page.nextCursor,
     };
   }
 

@@ -186,7 +186,7 @@ export interface SeasonMembership {
 export async function personSeasonMemberships(
   db: Reader,
   organizationId: string,
-  personId: string,
+  personId: string | readonly string[],
   seasonId: string,
   at: Date,
   excludeEntryId: string,
@@ -201,7 +201,7 @@ export async function personSeasonMemberships(
     )
     .select(['rm.team_entry_id', 'rm.status', 'rm.status_before_removal', 'te.division_id'])
     .where('rm.organization_id', '=', organizationId)
-    .where('rm.person_id', '=', personId)
+    .where('rm.person_id', 'in', typeof personId === 'string' ? [personId] : [...personId])
     .where('te.season_id', '=', seasonId)
     .where('te.status', 'in', ['applied', 'approved'])
     .where('rm.team_entry_id', '<>', excludeEntryId)
@@ -303,4 +303,29 @@ export async function divisionEntryCount(
     .where('status', 'in', ['applied', 'approved'])
     .executeTakeFirstOrThrow();
   return Number(row.n);
+}
+
+/**
+ * Team names of entries (CMP-01): one join for a whole page of rows; unknown or other-organization
+ * entry ids are omitted.
+ */
+export async function teamNamesOf(
+  db: Reader,
+  organizationId: string,
+  entryIds: ReadonlyArray<string | null | undefined>,
+): Promise<Map<string, string>> {
+  const ids = [...new Set(entryIds.filter((id): id is string => typeof id === 'string'))];
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .selectFrom('team_entries')
+    .innerJoin('teams', (join) =>
+      join
+        .onRef('teams.organization_id', '=', 'team_entries.organization_id')
+        .onRef('teams.id', '=', 'team_entries.team_id'),
+    )
+    .select(['team_entries.id', 'teams.name'])
+    .where('team_entries.organization_id', '=', organizationId)
+    .where('team_entries.id', 'in', ids)
+    .execute();
+  return new Map(rows.map((r) => [r.id, r.name]));
 }

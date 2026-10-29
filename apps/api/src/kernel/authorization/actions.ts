@@ -1,4 +1,9 @@
-import type { ActionId, StaffRole } from '@sportspark/contracts';
+import {
+  CAPABILITIES,
+  type ActionId,
+  type CapabilityId,
+  type StaffRole,
+} from '@sportspark/contracts';
 
 /** Guardian/self permissions that may be granted over a participant (SPK-IAM-003). */
 export const GrantPermissions = [
@@ -28,6 +33,13 @@ export interface ActionDefinition {
   teamRole?: TeamRole;
   /** Documentation: specification requirement ids this action implements. */
   requirements?: readonly string[];
+  /**
+   * The conditional capability whose new commitments this action creates (K-12, DEC-016): its
+   * command calls `CapabilityService.require` in its unit of work, and GET /v1/me/permissions
+   * hides an area whose held actions are all disabled. Only a capability enforced on commands may
+   * be named; reads, cancellations, refunds and other unwinding actions never name one.
+   */
+  capability?: CapabilityId;
 }
 
 /**
@@ -39,6 +51,19 @@ export class ActionRegistry {
   private readonly actions = new Map<ActionId, ActionDefinition>();
 
   register(definition: ActionDefinition): ActionDefinition {
+    if (definition.capability !== undefined) {
+      const capability = CAPABILITIES[definition.capability];
+      if (!capability) {
+        throw new Error(
+          `action ${definition.id} names unknown capability ${definition.capability}`,
+        );
+      }
+      if (capability.enforcement !== 'commands') {
+        throw new Error(
+          `action ${definition.id} names capability ${definition.capability}, which is recorded only and never checked (DEC-016)`,
+        );
+      }
+    }
     const existing = this.actions.get(definition.id);
     if (existing && existing !== definition) {
       throw new Error(`action ${definition.id} is already registered`);

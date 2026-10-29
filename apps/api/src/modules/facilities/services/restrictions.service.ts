@@ -34,7 +34,11 @@ import {
   type ClosurePort,
 } from '../../scheduling';
 import { FacilitiesActions } from '../facilities.actions';
-import { RestrictionActivated, RestrictionReleased } from '../facilities.events';
+import {
+  RestrictionActivated,
+  RestrictionReleased,
+  RestrictionWithdrawn,
+} from '../facilities.events';
 import { FACILITIES_POLICY, type FacilitiesPolicy } from '../facilities.policy';
 import { AssetMachine, RestrictionMachine } from '../facilities.state-machines';
 import type { OperatingStatusPort } from '../ports';
@@ -48,6 +52,13 @@ export interface ApproveRestrictionInput {
 }
 
 export interface ReleaseRestrictionInput {
+  reason: string;
+  expectedRevision?: number;
+  correlationId?: string | null;
+}
+
+/** FAC-01 (SPK-FAC-004): the withdrawal reason is required and stored on the restriction. */
+export interface WithdrawRestrictionInput {
   reason: string;
   expectedRevision?: number;
   correlationId?: string | null;
@@ -305,11 +316,17 @@ export class RestrictionsService implements OperatingStatusPort {
       });
       // SPK-FAC-004 / SPK-AT-021: exactly one closure backs a restriction. The link is made under
       // the restriction's row lock; when a concurrent approval linked its closure first, that one
-      // is used and the closure created here stays pending (inert: only active closures block).
+      // is used and the closure created here, still pending, is withdrawn through the closure port
+      // in the same unit of work (FAC-01, IF-11), so no orphan closure is left in scheduling.
       closureId = await this.uow.run(async ({ trx }) => {
         const current = await this.reader.loadRestriction(trx, organizationId, restrictionId, true);
         if (!current) throw errors.notFound('restriction', restrictionId);
         if (current.scheduling_closure_id) {
+          await this.closurePort.withdrawClosure(principal, closure.id, {
+            reason: `Superseded: restriction ${restrictionId} is backed by closure ${current.scheduling_closure_id}`,
+            expectedRevision: closure.revision,
+            correlationId: input.correlationId ?? null,
+          });
           await this.audit.record(trx, {
             organizationId,
             actor: principal,
@@ -321,6 +338,7 @@ export class RestrictionsService implements OperatingStatusPort {
             details: {
               schedulingClosureId: current.scheduling_closure_id,
               supersededClosureId: closure.id,
+              supersededClosureWithdrawn: true,
             },
           });
           return current.scheduling_closure_id;
@@ -603,6 +621,115 @@ export class RestrictionsService implements OperatingStatusPort {
     }
   }
 
+  /**
+   * FAC-01 (SPK-FAC-004, §4.6, §4.9, §4.2): withdraw a restriction that never took effect, with its
+   * reason. A proposed restriction holds nothing in scheduling. An approved one (an activation that
+   * did not complete, left by an earlier version or an interrupted resume) may be backed by a
+   * pending scheduling closure: it is withdrawn through the closure port, whose command joins this
+   * unit of work, so the restriction and its closure are withdrawn together or not at all. A closure
+   * already applied, or an active restriction, affects availability: INVALID_TRANSITION, and the
+   * area returns to service only through the authorized release (complete a stalled activation with
+   * `approve` first). The asset's status is untouched: only activation restricts it.
+   */
+  async withdraw(
+    principal: Principal,
+    restrictionId: string,
+    input: WithdrawRestrictionInput,
+  ): Promise<Restriction> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const current = await this.reader.loadRestriction(trx, organizationId, restrictionId, true);
+      if (!current) throw errors.notFound('restriction', restrictionId);
+      await this.authorization.require(principal, FacilitiesActions.applyRestriction, {
+        type: 'restriction',
+        id: restrictionId,
+        organizationId,
+        facilityId: current.facility_id,
+      });
+      assertExpectedRevision(input.expectedRevision, current.revision);
+      const next = RestrictionMachine.next(current.status, 'withdraw');
+      const correlationId = input.correlationId ?? null;
+      const closureId = current.scheduling_closure_id;
+      const operationId = await this.operations.create(trx, {
+        organizationId,
+        kind: 'facilities.withdraw_restriction',
+        requestedBy: principal,
+        correlationId,
+        input: { restrictionId, reason: input.reason, schedulingClosureId: closureId },
+        status: 'running',
+      });
+      let closureWithdrawn = false;
+      if (closureId) {
+        const closure = await this.closures.getClosure(principal, closureId);
+        if (closure.status === 'pending') {
+          // Scheduling authority (§4.2, IF-11): pending -> withdrawn in this same unit of work.
+          await this.closurePort.withdrawClosure(principal, closureId, {
+            reason: input.reason,
+            expectedRevision: closure.revision,
+            correlationId,
+          });
+          closureWithdrawn = true;
+        } else if (closure.status !== 'withdrawn') {
+          // applied (or lifted): the area was closed, so only the authorized release ends it
+          throw errors.invalidTransition('SchedulingClosure', closure.status, 'withdraw');
+        }
+      }
+      const updated = await trx
+        .updateTable('restrictions')
+        .set({
+          status: next,
+          withdrawn_by: json(snapshotActor(principal)),
+          withdrawn_at: this.clock.now(),
+          withdrawal_reason: input.reason,
+          operation_id: operationId,
+          revision: current.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', restrictionId)
+        .where('revision', '=', current.revision)
+        .executeTakeFirst();
+      if (Number(updated.numUpdatedRows ?? 0) === 0) {
+        const latest = await this.reader.loadRestriction(trx, organizationId, restrictionId);
+        throw errors.staleRevision(current.revision, latest?.revision ?? current.revision);
+      }
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: 'facilities.restriction_withdrawn',
+        targetType: 'restriction',
+        targetId: restrictionId,
+        beforeRevision: current.revision,
+        afterRevision: current.revision + 1,
+        reason: input.reason,
+        correlationId,
+        operationId,
+        details: { from: current.status, schedulingClosureId: closureId, closureWithdrawn },
+      });
+      await this.outbox.enqueue(trx, RestrictionWithdrawn, {
+        organizationId,
+        aggregateType: 'restriction',
+        aggregateId: restrictionId,
+        correlationId,
+        operationId,
+        payload: {
+          restrictionId,
+          facilityId: current.facility_id,
+          resourceId: current.resource_id,
+          assetId: current.asset_id,
+          taskId: current.task_id,
+          interval: { start: iso(current.start), end: iso(current.end) },
+          reason: input.reason,
+          schedulingClosureId: closureId,
+        },
+      });
+      await this.operations.transition(trx, operationId, 'succeeded', {
+        result: { restrictionId, status: next, schedulingClosureId: closureId, closureWithdrawn },
+      });
+      const row = await this.reader.loadRestriction(trx, organizationId, restrictionId);
+      return this.reader.restrictionView(row as RestrictionRow);
+    });
+  }
+
   async get(principal: Principal, restrictionId: string): Promise<Restriction> {
     const organizationId = organizationOf(principal);
     const row = await this.reader.loadRestriction(
@@ -748,6 +875,29 @@ export class RestrictionsService implements OperatingStatusPort {
     throw errors.eligibility(
       'This closure backs a maintenance restriction; the space returns to service only through the facilities release (inspection and release authority).',
       { code: 'restriction_release_required', restrictionId: restriction.id, closureId },
+    );
+  }
+
+  /**
+   * The closure guard for a direct withdrawal (scheduling's POST /v1/closures/{id}/withdraw): a
+   * closure that a proposed, approved or active restriction holds is withdrawn only with its
+   * restriction (FAC-01, SPK-FAC-003, §4.2), answered RESOURCE_CONFLICT OWNED_BY_RESTRICTION.
+   */
+  async assertClosureWithdrawAllowed(
+    trx: Trx,
+    organizationId: string,
+    closureId: string,
+  ): Promise<void> {
+    const restriction = await this.reader
+      .restrictionQuery(trx)
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_closure_id', '=', closureId)
+      .where('status', 'in', ['proposed', 'approved', 'active'])
+      .executeTakeFirst();
+    if (!restriction) return;
+    throw errors.resourceConflict(
+      'This closure belongs to a maintenance restriction; withdraw the restriction instead.',
+      { code: 'OWNED_BY_RESTRICTION', closureId, restrictionId: restriction.id },
     );
   }
 

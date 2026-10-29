@@ -6,7 +6,7 @@ import { createProgramFixture } from '../../catalog';
 import { PeopleService } from '../../identity';
 import { applyCorrelationId, importPrincipal } from '../migration.shared';
 import { ImportTargets } from '../services/import-targets';
-import { stagedCredit, stagedPerson } from '../testing/migration-fixtures';
+import { stagedCredit, stagedHousehold, stagedPerson } from '../testing/migration-fixtures';
 import {
   countRows,
   exceptionsOf,
@@ -215,7 +215,7 @@ describe('apply recovery and the per-source apply lock (§4.7 invariants 5 and 1
    * the lease run out, applies again, then releases the first apply.
    */
   async function takeOverWhileCreating(
-    method: 'issueOpeningCredit' | 'createPerson',
+    method: 'issueOpeningCredit' | 'createHousehold',
     rows: Parameters<typeof stageAndValidate>[2],
     sourceSystem: string,
   ) {
@@ -301,24 +301,24 @@ describe('apply recovery and the per-source apply lock (§4.7 invariants 5 and 1
     );
   });
 
-  it('SPK-AT-024 / §4.7 invariant 5 (support-migration-05): a person the stale apply created anyway is never silent — it is an owned exception and a reconciliation discrepancy', async () => {
+  it('SPK-AT-024 / §4.7 invariant 5 (support-migration-05): a household the stale apply created anyway is never silent — it is an owned exception and a reconciliation discrepancy', async () => {
     const { batch, first, rows } = await takeOverWhileCreating(
-      'createPerson',
-      [stagedPerson('TO-P', { givenName: 'Taken', familyName: 'Over' })],
-      'takeover-person',
+      'createHousehold',
+      [stagedPerson('TO-P'), stagedHousehold('TO-H', 'Taken Over Household', ['TO-P'])],
+      'takeover-household',
     );
     expect(first.status).toBe(409);
     expect(first.body.details).toMatchObject({ code: 'APPLY_LOCK_LOST' });
-    const linked = rows.find((r) => r.externalId === 'TO-P')?.internalId as string;
-    const people = await t.db
-      .selectFrom('persons')
+    const linked = rows.find((r) => r.externalId === 'TO-H')?.internalId as string;
+    const households = await t.db
+      .selectFrom('households')
       .select('id')
       .where('organization_id', '=', t.organizationId)
-      .where('family_name', '=', 'Over')
+      .where('name', '=', 'Taken Over Household')
       .execute();
-    // Identity has no import key for persons: the stale apply's person exists, unlinked.
-    expect(people).toHaveLength(2);
-    const orphan = people.find((p) => p.id !== linked)?.id as string;
+    // Identity has no import key for households: the stale apply's household exists, unlinked.
+    expect(households).toHaveLength(2);
+    const orphan = households.find((h) => h.id !== linked)?.id as string;
     const exception = await t.db
       .selectFrom('operational_exceptions')
       .select(['category', 'owner_queue', 'status', 'details'])
@@ -329,7 +329,7 @@ describe('apply recovery and the per-source apply lock (§4.7 invariants 5 and 1
       category: 'migration.orphaned_creation',
       owner_queue: 'migration',
       status: 'open',
-      details: expect.objectContaining({ entityType: 'person', internalId: orphan }),
+      details: expect.objectContaining({ entityType: 'household', internalId: orphan }),
     });
     const report = await post(
       t,
@@ -342,11 +342,77 @@ describe('apply recovery and the per-source apply lock (§4.7 invariants 5 and 1
     expect(report.body.discrepancies).toContainEqual(
       expect.objectContaining({
         level: 'record_identity',
-        entityType: 'person',
+        entityType: 'household',
         code: 'unlinked_creation',
-        externalId: 'TO-P',
+        externalId: 'TO-H',
         internalId: orphan,
       }),
     );
+  });
+
+  it('SPK-AT-024 (MIG-02): an apply interrupted after reserving a record id resumes and creates exactly the reserved record, once', async () => {
+    const batch = await reviewed(
+      [stagedPerson('RS-1', { givenName: 'Reserved', familyName: 'Person' })],
+      'reserved-source',
+    );
+    // The crash: the mapping reserved its record id and committed; the row's unit of work (the
+    // identity import command, the link and the outcome) never committed.
+    const reserved = newId();
+    await t.db
+      .insertInto('external_mappings')
+      .values({
+        id: newId(),
+        organization_id: t.organizationId,
+        source_system: 'reserved-source',
+        entity_type: 'person',
+        external_id: 'RS-1',
+        person_id: null,
+        household_id: null,
+        relationship_id: null,
+        program_id: null,
+        obligation_id: null,
+        credit_id: null,
+        reserved_record_id: reserved,
+        applied_payload_hash: null,
+        first_seen_batch_id: batch.id,
+        last_seen_batch_id: batch.id,
+        provenance: json({ batchId: batch.id }),
+        linked_at: null,
+      })
+      .execute();
+    await t.db
+      .updateTable('import_batches')
+      .set({
+        apply_started_at: t.clock.now(),
+        apply_lock_operation_id: await runningOperation(),
+        apply_lock_until: new Date(t.clock.now().getTime() + 60_000),
+      })
+      .where('id', '=', batch.id)
+      .execute();
+    const persons = await countRows(t, 'persons');
+    t.clock.advance(16 * 60_000);
+    const resumed = await post(t, `/v1/import-batches/${batch.id}/apply`, operator, {});
+    expect(resumed.status, JSON.stringify(resumed.body)).toBe(200);
+    expect(resumed.body.outcomeCounts).toMatchObject({ created: 1, exception: 0 });
+    expect(await countRows(t, 'persons')).toBe(persons + 1);
+    const [row] = await rowsOf(t, operator, batch.id);
+    expect(row).toMatchObject({ outcome: 'created', internalId: reserved });
+    const person = await t.db
+      .selectFrom('persons')
+      .select(['id', 'source', 'given_name'])
+      .where('id', '=', reserved)
+      .executeTakeFirstOrThrow();
+    expect(person).toEqual({ id: reserved, source: 'import', given_name: 'Reserved' });
+    const mapping = await t.db
+      .selectFrom('external_mappings')
+      .select(['status', 'person_id', 'reserved_record_id'])
+      .where('source_system', '=', 'reserved-source')
+      .where('external_id', '=', 'RS-1')
+      .executeTakeFirstOrThrow();
+    expect(mapping).toEqual({
+      status: 'linked',
+      person_id: reserved,
+      reserved_record_id: reserved,
+    });
   });
 });

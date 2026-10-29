@@ -21,6 +21,9 @@ export function resultDigest(result: ReportResponse): string {
     columns: result.columns,
     rows: result.rows,
     disclosures: result.disclosures,
+    // REP-03: the settings used change the figures; runs stored before REP-03 name none, and
+    // their digests stay comparable.
+    ...(result.settings.length > 0 ? { settings: result.settings } : {}),
   });
 }
 
@@ -76,6 +79,12 @@ export function renderCsv(result: ReportResponse): string {
       ].join(' | '),
     );
   }
+  for (const u of result.settings) {
+    meta(
+      `setting ${u.setting}`,
+      `${u.configured ? `configured ${u.value}` : 'not configured'} (${u.pendingDecision}); ${u.effect}`,
+    );
+  }
   for (const d of result.disclosures) meta('disclosure', d);
   lines.push(result.columns.map((c) => csvCell(c.key)).join(','));
   for (const row of result.rows) {
@@ -102,7 +111,9 @@ export function renderCsv(result: ReportResponse): string {
 }
 
 export function renderJson(result: ReportResponse): string {
-  return `${JSON.stringify(result, null, 2)}\n`;
+  // A run stored before REP-03 names no settings: render it exactly as it was authorized.
+  const { settings, ...rest } = result;
+  return `${JSON.stringify(settings.length > 0 ? result : rest, null, 2)}\n`;
 }
 
 export function renderExport(result: ReportResponse, format: 'csv' | 'json'): string {

@@ -40,7 +40,7 @@ import { StateView } from '../../ui/StateView';
 
 type Kind = Schema<'NotificationKind'>;
 type Category = Schema<'NotificationCategory'>;
-type StaffRole = Schema<'Audience'>['staffRoles'][number];
+type StaffRole = NonNullable<Schema<'Audience'>['staffRoles']>[number];
 
 const KINDS: readonly Kind[] = [
   'staff_broadcast',

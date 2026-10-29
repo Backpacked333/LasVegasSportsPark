@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  systemPrincipal,
   type CreateSessionCheckinBody,
   type Principal,
   type RecheckSessionCheckinBody,
@@ -37,6 +38,9 @@ import { ActivityResolver, refOf, type ResolvedActivity } from './activity-resol
 import { ArrivalChecks, hasBlocking, type ParticipationBasis } from './arrival-checks';
 import { StaffScope } from './staff-scope';
 import { VisitsService } from './visits.service';
+
+/** The withdrawal reason of a check-in whose activity its owning module canceled (ENT-03). */
+export const ACTIVITY_CANCELED = 'activity_canceled';
 
 function basisColumns(basis: ParticipationBasis | null) {
   return {
@@ -287,6 +291,66 @@ export class CheckinsService {
       );
       return toCheckin(updated);
     });
+  }
+
+  /**
+   * ENT-03 (§4.6, §4.12, SPK-ENTRY-003, SPK-AT-009): an activity was canceled by its owning module
+   * (catalog canceled the session, or scheduling canceled the event). Every live (held or
+   * admitted) check-in of it is withdrawn through SessionCheckinMachine with the reason
+   * `activity_canceled`, audited as the system and announced (entry.session_checkin_changed).
+   * Visits stay open: the people are still on site. Replay-safe: an already withdrawn check-in is
+   * not live, so a replayed cancellation changes nothing. Runs in the handler's transaction.
+   */
+  async withdrawForCanceledActivity(
+    trx: Trx,
+    organizationId: string,
+    activityType: 'session' | 'event',
+    activityId: string,
+    source: string,
+    correlationId: string | null,
+  ): Promise<number> {
+    const live = await trx
+      .selectFrom('session_checkins')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('activity_type', '=', activityType)
+      .where('activity_id', '=', activityId)
+      .where('status', 'in', ['held', 'admitted'])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const system = systemPrincipal(organizationId, source);
+    const now = this.clock.now();
+    let withdrawn = 0;
+    for (const current of live) {
+      const status = SessionCheckinMachine.next(current.status, 'withdraw');
+      const result = await trx
+        .updateTable('session_checkins')
+        .set({
+          status,
+          withdrawn_at: now,
+          withdrawn_reason: ACTIVITY_CANCELED,
+          revision: current.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', current.id)
+        .where('revision', '=', current.revision)
+        .executeTakeFirst();
+      if (Number(result.numUpdatedRows) === 0) continue;
+      const updated = await this.load(trx, organizationId, current.id);
+      if (!updated) continue;
+      await this.afterChange(
+        trx,
+        system,
+        organizationId,
+        updated,
+        current.status === 'withdrawn' ? null : current.status,
+        correlationId,
+        ACTIVITY_CANCELED,
+      );
+      withdrawn += 1;
+    }
+    return withdrawn;
   }
 
   /**

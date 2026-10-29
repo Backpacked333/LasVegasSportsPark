@@ -151,6 +151,40 @@ export const MatchActions = defineActions({
     subjectPermission: 'view',
     requirements: ['SPK-DISC-002', '§4.10'],
   },
+  /**
+   * CMP-06 (SPK-UX-007, SPK-STAFF-002/005, §4.14): the field-limited match sheet. An official also
+   * needs an accepted assignment for the fixture (proposed or offered ones do not count); a captain
+   * of either side sees names and numbers only.
+   */
+  readMatchSheet: {
+    id: 'competition.read_match_sheet',
+    description:
+      'Read the field-limited match sheet (league staff, an accepted official, or a captain of either side)',
+    staffRoles: [...LEAGUE_ADMINS, 'official'],
+    teamRole: 'captain',
+    requirements: ['SPK-UX-007', 'SPK-STAFF-002', 'SPK-STAFF-005', '§4.14'],
+  },
+  /** CMP-12 (SPK-RESULT-005): the submitter, or a captain of the submitting entry, withdraws. */
+  withdrawDispute: {
+    id: 'competition.withdraw_dispute',
+    description: 'Withdraw a dispute (its submitter or a captain of the submitting entry)',
+    staffRoles: [],
+    allowSelf: true,
+    teamRole: 'captain',
+    requirements: ['SPK-RESULT-005', '§4.6'],
+  },
+  /**
+   * CMP-15 (§3.16 Tournaments): create pools and place or remove their entries. New pool
+   * commitments need the organization's `tournaments` capability (DEC-016, DEC-078); reads and
+   * seeding from existing pools are never gated.
+   */
+  managePools: {
+    id: 'competition.manage_pools',
+    description: 'Create tournament pools and change their entries (league administration)',
+    staffRoles: LEAGUE_ADMINS,
+    capability: 'tournaments',
+    requirements: ['§3.16', 'SPK-COMP-001', 'DEC-078'],
+  },
   submitAppeal: {
     id: 'competition.submit_appeal',
     description:

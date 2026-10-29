@@ -10,7 +10,14 @@ import {
   createTeamEntryFixture,
   type SeasonFixture,
 } from '../testing/competition-fixtures';
-import { adultCustomer, competitionTestApp, key, staffMember, type Actor } from './support';
+import {
+  adultCustomer,
+  atKickoff,
+  competitionTestApp,
+  key,
+  staffMember,
+  type Actor,
+} from './support';
 
 interface Team {
   teamEntryId: string;
@@ -108,6 +115,7 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
   }
 
   async function submit(fixtureId: string, body: object) {
+    await atKickoff(t, fixtureId);
     const res = await post(`/fixtures/${fixtureId}/results`, leagueManager, body);
     expect(res.status).toBe(201);
     return res.body as { id: string; revision: number };
@@ -369,6 +377,26 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
     expect(reuse.status).toBe(201);
     const stale = await publish(reuse.body, { reviewExceptionId: open.id });
     expect(stale.status).toBe(400);
+  });
+
+  it('CMP-11: a league manager resolves a result review task as the audited actor', async () => {
+    const resolved = await t.db
+      .selectFrom('operational_exceptions')
+      .select('id')
+      .where('category', '=', 'competition.result_correction_review')
+      .where('status', '=', 'resolved')
+      .execute();
+    expect(resolved.length).toBeGreaterThanOrEqual(1);
+    for (const task of resolved) {
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select(['action', 'actor'])
+        .where('target_id', '=', task.id)
+        .where('action', '=', 'exceptions.resolved')
+        .executeTakeFirstOrThrow();
+      // the reviewer, not a system principal, is recorded (exceptions.manage_own_queue)
+      expect(audit.actor).toMatchObject({ kind: 'staff', personId: leagueManager.personId });
+    }
   });
 
   it('SPK-RESULT-004: returning a correction that waits for review closes its review task; the official playoff result stands', async () => {
@@ -774,5 +802,44 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
       (await correct(f3, { homeScore: 2, awayScore: 1, cards: [yellow(5)] })).proposedSuspensionIds,
     ).toEqual([]);
     expect((await accumulation()).map((r) => r.source_fixture_id).sort()).toEqual([f2, f3].sort());
+  });
+
+  it('SPK-DISC-001 / CMP-12: correcting an earlier fixture that removes a counted yellow overturns the accumulation suspension sourced at a later fixture', async () => {
+    const division = await createDivisionFixture(t, { seasonId: season.seasonId, name: 'Review' });
+    const g = await teamOf('Grebes', division);
+    const h = await teamOf('Hawks', division);
+    const yellow = (minute: number) => ({
+      personId: g.player.personId,
+      teamEntryId: g.teamEntryId,
+      kind: 'yellow',
+      minute,
+    });
+    // threshold 2: a yellow in f1 and one in f2 propose a suspension sourced at f2
+    const f1 = await fixture(g, h, division);
+    await played(f1, 1, 0, { cards: [yellow(10)] });
+    const f2 = await fixture(h, g, division);
+    const crossing = await played(f2, 0, 0, { cards: [yellow(20)] });
+    expect(crossing.proposedSuspensionIds).toHaveLength(1);
+    const suspensionId = crossing.proposedSuspensionIds[0] as string;
+    // the official correction of f1 removes its yellow: the season now counts one
+    const res = await publish(
+      await submit(f1, {
+        classification: 'completed',
+        homeScore: 1,
+        awayScore: 0,
+        reason: 'The caution was shown to another player.',
+      }),
+    );
+    expect(res.status).toBe(200);
+    const after = await t.db
+      .selectFrom('suspensions')
+      .select(['status', 'overturn_reason', 'source_fixture_id'])
+      .where('id', '=', suspensionId)
+      .executeTakeFirstOrThrow();
+    expect(after).toEqual({
+      status: 'overturned',
+      overturn_reason: 'card removed by correction',
+      source_fixture_id: f2,
+    });
   });
 });

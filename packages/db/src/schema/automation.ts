@@ -9,7 +9,7 @@ import type {
 } from './core';
 
 /**
- * Automation module tables (migration 1400, specification §3.21 SPK-AUTO-001..005, §4.2
+ * Automation module tables (migrations 1400 and 1401, specification §3.21 SPK-AUTO-001..005, §4.2
  * "Automation: reviewable recommendations", SPK-AT-026). Assistant requests with their supporting
  * evidence and missing evidence, reviewable recommendations, and the append-only log of every
  * module query or command the assistant used or a reviewer applied.
@@ -129,8 +129,33 @@ export interface ToolInvocationsTable {
   operation_id: string | null;
 }
 
+export type ApplySettlementOutcome = 'applied' | 'not_applied';
+
+/**
+ * Append-only (forbid_mutation, migration 1401, AUT-03): the reconciled outcome of an apply whose
+ * outcome the owning module did not report; one per apply operation.
+ */
+export interface RecommendationApplySettlementsTable {
+  id: string;
+  organization_id: string;
+  recommendation_id: string;
+  apply_operation_id: string;
+  outcome: ApplySettlementOutcome;
+  evidence: string;
+  reason: string;
+  policy_references: GeneratedJson<string[]>;
+  settled_by: Json<PrincipalSnapshot>;
+  settled_by_account_id: string;
+  settled_by_person_id: string;
+  settled_at: Timestamp;
+  audit_record_id: string;
+  correlation_id: string | null;
+  created_at: GeneratedTimestamp;
+}
+
 export interface AutomationTables {
   assistant_requests: AssistantRequestsTable;
   recommendations: RecommendationsTable;
   tool_invocations: ToolInvocationsTable;
+  recommendation_apply_settlements: RecommendationApplySettlementsTable;
 }

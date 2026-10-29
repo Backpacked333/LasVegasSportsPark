@@ -11,7 +11,14 @@ import {
   createTeamEntryFixture,
   type SeasonFixture,
 } from '../testing/competition-fixtures';
-import { adultCustomer, competitionTestApp, key, staffMember, type Actor } from './support';
+import {
+  adultCustomer,
+  atKickoff,
+  competitionTestApp,
+  key,
+  staffMember,
+  type Actor,
+} from './support';
 
 interface Team {
   teamEntryId: string;
@@ -119,6 +126,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
         },
       ],
     };
+    await atKickoff(t, f1);
     const unassigned = await post(`/fixtures/${f1}/results`, official, body);
     expect(unassigned.status).toBe(403);
     const byCaptain = await post(`/fixtures/${f1}/results`, a.captain, body);
@@ -250,6 +258,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
 
   it('every Result transition: return for correction (submitted â†’ draft), resubmit (draft â†’ submitted), publish; SPK-RESULT-003 standings explain the tiebreak', async () => {
     const f2 = await scheduleFixture(a, c, '2027-01-23', '18:00', '19:00');
+    await atKickoff(t, f2);
     const submitted = await post(`/fixtures/${f2}/results`, leagueManager, {
       classification: 'completed',
       homeScore: 3,
@@ -418,6 +427,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
       fixtureId: f3,
     });
     expect(node.status).toBe(201);
+    await atKickoff(t, f3);
     const submitted = await post(`/fixtures/${f3}/results`, leagueManager, {
       classification: 'completed',
       homeScore: 1,

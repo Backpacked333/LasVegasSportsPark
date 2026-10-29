@@ -15,6 +15,7 @@ import { AuthorizationService } from '../authorization/authorization.service';
 import type { Clock } from '../clock';
 import { currentCommitFence } from '../database/commit-fence';
 import { ensureUpdated } from '../database/revision';
+import { executorFor } from '../database/transaction-context';
 import type { Trx } from '../database/unit-of-work';
 import { CLOCK, DATABASE } from '../tokens';
 
@@ -145,6 +146,31 @@ export class OperationsService {
     ensureUpdated(updated.numUpdatedRows, () =>
       errors.staleRevision(current.revision, current.revision + 1),
     );
+  }
+
+  /**
+   * Who requested an operation (K-10, IF-29): the principal kind, account and person recorded at
+   * creation, or null for an unknown id or another organization's operation. The caller
+   * authorizes its own context first.
+   */
+  async requestedBy(
+    organizationId: string,
+    operationId: string,
+    db?: Db | Trx,
+  ): Promise<{ kind: string; accountId: string | null; personId: string | null } | null> {
+    const row = await (db ?? executorFor(this.db))
+      .selectFrom('operations')
+      .select('requested_by')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', operationId)
+      .executeTakeFirst();
+    if (!row) return null;
+    const actor = (row.requested_by ?? {}) as Record<string, unknown>;
+    return {
+      kind: typeof actor['kind'] === 'string' ? actor['kind'] : 'unknown',
+      accountId: typeof actor['accountId'] === 'string' ? actor['accountId'] : null,
+      personId: typeof actor['personId'] === 'string' ? actor['personId'] : null,
+    };
   }
 
   /** Returns the operation when the principal may see it; protected not-found otherwise. */

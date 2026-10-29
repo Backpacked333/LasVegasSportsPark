@@ -97,4 +97,12 @@ export const EntryEvents = {
     'entry.occupancy_snapshot_taken',
     z.object({ snapshotId: z.uuid(), facilityId: z.uuid(), reconciled: z.boolean() }),
   ),
+  /**
+   * ENT-05, IF-38: an access device was registered, changed, retired, or its health changed
+   * (`change` names which, for example registered, updated, retired, online, offline).
+   */
+  accessDeviceChanged: defineEvent(
+    'entry.access_device_changed',
+    z.object({ deviceId: z.uuid(), change: z.string().min(1).max(100) }),
+  ),
 };

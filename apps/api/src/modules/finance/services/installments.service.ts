@@ -22,6 +22,7 @@ import {
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
 import {
+  outcomeUnknownDetails,
   financeSystem,
   organizationOf,
   toInstallmentPlan,
@@ -174,7 +175,7 @@ export class InstallmentsService {
       });
       if (live) {
         if (live.purpose !== 'installment' || live.status === 'unknown') {
-          throw errors.paymentOutcomeUnknown({ paymentAttemptId: live.id, status: live.status });
+          throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(actor, live));
         }
         return live;
       }

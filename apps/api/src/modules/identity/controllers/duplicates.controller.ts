@@ -1,14 +1,18 @@
-import { Controller, HttpCode, Post } from '@nestjs/common';
+import { Controller, Get, HttpCode, Post } from '@nestjs/common';
 import {
   DismissDuplicateBody,
   FlagDuplicateBody,
   MergeDuplicateBody,
+  ListDuplicateCandidatesQuery,
   z,
   type DuplicateCandidate,
+  type DuplicateCandidateDetail,
+  type DuplicateCandidateView,
+  type Page,
   type PersonMerge,
   type Principal,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
 import { CorrelationId } from '../identity.shared';
 import { DuplicatesService } from '../services/duplicates.service';
 
@@ -26,6 +30,23 @@ export class DuplicatesController {
     @CorrelationId() correlationId: string | null,
   ): Promise<DuplicateCandidate> {
     return this.duplicates.flag(principal, body, correlationId);
+  }
+
+  /** GET /v1/duplicate-candidates (ID-05): default open, names and signals, no dates of birth. */
+  @Get()
+  list(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListDuplicateCandidatesQuery) query: z.infer<typeof ListDuplicateCandidatesQuery>,
+  ): Promise<Page<DuplicateCandidateView>> {
+    return this.duplicates.list(principal, query);
+  }
+
+  @Get(':id')
+  get(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<DuplicateCandidateDetail> {
+    return this.duplicates.get(principal, params.id);
   }
 
   @Post(':id/merge')

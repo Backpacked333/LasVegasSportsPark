@@ -9,10 +9,11 @@ import {
 } from '../calculators/allocation';
 import { column, type ReportContext, type ReportDefinition } from '../engine/report-definition';
 import { ReportingActions } from '../reporting.actions';
+import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import {
   HOUR_MS,
   hours,
-  localDateOfInstant,
+  operatingDateOf,
   localDays,
   metricValue,
   ratio,
@@ -64,6 +65,7 @@ export class EconomicsReport {
     pointInTime: 'partial',
     pointInTimeNote:
       'Orders fulfilled after the as-of instant and reservations released by then are excluded, and cost inputs are those in force at the as-of instant (recorded by then and not yet withdrawn); session schedules are taken as they stand now. The stored run is the reproducible record.',
+    settings: [REPORTING_SETTING_NAMES.operatingDayStart],
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
@@ -78,7 +80,7 @@ export class EconomicsReport {
   ) {
     const facility = ctx.facility!;
     const tz = facility.timezone;
-    const days = localDays(tz, params.from, params.to, ctx.policy.maxPeriodDays);
+    const days = localDays(tz, params.from, params.to, ctx.policy.maxPeriodDays, ctx.dayStart);
     const spanStart = new Date(days[0]!.start);
     const spanEnd = new Date(days[days.length - 1]!.end);
     const method = params.allocationMethod;
@@ -125,7 +127,7 @@ export class EconomicsReport {
       offeringKind: l.offering_kind,
       totalMinor: l.total_minor,
       currency: l.currency,
-      fulfilledOn: localDateOfInstant(tz, l.fulfilled_at as Date),
+      fulfilledOn: operatingDateOf(tz, l.fulfilled_at as Date, ctx.dayStart),
     }));
 
     // Every live session event of those offerings (pro-rata spreads over the whole offering).
@@ -177,7 +179,7 @@ export class EconomicsReport {
       return {
         offeringId: e.offering_id,
         eventId: e.event_id,
-        eventOn: localDateOfInstant(tz, e.scheduled_start),
+        eventOn: operatingDateOf(tz, e.scheduled_start, ctx.dayStart),
         activityMinutes: Math.round(durationMs / 60_000),
         spaces,
       };

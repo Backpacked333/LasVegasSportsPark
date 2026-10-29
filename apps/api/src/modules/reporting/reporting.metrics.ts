@@ -39,8 +39,9 @@ const UTIL = 'reporting.view_utilization';
 const RET = 'reporting.view_retention';
 
 const DAY =
-  'Facility-local operating day of the scheduled start (local midnight, DEC-001), as of the as-of instant';
-const PERIOD_LOCAL = 'Facility-local dates from..to inclusive, as of the as-of instant';
+  'Facility-local operating day of the scheduled start (from REPORTING_OPERATING_DAY_START, else local midnight; DEC-001), as of the as-of instant';
+const PERIOD_LOCAL =
+  'Facility-local operating days from..to inclusive (from REPORTING_OPERATING_DAY_START, else local midnight; DEC-001), as of the as-of instant';
 const PERIOD_INSTANT =
   'Instants periodStart (inclusive) to periodEnd (exclusive), as of the as-of instant';
 const LIVE = 'The as-of instant (evaluated live; the as-of instant is displayed)';
@@ -513,7 +514,7 @@ export const METRICS: readonly MetricSpec[] = [
     numerator:
       'Sum over open obligations of (amount minus allocated receipts and credits), per currency',
     denominator: 'none (amount); count of obligations',
-    timeBasis: `${LIVE}; aging bands by days past due`,
+    timeBasis: `${LIVE}; aging bands by days past due from REPORTING_AGING_BANDS_DAYS (unbanded when none is configured)`,
     exclusions: [
       'settled, written-off and canceled obligations',
       'contribution requests (requests are not receipts, SPK-PAY-004)',
@@ -796,7 +797,9 @@ export const METRICS: readonly MetricSpec[] = [
     accessScope: OPS,
     unit: 'count',
     requirementIds: ['SPK-REPORT-002', 'SPK-COMMS-004', '§5.11'],
-    pendingDecisions: ['DEC-015 unknown-delivery threshold (placeholder 60 minutes)'],
+    pendingDecisions: [
+      'DEC-015 unknown-delivery threshold (REPORTING_UNKNOWN_DELIVERY_MINUTES; without one every unknown delivery counts at once)',
+    ],
   },
   // SPK-REPORT-003 Field utilization -------------------------------------------------------------
   {

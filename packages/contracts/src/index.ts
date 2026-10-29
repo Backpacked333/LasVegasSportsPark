@@ -8,5 +8,6 @@ export * from './principal';
 export * from './state-machines';
 export * from './events';
 export * from './time';
+export * from './capabilities';
 export * from './openapi';
 export * from './api';

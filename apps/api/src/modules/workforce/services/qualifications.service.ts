@@ -37,6 +37,7 @@ import {
   toQualification,
   type QualificationRow,
 } from '../workforce.shared';
+import { MergedPersons } from './merged-persons';
 
 export interface QualificationCheck {
   kind: string;
@@ -62,6 +63,7 @@ export class QualificationsService {
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
     private readonly exceptions: OperationalExceptions,
+    private readonly merged: MergedPersons,
   ) {}
 
   async create(
@@ -174,7 +176,14 @@ export class QualificationsService {
       .orderBy('person_id')
       .orderBy('kind')
       .orderBy('valid_from', 'desc');
-    if (personId) q = q.where('person_id', '=', personId);
+    // WRK-05, SPK-IAM-007: a survivor's evidence includes what was recorded for people merged into it.
+    if (personId) {
+      q = q.where(
+        'person_id',
+        'in',
+        await this.merged.resolving(this.db, organizationId, personId),
+      );
+    }
     if (query.kind) q = q.where('kind', '=', query.kind);
     if (query.status) q = q.where('status', '=', query.status);
     return (await q.execute()).map(toQualification);
@@ -183,6 +192,9 @@ export class QualificationsService {
   /**
    * Explains, per required kind, whether the person holds a verified qualification valid at the
    * instant (SPK-STAFF-001). Used by assignments and the replacement workflow.
+   *
+   * WRK-05, SPK-IAM-007: evidence recorded for anyone identity resolves to the same person (the
+   * survivor of a merge and the people merged into it) counts; no row is rewritten.
    */
   async check(
     db: Db | Trx,
@@ -192,12 +204,14 @@ export class QualificationsService {
     at: Date,
   ): Promise<QualificationCheck[]> {
     if (kinds.length === 0) return [];
+    const personIds = await this.merged.resolving(db, organizationId, personId);
     const rows = await db
       .selectFrom('qualifications')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('person_id', '=', personId)
+      .where('person_id', 'in', personIds)
       .where('kind', 'in', [...kinds])
+      .orderBy('id')
       .execute();
     return kinds.map((kind) => {
       const own = rows.filter((r) => r.kind === kind);
@@ -217,7 +231,10 @@ export class QualificationsService {
     });
   }
 
-  /** People holding every kind, verified and valid at the instant (replacement pool). */
+  /**
+   * People holding every kind, verified and valid at the instant (replacement pool). WRK-05: a
+   * merged person's evidence counts for the survivor, so holders are the canonical persons.
+   */
   async holdersOfAll(
     db: Db | Trx,
     organizationId: string,
@@ -233,11 +250,17 @@ export class QualificationsService {
       .where('status', '=', 'verified')
       .execute();
     const byPerson = new Map<string, Set<string>>();
+    const canonical = new Map<string, string>();
     for (const row of rows) {
       if (!qualificationHoldsAt(row, at)) continue;
-      const set = byPerson.get(row.person_id) ?? new Set<string>();
+      let holder = canonical.get(row.person_id);
+      if (holder === undefined) {
+        holder = await this.merged.canonical(db, organizationId, row.person_id);
+        canonical.set(row.person_id, holder);
+      }
+      const set = byPerson.get(holder) ?? new Set<string>();
       set.add(row.kind);
-      byPerson.set(row.person_id, set);
+      byPerson.set(holder, set);
     }
     return [...byPerson.entries()]
       .filter(([, held]) => kinds.every((k) => held.has(k)))
@@ -349,6 +372,8 @@ export class QualificationsService {
         'r.required_qualifications',
       ])
       .where('a.organization_id', '=', organizationId)
+      // WRK-02: a retired requirement demands nothing.
+      .where('r.retired_at', 'is', null)
       .where('a.status', '=', 'accepted')
       .where('a.scheduled_end', '>', this.clock.now())
       .whereRef('a.slot', '<=', 'r.required_count')

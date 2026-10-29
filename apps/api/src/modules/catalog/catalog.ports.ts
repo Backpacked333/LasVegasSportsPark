@@ -3,11 +3,17 @@ import type {
   DiscountEvaluation,
   DiscountEvaluationLine,
   EntitlementDefinition,
+  EntitlementKind,
+  MembershipBenefitScope,
   Offering,
   PolicyKind,
+  PackageCreditsScope,
+  PartyPackageScope,
   PolicyVersion,
   PriceRule,
   Principal,
+  RentalResourceScope,
+  TypedEntitlementKind,
 } from '@sportspark/contracts';
 import type { Trx } from '../../kernel';
 
@@ -20,12 +26,37 @@ export const OFFERING_LOOKUP_PORT = Symbol('OFFERING_LOOKUP_PORT');
 export const POLICY_PORT = Symbol('POLICY_PORT');
 export const PRICING_PORT = Symbol('PRICING_PORT');
 
+type DefinitionWith<K extends EntitlementKind, S> = Omit<
+  EntitlementDefinition,
+  'kind' | 'scope'
+> & {
+  kind: K;
+  scope: S;
+};
+
+/**
+ * CAT-02, IF-23: an entitlement definition whose scope is typed by its kind (SPK-COND-001 to
+ * SPK-COND-003). The four Package G kinds carry their parsed scope; every other kind keeps the
+ * free-form scope.
+ */
+export type SnapshotEntitlementDefinition =
+  | DefinitionWith<'membership_benefit', MembershipBenefitScope>
+  | DefinitionWith<'package_credits', PackageCreditsScope>
+  | DefinitionWith<'party_package', PartyPackageScope>
+  | DefinitionWith<'rental_resource', RentalResourceScope>
+  | DefinitionWith<Exclude<EntitlementKind, TypedEntitlementKind>, Record<string, unknown>>;
+
 /** Everything a quote or an eligibility evaluation needs about an offering at one instant. */
 export interface OfferingSnapshot {
   offering: Offering;
   /** The price rule effective at the instant, or null when the offering is unpriced then. */
   priceRule: PriceRule | null;
-  entitlementDefinition: EntitlementDefinition | null;
+  /**
+   * The definition with its scope typed by kind (IF-23). A Package G definition whose stored
+   * scope does not satisfy its schema is reported as null, so a consumer refuses rather than
+   * guesses an effect.
+   */
+  entitlementDefinition: SnapshotEntitlementDefinition | null;
   capacityUnits: CapacityUnit[];
   /** SPK-REG-002: the configured reference date (YYYY-MM-DD) eligibility is evaluated against. */
   eligibilityReferenceDate: string;
@@ -34,6 +65,13 @@ export interface OfferingSnapshot {
   requiredForms: PolicyVersion[];
   /** Whether registration intents are accepted right now (publication state and window). */
   registrationOpen: boolean;
+  /**
+   * CAT-02, IF-23: the approved `booking_terms` version of a rental or party offering effective at
+   * the instant (its content satisfies `BookingTermsContentSchema`); null for other kinds or when
+   * no approved version is effective, and a booking without terms is refused with
+   * BOOKING_TERMS_REQUIRED.
+   */
+  bookingTerms: PolicyVersion | null;
 }
 
 export interface OfferingLookupPort {

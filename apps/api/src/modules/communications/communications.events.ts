@@ -4,6 +4,7 @@ import {
   DeliveryFailureCodeSchema,
   NotificationCategorySchema,
   NotificationKindSchema,
+  PushPlatformSchema,
   SuppressionReasonSchema,
   z,
 } from '@sportspark/contracts';
@@ -115,6 +116,33 @@ export const CalendarFeedRevoked = defineEvent(
   z.object({ feedId: z.uuid(), personId: z.uuid() }),
 );
 
+/** COM-02 (SPK-COMMS-004): a failed external delivery was retried as a new queued attempt. */
+export const DeliveryRetryQueued = defineEvent(
+  'communications.delivery_retry_queued',
+  z.object({ ...attemptPayload, retryOfAttemptId: z.uuid() }),
+);
+
+/** COM-01 (SPK-UX-001): a device was registered for push; the token never travels in an event. */
+export const PushDeviceRegistered = defineEvent(
+  'communications.push_device_registered',
+  z.object({
+    deviceId: z.uuid(),
+    personId: z.uuid(),
+    accountId: z.uuid(),
+    platform: PushPlatformSchema,
+  }),
+);
+/** COM-01 (SPK-IAM-006, SPK-AT-025): a device receives nothing more; its token is erased. */
+export const PushDeviceRevoked = defineEvent(
+  'communications.push_device_revoked',
+  z.object({
+    deviceId: z.uuid(),
+    personId: z.uuid(),
+    accountId: z.uuid(),
+    reason: z.string(),
+  }),
+);
+
 export const CommunicationsEvents = {
   NotificationComposed,
   NotificationQueued,
@@ -130,4 +158,7 @@ export const CommunicationsEvents = {
   NotificationAcknowledged,
   CalendarFeedCreated,
   CalendarFeedRevoked,
+  DeliveryRetryQueued,
+  PushDeviceRegistered,
+  PushDeviceRevoked,
 } as const;

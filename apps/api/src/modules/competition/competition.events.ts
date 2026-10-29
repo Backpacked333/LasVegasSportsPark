@@ -87,13 +87,20 @@ export const CompetitionEvents = {
       reason: z.string().nullable(),
     }),
   ),
+  /**
+   * A team role was assigned, ended or handed over. A handover (CMP-13) names the new holder as
+   * `personId` and carries `fromPersonId`, `toPersonId` and the one instant both rows changed.
+   */
   teamRoleChanged: defineEvent(
     'competition.team_role_changed',
     z.object({
       teamEntryId: z.uuid(),
       personId: z.uuid(),
       role: TeamRoleSchema,
-      change: z.enum(['assigned', 'ended']),
+      change: z.enum(['assigned', 'ended', 'handed_over']),
+      fromPersonId: z.uuid().nullable().optional(),
+      toPersonId: z.uuid().nullable().optional(),
+      effectiveAt: z.iso.datetime().nullable().optional(),
     }),
   ),
   /** One per roster row opened or closed (SPK-COMP-005). */
@@ -179,6 +186,21 @@ export const CompetitionEvents = {
         'synced_from_scheduling',
       ]),
       reason: z.string().nullable(),
+    }),
+  ),
+  /**
+   * CMP-14, IF-45 (SPK-CAP-001): a captain or league staff asked the entry's players without an
+   * answer for their availability; each request id is one notice per recipient (communications).
+   */
+  availabilityRequested: defineEvent(
+    'competition.availability_requested',
+    z.object({
+      requestId: z.uuid(),
+      fixtureId: z.uuid(),
+      teamEntryId: z.uuid(),
+      recipientPersonIds: z.array(z.uuid()),
+      scheduledStart: z.string(),
+      facilityId: z.uuid().nullable(),
     }),
   ),
   /** RSVP recorded. RSVP is neither attendance nor eligibility (SPK-CAP-003). */

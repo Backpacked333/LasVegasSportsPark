@@ -9,7 +9,15 @@ import type { Db, MappedEntityType } from '@sportspark/db';
 import { AuthorizationService, currentTransaction, DATABASE, type Trx } from '../../../kernel';
 import { MigrationActions } from '../migration.actions';
 import type { ExternalMappingPort } from '../migration.ports';
-import { organizationOf, toExternalMapping, type Reader } from '../migration.shared';
+import {
+  afterKeyset,
+  createdAtText,
+  keysetPage,
+  organizationOf,
+  readKeysetCursor,
+  toExternalMapping,
+  type Reader,
+} from '../migration.shared';
 import { isMappedEntityType } from '../staging/categories';
 
 /**
@@ -34,14 +42,16 @@ export class ExternalMappingsService implements ExternalMappingPort {
       organizationId,
       protected: true,
     });
+    // MIG-01: keyset paging, newest first (created_at desc, id desc).
+    const cursor = readKeysetCursor(query.cursor);
     let q = this.db
       .selectFrom('external_mappings')
       .selectAll()
+      .select(createdAtText('created_at').as('created_at_text'))
       .where('organization_id', '=', organizationId)
-      .orderBy('source_system')
-      .orderBy('entity_type')
-      .orderBy('external_id')
-      .limit(query.limit);
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
     if (query.sourceSystem) q = q.where('source_system', '=', query.sourceSystem);
     if (query.entityType) {
       if (!isMappedEntityType(query.entityType)) return { items: [], nextCursor: null };
@@ -49,8 +59,9 @@ export class ExternalMappingsService implements ExternalMappingPort {
     }
     if (query.externalId) q = q.where('external_id', '=', query.externalId);
     if (query.internalId) q = q.where('internal_id', '=', query.internalId);
-    const rows = await q.execute();
-    return { items: rows.map(toExternalMapping), nextCursor: null };
+    if (cursor) q = q.where(afterKeyset('created_at', 'id', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
+    return { items: page.rows.map(toExternalMapping), nextCursor: page.nextCursor };
   }
 
   async findInternalId(

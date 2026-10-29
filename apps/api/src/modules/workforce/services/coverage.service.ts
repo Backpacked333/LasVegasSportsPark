@@ -46,6 +46,20 @@ export interface UncoveredNotice {
 
 export type UncoveredCause = 'declined' | 'withdrawn' | 'schedule_conflict';
 
+/**
+ * WRK-02: the assignment (table alias `alias`) does not belong to a retired requirement of its
+ * target and role. Assignments without any requirement (declared ad hoc) still count.
+ */
+export function notOfRetiredRequirement(alias: string) {
+  return sql<boolean>`not exists (
+    select 1 from assignment_requirements rr
+     where rr.organization_id = ${sql.ref(`${alias}.organization_id`)}
+       and rr.target_type = ${sql.ref(`${alias}.target_type`)}
+       and rr.target_id = ${sql.ref(`${alias}.target_id`)}
+       and rr.role = ${sql.ref(`${alias}.role`)}
+       and rr.retired_at is not null)`;
+}
+
 export const uncoveredDedupeKey = (
   targetType: string,
   targetId: string,
@@ -74,6 +88,7 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     private readonly qualifications: QualificationsService,
   ) {}
 
+  /** The target's requirements in force (WRK-02: retired requirements are skipped). */
   async requirements(
     db: Db | Trx,
     organizationId: string,
@@ -86,11 +101,25 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       .where('organization_id', '=', organizationId)
       .where('target_type', '=', targetType)
       .where('target_id', '=', targetId)
+      .where('retired_at', 'is', null)
       .orderBy('role')
       .execute();
   }
 
+  /** The requirement in force for the target and role (WRK-02: never a retired one). */
   async requirementFor(
+    db: Db | Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+    role: string,
+  ): Promise<RequirementRow | undefined> {
+    const row = await this.anyRequirementFor(db, organizationId, targetType, targetId, role);
+    return row && row.retired_at === null ? row : undefined;
+  }
+
+  /** The requirement for the target and role, retired or not (unique per target and role). */
+  async anyRequirementFor(
     db: Db | Trx,
     organizationId: string,
     targetType: AssignmentTargetType,
@@ -104,6 +133,30 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       .where('target_type', '=', targetType)
       .where('target_id', '=', targetId)
       .where('role', '=', role)
+      .executeTakeFirst();
+  }
+
+  /**
+   * Takes the requirement row's share lock before an assignment of its role is locked or inserted
+   * (WRK-02): the trigger `assignments_requirement_not_retired` takes the same lock, and a
+   * retirement locks the requirement before the assignments, so both take the locks in one order.
+   * Returns the requirement (retired or not), if any.
+   */
+  async lockRequirementShared(
+    trx: Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+    role: string,
+  ): Promise<RequirementRow | undefined> {
+    return trx
+      .selectFrom('assignment_requirements')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('target_type', '=', targetType)
+      .where('target_id', '=', targetId)
+      .where('role', '=', role)
+      .forShare()
       .executeTakeFirst();
   }
 
@@ -147,6 +200,35 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     });
   }
 
+  /**
+   * IF-34, WRK-03 (SPK-UX-007 assigned activities only, SPK-YOUTH-005): whether the person holds an
+   * accepted or completed assignment of the kind on any session of the offering. Proposed and
+   * offered assignments never count; assignments of a retired requirement are skipped (WRK-02).
+   * Reads through the passed transaction, else the active one.
+   */
+  async isAcceptedOnOffering(
+    organizationId: string,
+    offeringId: string,
+    personId: string,
+    kind: AssignmentKind,
+    trx?: Trx,
+  ): Promise<boolean> {
+    const row = await (trx ?? this.uow.reader())
+      .selectFrom('assignments as a')
+      .select('a.id')
+      .where('a.organization_id', '=', organizationId)
+      .where('a.target_type', '=', 'session')
+      .where('a.offering_id', '=', offeringId)
+      .where('a.person_id', '=', personId)
+      .where('a.kind', '=', kind)
+      .where('a.status', 'in', [...COVERING_STATUSES])
+      .where(notOfRetiredRequirement('a'))
+      .limit(1)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /** People holding an accepted (or completed) assignment of the kind (retired requirements skipped). */
   async acceptedAssignees(
     organizationId: string,
     targetType: AssignmentTargetType,
@@ -155,14 +237,15 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     trx?: Trx,
   ): Promise<string[]> {
     let q = (trx ?? this.uow.reader())
-      .selectFrom('assignments')
-      .select('person_id')
+      .selectFrom('assignments as a')
+      .select('a.person_id')
       .distinct()
-      .where('organization_id', '=', organizationId)
-      .where('target_type', '=', targetType)
-      .where('target_id', '=', targetId)
-      .where('status', 'in', [...COVERING_STATUSES]);
-    if (kind) q = q.where('kind', '=', kind);
+      .where('a.organization_id', '=', organizationId)
+      .where('a.target_type', '=', targetType)
+      .where('a.target_id', '=', targetId)
+      .where('a.status', 'in', [...COVERING_STATUSES])
+      .where(notOfRetiredRequirement('a'));
+    if (kind) q = q.where('a.kind', '=', kind);
     return (await q.execute()).map((r) => r.person_id).sort();
   }
 
@@ -174,14 +257,15 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     trx?: Trx,
   ): Promise<boolean> {
     const row = await (trx ?? this.uow.reader())
-      .selectFrom('assignments')
-      .select('id')
-      .where('organization_id', '=', organizationId)
-      .where('target_type', '=', 'fixture')
-      .where('target_id', '=', fixtureId)
-      .where('person_id', '=', personId)
-      .where('kind', '=', 'official')
-      .where('status', 'in', [...COVERING_STATUSES])
+      .selectFrom('assignments as a')
+      .select('a.id')
+      .where('a.organization_id', '=', organizationId)
+      .where('a.target_type', '=', 'fixture')
+      .where('a.target_id', '=', fixtureId)
+      .where('a.person_id', '=', personId)
+      .where('a.kind', '=', 'official')
+      .where('a.status', 'in', [...COVERING_STATUSES])
+      .where(notOfRetiredRequirement('a'))
       .executeTakeFirst();
     return row !== undefined;
   }
@@ -311,13 +395,16 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     correlationId: string | null,
     facilitySettings: Record<string, unknown>,
   ): Promise<UncoveredNotice | null> {
-    const requirement = await this.requirementFor(
+    // WRK-02: read under the requirement's share lock, so an escalation racing a retirement either
+    // sees the requirement retired (nothing to cover) or is seen by the retirement and resolved.
+    const locked = await this.lockRequirementShared(
       trx,
       row.organization_id,
       row.target_type,
       row.target_id,
       row.role,
     );
+    const requirement = locked && locked.retired_at === null ? locked : undefined;
     if (!requirement || !requirement.must_be_accepted) return null;
     if (row.slot > requirement.required_count) return null;
     // SPK-UX-006: serialized with an acceptance of the same slot (resolveIfCovered takes the same
@@ -338,9 +425,14 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     const start = new Date(row.scheduled_start);
     const end = new Date(row.scheduled_end);
     const policy = workforcePolicyForFacility(this.policy, facilitySettings);
-    const windowMs = policy.uncoveredEscalationHours * 3_600_000;
     if (now.getTime() >= end.getTime()) return null;
-    if (start.getTime() - now.getTime() > windowMs) return null;
+    // WRK-06 (DEC-011 pending): without a configured escalation window the slot escalates at once.
+    if (
+      policy.uncoveredEscalationHours !== null &&
+      start.getTime() - now.getTime() > policy.uncoveredEscalationHours * 3_600_000
+    ) {
+      return null;
+    }
     const raised = await this.exceptions.raise(trx, {
       organizationId: row.organization_id,
       facilityId: row.facility_id,
@@ -461,6 +553,51 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       );
     }
     return open.map((e) => e.id);
+  }
+
+  /**
+   * WRK-02: a retired requirement needs no covering, so the open (or acknowledged) uncovered-slot
+   * exceptions of its role on the target are resolved, naming the retirement. They stay as
+   * history; idempotent (only open or acknowledged exceptions match).
+   */
+  async resolveUncoveredOfRetired(
+    trx: Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+    roles: readonly string[],
+    reason: string,
+    resolution: Record<string, unknown>,
+    correlationId: string | null,
+  ): Promise<string[]> {
+    if (roles.length === 0) return [];
+    const open = await trx
+      .selectFrom('operational_exceptions')
+      .select(['id', 'dedupe_key'])
+      .where('organization_id', '=', organizationId)
+      .where('category', '=', UNCOVERED_ASSIGNMENT)
+      .where('affected_type', '=', targetType)
+      .where('affected_id', '=', targetId)
+      .where('status', 'in', ['open', 'acknowledged'])
+      .orderBy('id')
+      .execute();
+    const prefixes = roles.map(
+      (role) => `${UNCOVERED_ASSIGNMENT}:${targetType}:${targetId}:${role}:`,
+    );
+    const resolved: string[] = [];
+    for (const exception of open) {
+      const key = exception.dedupe_key;
+      if (!key || !prefixes.some((prefix) => key.startsWith(prefix))) continue;
+      await this.exceptions.transition(
+        trx,
+        systemPrincipal(organizationId, 'workforce.coverage'),
+        exception.id,
+        'resolved',
+        { reason, resolution, correlationId: correlationId ?? undefined },
+      );
+      resolved.push(exception.id);
+    }
+    return resolved;
   }
 
   private openUncovered(

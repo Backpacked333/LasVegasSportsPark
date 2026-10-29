@@ -4,6 +4,7 @@ import {
   encodeCursor,
   errors,
   newId,
+  POLICY_CONTENT_SCHEMAS,
   z,
   type Approval,
   type ApprovePolicyVersionInput,
@@ -34,10 +35,36 @@ import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { POLICY_APPROVAL_ACTION } from '../catalog.policy';
 import type { PolicyPort } from '../catalog.ports';
+import { assertCatalogReferences } from './entitlement-definitions.service';
 import { organizationOf, toApproval, toPolicyVersion } from '../catalog.shared';
 import { PolicyVersionMachine } from '../catalog.state-machines';
 
 const Cursor = z.object({ kind: z.string(), key: z.string(), version: z.number(), id: z.string() });
+
+/**
+ * CAT-02: content rules per policy kind (`POLICY_CONTENT_SCHEMAS`). Booking terms and taxes or
+ * fees must state every value (none is assumed, DEC-057, POL-040); eligibility and cancellation
+ * content is checked only for its Package G keys. Returns the parsed content.
+ */
+export function parsePolicyContent(
+  kind: PolicyKind,
+  content: Record<string, unknown>,
+): Record<string, unknown> {
+  const schema = (POLICY_CONTENT_SCHEMAS as Partial<Record<PolicyKind, z.ZodType>>)[kind];
+  if (!schema) return content;
+  const result = schema.safeParse(content);
+  if (!result.success) {
+    throw errors.validation(
+      `The content of a ${kind} policy version is incomplete or invalid.`,
+      result.error.issues.map((i) => ({
+        path: ['content', ...i.path.map(String)].join('.'),
+        message: i.message,
+        code: i.code,
+      })),
+    );
+  }
+  return result.data as Record<string, unknown>;
+}
 
 /**
  * Versioned policies (§4.4 PolicyVersion/Approval, SPK-REG-002, SPK-PAY-003). A version is drafted
@@ -66,7 +93,17 @@ export class PoliciesService implements PolicyPort {
       type: 'policy_version',
       organizationId,
     });
+    const content = parsePolicyContent(body.kind, body.content);
     return this.uow.run(async ({ trx }) => {
+      // §4.3: an eligibility rule requiring membership names offerings or programs that exist.
+      if (body.kind === 'eligibility') {
+        await assertCatalogReferences(
+          trx,
+          organizationId,
+          content['membershipRequired'] as { offeringIds?: string[]; programIds?: string[] },
+          'content.membershipRequired',
+        );
+      }
       const latest = await trx
         .selectFrom('policy_versions')
         .select((eb) => eb.fn.max('version').as('version'))
@@ -87,7 +124,7 @@ export class PoliciesService implements PolicyPort {
             key: body.key,
             version,
             title: body.title,
-            content: json(body.content),
+            content: json(content),
             effective_from: new Date(body.effectiveFrom),
             effective_to: body.effectiveTo ? new Date(body.effectiveTo) : null,
             approved_by: null,
@@ -391,6 +428,36 @@ export class PoliciesService implements PolicyPort {
       .orderBy('version', 'desc')
       .executeTakeFirst();
     return row ? toPolicyVersion(row) : null;
+  }
+
+  /**
+   * CAT-02: for each key, the id of the approved version of the family effective at the instant
+   * (highest version wins), read through the caller's executor; absent keys have none.
+   */
+  async currentVersionIdsByKey(
+    db: Db | Trx,
+    organizationId: string,
+    kind: PolicyKind,
+    keys: readonly string[],
+    at: Date,
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(keys)];
+    const out = new Map<string, string>();
+    if (unique.length === 0) return out;
+    const rows = await db
+      .selectFrom('policy_versions')
+      .select(['id', 'key', 'version'])
+      .where('organization_id', '=', organizationId)
+      .where('kind', '=', kind)
+      .where('key', 'in', unique)
+      .where('approval_status', '=', 'approved')
+      .where('effective_from', '<=', at)
+      .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]))
+      .orderBy('key')
+      .orderBy('version', 'desc')
+      .execute();
+    for (const row of rows) if (!out.has(row.key)) out.set(row.key, row.id);
+    return out;
   }
 
   async hasAcknowledgment(

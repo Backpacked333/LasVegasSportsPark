@@ -19,6 +19,36 @@ const READ_STAFF: readonly StaffRole[] = [
   'system_administrator',
   'support_operator',
 ];
+/** Person search (ID-02, Proposed C.2): the record readers without scheduler. */
+const LOOKUP_STAFF: readonly StaffRole[] = [
+  'front_desk',
+  'league_manager',
+  'program_manager',
+  'finance_operator',
+  'general_manager',
+  'system_administrator',
+  'support_operator',
+];
+/** Authority, invitation and duplicate reads for staff (ID-03, ID-04, ID-05). */
+const AUTHORITY_READERS: readonly StaffRole[] = [
+  'front_desk',
+  'program_manager',
+  'league_manager',
+  'support_operator',
+  'general_manager',
+  'system_administrator',
+];
+const READ_STAFF_DIRECTORY: readonly StaffRole[] = [
+  'front_desk',
+  'league_manager',
+  'program_manager',
+  'scheduler',
+  'finance_operator',
+  'facilities_operator',
+  'general_manager',
+  'system_administrator',
+  'support_operator',
+];
 const REVIEW_DECIDERS: readonly StaffRole[] = [
   'general_manager',
   'system_administrator',
@@ -62,6 +92,27 @@ export const IdentityActions = defineActions({
   addContactPoint: {
     id: 'identity.add_contact_point',
     description: 'Add a contact point to a person',
+    staffRoles: SUPPORT_STAFF,
+    allowSelf: true,
+    subjectPermission: 'register',
+    requirements: ['SPK-IAM-001'],
+  },
+  /**
+   * Audit ids for the ID-06 contact-point commands. Authorization of both stays
+   * identity.add_contact_point (same roles, self and `register`); these ids name what the audit
+   * record did, so a removal is never filed under an add.
+   */
+  makePrimaryContactPoint: {
+    id: 'identity.make_primary_contact_point',
+    description: 'Make a contact point the primary one of its kind for a person',
+    staffRoles: SUPPORT_STAFF,
+    allowSelf: true,
+    subjectPermission: 'register',
+    requirements: ['SPK-IAM-001'],
+  },
+  removeContactPoint: {
+    id: 'identity.remove_contact_point',
+    description: 'Remove a contact point from a person',
     staffRoles: SUPPORT_STAFF,
     allowSelf: true,
     subjectPermission: 'register',
@@ -204,5 +255,86 @@ export const IdentityActions = defineActions({
     description: 'Dismiss a duplicate candidate',
     staffRoles: ['general_manager', 'system_administrator', 'support_operator'],
     requirements: ['SPK-IAM-007'],
+  },
+  // ------------------------------------------------------------------------------------------
+  // Stage 3 reads and commands (ID-02..ID-08). Role sets are Proposed (permission matrix C.2).
+  // ------------------------------------------------------------------------------------------
+  lookupPerson: {
+    id: 'identity.lookup_person',
+    description: 'Search people by name prefix or exact contact (names only, never dates of birth)',
+    staffRoles: LOOKUP_STAFF,
+    requirements: ['SPK-IAM-002', 'SPK-IAM-003', '§4.14'],
+  },
+  readInvitations: {
+    id: 'identity.read_invitations',
+    description: "List a person's invitations for staff (the token is never returned)",
+    staffRoles: AUTHORITY_READERS,
+    requirements: ['SPK-IAM-004', '§4.10'],
+  },
+  declineInvitation: {
+    id: 'identity.decline_invitation',
+    description: 'Decline an invitation addressed to oneself',
+    staffRoles: [],
+    allowSelf: true,
+    requirements: ['SPK-IAM-004'],
+  },
+  readAuthority: {
+    id: 'identity.read_authority',
+    description:
+      "Read a person's relationships, grants, households, pending invitations and claims (staff)",
+    staffRoles: AUTHORITY_READERS,
+    requirements: ['SPK-IAM-001', 'SPK-IAM-003', 'SPK-IAM-005', 'SPK-IAM-006'],
+  },
+  readStaffMembership: {
+    id: 'identity.read_staff_membership',
+    description: 'List and read staff memberships (role assignments)',
+    staffRoles: ['general_manager', 'system_administrator'],
+    requirements: ['§2.1', '§4.14'],
+  },
+  readStaffDirectory: {
+    id: 'identity.read_staff_directory',
+    description:
+      'Read the staff directory: names, roles and facility scopes in effect (no contacts)',
+    staffRoles: READ_STAFF_DIRECTORY,
+    requirements: ['§2.1', '§4.14', 'SPK-UX-005'],
+  },
+  readWorkforceDirectory: {
+    id: 'identity.read_workforce_directory',
+    description: 'Include coaches and officials in the staff directory (staffing screens)',
+    staffRoles: [
+      'scheduler',
+      'league_manager',
+      'program_manager',
+      'general_manager',
+      'system_administrator',
+    ],
+    requirements: ['§2.1', '§4.14'],
+  },
+  readDuplicates: {
+    id: 'identity.read_duplicates',
+    description: 'List and read duplicate candidates with both names and detection signals',
+    staffRoles: AUTHORITY_READERS,
+    requirements: ['SPK-IAM-007'],
+  },
+  /** System-only (ID-07): the background sweep records an invitation's expiry. */
+  expireInvitation: {
+    id: 'identity.expire_invitation',
+    description: 'Record that a pending invitation passed its expiry (background sweep)',
+    staffRoles: [],
+    requirements: ['SPK-IAM-004', '§4.12'],
+  },
+  /** System-only (ID-07): the background sweep records a claim's expiry. */
+  expireClaim: {
+    id: 'identity.expire_claim',
+    description: 'Record that a pending claim passed its expiry (background sweep)',
+    staffRoles: [],
+    requirements: ['SPK-IAM-002', '§4.12'],
+  },
+  /** System-only (ID-08): a time-bounded restriction's window ended. */
+  endRestrictionWindow: {
+    id: 'identity.end_restriction_window',
+    description: 'Record the end of a time-bounded access restriction when its window passes',
+    staffRoles: [],
+    requirements: ['SPK-IAM-005', '§4.6'],
   },
 });

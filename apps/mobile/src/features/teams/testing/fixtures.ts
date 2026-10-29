@@ -72,6 +72,7 @@ export function teamEntry(overrides: Partial<Schema<'TeamEntry'>> = {}): Schema<
     seasonId: IDS.season,
     divisionId: IDS.division,
     teamId: IDS.team,
+    teamName: 'Desert Foxes',
     status: 'approved',
     appliedByPersonId: IDS.me,
     appliedAt: T0,
@@ -267,6 +268,7 @@ export function workspace(
     pendingInvitations: [invitation()],
     pendingJoinRequests: [joinRequest()],
     upcomingFixtures: [upcoming()],
+    viewer: { roles: ['captain'], actingAsCaptain: true, availableActions: [] },
     ...overrides,
   };
 }
@@ -286,6 +288,7 @@ export function playerWorkspace(): Schema<'TeamEntryWorkspace'> {
     ],
     pendingInvitations: [],
     pendingJoinRequests: [],
+    viewer: { roles: ['member'], actingAsCaptain: false, availableActions: [] },
   });
 }
 
@@ -383,6 +386,7 @@ export function result(
     homeScore: 1,
     awayScore: 2,
     forfeitingEntryId: null,
+    shootoutWinnerEntryId: null,
     details: { cards: [], abandonment: null, incidentIds: [], notes: null, disputeId: null },
     submittedBy: actor('staff', 'Match official'),
     submittedAt: '2026-10-17T19:00:00.000Z',
@@ -424,6 +428,9 @@ export function fixtureDetail(
       availability: { available: 0, unavailable: 0, tentative: 0, noResponse: 3 },
     }),
     myResponse: null,
+    responses: [],
+    rosterStatus: null,
+    venue: null,
     ...overrides,
   };
 }
@@ -496,6 +503,7 @@ export function obligation(overrides: Partial<Schema<'Obligation'>> = {}): Schem
         paidAt: '2026-10-20T12:00:00.000Z',
       },
     ],
+    liveAttempt: null,
     revision: 2,
     createdAt: T0,
     ...overrides,
@@ -544,6 +552,7 @@ export function paymentAttempt(
     orderId: null,
     obligationId: IDS.obligation,
     contributionRequestId: IDS.contribution,
+    posSaleId: null,
     installmentId: null,
     unknownSince: null,
     resolvedAt: null,

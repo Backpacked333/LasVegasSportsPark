@@ -22,7 +22,7 @@ export function useFacilityNames(facilityId: string) {
   const resources = useApiQuery({ path: '/resources', request: { query: { facilityId } } });
   const assets = useApiQuery({
     path: '/assets',
-    request: { query: { facilityId, includeRetired: true } },
+    request: { query: { facilityId, includeRetired: 'true' } },
   });
   const resourceNames = new Map((resources.data ?? []).map((r) => [r.id, r.name]));
   const assetNames = new Map((assets.data ?? []).map((a) => [a.id, a.name]));

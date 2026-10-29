@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  systemPrincipal,
   type ActivityAttendance,
   type AttendanceQuery,
   type CorrectAttendanceObservationBody,
@@ -23,7 +24,11 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
-import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
+import {
+  PERSON_DIRECTORY_PORT,
+  type PersonDirectoryPort,
+  type PersonDisplayName,
+} from '../../identity';
 import { EntryActions } from '../entry.actions';
 import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
@@ -65,6 +70,12 @@ export interface InsertedObservation {
   row: ObservationRow;
   duplicate: boolean;
   conflict: { exceptionId: string; conflictingObservationIds: string[] } | null;
+}
+
+/** The open review exception of one person's attendance in one activity (dedupe and affected id). */
+export const ATTENDANCE_CONFLICT = 'entry.attendance_conflict';
+function conflictSubject(activityType: string, activityId: string, personId: string): string {
+  return `${activityType}:${activityId}:${personId}`;
 }
 
 /**
@@ -256,17 +267,28 @@ export class AttendanceService implements AttendancePort {
       .orderBy('person_id')
       .orderBy('received_at')
       .orderBy('id');
-    if (personFilter) q = q.where('person_id', '=', personFilter);
+    // ENT-04, SPK-IAM-007: a person's attendance includes what was recorded under the people
+    // merged into them (rows keep their original person id); only the surviving (canonical) person
+    // is expanded, so asking about a merged id never reveals the survivor's history.
+    if (personFilter) {
+      const resolving = await this.people.personIdsResolvingTo(organizationId, personFilter);
+      q = q.where('person_id', 'in', resolving[0] === personFilter ? resolving : [personFilter]);
+    }
     const rows = await q.execute();
     const byPerson = new Map<string, ObservationRow[]>();
     for (const row of rows) {
-      const list = byPerson.get(row.person_id) ?? [];
+      const key = personFilter ?? row.person_id;
+      const list = byPerson.get(key) ?? [];
       list.push(row);
-      byPerson.set(row.person_id, list);
+      byPerson.set(key, list);
     }
-    const people: PersonAttendance[] = [...byPerson.entries()].map(([personId, list]) =>
-      summarize(personId, list, audience),
-    );
+    // ENT-01, SPK-UX-002/007: names are read only after the read above was authorized, and only
+    // the names (never date of birth or contacts, §4.14).
+    const names = await this.people.displayNames(organizationId, [...byPerson.keys()]);
+    const people: PersonAttendance[] = [...byPerson.entries()].map(([personId, list]) => ({
+      ...summarize(personId, list, audience),
+      ...nameFields(names.get(personId)),
+    }));
     return { activity: activity.detail, people };
   }
 
@@ -414,17 +436,25 @@ export class AttendanceService implements AttendancePort {
       return { row: existing, duplicate: true, conflict: null };
     }
     let conflict: InsertedObservation['conflict'] = null;
+    if (contradicted.length === 0 && input.correctsObservationId) {
+      // ENT-03, §4.15: a correction that leaves the current observations agreeing resolves the
+      // open review exception it answered; the exception's history keeps who and when (system).
+      const heads = currentHeads([...prior, row].map(observationLike));
+      if (!headsConflict(heads)) {
+        await this.resolveConflictReview(trx, organizationId, activity, input.personId, row);
+      }
+    }
     if (contradicted.length > 0) {
       const policy = policyForFacility(this.policy, activity.facilitySettings);
       const ids = [...contradicted.map((c) => c.id), row.id];
       const raised = await this.exceptions.raise(trx, {
         organizationId,
         facilityId: activity.facilityId,
-        category: 'entry.attendance_conflict',
+        category: ATTENDANCE_CONFLICT,
         severity: 'warning',
         title: 'Conflicting attendance observations need review',
         affectedType: 'attendance',
-        affectedId: `${activity.detail.type}:${activity.detail.id}:${input.personId}`,
+        affectedId: conflictSubject(activity.detail.type, activity.detail.id, input.personId),
         ownerQueue: policy.attendanceReviewQueue,
         dedupeKey: `entry.attendance_conflict:${activity.detail.id}:${input.personId}`,
         details: {
@@ -475,6 +505,36 @@ export class AttendanceService implements AttendancePort {
     return { row, duplicate: false, conflict };
   }
 
+  /** Resolves the open `entry.attendance_conflict` exception of one person in one activity. */
+  private async resolveConflictReview(
+    trx: Trx,
+    organizationId: string,
+    activity: ResolvedActivity,
+    personId: string,
+    correction: ObservationRow,
+  ): Promise<void> {
+    const open = await this.exceptions.list(
+      organizationId,
+      {
+        statuses: ['open', 'acknowledged'],
+        category: ATTENDANCE_CONFLICT,
+        affectedType: 'attendance',
+        affectedId: conflictSubject(activity.detail.type, activity.detail.id, personId),
+      },
+      trx,
+    );
+    const system = systemPrincipal(organizationId, 'entry.attendance_correction');
+    for (const exception of open.items) {
+      await this.exceptions.transition(trx, system, exception.id, 'resolved', {
+        reason: 'A correction resolved the conflicting attendance observations.',
+        resolution: {
+          resolvedByObservationId: correction.id,
+          effectiveState: correction.observed_state,
+        },
+      });
+    }
+  }
+
   async byClientId(
     db: Db | Trx,
     organizationId: string,
@@ -500,12 +560,22 @@ export class AttendanceService implements AttendancePort {
   }
 }
 
+function nameFields(
+  name: PersonDisplayName | undefined,
+): Pick<PersonAttendance, 'givenName' | 'familyName' | 'displayName'> {
+  return {
+    givenName: name?.givenName ?? null,
+    familyName: name?.familyName ?? null,
+    displayName: name?.displayName ?? null,
+  };
+}
+
 /** One person's attendance in an activity: the current heads and the full, uncut history. */
 export function summarize(
   personId: string,
   rows: readonly ObservationRow[],
   audience: ReadAudience = 'staff',
-): PersonAttendance {
+): Omit<PersonAttendance, 'givenName' | 'familyName' | 'displayName'> {
   const likes = rows.map(observationLike);
   const heads = currentHeads(likes);
   const correctedBy = new Map<string, string>();

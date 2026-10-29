@@ -23,8 +23,10 @@ import {
   dispatchOutbox,
   fakeProviders,
   recipientsOf,
+  registerPushDeviceFixture,
   type FakeProviders,
 } from '../testing/communications-fixtures';
+import { withDeclaredPortDoubles } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -79,6 +81,7 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
 
   beforeAll(async () => {
     t = await createTestApp({
+      configure: withDeclaredPortDoubles,
       imports: [CommunicationsModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',
@@ -95,6 +98,8 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
       verified: true,
     });
     staff = await authHeaderForPerson(t, people.staff.personId);
+    // COM-01: the push channel reaches registered devices.
+    await registerPushDeviceFixture(t, { personId: people.adult.personId });
   });
   beforeEach(() => {
     fakes.push.reset();
@@ -108,6 +113,7 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
   async function createCoach(childId = people.child.personId): Promise<Coach> {
     const personId = await createPersonFixture(t, { kind: 'adult' });
     await createAccountFixture(t, { personId });
+    await registerPushDeviceFixture(t, { personId });
     // a verified primary identifier is unique per organization: the full id keeps coaches apart
     const email = `coach-${personId}@example.test`;
     await createContactPointFixture(t, { personId, kind: 'email', value: email, verified: true });

@@ -1,7 +1,8 @@
 import { z } from '../zod';
 import { Revision, withCommandMeta } from '../commands';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
-import { PrincipalKind, StaffRole } from '../principal';
+import { PageRequestSchema, pageSchema } from '../pagination';
+import { PrincipalKind, StaffRole, StaffScopeSchema } from '../principal';
 import { Instant } from '../time';
 
 /**
@@ -33,9 +34,14 @@ export const AuthoritySourceSchema = z.enum([
   'import',
 ]);
 export const ContactPointKindSchema = z.enum(['email', 'phone']).openapi('ContactPointKind');
+/** ID-03 (DEC-093, Proposed): `declined` is terminal, like accepted, revoked and expired. */
 export const InvitationStatusSchema = z
-  .enum(['pending', 'accepted', 'revoked', 'expired'])
+  .enum(['pending', 'accepted', 'declined', 'revoked', 'expired'])
   .openapi('InvitationStatus');
+/** Claims keep the original lifecycle: a claim is accepted, revoked or expires, never declined. */
+export const ClaimStatusSchema = z
+  .enum(['pending', 'accepted', 'revoked', 'expired'])
+  .openapi('ClaimStatus');
 export const ClaimKindSchema = z.enum(['self', 'guardian']).openapi('ClaimKind');
 export const AccessReviewStatusSchema = z
   .enum(['open', 'escalated', 'decided', 'closed'])
@@ -320,6 +326,8 @@ export const InvitationSchema = z
     acceptedAt: Instant.nullable(),
     acceptedByPersonId: z.uuid().nullable(),
     revokedAt: Instant.nullable(),
+    /** ID-03: when the recipient declined (status `declined`). */
+    declinedAt: Instant.nullable(),
     revision: Revision,
     createdAt: Instant,
   })
@@ -375,7 +383,7 @@ export const ClaimSchema = z
     subjectPersonId: z.uuid(),
     kind: ClaimKindSchema,
     requestedPermissions: z.array(GrantPermissionSchema),
-    status: InvitationStatusSchema,
+    status: ClaimStatusSchema,
     expiresAt: Instant,
     acceptedAt: Instant.nullable(),
     acceptedByPersonId: z.uuid().nullable(),
@@ -483,6 +491,8 @@ export const AccessReviewDecisionSchema = z
     affectedGrantIds: z.array(z.uuid()),
     effectiveFrom: Instant.nullable(),
     effectiveTo: Instant.nullable(),
+    /** ID-08: recorded by the system (the end of a restriction window), not by a staff member. */
+    bySystem: z.boolean(),
     occurredAt: Instant,
   })
   .openapi('AccessReviewDecision');
@@ -504,6 +514,11 @@ export const AccessReviewSchema = z
     closedAt: Instant.nullable(),
     outcome: z.record(z.string(), z.unknown()).nullable(),
     decisions: z.array(AccessReviewDecisionSchema),
+    /**
+     * ID-05: the decision kinds the review's state allows now (AccessReviewMachine); empty for a
+     * reader who may not decide.
+     */
+    allowedDecisions: z.array(AccessReviewDecisionKindSchema),
     revision: Revision,
     createdAt: Instant,
   })
@@ -608,6 +623,308 @@ export const DevTokenResponse = z
   .openapi('DevToken');
 
 // ---------------------------------------------------------------------------------------------
+// Stage 3 reads and commands (ID-02..ID-06)
+// ---------------------------------------------------------------------------------------------
+/** `?ids=a,b` or repeated `ids`. */
+const commaList = (value: unknown) =>
+  typeof value === 'string'
+    ? value
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0)
+    : value;
+
+/** ID-02 (SPK-IAM-002, §4.14): 1 to 100 person ids. */
+export const PersonNamesQuery = z.object({
+  ids: z.preprocess(commaList, z.array(z.uuid()).min(1).max(100)),
+});
+export type PersonNamesQueryInput = z.infer<typeof PersonNamesQuery>;
+
+/** A person's name only: never date of birth, contact points or household (§4.14). */
+export const PersonNameSchema = z
+  .object({
+    personId: z.uuid(),
+    /** The surviving record when this person was merged (SPK-IAM-007); otherwise personId. */
+    canonicalPersonId: z.uuid(),
+    givenName: z.string(),
+    familyName: z.string(),
+    displayName: z.string(),
+    kind: PersonKindSchema,
+  })
+  .openapi('PersonName');
+export type PersonName = z.infer<typeof PersonNameSchema>;
+export const PersonNameListSchema = z
+  .object({ items: z.array(PersonNameSchema) })
+  .openapi('PersonNameList');
+
+/** ID-02: staff person search by name prefix or exact contact (SCR-S-20). */
+export const SearchPeopleQuery = PageRequestSchema.extend({
+  query: z.string().trim().min(2).max(100),
+  kind: PersonKindSchema.optional(),
+  /** Merged persons are listed only with `status=merged`. */
+  status: PersonStatusSchema.optional(),
+});
+export type SearchPeopleQueryInput = z.infer<typeof SearchPeopleQuery>;
+export const PersonSearchResultSchema = z
+  .object({
+    id: z.uuid(),
+    givenName: z.string(),
+    familyName: z.string(),
+    kind: PersonKindSchema,
+    status: PersonStatusSchema,
+    matchedOn: z.enum(['name', 'contact']),
+  })
+  .openapi('PersonSearchResult');
+export type PersonSearchResult = z.infer<typeof PersonSearchResultSchema>;
+export const PersonSearchPageSchema =
+  pageSchema(PersonSearchResultSchema).openapi('PersonSearchPage');
+
+/** ID-06: `expectedRevision` is the person's revision (contact points are part of PersonDetail). */
+export const MakePrimaryContactPointBody = withCommandMeta({}).openapi(
+  'MakePrimaryContactPointRequest',
+);
+export type MakePrimaryContactPointInput = z.infer<typeof MakePrimaryContactPointBody>;
+export const RemoveContactPointBody = withCommandMeta({}).openapi('RemoveContactPointRequest');
+export type RemoveContactPointInput = z.infer<typeof RemoveContactPointBody>;
+export const ContactPointRemovedResponse = z
+  .object({ removedContactPointId: z.uuid() })
+  .openapi('ContactPointRemoved');
+export type ContactPointRemoved = z.infer<typeof ContactPointRemovedResponse>;
+
+/** ID-03: a person named on an invitation, by display name only. */
+export const InvitationPartySchema = z
+  .object({ personId: z.uuid(), displayName: z.string() })
+  .openapi('InvitationParty');
+/**
+ * ID-03 (SPK-IAM-004): what a recipient reads before accepting: the sender, the people covered
+ * (fixed at issue), the permissions requested and the expiry. `effectiveStatus` reads `expired`
+ * for a pending invitation past its expiry, without a write. The token is never returned again.
+ */
+export const InvitationViewSchema = InvitationSchema.extend({
+  inviter: InvitationPartySchema.nullable(),
+  subjects: z.array(InvitationPartySchema),
+  effectiveStatus: InvitationStatusSchema,
+}).openapi('InvitationView');
+export type InvitationView = z.infer<typeof InvitationViewSchema>;
+export const InvitationViewPageSchema =
+  pageSchema(InvitationViewSchema).openapi('InvitationViewPage');
+export const ListMyInvitationsQuery = PageRequestSchema.extend({
+  direction: z.enum(['received', 'sent']).optional(),
+  /** Filters on the effective status (a pending invitation past expiry is `expired`). */
+  status: InvitationStatusSchema.optional(),
+});
+export type ListMyInvitationsQueryInput = z.infer<typeof ListMyInvitationsQuery>;
+export const ListInvitationsQuery = PageRequestSchema.extend({
+  /** Invitations covering this person (fixed at issue). */
+  scopePersonId: z.uuid().optional(),
+  status: InvitationStatusSchema.optional(),
+});
+export type ListInvitationsQueryInput = z.infer<typeof ListInvitationsQuery>;
+/**
+ * ID-03: declining needs the same proof as accepting (the token, sent in the body). A command
+ * (§4.9): `expectedRevision` is the revision read through GET /v1/me/invitations/{id}, so a
+ * decision made against a stale view is refused (STALE_REVISION).
+ */
+export const DeclineInvitationBody = withCommandMeta({ token: Token })
+  .extend({ reason: Reason.optional() })
+  .openapi('DeclineInvitationRequest');
+export type DeclineInvitationInput = z.infer<typeof DeclineInvitationBody>;
+
+/** ID-04 (SPK-IAM-006): the state of a grant at the clock. */
+export const GrantStatusSchema = z
+  .enum(['effective', 'scheduled', 'suspended', 'revoked', 'ended'])
+  .openapi('GrantStatus');
+export const GrantViewSchema = z
+  .object({
+    grantId: z.uuid(),
+    relationshipId: z.uuid(),
+    relationshipKind: RelationshipKindSchema,
+    actorPersonId: z.uuid(),
+    actorDisplayName: z.string().nullable(),
+    subjectPersonId: z.uuid(),
+    subjectDisplayName: z.string().nullable(),
+    permission: GrantPermissionSchema,
+    source: AuthoritySourceSchema,
+    effectiveFrom: Instant,
+    effectiveTo: Instant.nullable(),
+    revokedAt: Instant.nullable(),
+    status: GrantStatusSchema,
+    /** SPK-IAM-005: a disputed-access review's restriction is in force on this grant. */
+    underReview: z.boolean(),
+    revision: Revision,
+  })
+  .openapi('GrantView');
+export type GrantView = z.infer<typeof GrantViewSchema>;
+export const GrantViewPageSchema = pageSchema(GrantViewSchema).openapi('GrantViewPage');
+export const ListMyAccessGrantsQuery = PageRequestSchema.extend({
+  /** `held`: grants I hold over others (default); `over_me`: grants others hold over me. */
+  direction: z.enum(['held', 'over_me']).optional(),
+});
+export type ListMyAccessGrantsQueryInput = z.infer<typeof ListMyAccessGrantsQuery>;
+
+/** ID-04: a claim as staff see it on a person (never the token; the recipient masked). */
+export const ClaimSummarySchema = z
+  .object({
+    id: z.uuid(),
+    kind: ClaimKindSchema,
+    status: ClaimStatusSchema,
+    effectiveStatus: ClaimStatusSchema,
+    expiresAt: Instant,
+    createdAt: Instant,
+    recipientHint: z.string().nullable(),
+  })
+  .openapi('ClaimSummary');
+export const HouseholdSummarySchema = z
+  .object({ id: z.uuid(), name: z.string(), memberCount: z.number().int() })
+  .openapi('HouseholdSummary');
+/** ID-04 (SCR-S-20/21): a person's authority for staff. */
+export const PersonAuthoritySchema = z
+  .object({
+    personId: z.uuid(),
+    relationships: z.array(RelationshipSchema),
+    grants: z.array(GrantViewSchema),
+    households: z.array(HouseholdSummarySchema),
+    pendingInvitations: z.array(InvitationViewSchema),
+    /** Whether an active login account represents the person (claimed). */
+    accountLinked: z.boolean(),
+    claims: z.array(ClaimSummarySchema),
+  })
+  .openapi('PersonAuthority');
+export type PersonAuthority = z.infer<typeof PersonAuthoritySchema>;
+
+export const MyHouseholdMemberSchema = z.object({
+  personId: z.uuid(),
+  displayName: z.string(),
+  kind: PersonKindSchema,
+  label: z.string().nullable(),
+  isSelf: z.boolean(),
+});
+/** ID-04: a household I belong to; members limited to myself and people I hold view over. */
+export const MyHouseholdSchema = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    members: z.array(MyHouseholdMemberSchema),
+    /** Members not shown because I hold no view permission over them (§4.5, §4.14). */
+    otherMemberCount: z.number().int(),
+    revision: Revision,
+    createdAt: Instant,
+  })
+  .openapi('MyHousehold');
+export type MyHousehold = z.infer<typeof MyHouseholdSchema>;
+export const MyHouseholdListSchema = z
+  .object({ items: z.array(MyHouseholdSchema) })
+  .openapi('MyHouseholdList');
+
+/** ID-05 (§2.1): staff memberships for administrators. */
+export const StaffMembershipViewSchema = StaffMembershipSchema.extend({
+  personDisplayName: z.string().nullable(),
+}).openapi('StaffMembershipView');
+export type StaffMembershipView = z.infer<typeof StaffMembershipViewSchema>;
+export const StaffMembershipPageSchema =
+  pageSchema(StaffMembershipViewSchema).openapi('StaffMembershipPage');
+export const ListStaffMembershipsQuery = PageRequestSchema.extend({
+  personId: z.uuid().optional(),
+  role: StaffRole.optional(),
+  /** Memberships that cover the facility (scoped to it, or organization-wide). */
+  facilityId: z.uuid().optional(),
+  status: StaffMembershipStatusSchema.optional(),
+});
+export type ListStaffMembershipsQueryInput = z.infer<typeof ListStaffMembershipsQuery>;
+
+/** ID-05: who holds which staff role now, and where (never contacts). */
+export const StaffDirectoryEntrySchema = z
+  .object({
+    personId: z.uuid(),
+    displayName: z.string(),
+    roles: z.array(StaffRole),
+    /** Union of the facility scopes; empty means every facility. */
+    facilityIds: z.array(z.uuid()),
+    /** Per-role facility scope (empty facilityIds: every facility). */
+    scopes: z.array(StaffScopeSchema),
+  })
+  .openapi('StaffDirectoryEntry');
+export type StaffDirectoryEntry = z.infer<typeof StaffDirectoryEntrySchema>;
+export const StaffDirectoryPageSchema =
+  pageSchema(StaffDirectoryEntrySchema).openapi('StaffDirectoryPage');
+export const StaffDirectoryQuery = PageRequestSchema.extend({
+  role: StaffRole.optional(),
+  facilityId: z.uuid().optional(),
+  /** Name prefix. */
+  query: z.string().trim().min(1).max(100).optional(),
+});
+export type StaffDirectoryQueryInput = z.infer<typeof StaffDirectoryQuery>;
+
+/** ID-05 (SPK-IAM-005, SCR-S-22): a review in a queue, with the decisions its state allows. */
+export const AccessReviewSummarySchema = z
+  .object({
+    id: z.uuid(),
+    subjectPersonId: z.uuid(),
+    subjectDisplayName: z.string().nullable(),
+    reason: z.string(),
+    ownerRole: AccessReviewOwnerRoleSchema,
+    ownerPersonId: z.uuid().nullable(),
+    status: AccessReviewStatusSchema,
+    effectiveFrom: Instant,
+    effectiveTo: Instant.nullable(),
+    escalatedAt: Instant.nullable(),
+    decidedAt: Instant.nullable(),
+    closedAt: Instant.nullable(),
+    /** Grants this review's restrictions suspend right now. */
+    restrictedGrantCount: z.number().int(),
+    allowedDecisions: z.array(AccessReviewDecisionKindSchema),
+    revision: Revision,
+    createdAt: Instant,
+  })
+  .openapi('AccessReviewSummary');
+export type AccessReviewSummary = z.infer<typeof AccessReviewSummarySchema>;
+export const AccessReviewPageSchema =
+  pageSchema(AccessReviewSummarySchema).openapi('AccessReviewPage');
+export const ListAccessReviewsQuery = PageRequestSchema.extend({
+  /** Default: every review that is not closed. */
+  status: AccessReviewStatusSchema.optional(),
+  ownerRole: AccessReviewOwnerRoleSchema.optional(),
+  subjectPersonId: z.uuid().optional(),
+});
+export type ListAccessReviewsQueryInput = z.infer<typeof ListAccessReviewsQuery>;
+
+/** ID-05 (SPK-IAM-007, SCR-S-23): one side of a duplicate candidate, by name. */
+export const DuplicatePersonSchema = z
+  .object({
+    personId: z.uuid(),
+    givenName: z.string(),
+    familyName: z.string(),
+    displayName: z.string(),
+    kind: PersonKindSchema,
+    status: PersonStatusSchema,
+  })
+  .openapi('DuplicatePerson');
+export const DuplicateCandidateViewSchema = DuplicateCandidateSchema.extend({
+  personA: DuplicatePersonSchema,
+  personB: DuplicatePersonSchema,
+}).openapi('DuplicateCandidateView');
+export type DuplicateCandidateView = z.infer<typeof DuplicateCandidateViewSchema>;
+export const DuplicateCandidatePageSchema = pageSchema(DuplicateCandidateViewSchema).openapi(
+  'DuplicateCandidatePage',
+);
+/** The single-candidate read adds what a reviewer compares: dates of birth and account links. */
+export const DuplicatePersonDetailSchema = DuplicatePersonSchema.extend({
+  dateOfBirth: DateOnly.nullable(),
+  accountLinked: z.boolean(),
+  contactPointKinds: z.array(ContactPointKindSchema),
+}).openapi('DuplicatePersonDetail');
+export const DuplicateCandidateDetailSchema = DuplicateCandidateSchema.extend({
+  personA: DuplicatePersonDetailSchema,
+  personB: DuplicatePersonDetailSchema,
+}).openapi('DuplicateCandidateDetail');
+export type DuplicateCandidateDetail = z.infer<typeof DuplicateCandidateDetailSchema>;
+export const ListDuplicateCandidatesQuery = PageRequestSchema.extend({
+  /** Default `open`. */
+  status: DuplicateCandidateStatusSchema.optional(),
+});
+export type ListDuplicateCandidatesQueryInput = z.infer<typeof ListDuplicateCandidatesQuery>;
+
+// ---------------------------------------------------------------------------------------------
 // OpenAPI registration
 // ---------------------------------------------------------------------------------------------
 const IdParams = z.object({ id: z.uuid() });
@@ -622,6 +939,7 @@ function register(input: {
   summary: string;
   requirements: string;
   params?: z.ZodType;
+  query?: z.ZodType;
   body?: z.ZodType;
   response: z.ZodType;
   status?: 200 | 201;
@@ -642,6 +960,7 @@ function register(input: {
     ...(input.deprecated ? { deprecated: true } : {}),
     request: {
       ...(input.params ? { params: input.params as never } : {}),
+      ...(input.query ? { query: input.query as never } : {}),
       ...(input.body ? { body: { content: { 'application/json': { schema: input.body } } } } : {}),
     },
     responses: {
@@ -933,6 +1252,156 @@ register({
   response: DuplicateCandidateSchema,
   status: 200,
   idempotent: true,
+});
+// Stage 3 (ID-02..ID-06)
+const ContactPointParams = z.object({ id: z.uuid(), contactPointId: z.uuid() });
+register({
+  method: 'get',
+  path: '/person-names',
+  summary:
+    'Names of up to 100 people the caller may view (no dates of birth or contacts); others are omitted',
+  requirements: 'SPK-IAM-002, SPK-IAM-003, §4.10, §4.14',
+  query: PersonNamesQuery,
+  response: PersonNameListSchema,
+});
+register({
+  method: 'get',
+  path: '/people',
+  summary: 'Staff person search by name prefix or exact contact (names only)',
+  requirements: 'SPK-IAM-002, SPK-IAM-003, §4.14',
+  query: SearchPeopleQuery,
+  response: PersonSearchPageSchema,
+});
+register({
+  method: 'get',
+  path: '/people/{id}/authority',
+  summary:
+    "A person's relationships, grants, households, pending invitations and claim status (staff)",
+  requirements: 'SPK-IAM-001, SPK-IAM-002, SPK-IAM-003, SPK-IAM-005, SPK-IAM-006',
+  params: IdParams,
+  response: PersonAuthoritySchema,
+});
+register({
+  method: 'post',
+  path: '/people/{id}/contact-points/{contactPointId}/make-primary',
+  summary: 'Make a contact point the primary one of its kind (one transaction)',
+  requirements: 'SPK-IAM-001, §4.9',
+  params: ContactPointParams,
+  body: MakePrimaryContactPointBody,
+  response: ContactPointSchema,
+  status: 200,
+  idempotent: true,
+});
+register({
+  method: 'post',
+  path: '/people/{id}/contact-points/{contactPointId}/remove',
+  summary:
+    'Remove a contact point (refused for the only verified contact of a person with an account)',
+  requirements: 'SPK-IAM-001, §4.9, §4.14',
+  params: ContactPointParams,
+  body: RemoveContactPointBody,
+  response: ContactPointRemovedResponse,
+  status: 200,
+  idempotent: true,
+});
+register({
+  method: 'get',
+  path: '/me/invitations',
+  summary: 'Invitations I received (to me or a verified contact of mine) or sent',
+  requirements: 'SPK-IAM-004, §4.10',
+  query: ListMyInvitationsQuery,
+  response: InvitationViewPageSchema,
+});
+register({
+  method: 'get',
+  path: '/me/invitations/{id}',
+  summary: 'Read an invitation before accepting it (recipient or inviter)',
+  requirements: 'SPK-IAM-004, §4.10',
+  params: IdParams,
+  response: InvitationViewSchema,
+});
+register({
+  method: 'post',
+  path: '/invitations/{id}/decline',
+  summary: 'Decline an invitation as its recipient (the token is sent in the body)',
+  requirements: 'SPK-IAM-004, §4.6',
+  params: IdParams,
+  body: DeclineInvitationBody,
+  response: InvitationSchema,
+  status: 200,
+  idempotent: true,
+});
+register({
+  method: 'get',
+  path: '/invitations',
+  summary: 'Staff list of invitations, optionally those covering one person',
+  requirements: 'SPK-IAM-004',
+  query: ListInvitationsQuery,
+  response: InvitationViewPageSchema,
+});
+register({
+  method: 'get',
+  path: '/me/access-grants',
+  summary: 'Grants I hold over others, or others hold over me, with ids, sources, dates and state',
+  requirements: 'SPK-IAM-003, SPK-IAM-005, SPK-IAM-006',
+  query: ListMyAccessGrantsQuery,
+  response: GrantViewPageSchema,
+});
+register({
+  method: 'get',
+  path: '/me/households',
+  summary: 'Households I belong to, showing members I may view',
+  requirements: 'SPK-IAM-001, §4.5, §4.14',
+  response: MyHouseholdListSchema,
+});
+register({
+  method: 'get',
+  path: '/staff-memberships',
+  summary: 'List staff memberships by person, role, facility and status (administrators)',
+  requirements: '§2.1, §4.14',
+  query: ListStaffMembershipsQuery,
+  response: StaffMembershipPageSchema,
+});
+register({
+  method: 'get',
+  path: '/staff-memberships/{id}',
+  summary: 'Read one staff membership (administrators)',
+  requirements: '§2.1, §4.9',
+  params: IdParams,
+  response: StaffMembershipViewSchema,
+});
+register({
+  method: 'get',
+  path: '/staff-directory',
+  summary:
+    'Staff in effect now with roles and facility scopes; coaches and officials only for staffing roles',
+  requirements: '§2.1, §4.14, SPK-UX-005',
+  query: StaffDirectoryQuery,
+  response: StaffDirectoryPageSchema,
+});
+register({
+  method: 'get',
+  path: '/access-reviews',
+  summary: 'List access reviews by status, owner and subject with the decisions each allows',
+  requirements: 'SPK-IAM-005',
+  query: ListAccessReviewsQuery,
+  response: AccessReviewPageSchema,
+});
+register({
+  method: 'get',
+  path: '/duplicate-candidates',
+  summary: 'List duplicate candidates (default open) with both names and detection signals',
+  requirements: 'SPK-IAM-007',
+  query: ListDuplicateCandidatesQuery,
+  response: DuplicateCandidatePageSchema,
+});
+register({
+  method: 'get',
+  path: '/duplicate-candidates/{id}',
+  summary: 'Read one duplicate candidate with what a reviewer compares',
+  requirements: 'SPK-IAM-007',
+  params: IdParams,
+  response: DuplicateCandidateDetailSchema,
 });
 register({
   method: 'post',

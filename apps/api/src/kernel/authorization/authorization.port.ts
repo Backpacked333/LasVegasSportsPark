@@ -14,6 +14,16 @@ export interface RelationshipAuthorityPort {
     subjectPersonId: string,
     permission: GrantPermission,
   ): Promise<boolean>;
+  /**
+   * The people other than the actor over whom the actor holds `permission` now (K-05, IF-01),
+   * with the same effectivity rule as `hasPermission`, read through `currentTransaction()`.
+   * Customer "my ..." lists start from these subjects (`AuthorizationService.customerSubjects`).
+   */
+  subjectsWithPermission(
+    organizationId: string,
+    actorPersonId: string,
+    permission: GrantPermission,
+  ): Promise<string[]>;
 }
 
 /** Team authority (competition module): does the person hold the role on the season team entry? */
@@ -33,6 +43,8 @@ export interface TeamAuthorityPort {
 export const denyAllRelationshipAuthority: RelationshipAuthorityPort = {
   hasPermission: async (_organizationId, actorPersonId, subjectPersonId) =>
     actorPersonId === subjectPersonId,
+  // Nobody holds anything over anyone else: me-lists show only the principal's own records.
+  subjectsWithPermission: async () => [],
 };
 
 export const denyAllTeamAuthority: TeamAuthorityPort = {

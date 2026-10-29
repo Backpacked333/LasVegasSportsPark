@@ -14,6 +14,8 @@ const item = (id: string, personId: string, start: string, end: string): FamilyC
   start,
   end,
   status: 'confirmed',
+  facilityId: null,
+  timezone: null,
 });
 
 describe('SPK-YOUTH-007 overlap highlighting', () => {

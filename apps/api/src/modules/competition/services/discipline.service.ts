@@ -1,7 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   newId,
+  z,
   type Appeal,
   type CreateAppealInput,
   type CreateDisciplinaryDecisionInput,
@@ -10,8 +13,11 @@ import {
   type DecideAppealInput,
   type DisciplinaryDecision,
   type Incident,
+  type ListAppealsQuery,
+  type ListDisciplinaryDecisionsQuery,
   type ListIncidentsQuery,
   type ListSuspensionsQuery,
+  type Page,
   type OverturnDecisionInput,
   type Principal,
   type ResultCard,
@@ -34,6 +40,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  OperationalExceptions,
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
@@ -42,6 +49,7 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
+import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { ASSIGNMENT_CHECK_PORT, type AssignmentCheckPort } from '../competition-matches.ports';
@@ -53,8 +61,12 @@ import {
   SuspensionMachine,
 } from '../competition-matches.state-machines';
 import type { Reader } from '../competition.queries';
-import { isStaffLike, organizationOf } from '../competition.shared';
-import { DISCIPLINE_MANAGER_ROLES } from '../competition-matches.policy';
+import { isStaffLike, iso, organizationOf } from '../competition.shared';
+import {
+  CARD_REMOVED_OVERTURN_REASON,
+  DISCIPLINE_MANAGER_ROLES,
+  SUSPENSION_CARD_REMOVED,
+} from '../competition-matches.policy';
 import type { ActiveSuspension, SuspensionCheckPort, SuspensionScope } from '../ports';
 
 type SuspensionRow = Selectable<SuspensionsTable>;
@@ -77,7 +89,18 @@ export class DisciplineService implements SuspensionCheckPort {
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
     @Inject(ASSIGNMENT_CHECK_PORT) private readonly assignments: AssignmentCheckPort,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly directory: PersonDirectoryPort,
+    private readonly exceptions: OperationalExceptions,
   ) {}
+
+  /**
+   * CMP-08 (SPK-IAM-007, IF-09): the ids a person's discipline is recorded under, the person and
+   * everyone merged into them, so a suspension recorded against a merged person binds the survivor.
+   */
+  private async idsOf(organizationId: string, personId: string, trx?: Trx): Promise<string[]> {
+    const ids = await this.directory.personIdsResolvingTo(organizationId, personId, trx);
+    return ids.length > 0 ? [...new Set([personId, ...ids])] : [personId];
+  }
 
   // -------------------------------------------------------------------------------------------
   // SuspensionCheckPort (SPK-AT-013)
@@ -90,11 +113,12 @@ export class DisciplineService implements SuspensionCheckPort {
     trx?: Trx,
   ): Promise<ActiveSuspension[]> {
     const db: Reader = trx ?? currentTransaction() ?? this.db;
+    const subjectIds = await this.idsOf(organizationId, personId, trx);
     const rows = await db
       .selectFrom('suspensions')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('subject_person_id', '=', personId)
+      .where('subject_person_id', 'in', subjectIds)
       .where('status', '=', 'active')
       .where((eb) =>
         eb.or([
@@ -401,6 +425,288 @@ export class DisciplineService implements SuspensionCheckPort {
       });
     }
     return created;
+  }
+
+  /**
+   * CMP-12 (SPK-DISC-001, SPK-RESULT-004): after an official correction of a fixture, the
+   * rule-set suspensions proposed from that fixture whose card is gone are followed up in the same
+   * transaction. A sending-off suspension whose person is no longer sent off, or an accumulation
+   * suspension the season's yellow cards no longer reach, is overturned while `proposed`
+   * (SuspensionMachine 'overturn', reason "card removed by correction"); an `active` one is never
+   * lifted silently: it raises competition.suspension_card_removed for the league manager, once.
+   */
+  async reconcileRemovedCards(
+    trx: Trx,
+    principal: Principal,
+    input: {
+      organizationId: string;
+      fixtureId: string;
+      seasonId: string;
+      cards: RuleSetContent['cards'];
+      resultCards: ResultCard[];
+      /** The cards of the official revision this correction supersedes. */
+      previousCards?: ResultCard[];
+      correlationId: string | null;
+      operationId: string | null;
+    },
+  ): Promise<{ overturned: string[]; flagged: string[] }> {
+    const rules = input.cards;
+    const countsAsYellow = (card: ResultCard) =>
+      card.kind === 'yellow' || (card.kind === 'second_yellow' && !rules.secondYellowIsRed);
+    const yellowsOf = (cards: ResultCard[]) => {
+      const counts = new Map<string, number>();
+      for (const card of cards) {
+        if (countsAsYellow(card)) counts.set(card.personId, (counts.get(card.personId) ?? 0) + 1);
+      }
+      return counts;
+    };
+    // An accumulation suspension is sourced at the fixture where the threshold was crossed, so a
+    // correction of an earlier fixture that removes a counted yellow reaches suspensions sourced
+    // anywhere in the season: every person who lost a counted yellow here is re-examined.
+    const before = yellowsOf(input.previousCards ?? []);
+    const after = yellowsOf(input.resultCards);
+    const lostYellow = [...before.entries()]
+      .filter(([personId, n]) => (after.get(personId) ?? 0) < n)
+      .map(([personId]) => personId);
+    const rows = await trx
+      .selectFrom('suspensions')
+      .selectAll()
+      .where('organization_id', '=', input.organizationId)
+      .where('status', 'in', ['proposed', 'active'])
+      .where((eb) => {
+        const here = eb.and([
+          eb('source_fixture_id', '=', input.fixtureId),
+          eb('source_kind', 'in', ['red_card', 'yellow_accumulation']),
+        ]);
+        if (lostYellow.length === 0) return here;
+        return eb.or([
+          here,
+          eb.and([
+            eb('source_kind', '=', 'yellow_accumulation'),
+            eb('subject_person_id', 'in', lostYellow),
+            eb(
+              'source_fixture_id',
+              'in',
+              eb
+                .selectFrom('fixtures')
+                .select('id')
+                .where('organization_id', '=', input.organizationId)
+                .where('season_id', '=', input.seasonId),
+            ),
+          ]),
+        ]);
+      })
+      .orderBy('created_at')
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    if (rows.length === 0) return { overturned: [], flagged: [] };
+    const sentOff = new Set(
+      input.resultCards
+        .filter((c) => c.kind === 'red' || (c.kind === 'second_yellow' && rules.secondYellowIsRed))
+        .map((c) => c.personId),
+    );
+    const removed: SuspensionRow[] = [];
+    for (const row of rows) {
+      if (row.source_kind === 'red_card') {
+        if (!sentOff.has(row.subject_person_id)) removed.push(row);
+        continue;
+      }
+      if (await this.accumulationGone(trx, input, row)) removed.push(row);
+    }
+    const overturned: string[] = [];
+    const flagged: string[] = [];
+    for (const row of removed) {
+      if (row.status === 'proposed') {
+        await this.overturnSuspensionRow(
+          trx,
+          principal,
+          row,
+          CARD_REMOVED_OVERTURN_REASON,
+          input.correlationId,
+        );
+        overturned.push(row.id);
+        continue;
+      }
+      await this.exceptions.raise(trx, {
+        organizationId: input.organizationId,
+        category: SUSPENSION_CARD_REMOVED.category,
+        severity: SUSPENSION_CARD_REMOVED.severity,
+        title: 'A correction removed the card an active suspension rests on',
+        affectedType: 'suspension',
+        affectedId: row.id,
+        ownerQueue: SUSPENSION_CARD_REMOVED.ownerQueue,
+        dedupeKey: `suspension_card_removed:${row.id}`,
+        details: {
+          suspensionId: row.id,
+          fixtureId: input.fixtureId,
+          sourceKind: row.source_kind,
+          subjectPersonId: row.subject_person_id,
+        },
+      });
+      flagged.push(row.id);
+    }
+    return { overturned, flagged };
+  }
+
+  /**
+   * Whether an accumulation suspension sourced from the corrected fixture lost its basis: the
+   * season's official yellow cards of the person now reach fewer threshold crossings than the
+   * accumulation suspensions still standing for them (newest first gives way).
+   */
+  private async accumulationGone(
+    trx: Trx,
+    input: { organizationId: string; seasonId: string; cards: RuleSetContent['cards'] },
+    row: SuspensionRow,
+  ): Promise<boolean> {
+    const rules = input.cards;
+    const threshold = rules.yellowAccumulationThreshold;
+    if (threshold === null) return true;
+    const countsAsYellow = (card: ResultCard) =>
+      card.kind === 'yellow' || (card.kind === 'second_yellow' && !rules.secondYellowIsRed);
+    const official = await trx
+      .selectFrom('result_revisions as r')
+      .innerJoin('fixtures as f', (join) =>
+        join
+          .onRef('f.organization_id', '=', 'r.organization_id')
+          .onRef('f.id', '=', 'r.fixture_id'),
+      )
+      .select(['r.details'])
+      .where('r.organization_id', '=', input.organizationId)
+      .where('f.season_id', '=', input.seasonId)
+      .where('r.status', '=', 'official')
+      .execute();
+    let total = 0;
+    for (const result of official) {
+      for (const card of (result.details as { cards?: ResultCard[] }).cards ?? []) {
+        if (card.personId === row.subject_person_id && countsAsYellow(card)) total += 1;
+      }
+    }
+    const crossings = Math.floor(total / threshold);
+    const standing = await trx
+      .selectFrom('suspensions as s')
+      .innerJoin('fixtures as sf', (join) =>
+        join
+          .onRef('sf.organization_id', '=', 's.organization_id')
+          .onRef('sf.id', '=', 's.source_fixture_id'),
+      )
+      .select(['s.id'])
+      .where('s.organization_id', '=', input.organizationId)
+      .where('sf.season_id', '=', input.seasonId)
+      .where('s.source_kind', '=', 'yellow_accumulation')
+      .where('s.subject_person_id', '=', row.subject_person_id)
+      .where('s.status', '<>', 'overturned')
+      .orderBy('s.created_at', 'desc')
+      .orderBy('s.id', 'desc')
+      .execute();
+    const excess = standing.length - crossings;
+    if (excess <= 0) return false;
+    return standing.slice(0, excess).some((s) => s.id === row.id);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Staff lists (CMP-05; SPK-DISC-003/005): keyset created_at desc, id desc
+  // -------------------------------------------------------------------------------------------
+  async listDecisions(
+    principal: Principal,
+    query: ListDisciplinaryDecisionsQuery,
+  ): Promise<Page<DisciplinaryDecision>> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, MatchActions.readDiscipline, {
+      type: 'disciplinary_decision',
+      organizationId,
+    });
+    const cursor = decodeCursor(query.cursor, ListCursor);
+    if (query.cursor && !cursor) throw errors.validation('The cursor is not valid.');
+    let q = this.db
+      .selectFrom('disciplinary_decisions as d')
+      .selectAll('d')
+      .where('d.organization_id', '=', organizationId);
+    if (query.personId) q = q.where('d.subject_person_id', '=', query.personId);
+    if (query.status) q = q.where('d.status', '=', query.status);
+    if (query.competitionId) {
+      const competitionId = query.competitionId;
+      q = q.where(({ or, exists, selectFrom }) =>
+        or([
+          exists(
+            selectFrom('incidents as i')
+              .select('i.id')
+              .whereRef('i.organization_id', '=', 'd.organization_id')
+              .whereRef('i.id', '=', 'd.incident_id')
+              .where('i.competition_id', '=', competitionId),
+          ),
+          exists(
+            selectFrom('suspensions as s')
+              .select('s.id')
+              .whereRef('s.organization_id', '=', 'd.organization_id')
+              .whereRef('s.decision_id', '=', 'd.id')
+              .where(sql<boolean>`s.competition_ids @> array[${competitionId}]::uuid[]`),
+          ),
+        ]),
+      );
+    }
+    if (cursor) {
+      const at = new Date(cursor.at);
+      q = q.where((eb) =>
+        eb.or([
+          eb('d.created_at', '<', at),
+          eb.and([eb('d.created_at', '=', at), eb('d.id', '<', cursor.id)]),
+        ]),
+      );
+    }
+    const rows = await q
+      .orderBy('d.created_at', 'desc')
+      .orderBy('d.id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = rows.slice(0, query.limit);
+    const suspensions =
+      page.length === 0
+        ? []
+        : await this.db
+            .selectFrom('suspensions')
+            .select(['id', 'decision_id'])
+            .where('organization_id', '=', organizationId)
+            .where(
+              'decision_id',
+              'in',
+              page.map((r) => r.id),
+            )
+            .execute();
+    const byDecision = new Map(suspensions.map((r) => [r.decision_id, r.id]));
+    return {
+      items: page.map((row) => toDecision(row, byDecision.get(row.id) ?? null)),
+      nextCursor: nextCursorOf(rows, page, query.limit),
+    };
+  }
+
+  async listAppeals(principal: Principal, query: ListAppealsQuery): Promise<Page<Appeal>> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, MatchActions.readDiscipline, {
+      type: 'appeal',
+      organizationId,
+    });
+    const cursor = decodeCursor(query.cursor, ListCursor);
+    if (query.cursor && !cursor) throw errors.validation('The cursor is not valid.');
+    let q = this.db.selectFrom('appeals').selectAll().where('organization_id', '=', organizationId);
+    if (query.status) q = q.where('status', '=', query.status);
+    if (query.decisionId) q = q.where('decision_id', '=', query.decisionId);
+    if (cursor) {
+      const at = new Date(cursor.at);
+      q = q.where((eb) =>
+        eb.or([
+          eb('created_at', '<', at),
+          eb.and([eb('created_at', '=', at), eb('id', '<', cursor.id)]),
+        ]),
+      );
+    }
+    const rows = await q
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1)
+      .execute();
+    const page = rows.slice(0, query.limit);
+    return { items: page.map(toAppeal), nextCursor: nextCursorOf(rows, page, query.limit) };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1537,4 +1843,18 @@ export class DisciplineService implements SuspensionCheckPort {
       protected: true,
     });
   }
+}
+
+const ListCursor = z.object({ at: z.string(), id: z.uuid() });
+
+/** The keyset cursor after the page, or null on the last page. */
+export function nextCursorOf(
+  rows: ReadonlyArray<{ created_at: Date | string; id: string }>,
+  page: ReadonlyArray<{ created_at: Date | string; id: string }>,
+  limit: number,
+): string | null {
+  const last = page[page.length - 1];
+  return rows.length > limit && last
+    ? encodeCursor({ at: iso(last.created_at), id: last.id })
+    : null;
 }

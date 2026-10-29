@@ -9,10 +9,10 @@ import {
   UpdateSeasonBody,
   z,
   type Division,
-  type Fixture,
   type Page,
   type Principal,
   type Season,
+  type SeasonFixture,
 } from '@sportspark/contracts';
 import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
 import { CorrelationId } from '../competition.shared';
@@ -71,7 +71,7 @@ export class SeasonsController {
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
     @ZodQuery(ListSeasonFixturesQuery) query: z.infer<typeof ListSeasonFixturesQuery>,
-  ): Promise<Page<Fixture>> {
+  ): Promise<Page<SeasonFixture>> {
     return this.fixtures.listForSeason(principal, params.id, query);
   }
 

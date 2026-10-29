@@ -92,6 +92,24 @@ export const RestrictionReleased = defineEvent(
   }),
 );
 
+/**
+ * FAC-01, IF-13 (SPK-FAC-004): a proposed or approved restriction was withdrawn before it took
+ * effect (with its pending scheduling closure, if any). Dispatched with no handler yet.
+ */
+export const RestrictionWithdrawn = defineEvent(
+  'facilities.restriction_withdrawn',
+  z.object({
+    restrictionId: z.uuid(),
+    facilityId: z.uuid(),
+    resourceId: z.uuid(),
+    assetId: z.uuid().nullable(),
+    taskId: z.uuid().nullable(),
+    interval: Interval,
+    reason: z.string(),
+    schedulingClosureId: z.uuid().nullable(),
+  }),
+);
+
 /** Internal timer: enqueued with `availableAt = dueAt` so an overdue critical task is escalated (dedupe per task). */
 export const MaintenanceTaskDueReached = defineEvent(
   'facilities.maintenance_task_due_reached',
@@ -122,6 +140,7 @@ export const FacilitiesEvents = {
   InspectionRecorded,
   RestrictionActivated,
   RestrictionReleased,
+  RestrictionWithdrawn,
   MaintenanceTaskDueReached,
   PreventiveOccurrencesGenerated,
 };

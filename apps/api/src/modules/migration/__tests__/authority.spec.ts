@@ -13,7 +13,12 @@ import {
 import { createPersonFixture } from '../../identity';
 import { at, createScheduledEvent, EventsService, seedPitchWithHalves } from '../../scheduling';
 import { AUTHORITY_GUARD_PORT, type AuthorityGuardPort } from '../migration.ports';
-import { AUTHORITY_EXEMPT_ROUTES, AUTHORITY_ROUTES } from '../services/authority-routes';
+import { applicationRouteFacts } from '../../../openapi-document';
+import {
+  AUTHORITY_EXEMPT_ROUTES,
+  classifyWriteRoutes,
+  toRouteFactPath,
+} from '../services/authority-routes';
 import { createAuthorityAssignmentFixture } from '../testing/migration-fixtures';
 import { customer, get, key, migrationTestApp, post, staff, type Actor } from './support';
 
@@ -486,9 +491,11 @@ describe('AuthorityWriteInterceptor schedule scope (§5.6 shared pitches, author
   });
 });
 
-describe('AUTHORITY_ROUTES (deny-by-default classification)', () => {
+describe('AUTHORITY_ROUTES and K-11 decorators (deny-by-default classification, MIG-00)', () => {
   let t: TestApp;
   const served = new Set<string>();
+  const facts = applicationRouteFacts();
+  const report = classifyWriteRoutes(facts);
 
   beforeAll(async () => {
     t = await fullApp();
@@ -500,7 +507,9 @@ describe('AUTHORITY_ROUTES (deny-by-default classification)', () => {
     for (const layer of stack) {
       if (!layer.route) continue;
       for (const method of Object.keys(layer.route.methods)) {
-        served.add(`${method.toUpperCase()} ${layer.route.path.replace(/^\/v1(?=\/)/, '')}`);
+        served.add(
+          `${method.toUpperCase()} ${toRouteFactPath(layer.route.path.replace(/^\/v1(?=\/)/, ''))}`,
+        );
       }
     }
   });
@@ -508,47 +517,56 @@ describe('AUTHORITY_ROUTES (deny-by-default classification)', () => {
     await t.close();
   });
 
-  it('§5.6: every served write route is classified exactly once — guarded with a scope source, or exempt with a reason', () => {
+  it('§5.6: every served write route is classified exactly once — by its decorator or one list entry, guarded with a scope source or exempt with a reason', () => {
     expect(served.size).toBeGreaterThan(100);
+    // The route facts the check reads are the routes the application serves (K-02).
     const writes = [...served].filter((k) => /^(POST|PATCH|PUT|DELETE) /.test(k));
-    const guarded = AUTHORITY_ROUTES.map((r) => `${r.method} ${r.path}`);
-    const exempt = AUTHORITY_EXEMPT_ROUTES.map((r) => `${r.method} ${r.path}`);
-    const listed = [...guarded, ...exempt];
-    expect(listed.filter((k, i) => listed.indexOf(k) !== i)).toEqual([]);
-    expect(writes.filter((k) => !listed.includes(k)).sort()).toEqual([]);
-    expect(listed.filter((k) => !served.has(k)).sort()).toEqual([]);
-    for (const route of AUTHORITY_ROUTES) {
-      expect(IMPORT_ENTITY_TYPES).toContain(route.category);
+    const factKeys = new Set(facts.map((f) => `${f.method} ${f.path}`));
+    expect(writes.filter((k) => !factKeys.has(k)).sort()).toEqual([]);
+    expect(report.unclassified).toEqual([]);
+    expect(report.classifiedTwice).toEqual([]);
+    expect(report.listedNotServed).toEqual([]);
+    for (const route of report.guarded) {
+      expect(IMPORT_ENTITY_TYPES, `${route.method} ${route.path}`).toContain(route.category);
       const scope = route.scope;
       const valid =
         scope === 'organization' ||
         scope === 'unproven' ||
-        (typeof scope === 'object' && Object.keys(scope).length > 0);
+        (typeof scope === 'object' && scope !== null && Object.keys(scope).length > 0);
       expect(valid, `${route.method} ${route.path} declares its scope source`).toBe(true);
     }
     for (const route of AUTHORITY_EXEMPT_ROUTES) {
       expect(route.reason.length, `${route.method} ${route.path}`).toBeGreaterThan(10);
     }
+    for (const fact of facts) {
+      if (fact.recordAuthority?.kind === 'exempt') {
+        expect(fact.recordAuthority.reason.length, `${fact.method} ${fact.path}`).toBeGreaterThan(
+          10,
+        );
+      }
+    }
   });
 
-  it('§4.7 invariant 11: every guarded route is refused while its category is legacy-authoritative, and only then', async () => {
+  it('§4.7 invariant 11: every guarded route — listed or decorated — is refused while its category is legacy-authoritative, and only then', async () => {
     const gm = await staff(t, ['general_manager']);
-    const send = (route: (typeof AUTHORITY_ROUTES)[number]) => {
-      const path = `/v1${route.path.replace(/:[A-Za-z]+/g, () => newId())}`;
+    const guarded = report.guarded;
+    expect(guarded.some((r) => r.source === 'decorator')).toBe(true);
+    const sendGuarded = (route: (typeof guarded)[number]) => {
+      const path = `/v1${route.path.replace(/\{[A-Za-z]+\}/g, () => newId())}`;
       const method = route.method.toLowerCase() as 'post' | 'patch' | 'put' | 'delete';
       return t.http[method](path).set(gm.header).set('Idempotency-Key', key()).send({});
     };
     // Without any assignment SportsPark is authoritative: the guard never answers.
-    for (const route of AUTHORITY_ROUTES) {
-      const res = await send(route);
+    for (const route of guarded) {
+      const res = await sendGuarded(route);
       expect(res.body?.details?.code, `${route.method} ${route.path}`).not.toBe('LEGACY_AUTHORITY');
     }
     for (const recordCategory of IMPORT_ENTITY_TYPES) {
       await createAuthorityAssignmentFixture(t, { recordCategory, authoritativeSystem: 'legacy' });
     }
-    for (const route of AUTHORITY_ROUTES) {
-      const res = await send(route);
-      expect(res.status, `${route.method} ${route.path}`).toBe(403);
+    for (const route of guarded) {
+      const res = await sendGuarded(route);
+      expect(res.status, `${route.method} ${route.path} (${route.source})`).toBe(403);
       expect(res.body.details, `${route.method} ${route.path}`).toMatchObject({
         code: 'LEGACY_AUTHORITY',
         recordCategory: route.category,

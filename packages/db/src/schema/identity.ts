@@ -2,7 +2,7 @@ import type { ColumnType, Generated } from 'kysely';
 import type { GeneratedJson, GeneratedTimestamp, Json, NullableTimestamp, Timestamp } from './core';
 
 /**
- * Identity module tables (migrations 0100-0103, specification §3.1 SPK-IAM-001..007).
+ * Identity module tables (migrations 0100-0105, specification §3.1 SPK-IAM-001..007).
  * `date` columns are read through a `::text` cast by the module so both drivers return
  * `YYYY-MM-DD`; the type below documents that contract.
  */
@@ -144,7 +144,8 @@ export interface AccessGrantSuspensionsTable {
   created_at: GeneratedTimestamp;
 }
 
-export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+/** Migration 0104 (ID-03, SPK-IAM-004) adds `declined`. */
+export type InvitationStatus = 'pending' | 'accepted' | 'declined' | 'revoked' | 'expired';
 export type InvitationScopeType = 'person' | 'household';
 export type InvitationRelationshipKind = Exclude<RelationshipKind, 'self_managed'>;
 export interface InvitationsTable {
@@ -169,6 +170,10 @@ export interface InvitationsTable {
   revoked_at: NullableTimestamp;
   revoked_by: Json<Record<string, unknown>> | null;
   revocation_reason: string | null;
+  /** Migration 0104 (ID-03): set together when the recipient declines. */
+  declined_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  declined_by_person_id: ColumnType<string | null, string | null | undefined, string | null>;
+  decline_reason: ColumnType<string | null, string | null | undefined, string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -186,7 +191,8 @@ export interface InvitationSubjectsTable {
 }
 
 export type ClaimKind = 'self' | 'guardian';
-export type ClaimStatus = InvitationStatus;
+/** Claims are never declined: the original invitation lifecycle without `declined`. */
+export type ClaimStatus = Exclude<InvitationStatus, 'declined'>;
 export interface ClaimsTable {
   id: string;
   organization_id: string;

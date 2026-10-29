@@ -1,7 +1,8 @@
 # communications module
 
-**Owns:** notifications, notification recipients, delivery attempts, communication preferences,
-notification acknowledgments, calendar feeds, and its own calendar-entry projection of scheduled
+**Owns:** notifications, notification recipients, delivery attempts, communication preferences
+(and their import records), notification acknowledgments, calendar feeds, push device registrations,
+activity reminder marks, person-merge follow-ups, and its own calendar-entry projection of scheduled
 events.
 
 **Specification:** §3.18 (SPK-COMMS-001..008), §4.4 Communications (Notification, DeliveryAttempt,
@@ -10,18 +11,25 @@ Preference, Acknowledgment), §4.5 "Messages must represent actual delivery stat
 SPK-UX-003/006 (inbox, failed urgent communications).
 
 **Migration range:** `packages/db/migrations/1000_communications_*.sql` … `1099` (this module uses
-`1000` to `1003`).
+`1000` to `1008`; stage 3 added `1004` to `1008`).
 
-**Depends on:** identity (`PERSON_DIRECTORY_PORT`, `AUTHORITY_LOOKUP_PORT`, `STAFF_DIRECTORY_PORT`,
-`PeopleService` for display names and contact points), scheduling (`scheduling.event_changed` and
+**Depends on:** identity (`PERSON_DIRECTORY_PORT` incl. `displayNames` and `personIdsResolvingTo`
+(IF-09), `AUTHORITY_LOOKUP_PORT`, `STAFF_DIRECTORY_PORT`, `PeopleService` for contact points;
+events `identity.access_grant_revoked`, `identity.access_restricted`, `identity.account_relinked`
+(IF-17), `identity.persons_merged` (IF-21)), scheduling (`scheduling.event_changed` and
 `scheduling.schedule_published` events, `EventDetails` shape), competition (`ROSTER_PORT`,
-`TEAM_ENTRY_QUERY_PORT` for team audiences and calendar scopes). It never writes another module's
-tables (§4.2).
+`TEAM_ENTRY_QUERY_PORT` incl. `roleHolders` (IF-15), `FIXTURE_PORT`; events
+`competition.team_invitation_created`, `competition.result_published`,
+`competition.availability_requested` (IF-45)), kernel (`INTEGRATION_REGISTRY` (IF-04),
+`PeriodicJobRegistry` (IF-24), module settings (IF-43), import provenance (IF-40),
+`FacilityDirectory`). It never writes another module's tables (§4.2).
 
 **Status: implemented** — verified by `apps/api/src/modules/communications/__tests__` and the unit
 specs next to the code (`communications.machines.spec.ts`, `calendar/ics.spec.ts`,
-`providers/fake-messaging.provider.spec.ts`, `services/schedule-notices.spec.ts`). Statements below
-are verified unless marked proposed or pending.
+`providers/fake-messaging.provider.spec.ts`, `services/schedule-notices.spec.ts`), on PGlite and on
+PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** unless marked **proposed** or
+**pending** (§6.7). The stage-3 work items (COM-01 … COM-06) are summarised in
+[Stage 3](#stage-3-com-01--com-06).
 
 ## Model
 
@@ -43,19 +51,26 @@ Lifecycles (`communications.machines.ts`; the database check constraints list ex
   been handed over.
 - DeliveryAttempt: `queued → provider_accepted | delivered | failed | unknown`;
   `provider_accepted → delivered | failed | unknown`; `unknown → provider_accepted | delivered | failed`;
-  `delivered → read | acknowledged`; `read → acknowledged`.
+  `delivered → read | acknowledged`; `read → acknowledged`. A retry of a `failed` attempt is a new
+  attempt row naming it (`retry_of_attempt_id`, COM-02); the failed fact is never rewritten.
+- PushDevice (COM-01): `active → revoked`; a revoked registration is never reactivated.
 
-## Tables (migration `1000_communications_core.sql`)
+## Tables (migrations `1000` to `1008`)
 
-| Table                            | Purpose                                                                                                                                                                                                                                                                                                                                  |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `notifications`                  | kind (SPK-COMMS-002 triggers + `staff_broadcast`), category `operational/promotional` (SPK-COMMS-007), subject record, audience jsonb, title/body, `details_before/after` (SPK-COMMS-005), `protected`, `scheduled_for`, status, `supersedes_notification_id` / `superseded_by_notification_id`, suppression reason, operation, revision |
-| `notification_recipients`        | one row per person per notification: `resolved_basis` (`self`, `receive_messages`, `staff_role`, `team_member`, `explicit`), `basis_detail`, `subject_person_ids` (who justified inclusion), status `pending/authorized/revoked`, instants, revision                                                                                     |
-| `delivery_attempts`              | per recipient and channel (`in_app`, `push`, `email`, `sms`): provider, provider message id, status, `queued_at/attempted_at/accepted_at/delivered_at/failed_at/read_at/acknowledged_at`, provider response, failure code, error, lease (`ready_at`, `locked_until`), revision                                                           |
-| `communication_preferences`      | per person × channel × category: enabled flag; the database refuses `operational + in_app + false` (SPK-COMMS-007)                                                                                                                                                                                                                       |
-| `notification_acknowledgments`   | append-only (`forbid_mutation`), at most one per recipient, `via`, note                                                                                                                                                                                                                                                                  |
-| `calendar_feeds`                 | owner, label, `token_hash` (unique; the token itself is never stored), scope (other people in the feed), access counters, revocation (attributed), revision                                                                                                                                                                              |
-| `calendar_entries` (+`_parties`) | this module's projection of scheduled events built from `scheduling.event_changed`: stable `event_id` (the iCalendar UID), `sequence` bumped per change, status, parties (team / person)                                                                                                                                                 |
+| Table                                                                         | Purpose                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notifications`                                                               | kind (SPK-COMMS-002 triggers + `staff_broadcast`), category `operational/promotional` (SPK-COMMS-007), subject record, audience jsonb, title/body, `details_before/after` (SPK-COMMS-005), `protected`, `scheduled_for`, status, `supersedes_notification_id` / `superseded_by_notification_id`, suppression reason, operation, revision |
+| `notification_recipients`                                                     | one row per person per notification: `resolved_basis` (`self`, `receive_messages`, `staff_role`, `team_member`, `explicit`), `basis_detail`, `subject_person_ids` (who justified inclusion), status `pending/authorized/revoked`, instants, revision                                                                                     |
+| `delivery_attempts`                                                           | per recipient and channel (`in_app`, `push`, `email`, `sms`): provider, provider message id, status, `queued_at/attempted_at/accepted_at/delivered_at/failed_at/read_at/acknowledged_at`, provider response, failure code, error, lease (`ready_at`, `locked_until`), revision                                                           |
+| `communication_preferences`                                                   | per person × channel × category: enabled flag; the database refuses `operational + in_app + false` (SPK-COMMS-007)                                                                                                                                                                                                                       |
+| `notification_acknowledgments`                                                | append-only (`forbid_mutation`), at most one per recipient, `via`, note                                                                                                                                                                                                                                                                  |
+| `calendar_feeds`                                                              | owner, label, `token_hash` (unique; the token itself is never stored), scope (other people in the feed), access counters, revocation (attributed), revision                                                                                                                                                                              |
+| `calendar_entries` (+`_parties`)                                              | this module's projection of scheduled events built from `scheduling.event_changed`: stable `event_id` (the iCalendar UID), `sequence` bumped per change, status, parties (team / person)                                                                                                                                                 |
+| `push_devices` (1004)                                                         | one registration per app install and account: person, account, platform, `token` (kept only while active), `token_hash` (SHA-256; one active registration per token), `token_hint`, app version, status `active/revoked`, last seen, revocation reason, revision                                                                         |
+| `delivery_attempts.retry_of_attempt_id` (1005)                                | the failed attempt a retry repeats; trigger `delivery_attempts_retry_guard` refuses a source that is not `failed`, failed `RECIPIENT_REVOKED`/`SUPERSEDED`, or of another recipient or channel; one retry per source                                                                                                                     |
+| `communication_preferences.source` (1006), `communication_preference_imports` | who last wrote a stored choice (`person` / `import`); one append-only import record per import record id with its content and outcome                                                                                                                                                                                                    |
+| `reminder_marks` (1007)                                                       | append-only, one row per (scheduling event, event revision) reminded; `notifications.kind` gains `availability_request`, `activity_reminder`                                                                                                                                                                                             |
+| `communication_merge_follow_ups` (1008)                                       | append-only, one row per person merge followed: survivor, merged person, the survivor's stored preference revisions at that moment, the conflicts found                                                                                                                                                                                  |
 
 Database-enforced invariants (tests in `__tests__/schema-invariants.spec.ts`): organization scope
 and composite `(organization_id, id)` foreign keys everywhere (an attempt or acknowledgment names a
@@ -65,7 +80,12 @@ constraints equal to the machines; timestamps consistent with states (`failed �
 `delivered/read/acknowledged ⇒ delivered_at`, …); `in_app ⇔ provider = 'in_app'`; one notice per
 source domain event; one recipient per person per notification; at most one live (non-failed)
 attempt per recipient and channel; a provider message id maps to one attempt; one acknowledgment per
-recipient; unique token hashes; one calendar entry per event.
+recipient; unique token hashes; one calendar entry per event. Stage 3 (tests in the COM spec files
+named below): one active push registration per device token, `token` present exactly while active,
+revocation timestamped and explained; one retry per failed attempt and only of a retryable failure of
+the same recipient and channel; preference sources limited to `person`/`import`; one reminder mark
+per event revision; import records, reminder marks and merge follow-ups append-only
+(`forbid_mutation`).
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/communications.ts`)
 
@@ -75,18 +95,23 @@ recipient; unique token hashes; one calendar entry per event.
 | GET    | `/notifications`, `/notifications/{id}` | reader roles (`communications.read_notification`), newest first, filters status/kind/facility, cursor paging                                                                                                                                                                                                              |
 | GET    | `/notifications/{id}/recipients`        | composer roles (`communications.preview_recipients`): names, basis and a count from CURRENT permissions; never contact details (SPK-COMMS-006)                                                                                                                                                                            |
 | POST   | `/notifications/{id}/send`              | composer roles (`communications.send`): resolves recipients now, suppresses obsolete unsent notices about the same subject, creates an operation, requests delivery                                                                                                                                                       |
-| GET    | `/notifications/{id}/deliveries`        | reader roles: recipients and attempts with their actual states (SPK-COMMS-004, SPK-UX-006)                                                                                                                                                                                                                                |
-| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging (SPK-UX-003)                                                                                                                                                                                                                                             |
-| POST   | `/me/inbox/{id}/read`, `/acknowledge`   | self (`communications.acknowledge`); another person's notice is NOT_FOUND; acknowledgment recorded once                                                                                                                                                                                                                   |
+| GET    | `/notifications/{id}/deliveries`        | reader roles: recipients (with `displayName`, COM-02) and attempts (with `retryOfAttemptId`) with their actual states (SPK-COMMS-004, SPK-UX-006)                                                                                                                                                                         |
+| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging (SPK-UX-003); each item carries `revision` and `subjectPersonIds` (COM-02); after a merge, also the merged person's notices (COM-05)                                                                                                                     |
+| POST   | `/me/inbox/{id}/read`, `/acknowledge`   | self (`communications.acknowledge`); `expectedRevision` honoured (STALE_REVISION); another person's notice is NOT_FOUND; acknowledgment recorded once                                                                                                                                                                     |
 | GET    | `/me/communication-preferences`         | self: the effective 4 × 2 matrix with `stored` and `locked` flags                                                                                                                                                                                                                                                         |
 | PATCH  | `/me/communication-preferences`         | self (`communications.manage_preferences`); disabling operational in-app is refused by the service and the database                                                                                                                                                                                                       |
 | GET    | `/me/calendar-feeds`                    | self: feeds without tokens                                                                                                                                                                                                                                                                                                |
 | POST   | `/me/calendar-feeds`                    | self (`communications.manage_calendar_feeds`); including another person requires `view` over them (`communications.include_in_calendar_feed`, otherwise NOT_FOUND)                                                                                                                                                        |
 | POST   | `/me/calendar-feeds/{id}/revoke`        | owner only; future fetches answer 404 (SPK-COMMS-008, SPK-IAM-006)                                                                                                                                                                                                                                                        |
 | GET    | `/calendar-feeds/{token}.ics`           | public, token-authorized `text/calendar`; unknown, malformed or revoked tokens are NOT_FOUND; scope re-checked on every fetch                                                                                                                                                                                             |
+| POST   | `/delivery-attempts/{id}/retry`         | general manager, system administrator, support (`communications.retry_delivery`, COM-02): one failed push/email/SMS attempt as a new queued attempt; `unknown` → INVALID_TRANSITION, revoked recipient → RESOURCE_CONFLICT `RECIPIENT_REVOKED`, second retry → `ALREADY_RETRIED`, obsolete notice → `NOTICE_SUPERSEDED`   |
+| POST   | `/me/push-devices`                      | self (`communications.register_push_device`, COM-01): register `{ platform, token, appVersion? }`; same token and account refreshes the row; a token active for another account is moved (the older row revoked `reregistered`); the token is never returned (`tokenHint`)                                                |
+| GET    | `/me/push-devices`                      | self: the signed-in account's devices, token hints only                                                                                                                                                                                                                                                                   |
+| POST   | `/me/push-devices/{id}/revoke`          | self, own account's device only (another's is NOT_FOUND): `{ reason }`; erases the token, nothing more is pushed to it                                                                                                                                                                                                    |
 | POST   | `/webhooks/messaging/{provider}`        | public, signed receipt from the (fake) messaging provider; recorded once in the kernel inbox (202 with `duplicate`), applied by the inbox worker. The fake provider's secret is a published test constant, so the endpoint answers NOT_FOUND in production; a receipt resolves only attempts of the provider that sent it |
 
-Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write runs in
+Every consequential POST/PATCH is `@Idempotent()` and zod-validated; the stage-3 write routes carry
+`@NoRecordAuthority('Not a §5.3 record category')` (IF-41); every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Confirming a send creates an operation
 (`communications.send_notification`, readable at `GET /v1/operations/{id}`) that succeeds when the
 dispatch creates the attempts or suppresses the notice.
@@ -118,8 +143,9 @@ dispatch creates the attempts or suppresses the notice.
   the person's preferences enable. A notice nobody may receive is `suppressed`
   (`authority_revoked` or `no_recipients`).
 - **Delivery worker** (`services/delivery-worker.ts`, §4.11): claims queued external attempts with a
-  lock lease (`FOR UPDATE SKIP LOCKED`), resolves the address through identity's `PeopleService`
-  (contact points are never copied), then in one transaction locks the recipient and the attempt,
+  lock lease (`FOR UPDATE SKIP LOCKED`), resolves the addresses — email and SMS through identity's
+  `PeopleService` (contact points are never copied), push to every active registered device of the
+  person (COM-01) — then in one transaction locks the recipient and the attempt,
   re-checks a protected recipient (invariant 10) and marks `attempted_at` only if the attempt is
   still queued, unmarked and held under this worker's lease (renewing it for the call); after that
   commits it calls the provider OUTSIDE any transaction and records exactly its answer:
@@ -130,7 +156,8 @@ dispatch creates the attempts or suppresses the notice.
   what the provider received. An attempt another poller re-claimed after the lease expired is
   skipped, so it reaches the provider once; an interrupted hand-off is recorded `unknown` and never
   retried blindly (§4.12). A failed essential notice raises a `front_desk` operational exception
-  (SPK-UX-006); a revocation or a superseded (obsolete) notice is not a failure.
+  (SPK-UX-006); a revocation, a superseded (obsolete) notice, or a push to a person with no
+  registered device (`NO_ADDRESS` on push, COM-01) is not raised.
 - **Receipts** (`DeliveryWorker.applyReceipt`, inbox provider `fake-messaging`): resolve
   `queued/provider_accepted/unknown` into `provider_accepted/delivered/failed`; duplicates and
   out-of-order receipts are ignored rather than rewriting a later fact.
@@ -168,12 +195,20 @@ dispatch creates the attempts or suppresses the notice.
 ## Ports (`ports.ts`)
 
 - `CHANNEL_PROVIDERS` (`ChannelProviderPort[]`): `send(request) → accepted | failed | unknown`,
-  called outside any transaction. Shipped: `FakePushProvider`, `FakeEmailProvider`,
-  `FakeSmsProvider` (`providers/fake-messaging.provider.ts`) with scripted outcomes, a `throw`
-  scenario and signed receipts (`receipt()`) for the webhook. No vendor SDK (§5.2, DEC-020).
+  called outside any transaction; the request carries `addresses[]` (one email address or phone
+  number, or every active push token). Shipped: `FakePushProvider`, `FakeEmailProvider`,
+  `FakeSmsProvider` (`providers/fake-messaging.provider.ts`) with the four §5.2 scenarios — success,
+  failure (`+fail` or scripted), timeout/unknown (`+unknown`, scripted `unknown` or `throw`) and
+  duplicate (a second hand-off of an accepted attempt answers the same message id and sends
+  nothing; a repeated receipt id is recorded once by the kernel inbox) — and signed receipts
+  (`receipt()`) for the webhook. The push fake fans out per device (`deviceSends`). No vendor SDK
+  (§5.2, DEC-020). All three are in the kernel integration register as
+  `communications.{push,email,sms}_provider` (gate `messaging`, `productionAllowed: false`,
+  reconciliation owner `front_desk`; COM-01, K-09).
 - `TEAM_MEMBERSHIP_PORT` (`TeamMembershipPort`): `membersOf`, `isMember`, `teamEntriesOf`,
   implemented by `CompetitionTeamMembership` over competition's `ROSTER_PORT` and
-  `TEAM_ENTRY_QUERY_PORT` at the clock.
+  `TEAM_ENTRY_QUERY_PORT` at the clock: the effective roster plus the captain and co-captain role
+  holders with or without a roster row (`roleHolders`, COM-03).
 - `COMMUNICATIONS_POLICY` (`communications.policy.ts`): default channels per category, the
   category of each kind (`categoryByKind`, SPK-COMMS-007: every SPK-COMMS-002 trigger is
   operational, `renewal_opportunity` promotional, `staff_broadcast` must name its category; a
@@ -188,10 +223,13 @@ dispatch creates the attempts or suppresses the notice.
   `unknown`. **Verified** (`apps/api/src/__tests__/cross-module-ports.spec.ts`).
 - For other modules: `NotificationsService.compose / composeAndQueue / composeAndQueueIn(trx, …)`
   (the `ComposeInput` carries `sourceEventId` so a replayed handler never composes twice),
-  `PreferencesService.enabledChannels`, `InboxService`, `CalendarFeedsService`.
+  `PreferencesService.enabledChannels`, `InboxService`, `CalendarFeedsService`,
+  `CommunicationPreferencesService.importPreferences` (IF-40, the migration module's import
+  provider; the same class as `PreferencesService`), `PushDevicesService`, `DeliveryRetryService`.
 - Fixtures for downstream tests: `testing/communications-fixtures.ts` (`fakeProviders`,
   `dispatchOutbox`, `deliverQueued`, `composeAndDispatch`, `recordReceipt`, `attemptsOf`,
-  `recipientsOf`, `inboxOf`); use with
+  `recipientsOf`, `inboxOf`, `registerPushDeviceFixture` — a test that expects a push to reach
+  someone registers a device for them first); use with
   `createTestApp({ imports: [CommunicationsModule], principalResolver: 'module' })` and the
   identity fixtures.
 
@@ -213,14 +251,23 @@ are re-checked before dispatch. A closure preview lists unsent notices about aff
 `communications.delivery_delivered`, `communications.delivery_failed`,
 `communications.delivery_unknown`, `communications.notification_read`,
 `communications.notification_acknowledged`, `communications.calendar_feed_created`,
-`communications.calendar_feed_revoked`. Payloads carry identifiers only.
+`communications.calendar_feed_revoked`, and (stage 3) `communications.delivery_retry_queued`,
+`communications.push_device_registered`, `communications.push_device_revoked`. Payloads carry
+identifiers only (never a push token).
 
 Handlers registered: `communications.dispatch_notification` (`communications.delivery_requested`),
 `communications.schedule_change_notice` (`scheduling.event_changed`),
 `communications.schedule_published_summary` (`scheduling.schedule_published`),
 `communications.reevaluate_revoked_grant` (`identity.access_grant_revoked`),
-`communications.reevaluate_restricted_access` (`identity.access_restricted`), inbox handler
-`communications.delivery_receipt` (provider `fake-messaging`).
+`communications.reevaluate_restricted_access` (`identity.access_restricted`),
+`communications.revoke_push_on_relink` (`identity.account_relinked`, failure owner support),
+`communications.follow_person_merge` (`identity.persons_merged`, failure owner support),
+`communications.notify_team_invitation` (`competition.team_invitation_created`),
+`communications.notify_result_published` (`competition.result_published`),
+`communications.notify_availability_request` (`competition.availability_requested`) (the last three
+with failure owner league manager), inbox handler `communications.delivery_receipt` (provider
+`fake-messaging`). Periodic job `communications.compose_activity_reminders` (300 s, failure owner
+support).
 
 ## Policy defaults (proposed, pending operator decisions DEC-012, DEC-020, DEC-062)
 
@@ -228,11 +275,83 @@ Handlers registered: `communications.dispatch_notification` (`communications.del
   defaults in `DEFAULT_COMMUNICATIONS_POLICY` are: operational → in-app (locked), push, email on,
   SMS off; promotional → in-app and email on, push and SMS off (so marketing never pushes over
   today's activity, SPK-UX-003).
-- Only `schedule_published` and `schedule_changed` notices are supersedable, by `schedule_changed`
-  and `cancellation` notices about the same subject.
+- `schedule_published`, `schedule_changed` and (stage 3) `activity_reminder` notices are
+  supersedable, by `schedule_changed` and `cancellation` notices about the same subject.
+- `availability_request` and `activity_reminder` are operational kinds (proposed split, DEC-062).
 - Calendar feeds cover 30 days back and 365 days ahead.
-- Push addressing uses the person id as the registration handle until the native apps register
-  devices (Package E); a real push adapter maps device tokens in `RecipientAddresses`.
+- **Pending (DEC-012): the activity reminder lead time.** `COMMUNICATIONS_ACTIVITY_REMINDER_LEAD_MINUTES`
+  (module settings, IF-43) has no default; unset, no activity reminder is composed. Whether and when
+  invitations to contact details are messaged by the platform is part of the same decision.
+- **Pending (DEC-020, DEC-061): push.** The push provider is not selected (fake adapter only) and
+  the app's push registration (bundle identifiers, permission prompts) waits for DEC-061; the device
+  registry and addressing are built against the port.
+
+## Stage 3 (COM-01 … COM-06)
+
+No communications behaviour is a Package G capability: none of the K-12 capability switches
+(DEC-016) applies to this module, so nothing here is behind a capability switch. What stays
+undecided is policy and provider choice, kept as configuration without defaults or as fakes:
+channel approval and the essential/promotional split (DEC-012, DEC-062), the reminder lead time
+(DEC-012), the messaging provider (DEC-020) and app push registration (DEC-061).
+
+- **COM-01 push devices — verified** (`__tests__/push-devices.spec.ts`): register, refresh on
+  re-registration (one row), move a token from another account (older row revoked
+  `reregistered`, one transaction, a racing duplicate insert retries once; concurrent registrations
+  leave one active row on PGlite and PostgreSQL), list and revoke; the token is never returned,
+  logged, audited or put in an event (`tokenHint`); push fans out to every active device and never
+  to a revoked one; no device → `NO_ADDRESS` without a front-desk exception, the in-app notice is
+  delivered; `identity.account_relinked` revokes the account's devices (`account_relinked`,
+  SPK-AT-025, replay-safe); the database refuses two active registrations of one token and
+  inconsistent token/status/revocation columns; push, email and SMS fakes are in the integration
+  register (DEC-020).
+- **COM-02 retry, names, inbox revision — verified** (`__tests__/delivery-retry.spec.ts`): a failed
+  external attempt is retried as a new queued attempt (the failed row untouched, audited with the
+  reason, delivered by the next worker pass); front desk is refused; a second retry, an `unknown`, a
+  queued, an in-app attempt and a revoked recipient (re-checked as at dispatch) are refused with
+  nothing queued; the database trigger and unique index refuse the same; `GET …/deliveries` names
+  every recipient (`displayName`, identity's `displayNames`); inbox items carry `revision` and
+  `subjectPersonIds`, and read/acknowledge refuse a stale `expectedRevision`.
+- **COM-03 team role holders and competition notices — verified**
+  (`__tests__/competition-notices.spec.ts`): a co-captain (and a captain) without a roster row is a
+  team-audience recipient while the role is effective, re-checked at dispatch when it ends;
+  `competition.team_invitation_created` with a known recipient queues one protected
+  `team_invitation` notice (the invitee if an adult, a child invitee's guardian through
+  `receive_messages`), a contact-only invitation queues none; `competition.result_published` queues
+  one `result_published` notice to both entries' team audiences.
+- **COM-04 preference import — verified** (`__tests__/preference-import.spec.ts`):
+  `importPreferences` is refused for any principal but the batch's import principal; importing twice
+  writes once (same outcome, one record, one audit); different content is
+  `IMPORT_CONTENT_MISMATCH`; the mandatory operational in-app notice stays on whatever is imported;
+  a person's own later choice is kept by later imports.
+- **COM-05 person merge follow-up — verified** (`__tests__/person-merge.spec.ts`, merges through
+  identity's API): the survivor's inbox lists, reads and acknowledges the merged person's notices
+  (a protected one re-checked for the survivor) without rewriting a row; disagreeing explicit
+  preferences resolve to opted out and raise one `communications.merged_preference_conflict`
+  exception for support; the mandatory in-app notice still goes out; the survivor's own later
+  choice wins; a replayed merge event raises nothing new. **Proposed:** identity's merge chain is
+  consulted only when a merge involves the person (their canonical id differs, or this module has
+  followed a merge into them), so until the follow-up of a fresh merge has run the survivor reads
+  only their own rows (`services/merged-persons.ts`).
+- **COM-06 availability requests and activity reminders — verified**
+  (`__tests__/competition-notices.spec.ts`, `__tests__/activity-reminders.spec.ts`):
+  `competition.availability_requested` queues one protected `availability_request` notice per
+  request (adult players themselves, guardians of child players), with the fixture start in the
+  facility's zone; a replayed event queues nothing; without
+  `COMMUNICATIONS_ACTIVITY_REMINDER_LEAD_MINUTES` the reminder job composes nothing; with it each
+  published event revision starting within the lead time is reminded once (a second pass or a
+  concurrent worker composes nothing, a moved event is reminded again for its new revision and its
+  old reminder's unsent part is superseded); the database refuses a second mark per revision and
+  any change to a mark.
+
+**Integration notes (stage-3 branch).** `PersonDirectoryPort.displayNames` /
+`personIdsResolvingTo` (identity, ID-01) and `TeamEntryQueryPort.roleHolders` (competition,
+CMP-01) are declared on the core branch and implemented on their owners' branches; this module's
+tests run with `__tests__/support.ts` doubles that answer from the owner's implementation when
+present and otherwise follow the declared contract. On this branch alone, other modules' flows that
+resolve a team audience or read `GET /notifications/{id}/deliveries` reach the declared stubs until
+those branches are merged. The new routes need `docs/api/openapi.json` regenerated
+(`pnpm build && pnpm openapi`) and are classified with `@NoRecordAuthority`, which the migration
+module's route classification counts once MIG-00 lands.
 
 ## Kernel notes
 
@@ -246,13 +365,9 @@ Handlers registered: `communications.dispatch_notification` (`communications.del
 
 ## Known gaps
 
-- Team audiences resolve to the effective roster (players with their roles); a captain or
-  co-captain who holds a team role without a roster row is not reached through a team audience
-  (competition exposes no "role holders of an entry" port yet). Name them explicitly in an
-  unprotected notice or wait for that port; a protected notice cannot name explicit recipients.
 - Pending: a per-person authority basis for protected notices to explicitly chosen people (an
-  identity port for "active staff at facility", a competition port for team-role holders); until
-  then protected content goes only through subject persons, team entries and staff roles.
+  identity port for "active staff at facility"); until then protected content goes only through
+  subject persons, team entries (roster and captain/co-captain holders) and staff roles.
 - Customer audiences (subject persons, team entries, person ids) are not scoped by facility: persons
   are organization-wide, and what makes a customer audience "authorized" for a composer is
   POL-024 / DEC-012 (pending decision). Only the facility dimension is enforced today.
@@ -261,12 +376,21 @@ Handlers registered: `communications.dispatch_notification` (`communications.del
   record stays truthful, the window is one short transaction.
 - A child leaving a team's roster is caught by the re-checks at dispatch, at the hand-off and in the
   inbox; there is no `competition.roster_changed` consumer failing queued attempts promptly.
-- Reminders are a composed notice with `scheduledFor`; there is no recurring reminder scheduler.
-- No retry/re-route command for failed deliveries (`communications.retry_delivery` in the
-  permission matrix is proposed); a retry is a new attempt row once the command exists.
-- Triggers other than schedule publication/change/cancellation (registration outcome, team
-  invitation, placement, waitlist offer, payment attention, assignment offer, result publication,
-  renewal, approved youth feedback) are composed by their owning modules through
-  `NotificationsService.composeAndQueueIn`; the kinds exist, the handlers land with those modules.
+- Activity reminders cover published events of this module's calendar projection that carry an
+  event revision (entries projected before migration 1002 are reminded after their next change);
+  composed reminders go out at once, not at a chosen instant before the start.
+- A retry re-sends one attempt; there is no re-route to another channel and no bulk retry. Queuing
+  a retry does not close the failed attempt's `communications.delivery_failed` exception; closing it
+  stays a staff step.
+- Triggers other than schedule publication/change/cancellation, team invitations, results and
+  availability requests (registration outcome, placement, waitlist offer, payment attention,
+  assignment offer, renewal, approved youth feedback) are composed by their owning modules through
+  `NotificationsService.composeAndQueueIn` (IF-22); invitations addressed only to a contact detail
+  are not messaged by the platform (DEC-012).
+- Push: a provider's "token no longer valid" answer does not revoke the device yet (the fake has no
+  such outcome); a merged person's devices keep addressing the merged person until the app
+  re-registers under the survivor's account (a refresh takes the account's current person over).
+- A protected notice reached through a team role or roster row of a merged person is not served to
+  the survivor's inbox (team membership is checked for the survivor's own id); unprotected ones are.
 - The ICS feed is a projection of `scheduling.event_changed`; it carries the facility zone in the
   description and UTC instants, not VTIMEZONE blocks.

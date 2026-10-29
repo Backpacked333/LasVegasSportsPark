@@ -70,6 +70,7 @@ export const RESTRICTION_BADGE: Record<RestrictionStatus, Badge> = {
   approved: { tone: 'warning', label: 'approved: activation not complete' },
   active: { tone: 'danger', label: 'active: area restricted' },
   released: { tone: 'success', label: 'released: returned to service' },
+  withdrawn: { tone: 'neutral', label: 'withdrawn: never took effect' },
 };
 
 export const TASK_BADGE: Record<TaskStatus, Badge> = {

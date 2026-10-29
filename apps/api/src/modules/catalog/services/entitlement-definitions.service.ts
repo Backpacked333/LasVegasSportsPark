@@ -1,11 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  ENTITLEMENT_SCOPE_SCHEMAS,
   errors,
   newId,
   type CreateEntitlementDefinitionInput,
   type EntitlementDefinition,
+  type EntitlementKind,
   type Principal,
   type UpdateEntitlementDefinitionInput,
+  type z,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, type Db } from '@sportspark/db';
 import {
@@ -15,9 +18,108 @@ import {
   DATABASE,
   snapshotActor,
   UnitOfWork,
+  type Trx,
 } from '../../../kernel';
 import { CatalogActions } from '../catalog.actions';
 import { organizationOf, toEntitlementDefinition } from '../catalog.shared';
+
+/** The requirement whose explicit effects each typed scope states (CAT-02). */
+const SCOPE_REQUIREMENT: Partial<Record<EntitlementKind, string>> = {
+  membership_benefit: 'SPK-COND-001',
+  package_credits: 'SPK-COND-002',
+  party_package: 'SPK-COND-003',
+  rental_resource: 'SPK-COND-003',
+};
+
+/**
+ * §4.3, SPK-COND-001/002: the offerings and programs a scope or policy names must exist in the
+ * caller's organization (catalog-owned records), so a definition never points at another
+ * organization's records or at nothing. Throws VALIDATION_FAILED naming the first missing path.
+ */
+export async function assertCatalogReferences(
+  db: Db | Trx,
+  organizationId: string,
+  ids: { offeringIds?: readonly string[]; programIds?: readonly string[] } | undefined,
+  path: string,
+): Promise<void> {
+  if (!ids) return;
+  const check = async (
+    table: 'offerings' | 'programs',
+    list: readonly string[] | undefined,
+    key: string,
+  ) => {
+    const wanted = [...new Set(list ?? [])];
+    if (wanted.length === 0) return;
+    const found = new Set(
+      (
+        await db
+          .selectFrom(table)
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('id', 'in', wanted)
+          .execute()
+      ).map((r) => r.id),
+    );
+    const missing = wanted.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      throw errors.validation(
+        `Every ${key === 'offeringIds' ? 'offering' : 'program'} named must exist in this organization.`,
+        [
+          {
+            path: `${path}.${key}`,
+            message: `unknown: ${missing.join(', ')}`,
+            code: 'unknown_reference',
+          },
+        ],
+      );
+    }
+  };
+  await check('offerings', ids.offeringIds, 'offeringIds');
+  await check('programs', ids.programIds, 'programIds');
+}
+
+/** The offering and program references a typed scope makes, with the path each lives at. */
+function scopeReferences(
+  kind: EntitlementKind,
+  scope: Record<string, unknown>,
+): Array<{ ids: { offeringIds?: string[]; programIds?: string[] }; path: string }> {
+  if (kind === 'membership_benefit') {
+    const attendance = scope['attendance'] as { mode: string; appliesTo?: object } | undefined;
+    return attendance?.appliesTo
+      ? [{ ids: attendance.appliesTo, path: 'scope.attendance.appliesTo' }]
+      : [];
+  }
+  if (kind === 'package_credits') {
+    const appliesTo = scope['appliesTo'] as object | undefined;
+    return appliesTo ? [{ ids: appliesTo, path: 'scope.appliesTo' }] : [];
+  }
+  return [];
+}
+
+/**
+ * CAT-02: a membership benefit, package credits, party package or rental resource scope must
+ * satisfy its schema (every key required, no defaults; `ENTITLEMENT_SCOPE_SCHEMAS`). Other kinds
+ * keep a free-form scope. Returns the parsed scope.
+ */
+export function parseEntitlementScope(
+  kind: EntitlementKind,
+  scope: Record<string, unknown>,
+): Record<string, unknown> {
+  const schema = (ENTITLEMENT_SCOPE_SCHEMAS as Partial<Record<EntitlementKind, z.ZodType>>)[kind];
+  if (!schema) return scope;
+  const result = schema.safeParse(scope);
+  if (!result.success) {
+    throw errors.validation(
+      `The scope of a ${kind} entitlement definition must state every effect explicitly (${SCOPE_REQUIREMENT[kind]}).`,
+      result.error.issues.map((i) => ({
+        path: ['scope', ...i.path.map(String)].join('.'),
+        message: i.message,
+        code: i.code,
+      })),
+    );
+  }
+  return result.data as Record<string, unknown>;
+}
 
 /**
  * What participation a purchase grants (§4.4 EntitlementDefinition). The equivalence scope is
@@ -43,7 +145,11 @@ export class EntitlementDefinitionsService {
       type: 'entitlement_definition',
       organizationId,
     });
+    const scope = parseEntitlementScope(body.kind, body.scope);
     return this.uow.run(async ({ trx }) => {
+      for (const ref of scopeReferences(body.kind, scope)) {
+        await assertCatalogReferences(trx, organizationId, ref.ids, ref.path);
+      }
       const id = newId();
       let row;
       try {
@@ -55,7 +161,7 @@ export class EntitlementDefinitionsService {
             name: body.name,
             description: body.description ?? null,
             kind: body.kind,
-            scope: json(body.scope),
+            scope: json(scope),
             equivalence_scope: body.equivalenceScope,
             equivalence_rule: json(body.equivalenceRule),
             created_by: json(snapshotActor(principal)),
@@ -109,6 +215,13 @@ export class EntitlementDefinitionsService {
       if (current.status === 'archived' && body.status !== 'active') {
         throw errors.invalidTransition('EntitlementDefinition', 'archived', 'update');
       }
+      const scope =
+        body.scope === undefined ? undefined : parseEntitlementScope(current.kind, body.scope);
+      if (scope) {
+        for (const ref of scopeReferences(current.kind, scope)) {
+          await assertCatalogReferences(trx, organizationId, ref.ids, ref.path);
+        }
+      }
       let updated;
       try {
         updated = await trx
@@ -116,7 +229,7 @@ export class EntitlementDefinitionsService {
           .set({
             name: body.name,
             description: body.description,
-            scope: body.scope === undefined ? undefined : json(body.scope),
+            scope: scope === undefined ? undefined : json(scope),
             equivalence_scope: body.equivalenceScope,
             equivalence_rule:
               body.equivalenceRule === undefined ? undefined : json(body.equivalenceRule),

@@ -105,3 +105,53 @@ export interface RecordAuthorityPort {
     trx?: Trx,
   ): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Accounting export (FIN-07, IF-37; §3.16 Accounting, SPK-PAY-010/011, §5.2 accounting gate)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Accounting export port (the accounting connection is not selected, DEC-022). Calls happen
+ * OUTSIDE any database transaction (§4.11), carry the batch's idempotency key and never throw for
+ * an outcome: a lost answer is `unknown`, reconciled later through `batchStatus`. The only adapter
+ * is `FakeAccountingProvider` (success, failure, timeout with an unknown outcome, duplicate
+ * submissions returning the first outcome); a real one waits for DEC-022.
+ */
+export const ACCOUNTING_EXPORT_PORT = Symbol('ACCOUNTING_EXPORT_PORT');
+
+export interface AccountingExportLine {
+  journalEntryId: string;
+  externalAccountRef: string;
+  debitMinor: number;
+  creditMinor: number;
+  currency: string;
+  /** ISO instant the journal entry was posted. */
+  postedAt: string;
+  memo: string;
+}
+
+export interface AccountingBatchSubmission {
+  organizationId: string;
+  batchId: string;
+  idempotencyKey: string;
+  periodStart: string;
+  periodEnd: string;
+  lines: AccountingExportLine[];
+  checksum: string;
+}
+
+export type AccountingSubmitResult =
+  | { outcome: 'accepted'; providerReference: string }
+  | { outcome: 'rejected' | 'unknown'; error: string };
+
+export type AccountingBatchStatusResult = AccountingSubmitResult | { outcome: 'not_found' };
+
+export interface AccountingExportPort {
+  readonly name: string;
+  submitBatch(submission: AccountingBatchSubmission): Promise<AccountingSubmitResult>;
+  batchStatus(query: {
+    organizationId: string;
+    batchId: string;
+    idempotencyKey: string;
+  }): Promise<AccountingBatchStatusResult>;
+}

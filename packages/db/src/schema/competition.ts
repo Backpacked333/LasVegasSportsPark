@@ -1,4 +1,4 @@
-import type { Generated } from 'kysely';
+import type { ColumnType, Generated } from 'kysely';
 import type {
   GeneratedJson,
   GeneratedTimestamp,
@@ -16,6 +16,8 @@ import type { DateOnly } from './identity';
  */
 
 export type CompetitionKind = 'league' | 'tournament';
+/** Who created a season, team or team entry (CMP-09, migration 0456): staff, or a migration import. */
+export type CompetitionRecordSource = 'staff' | 'import';
 export type SportFormat = 'outdoor' | 'indoor_boarded' | 'futsal' | 'small_sided_other';
 export type CompetitionStatus = 'draft' | 'active' | 'archived';
 export interface CompetitionsTable {
@@ -57,6 +59,8 @@ export interface SeasonsTable {
   registration_opens_at: NullableTimestamp;
   registration_closes_at: NullableTimestamp;
   status: Generated<SeasonStatus>;
+  /** CMP-09 (migration 0456). */
+  source: Generated<CompetitionRecordSource>;
   created_by: Json<Record<string, unknown>>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
@@ -85,6 +89,8 @@ export interface TeamsTable {
   created_by: Json<Record<string, unknown>>;
   created_by_person_id: string | null;
   status: Generated<TeamStatus>;
+  /** CMP-09 (migration 0456). */
+  source: Generated<CompetitionRecordSource>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -115,6 +121,8 @@ export interface TeamEntriesTable {
   eligibility_status: Generated<TeamEntryEligibilityStatus>;
   eligibility_reasons: GeneratedJson<unknown[]>;
   renewed_from_entry_id: string | null;
+  /** CMP-09 (migration 0456). */
+  source: Generated<CompetitionRecordSource>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -146,7 +154,9 @@ export type RosterSource =
   | 'staff'
   | 'renewal'
   /** A paid and approved join_team registration (SPK-AT-002, migration 0453). */
-  | 'registration';
+  | 'registration'
+  /** Created by a migration import (CMP-09, migration 0456). */
+  | 'import';
 export interface RosterMembershipsTable {
   id: string;
   organization_id: string;
@@ -229,6 +239,10 @@ export interface FixturesTable {
   scheduled_end: NullableTimestamp;
   status: Generated<FixtureStatus>;
   notes: string | null;
+  /** CMP-04 (migration 0455): the venue copied from the scheduling event; null until it changes. */
+  venue_facility_id: Generated<string | null>;
+  venue: ColumnType<FixtureVenueJson | null, string | null | undefined, string | null>;
+  venue_event_revision: Generated<number | null>;
   created_by: Json<Record<string, unknown>>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
@@ -253,6 +267,53 @@ export interface AvailabilityResponsesTable {
 
 export type CompetitionJson = JsonObject;
 
+/** `fixtures.venue` (CMP-04): the facility, its IANA time zone and the event's resources. */
+export interface FixtureVenueJson {
+  eventId: string;
+  facilityId: string;
+  timezone: string;
+  resources: Array<{ id: string; name: string }>;
+  [key: string]: unknown;
+}
+
+/** CMP-14 (migration 0458): append-only availability requests (and reminders). */
+export interface AvailabilityRequestsTable {
+  id: string;
+  organization_id: string;
+  fixture_id: string;
+  team_entry_id: string;
+  requested_by: Json<Record<string, unknown>>;
+  requested_by_person_id: string | null;
+  message: string | null;
+  requested_at: Timestamp;
+  recipient_count: number;
+  created_at: GeneratedTimestamp;
+}
+
+/** CMP-15 (migration 0459): tournament pools of a division. */
+export interface PoolsTable {
+  id: string;
+  organization_id: string;
+  season_id: string;
+  division_id: string;
+  name: string;
+  created_by: Json<Record<string, unknown>>;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+export interface PoolEntriesTable {
+  organization_id: string;
+  pool_id: string;
+  season_id: string;
+  division_id: string;
+  team_entry_id: string;
+  seed: number | null;
+  added_by: Json<Record<string, unknown>>;
+  created_at: GeneratedTimestamp;
+}
+
 export interface CompetitionTables {
   competitions: CompetitionsTable;
   rule_sets: RuleSetsTable;
@@ -266,4 +327,7 @@ export interface CompetitionTables {
   join_requests: JoinRequestsTable;
   fixtures: FixturesTable;
   availability_responses: AvailabilityResponsesTable;
+  availability_requests: AvailabilityRequestsTable;
+  pools: PoolsTable;
+  pool_entries: PoolEntriesTable;
 }

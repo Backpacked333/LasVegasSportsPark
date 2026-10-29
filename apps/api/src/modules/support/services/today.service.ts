@@ -10,11 +10,11 @@ import {
   type TodaySource,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
-import { sql, type SqlBool } from 'kysely';
 import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
   OperationalExceptions,
   type Clock,
   listFacilityScope,
@@ -91,6 +91,7 @@ export class TodayService {
     private readonly readiness: ReadinessService,
     private readonly requirements: RequirementsService,
     private readonly restrictions: RestrictionsService,
+    private readonly facilityDirectory: FacilityDirectory,
   ) {}
 
   async feed(principal: Principal, query: TodayQuery): Promise<TodayFeed> {
@@ -148,6 +149,8 @@ export class TodayService {
             ageMinutes: view.ageMinutes,
             deadlineAt: view.deadlineAt,
             overdue: view.overdue,
+            // SUP-01: the expectedRevision of the acknowledge, resolve and close steps.
+            revision: row.revision,
             nextActions: view.nextActions,
             history: view.history,
             details: { ...view.details, exceptionId: row.id, revision: row.revision },
@@ -266,6 +269,7 @@ export class TodayService {
             ageMinutes: minutesBetween(r.approvedAt ?? r.createdAt, now),
             deadlineAt: r.interval.end,
             overdue: false,
+            revision: r.revision,
             nextActions: await this.nextActions.permitted(principal, [
               isActive
                 ? {
@@ -355,6 +359,7 @@ export class TodayService {
       ageMinutes: null,
       deadlineAt: start.toISOString(),
       overdue: blocking.length > 0 && start.getTime() < now.getTime(),
+      revision: null,
       nextActions: await this.nextActions.permitted(principal, [
         {
           definition: MatchActions.readReadiness,
@@ -426,6 +431,7 @@ export class TodayService {
           ageMinutes: null,
           deadlineAt: start.toISOString(),
           overdue: start.getTime() < now.getTime(),
+          revision: null,
           nextActions: await this.nextActions.permitted(principal, [
             {
               definition: WorkforceActions.proposeAssignment,
@@ -484,24 +490,23 @@ export class TodayService {
     facilityId: string | undefined,
     now: Date,
   ): Promise<FacilityDay[]> {
-    let q = this.db
-      .selectFrom('facilities')
-      .select(['id', 'name', 'timezone'])
-      .where('organization_id', '=', organizationId)
-      .orderBy('name')
-      .orderBy('id');
+    // §4.2 (SUP-02): the kernel's facility directory (K-04), never its table.
+    let rows: Array<{ id: string; name: string; timezone: string }>;
     if (facilityId) {
-      q = q.where('id', '=', facilityId);
+      const found = (await this.facilityDirectory.describe(organizationId, [facilityId])).get(
+        facilityId,
+      );
+      if (!found) throw errors.notFound('facility', facilityId);
+      rows = [found];
     } else {
-      q = q.where('status', '=', 'active');
+      rows = await this.facilityDirectory.list(organizationId, { statuses: ['active'] });
       // §4.3, §4.14: the facilities of the roles that hold the Today read action (identity-05).
       const scope = listFacilityScope(principal, SupportActions.readToday);
       if (scope) {
-        q = scope.length > 0 ? q.where('id', 'in', [...scope]) : q.where(sql<SqlBool>`false`);
+        const allowed = new Set(scope);
+        rows = rows.filter((f) => allowed.has(f.id));
       }
     }
-    const rows = await q.execute();
-    if (facilityId && rows.length === 0) throw errors.notFound('facility', facilityId);
     return rows.map((f) => {
       // SPK-SCHED-008: "today" is the facility-local day, from local midnight to local midnight.
       const localDate = localDateOf(f.timezone, now);

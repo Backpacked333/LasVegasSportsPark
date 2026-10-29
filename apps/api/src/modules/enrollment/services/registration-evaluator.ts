@@ -8,7 +8,7 @@ import {
   type PriceSnapshot,
   type RegistrationIntent,
 } from '@sportspark/contracts';
-import { CLOCK, type Clock, type Trx } from '../../../kernel';
+import { CLOCK, FacilityDirectory, type Clock, type Trx } from '../../../kernel';
 import {
   OFFERING_LOOKUP_PORT,
   POLICY_PORT,
@@ -36,6 +36,9 @@ import {
   evaluateRegistrationEligibility,
   type EligibilityInput,
 } from '../eligibility/registration-eligibility';
+import { localDayStart } from '../package-g/local-dates';
+import { membershipRequirement } from '../package-g/scopes';
+import { MembershipLedger } from './membership-ledger';
 
 type EligibilityInputTeam = EligibilityInput['teamEligibility'];
 
@@ -70,6 +73,8 @@ export class RegistrationEvaluator {
     @Inject(TEAM_ENTRY_QUERY_PORT) private readonly teamEntries: TeamEntryQueryPort,
     @Inject(ELIGIBILITY_PORT) private readonly teamEligibility: EligibilityPort,
     @Inject(ENROLLMENT_POLICY) private readonly policy: EnrollmentPolicy,
+    private readonly facilities: FacilityDirectory,
+    private readonly memberships: MembershipLedger,
   ) {}
 
   async snapshot(
@@ -173,6 +178,7 @@ export class RegistrationEvaluator {
               }
             : null,
     });
+    await this.applyMembershipRequirement(trx, organizationId, snapshot, person.id, result);
     const approvalPolicy = await this.policies.currentPolicyVersion(
       organizationId,
       'approval',
@@ -194,6 +200,50 @@ export class RegistrationEvaluator {
         .map((f) => f.id)
         .filter((id) => !acknowledged.includes(id)),
     };
+  }
+
+  /**
+   * ENR-12 member-only eligibility (SPK-COND-001): an eligibility policy whose content names
+   * `membershipRequired` is satisfied only by a confirmed, unsuspended membership in those
+   * offerings or programs whose term covers the eligibility reference date (local midnight in the
+   * offering's facility zone). Anything else, including a malformed requirement or an unknown zone,
+   * is a known ineligibility `MEMBERSHIP_REQUIRED`, never an unknown.
+   */
+  private async applyMembershipRequirement(
+    trx: Trx | undefined,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    personId: string,
+    result: EligibilityResult,
+  ): Promise<void> {
+    const requirement = membershipRequirement(snapshot.eligibilityPolicy);
+    if (requirement === undefined) return;
+    let satisfied = false;
+    if (requirement) {
+      const zone = (
+        await this.facilities.describe(organizationId, [snapshot.offering.facilityId], trx)
+      ).get(snapshot.offering.facilityId)?.timezone;
+      if (zone) {
+        const at = localDayStart(snapshot.eligibilityReferenceDate, zone);
+        const ids = await this.persons.personIdsResolvingTo(organizationId, personId, trx);
+        satisfied = await this.memberships.holds(
+          trx,
+          organizationId,
+          ids.length > 0 ? ids : [personId],
+          requirement,
+          at,
+        );
+      }
+    }
+    if (satisfied) return;
+    result.reasons.push({
+      code: 'MEMBERSHIP_REQUIRED',
+      severity: 'blocking',
+      message: 'This offering is for members: an active membership covering its date is required.',
+      source: { type: 'policy_version', id: snapshot.eligibilityPolicy?.id ?? null },
+      requiredAction: 'buy_membership',
+    });
+    result.eligible = false;
   }
 
   /** The price basis of a line, from the catalog pricing port at the instant (SPK-PAY-001). */
@@ -222,6 +272,8 @@ export class RegistrationEvaluator {
       cancellationPolicyVersionId: snapshot.cancellationPolicy?.id ?? null,
       requiredFormPolicyVersionIds: snapshot.requiredForms.map((f) => f.id),
       approvalPolicyVersionId: approvalPolicy?.id ?? null,
+      // ENR-13: the booking terms a rental or party line is booked under (null otherwise).
+      bookingTermsPolicyVersionId: snapshot.bookingTerms?.id ?? null,
     };
   }
 

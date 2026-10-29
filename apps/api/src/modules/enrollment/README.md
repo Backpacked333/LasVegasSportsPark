@@ -2,22 +2,31 @@
 
 **Owns:** applications, enrollments, household baskets and basket lines, placement requests,
 session bookings, capacity pools, holds, allocations, waitlist entries and offers, makeup
-entitlements and their redemption history, trial participations
+entitlements and their redemption history, trial participations; and, behind their capability
+switches (§3.16, §6.5 Package G), package entitlements and redemptions, membership suspensions and
+benefit uses, rental and party bookings, assessment templates, assessments and progression
+recommendations (the last three: owner **Proposed**, §4.4 names no entity)
 
 **Specification:** §3.3 (SPK-REG-001..010), §3.6 (SPK-PLACE-001..005), §3.13 (SPK-YOUTH-001..004,
 SPK-YOUTH-007), §4.4 Participation (Application, Enrollment, PlacementRequest, SessionBooking) and
 Capacity (CapacityPool, Hold, Allocation, WaitlistEntry, WaitlistOffer), §4.5, §4.6 Application /
 Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 7, §4.8
 (`POST /v1/enrollments/{id}/transfer`, `POST /v1/waitlist-offers/{id}/accept`), SPK-AT-001, 004,
-005, 006, 015 (precondition), 019, 020
+005, 006, 015 (precondition), 019, 020; stage 3: §3.16 (SPK-COND-001 to SPK-COND-003),
+SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
-**Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses `0500`)
+**Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
+`0500` to `0509`; `0503` came from the review stage)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
 `SessionsService`), competition (`TEAM_ENTRY_QUERY_PORT`, `ELIGIBILITY_PORT`, `ROSTER_PORT`, and
-`RosterService.changeRoster` for placement roster additions). It never writes another module's
-tables (§4.2).
+`RosterService.changeRoster` for placement roster additions), scheduling (`EVENT_SCHEDULING_PORT`,
+`AVAILABILITY_PORT`, `ResourcesService` names, local-time helpers), workforce
+(`WORKFORCE_STAFFING_PORT`, `ASSIGNMENT_COVERAGE_PORT`), facilities (`ASSET_DIRECTORY_PORT`),
+communications (`NotificationsService.composeAndQueueIn`, IF-22) and the kernel (capability
+switches, periodic jobs, module settings, facility directory, operational exceptions). It never
+writes another module's tables (§4.2).
 
 **Status: implemented** — verified by `apps/api/src/modules/enrollment/__tests__` (PGlite and
 `TEST_DATABASE_URL` PostgreSQL) and the unit specs next to the code
@@ -253,6 +262,148 @@ Payloads carry identifiers only (§4.14).
 trial_not_started`); cancellation stays allowed. **Verified**, `__tests__/youth.spec.ts` and,
   paid through finance, `apps/api/src/__tests__/journeys/spk-at-019.spec.ts`.
 
+## Stage 3 (ENR-01 to ENR-14)
+
+Statements in this section are **verified** by the named tests (PGlite and `TEST_DATABASE_URL`
+PostgreSQL) unless marked **proposed** or **pending**.
+
+### Customer reads, paging and views (ENR-01, ENR-02)
+
+- `GET /v1/me/baskets` (the caller's own baskets), `/me/waitlist-entries` (with `offeringName` and
+  the `openOffer` and its expiry), `/me/applications`, `/me/trial-participations`: keyset pages
+  (created_at desc, id desc) over the people the caller may view (`customerSubjects`, each
+  expanded with `personIdsResolvingTo`, so a merged duplicate's history shows under the survivor).
+  Migration `0504` adds the read indexes. Tests: `__tests__/customer-lists.spec.ts`
+  ("SPK-REG-008: a guardian lists their child's waitlist entries…", "SPK-UX-001: an interrupted
+  registration is found from GET /v1/me/baskets after a reinstall").
+- `GET /v1/applications`, `/enrollments` and `/placement-requests` honour `cursor`/`nextCursor`.
+  An enrollment carries `offering` (name, kind, dates, facility and its IANA zone, also for closed
+  offerings) and `pendingReason` (`approval`, `forms`, `payment`, `placement`); family calendar
+  items carry `facilityId` and `timezone`; a placement request carries `assignedTeamName`.
+  Tests: "SPK-UX-004: a pending enrollment states what is outstanding", "SPK-SCHED-008: family
+  calendar items carry the facility time zone".
+
+### Commands (ENR-03 to ENR-06)
+
+- `GET /v1/enrollments/{id}/transfer-preview` (read only). Cancel and transfer bind the previewed
+  consequence: `acceptedConsequence` must match the current one (`CONSEQUENCE_ACCEPTANCE_REQUIRED`,
+  `CONSEQUENCE_CHANGED`); `commit: false` and `acceptConsequence` are deprecated.
+  `__tests__/transfer-consequence.spec.ts`, `registration-commands.spec.ts`.
+- `POST /v1/waitlist-entries/{id}/offer` (program administration): offers the place to the next in
+  queue only (`NOT_NEXT_IN_QUEUE` names who is), `CAPACITY_UNAVAILABLE` without a free place;
+  the same offer payload as the generator.
+- `GET /v1/offerings/{id}/registration-options?participantPersonIds=`: the intents an offering
+  takes and a read-only evaluation per participant (customers: public offerings only).
+- The finance checkout operation is recorded as `last_operation_id` on the basket and its pending
+  enrollments (SPK-UX-001).
+
+### Follow-ups (ENR-07 to ENR-09)
+
+- `enrollment.follow_person_merge` (identity.persons_merged): pairs the survivor's and the merged
+  person's live records a partial unique index would have refused for one person and raises one
+  `enrollment.merged_duplicate_entitlement` (owner `program_manager`) per pair; nothing is
+  canceled automatically. `__tests__/follow-ups.spec.ts`.
+- Periodic job `enrollment.reconcile_placements` (60 s, failure owner `program_manager`;
+  technical setting `ENROLLMENT_PLACEMENT_RECONCILE_AFTER_SECONDS`, default 300): a placement
+  assignment whose operation stayed `running` is completed when the roster already holds the
+  player, else its holds are released, the operation fails and
+  `enrollment.placement_interrupted` is raised.
+- Notices composed by enrollment in the handler transaction with the event id as `sourceEventId`
+  (IF-22; one per event, replays compose nothing): `waitlist_offer` (expiry in the facility's local
+  time), `placement` (team name), `registration_outcome`.
+
+### Package G behind capability switches (ENR-10 to ENR-14)
+
+Each capability is off by default per organization and changed only by an administrator with
+audit (K-12). Whether the complex uses it is **pending** (DEC-016 and the decision named below).
+A disabled capability refuses new commitments with 403 `ACCESS_DENIED`, `details.code`
+`CAPABILITY_DISABLED`; reads, cancellations, reversals, suspensions, expiry jobs, staffing
+follow-ups and payment outcomes never check it. Policy values (prices, expiry, credit return,
+benefits, terms, deposits) are configuration in the catalog; nothing here supplies a default.
+
+| Capability          | Decision                            | Gated here                                                                               | Migration  | Tests                                                       |
+| ------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------- |
+| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`)                                       | —          | `package-g-foundation.spec.ts`                              |
+| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal                                           | 0505, 0507 | `package-g-foundation.spec.ts`, `memberships.spec.ts`       |
+| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506 | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
+| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508       | `bookings.spec.ts`                                          |
+| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508       | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
+| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509       | `youth-progression.spec.ts`                                 |
+
+Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
+`startCheckout`) re-checks every live line's capability before any payment attempt ("DEC-016:
+checkout of a held package line after session_packages was disabled is refused before any payment
+attempt"). A plain `rental_request` or `party_request` line is refused with `BOOKING_REQUIRED`;
+membership and package lines are one entitlement (`QUANTITY_ONE`; migration 0505 check). The
+module-local lifecycles are in `enrollment.state-machines.ts` (DEC-093 **proposed**), each
+mirrored by a database transition guard.
+
+- **Session packages (ENR-11, SPK-COND-002, SPK-AT-020).** A confirmed `package_purchase` issues
+  one `package_entitlements` row with the definition's credits and expiry (`none`,
+  `days_after_issue`, `fixed_date` → the next local midnight after it); an unreadable scope issues
+  nothing and raises `enrollment.package_scope_invalid`. `POST /v1/session-bookings` with
+  `packageEntitlementId` books a covered session and records the redemption in one unit of work;
+  the `package_redemptions_apply` trigger (row lock, `redeemed_count <= credits`) is the guarantee:
+  two concurrent redemptions of the last credit leave one booking (PGlite and PostgreSQL). A
+  canceled package booking returns its credit only as the package's approved cancellation policy
+  says (`packageCreditReturn.untilMinutesBeforeStart`: `returned`), else `retained_by_policy`, or
+  `retained_pending_policy` when no policy states it (POL-007, POL-039). Staff reverse a redemption
+  (`POST /v1/package-redemptions/{id}/reverse`, ungated). A canceled purchase revokes the package;
+  future bookings stay and raise `enrollment.revoked_package_has_bookings`. Job
+  `enrollment.expire_package_entitlements`. Reads: `GET /v1/me/package-entitlements`,
+  `GET /v1/package-entitlements`.
+- **Memberships (ENR-12, SPK-COND-001).** The term is set when the membership is confirmed
+  (`offering_dates` in the facility zone or `from_confirmation` plus `lengthDays`; an unreadable
+  term books nothing and raises `enrollment.membership_term_unknown`). Attendance is exactly what
+  the definition states: `none` books nothing, `included_sessions` books covered sessions in the
+  term and outside active suspensions, counted per `week:<first local date>`, `month:<YYYY-MM>` or
+  `term` (`membership_benefit_uses`, `used_count <= limit_count`), `unlimited` books without a
+  count. A membership never admits at check-in by itself: entry admits through the session
+  booking (verified with the entry module). Member-only eligibility (`membershipRequired` in the
+  eligibility policy) is the known reason `MEMBERSHIP_REQUIRED`. Suspensions
+  (`POST /v1/enrollments/{id}/membership-suspensions`, `/membership-suspensions/{id}/end`; active
+  periods never overlap: exclusion constraint), renewal (`POST /v1/enrollments/{id}/renew` adds a
+  linked membership line; nothing is charged until checkout), job `enrollment.membership_lifecycle`
+  (completes ended terms, ends elapsed suspensions, one `renewal_opportunity` notice when the
+  definition sets `renewal.noticeLeadDays`), `GET /v1/me/memberships`.
+- **Rentals and parties (ENR-13, SPK-COND-003).** `POST /v1/bookings` validates the offering's
+  approved booking terms (`BOOKING_TERMS_REQUIRED`), its resources (exact count from the allowed
+  set), guests (party) and equipment (`EQUIPMENT_UNAVAILABLE` through `ASSET_DIRECTORY_PORT`).
+  Instant mode reserves the event or weekly series (every conflict first; a taken slot writes
+  nothing), declares must-be-accepted staffing on every event, and opens the basket line with a
+  server-owned hold on a one-place pool for the booking, all in one unit of work. Request mode
+  (DEC-029, POL-005) only checks availability and raises `enrollment.booking_request_pending`
+  (owner `scheduler`); approval reserves, decline ends it. After payment the booking is
+  `confirmed` only when every staff slot is covered, else `awaiting_staff` with
+  `enrollment.booking_awaiting_staff` (owner `scheduler`); `workforce.assignment_changed`
+  re-evaluates both ways. Hold expiry expires an unpaid booking and cancels its events; cancel
+  releases what the state holds (a paid booking through the enrollment cancellation with the
+  accepted consequence). Job `enrollment.booking_lifecycle` (failure owner `scheduler`):
+  undecided requests expire at their start, an unstaffed booking that starts raises the critical
+  `enrollment.booking_started_unstaffed`, ended bookings complete. Reads:
+  `GET /v1/offerings/{id}/booking-availability`, `/v1/me/bookings`, `/v1/bookings/{id}` (booker or
+  staff; anyone else NOT_FOUND), `/v1/bookings` (staff). `BOOKING_QUERY_IMPL` is provided (IF-36).
+- **Youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006; owner Proposed).** Approved
+  templates (program managers) name skill areas and an ordinal scale; the
+  `assessments_template_guard` trigger refuses an unapproved template, an unknown skill area or a
+  value off the scale. Program managers, or a coach accepted on the offering (IF-34), author
+  assessments of enrolled participants; a program manager other than the author approves them
+  (`assessments_reviewer_differs`): family rows are published, staff-only rows recorded, both then
+  immutable (a correction is a new row). `GET /v1/me/youth-feedback` shows only published family
+  feedback and shared recommendations, never staff or review notes; one `youth_feedback` notice per
+  published assessment or shared recommendation carries no staff content.
+  `GET /v1/participants/{personId}/assessments` is the staff view. A recommendation stores the
+  read-only eligibility of the recommended offering and never holds capacity.
+
+### Test doubles (`__tests__/stage3-doubles.ts`)
+
+Stage-3 port members other work items implement (ID-01, ID-04, CMP-01, SCH-02, WRK-02, WRK-03;
+CAT-02 booking terms) answer through their declared contract in these tests only while the real
+member is still `declaredNotImplemented`; once merged the tests run against the real
+implementation. Typed Package G scopes are written in the shape CAT-02 validates
+(`__tests__/package-g-support.ts`); enrollment parses them again at the point of use
+(`package-g/scopes.ts`) and refuses rather than guesses when they do not match.
+
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
 `enrollment.policy.ts` (`DEFAULT_ENROLLMENT_POLICY`): hold 10 minutes (DEC-027); waitlist offer 48
@@ -264,9 +415,19 @@ are at most 120 days.
 
 ## Known gaps
 
-- SPK-YOUTH-005 (development records) and SPK-YOUTH-006 (progression recommendations) are not
-  implemented: §4.4 names no entity for them and their owning module and criteria are undecided
-  (DEC-003).
+- SPK-YOUTH-005/006 are implemented behind `youth_progression` with enrollment as **proposed**
+  owner; templates, scales, family-visible feedback and recommendation inputs remain **pending**
+  (DEC-003, DEC-054, DEC-055).
+- **Pending on this branch, closed at integration:** the migration module's record-authority test
+  (MIG-00) lists write routes statically, so the stage-3 routes decorated here
+  (`@RecordAuthority`, `@NoRecordAuthority`) are reported until MIG-00 is merged; and
+  `docs/api/openapi.json` is regenerated by the integrator, so the served-vs-documented parity test
+  reports it stale on this branch.
+- A booking's deposit (the first installment of the terms' `installmentPolicyKey`) is finance's
+  checkout concern; enrollment records the terms version on the line (`policyReferences.
+bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
+- Withdrawing staffing requirements on booking cancellation and the real requirement declaration
+  are WRK-02's; on this branch they run through the test double only.
 - `approvalReservesCapacity` (DEC-029) is configuration only; an approval never takes a hold.
   Deposit-before-approval workflows (DEC-030) are not supported.
 - `join_team` and `create_team_entry` enrollments hold roster-place / team-entry capacity (a
@@ -289,7 +450,7 @@ are at most 120 days.
   paid through).
 - Makeups are issued by staff (with the originating session); automatic issue on
   `catalog.session_canceled` awaits the makeup rules (DEC-003). Package-credit redemption
-  (invariant 7 for packages) belongs to finance/entry.
+  (invariant 7 for packages) is enrollment's (ENR-11, above).
 - Pickup organizer assignment (workforce) and attendance (entry) are other modules' records.
 - The money side of a non-`none` transfer or cancellation consequence is finance's. Both are
   recorded here as facts (`cancellation_consequence`, `transfer_consequence`), and a transfer's
@@ -304,7 +465,8 @@ are at most 120 days.
 - A session booking whose hold expired is expired by the timer even while a checkout is running
   (baskets keep their pending enrollments for finance instead); a late booking payment is
   compensated by finance.
-- List endpoints return one page (`nextCursor: null`); cursor pagination is pending.
+- `GET /v1/applications`, `/enrollments`, `/placement-requests` and every `/me/*` list are cursor
+  pages; waitlist, session-booking and makeup lists still return one page.
 
 ## Kernel limitations worked around here
 
@@ -315,3 +477,20 @@ are at most 120 days.
   (`services/catalog-sessions.ts` refuses to run inside one).
 - Competition's `RosterService.changeRoster` is called inside placement's transaction; its unit
   of work joins it (the kernel's `UnitOfWork.run` is reentrant).
+
+## Stage-3 integration notes — verified 2026-10-29
+
+- A booking's deposit is now quoted by finance from the approved installment policy its terms name
+  (finance README, "Stage-3 integration fixes"; journey `spk-cond-003-rentals.spec.ts`): the
+  earlier "**Pending** finance (FIN)" note is resolved; DEC-073 (the deposit rule itself) is still
+  **Pending decision**.
+- Booking staffing requirements are declared and retired through workforce's implementation
+  (WRK-02), not the test double: the earlier "test double only" note is resolved (journey
+  `spk-cond-003-party-booking.spec.ts`: an expired hold retires the requirement, which leaves Today
+  and the uncovered-assignments report).
+- The module now imports `SchedulingModule`, `CommunicationsModule`, `WorkforceModule` and
+  `FacilitiesModule` (bookings, notices, staffing, equipment); the record-authority classification
+  and OpenAPI parity notes above were closed at integration (both tests pass).
+- Journeys over this module: `spk-cond-001` to `spk-cond-003`, `capability-switches`,
+  `spk-reg-008-waitlist-offer`, `spk-youth-005-progression`, `spk-at-023-interrupted-payment` in
+  `apps/api/src/__tests__/journeys/`.

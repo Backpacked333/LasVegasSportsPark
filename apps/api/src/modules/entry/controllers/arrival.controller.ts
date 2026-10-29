@@ -13,6 +13,7 @@ import {
   z,
   type Departure,
   type IssuedPass,
+  type MyPass,
   type Page,
   type Pass,
   type PassScan,
@@ -65,6 +66,17 @@ export class PassesController {
     @CorrelationId() correlationId: string,
   ): Promise<Pass> {
     return this.passes.revoke(principal, params.id, body, correlationId);
+  }
+}
+
+/** The caller's own passes (ENT-01, SPK-ENTRY-002, SCR-C-05). */
+@Controller('me')
+export class MePassesController {
+  constructor(private readonly passes: PassesService) {}
+
+  @Get('passes')
+  mine(@CurrentPrincipal() principal: Principal): Promise<MyPass[]> {
+    return this.passes.mine(principal);
   }
 }
 

@@ -10,24 +10,35 @@ import {
   type CreateFixtureInput,
   type DomainEvent,
   type Event,
-  type Fixture,
   type FixtureAvailabilityResponse,
   type FixtureCommandResult,
   type FixtureDetail,
+  type FixtureResponse,
   type FixtureSchedule,
+  type FixtureVenue,
   type ListSeasonFixturesQuery,
   type Page,
   type Principal,
   type RecordAvailabilityInput,
+  type RosterPlayingStatus,
+  type SeasonFixture,
   type UpdateFixtureInput,
 } from '@sportspark/contracts';
-import { json, type Db, type FixtureStatus, type FixturesTable } from '@sportspark/db';
+import {
+  isUniqueViolation,
+  json,
+  type Db,
+  type FixtureStatus,
+  type FixturesTable,
+  type FixtureVenueJson,
+} from '@sportspark/db';
 import { sql, type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
   OperationsService,
   Outbox,
   UnitOfWork,
@@ -51,6 +62,7 @@ import {
   loadSeasonRow,
   rosterRowsEffectiveAt,
   statusAt,
+  teamNamesOf,
   type Reader,
 } from '../competition.queries';
 import {
@@ -103,6 +115,7 @@ export class FixturesService implements FixturePort {
     private readonly operations: OperationsService,
     @Inject(EVENT_SCHEDULING_PORT) private readonly scheduling: EventSchedulingPort,
     private readonly people: PeopleService,
+    private readonly facilities: FacilityDirectory,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -473,7 +486,27 @@ export class FixturesService implements FixturePort {
           details: { step: plan.step, outcome: 'failed', code: error.code },
         });
       });
-      return { failure: error };
+      // §4.9, §4.12: the fixture and its failed operation are committed, so the refusal names
+      // them; otherwise a caller told only "conflict" could not find the unscheduled fixture and
+      // would create a second one instead of scheduling this one elsewhere.
+      const base =
+        error.details !== null && typeof error.details === 'object' && !Array.isArray(error.details)
+          ? (error.details as Record<string, unknown>)
+          : error.details === undefined
+            ? {}
+            : { reason: error.details };
+      return {
+        failure: new DomainError(error.code, error.message, {
+          nextAction: error.nextAction,
+          details: {
+            ...base,
+            fixtureId: fixture.id,
+            operationId,
+            fixtureStatus: fixture.status,
+          },
+          cause: error,
+        }),
+      };
     }
     const scheduledNow = event !== null && event.status === 'published';
     const result = await this.uow.run(async ({ trx }): Promise<FixtureCommandResult> => {
@@ -564,38 +597,67 @@ export class FixturesService implements FixturePort {
       ) {
         throw errors.invalidTransition('Fixture', fixture.status, 'respond_availability');
       }
+      // CMP-04 (SPK-CAP-003): answers close at kickoff until a rule set defines a cutoff (DEC-002).
+      if (fixture.scheduled_start && now.getTime() >= new Date(fixture.scheduled_start).getTime()) {
+        throw availabilityClosed(fixture);
+      }
       const at = fixture.scheduled_start ? new Date(fixture.scheduled_start) : now;
       const teamEntryId = await this.sideOf(trx, organizationId, fixture, personId, at);
       if (!teamEntryId) {
         throw errors.validation('The person is not on a roster of this fixture.', { personId });
       }
-      const id = newId();
       const respondedAt = input.state === 'no_response' ? null : now;
-      const row = await trx
-        .insertInto('availability_responses')
-        .values({
-          id,
-          organization_id: organizationId,
-          fixture_id: fixtureId,
-          team_entry_id: teamEntryId,
-          person_id: personId,
-          state: input.state,
-          responded_at: respondedAt,
-          responded_by: json(snapshotActor(principal)),
-          note: input.note ?? null,
-        })
-        .onConflict((oc) =>
-          oc.columns(['organization_id', 'fixture_id', 'person_id']).doUpdateSet({
-            team_entry_id: teamEntryId,
-            state: input.state,
-            responded_at: respondedAt,
-            responded_by: json(snapshotActor(principal)),
-            note: input.note ?? null,
-            revision: sql`availability_responses.revision + 1`,
-          }),
-        )
-        .returningAll()
-        .executeTakeFirstOrThrow();
+      const values = {
+        team_entry_id: teamEntryId,
+        state: input.state,
+        responded_at: respondedAt,
+        responded_by: json(snapshotActor(principal)),
+        note: input.note ?? null,
+      };
+      // CMP-04 (§4.9): the answer is changed only from the revision the caller saw.
+      const existing = await trx
+        .selectFrom('availability_responses')
+        .select(['id', 'revision'])
+        .where('organization_id', '=', organizationId)
+        .where('fixture_id', '=', fixtureId)
+        .where('person_id', '=', personId)
+        .forUpdate()
+        .executeTakeFirst();
+      let row;
+      if (existing) {
+        assertExpectedRevision(input.expectedRevision, existing.revision);
+        row = await trx
+          .updateTable('availability_responses')
+          .set({ ...values, revision: existing.revision + 1 })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', existing.id)
+          .where('revision', '=', existing.revision)
+          .returningAll()
+          .executeTakeFirst();
+        if (!row) throw errors.staleRevision(input.expectedRevision ?? existing.revision, 0);
+      } else {
+        // No answer yet: a caller that names a revision saw one that no longer exists.
+        if (input.expectedRevision !== undefined) {
+          throw errors.staleRevision(input.expectedRevision, 0);
+        }
+        try {
+          row = await trx
+            .insertInto('availability_responses')
+            .values({
+              id: newId(),
+              organization_id: organizationId,
+              fixture_id: fixtureId,
+              person_id: personId,
+              ...values,
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        } catch (error) {
+          // A concurrent first answer for the person committed meanwhile: read it and retry.
+          if (isUniqueViolation(error)) throw errors.staleRevision(0, 1);
+          throw error;
+        }
+      }
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -627,14 +689,15 @@ export class FixturesService implements FixturePort {
     const now = this.clock.now();
     const at = fixture.scheduled_start ? new Date(fixture.scheduled_start) : now;
     await this.authorizeRead(principal, fixture, at);
-    return this.detail(executorFor(this.db), organizationId, fixture, at, principal.personId);
+    return this.detail(executorFor(this.db), principal, fixture);
   }
 
+  /** CMP-01: the season's fixtures with both teams' names (one join per page). */
   async listForSeason(
     principal: Principal,
     seasonId: string,
     query: ListSeasonFixturesQuery,
-  ): Promise<Page<Fixture>> {
+  ): Promise<Page<SeasonFixture>> {
     const organizationId = organizationOf(principal);
     const season = await loadSeasonRow(executorFor(this.db), organizationId, seasonId);
     if (!season) throw errors.notFound('season', seasonId);
@@ -670,7 +733,17 @@ export class FixturesService implements FixturePort {
         : q.where(sql<boolean>`(scheduled_start is null and id > ${cursor.id}::uuid)`);
     }
     const rows = await q.execute();
-    const items = rows.slice(0, query.limit).map(toFixture);
+    const page = rows.slice(0, query.limit);
+    const names = await teamNamesOf(
+      executorFor(this.db),
+      organizationId,
+      page.flatMap((r) => [r.home_entry_id, r.away_entry_id]),
+    );
+    const items = page.map((row): SeasonFixture => ({
+      ...toFixture(row),
+      homeTeamName: names.get(row.home_entry_id) ?? 'Unknown team',
+      awayTeamName: row.away_entry_id ? (names.get(row.away_entry_id) ?? 'Unknown team') : null,
+    }));
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
     return {
       items,
@@ -687,6 +760,72 @@ export class FixturesService implements FixturePort {
   // scheduling.event_changed handler: keep the copied instants and status in sync (idempotent).
   // -------------------------------------------------------------------------------------------
   async onSchedulingEventChanged(
+    event: DomainEvent<EventChangedPayload>,
+    ctx: HandlerContext,
+  ): Promise<void> {
+    await this.syncSchedule(event, ctx);
+    await this.projectVenue(event, ctx);
+  }
+
+  /**
+   * CMP-04 (SPK-SCHED-008, §4.12): the venue read model follows the fixture's CURRENT event. A
+   * change of that event replaces it only when its revision is newer than the one the copy came
+   * from, so a late or replayed delivery never overwrites a newer venue; a fixture whose event was
+   * unlinked (canceled, moved to another event) drops the old event's venue. The copy is not an
+   * edit of the fixture, so the fixture's revision is not bumped.
+   */
+  private async projectVenue(
+    event: DomainEvent<EventChangedPayload>,
+    ctx: HandlerContext,
+  ): Promise<void> {
+    const payload = event.payload;
+    if (payload.sourceType !== 'fixture' || !payload.sourceId) return;
+    const fixture = await this.loadFixture(ctx.trx, event.organizationId, payload.sourceId, {
+      forUpdate: true,
+    });
+    if (!fixture) return;
+    const venue = fixture.venue as FixtureVenueJson | null;
+    if (fixture.scheduling_event_id !== payload.eventId) {
+      if (venue && venue.eventId === payload.eventId && fixture.scheduling_event_id === null) {
+        await ctx.trx
+          .updateTable('fixtures')
+          .set({ venue: null, venue_facility_id: null, venue_event_revision: null })
+          .where('organization_id', '=', fixture.organization_id)
+          .where('id', '=', fixture.id)
+          .execute();
+      }
+      return;
+    }
+    const after = payload.after;
+    const revision = payload.revision;
+    if (!after || revision === undefined) return;
+    if (
+      venue &&
+      venue.eventId === payload.eventId &&
+      fixture.venue_event_revision !== null &&
+      fixture.venue_event_revision >= revision
+    ) {
+      return;
+    }
+    const next: FixtureVenueJson = {
+      eventId: payload.eventId,
+      facilityId: after.facilityId,
+      timezone: after.timezone,
+      resources: after.resources.map((r) => ({ id: r.id, name: r.name })),
+    };
+    await ctx.trx
+      .updateTable('fixtures')
+      .set({
+        venue: json(next),
+        venue_facility_id: after.facilityId,
+        venue_event_revision: revision,
+      })
+      .where('organization_id', '=', fixture.organization_id)
+      .where('id', '=', fixture.id)
+      .execute();
+  }
+
+  private async syncSchedule(
     event: DomainEvent<EventChangedPayload>,
     ctx: HandlerContext,
   ): Promise<void> {
@@ -882,7 +1021,7 @@ export class FixturesService implements FixturePort {
   // -------------------------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------------------------
-  private async loadFixture(
+  async loadFixture(
     db: Reader,
     organizationId: string,
     id: string,
@@ -1066,13 +1205,16 @@ export class FixturesService implements FixturePort {
     throw errors.protectedNotFound('fixture');
   }
 
-  private async detail(
-    db: Reader,
-    organizationId: string,
-    fixture: FixtureRow,
-    at: Date,
-    personId: string | null,
-  ): Promise<FixtureDetail> {
+  /**
+   * The fixture as its authorized reader sees it (the caller has authorized the read): both sides
+   * with availability summaries, the venue (CMP-04), the viewer's roster status at kickoff and the
+   * answers of the viewer and of every rostered person they hold `register` over.
+   */
+  async detail(db: Reader, principal: Principal, fixture: FixtureRow): Promise<FixtureDetail> {
+    const organizationId = fixture.organization_id;
+    const personId = principal.personId;
+    const at = fixture.scheduled_start ? new Date(fixture.scheduled_start) : this.clock.now();
+    const rostered = new Map<string, RosterPlayingStatus>();
     const side = async (entryId: string) => {
       const entry = await db
         .selectFrom('team_entries')
@@ -1088,6 +1230,10 @@ export class FixturesService implements FixturePort {
       const roster = (await rosterRowsEffectiveAt(db, organizationId, entryId, at)).filter(
         (r) => statusAt(r) !== null,
       );
+      for (const row of roster) {
+        const status = statusAt(row);
+        if (status && !rostered.has(row.person_id)) rostered.set(row.person_id, status);
+      }
       const { summary, mine } = await this.summaryOf(
         db,
         organizationId,
@@ -1108,7 +1254,66 @@ export class FixturesService implements FixturePort {
       home: home.side,
       away: away?.side ?? null,
       myResponse: home.mine ?? away?.mine ?? null,
+      venue: await this.venueOf(db, fixture),
+      rosterStatus: personId ? (rostered.get(personId) ?? null) : null,
+      responses: await this.responsesFor(db, principal, fixture, rostered),
     };
+  }
+
+  /** CMP-04: the copied venue with the facility's current name (FacilityDirectory, IF-03). */
+  async venueOf(
+    db: Reader,
+    fixture: Pick<FixtureRow, 'organization_id' | 'venue' | 'venue_facility_id'>,
+  ): Promise<FixtureVenue | null> {
+    const venue = fixture.venue as FixtureVenueJson | null;
+    if (!venue || !fixture.venue_facility_id) return null;
+    const facility = (
+      await this.facilities.describe(fixture.organization_id, [fixture.venue_facility_id], db)
+    ).get(fixture.venue_facility_id);
+    if (!facility) return null;
+    return {
+      facilityId: facility.id,
+      facilityName: facility.name,
+      timezone: venue.timezone,
+      resources: venue.resources.map((r) => ({ id: r.id, name: r.name })),
+    };
+  }
+
+  /**
+   * CMP-04 (SPK-CAP-003): the answers the viewer may see and change: their own and those of every
+   * rostered person they hold `register` over (customerSubjects of the RSVP action, IF-02). A
+   * person without an answer reads `no_response` with a null revision.
+   */
+  private async responsesFor(
+    db: Reader,
+    principal: Principal,
+    fixture: FixtureRow,
+    rostered: ReadonlyMap<string, RosterPlayingStatus>,
+  ): Promise<FixtureResponse[]> {
+    if (!principal.personId || rostered.size === 0) return [];
+    const subjects = (
+      await this.authorization.customerSubjects(principal, CompetitionActions.respondAvailability)
+    ).filter((id) => rostered.has(id));
+    if (subjects.length === 0) return [];
+    const rows = await db
+      .selectFrom('availability_responses')
+      .select(['person_id', 'state', 'revision', 'responded_at'])
+      .where('organization_id', '=', fixture.organization_id)
+      .where('fixture_id', '=', fixture.id)
+      .where('person_id', 'in', subjects)
+      .execute();
+    const byPerson = new Map(rows.map((r) => [r.person_id, r]));
+    return subjects.map((personId) => {
+      const row = byPerson.get(personId);
+      return row
+        ? {
+            personId,
+            state: row.state,
+            revision: row.revision,
+            respondedAt: row.responded_at ? new Date(row.responded_at).toISOString() : null,
+          }
+        : { personId, state: 'no_response' as const, revision: null, respondedAt: null };
+    });
   }
 
   private async summaryOf(
@@ -1154,4 +1359,17 @@ function commitmentsOf(fixture: FixtureRow) {
     });
   }
   return commitments;
+}
+
+/** CMP-04 / CMP-14: availability answers and requests close at kickoff (INVALID_TRANSITION). */
+export function availabilityClosed(fixture: { id: string; scheduled_start: Date | string | null }) {
+  return new DomainError('INVALID_TRANSITION', 'Availability for this fixture closed at kickoff.', {
+    details: {
+      code: 'AVAILABILITY_CLOSED',
+      fixtureId: fixture.id,
+      scheduledStart: fixture.scheduled_start
+        ? new Date(fixture.scheduled_start).toISOString()
+        : null,
+    },
+  });
 }

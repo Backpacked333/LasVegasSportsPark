@@ -58,6 +58,11 @@ export class TemporaryAccessService {
     private readonly memberships: StaffMembershipsService,
   ) {}
 
+  /** WRK-06: hours access lasts after the activity; unconfigured, it ends with the activity. */
+  private trailHours(): number {
+    return this.policy.temporaryAccess.trailHours ?? 0;
+  }
+
   /** Whether accepting this assignment grants access (temporary or substitute work with roles to grant). */
   required(row: Pick<AssignmentRow, 'engagement' | 'kind'>): boolean {
     return row.engagement !== 'regular' && this.policy.temporaryAccess.roles[row.kind].length > 0;
@@ -82,7 +87,7 @@ export class TemporaryAccessService {
     }
     const now = this.clock.now();
     const from = now;
-    const until = addHours(new Date(row.scheduled_end), this.policy.temporaryAccess.trailHours);
+    const until = addHours(new Date(row.scheduled_end), this.trailHours());
     let membershipId: string;
     try {
       const membership = await this.uow.run(() =>
@@ -264,7 +269,7 @@ export class TemporaryAccessService {
   ): Promise<void> {
     if (row.access_status !== 'granted' || !row.access_membership_id) return;
     const membershipId = row.access_membership_id;
-    const until = addHours(activityEnd, this.policy.temporaryAccess.trailHours);
+    const until = addHours(activityEnd, this.trailHours());
     if (row.access_until && new Date(row.access_until).getTime() === until.getTime()) return;
     const from = row.access_from ? new Date(row.access_from) : this.clock.now();
     if (until.getTime() <= from.getTime()) {

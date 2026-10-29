@@ -7,7 +7,7 @@ import {
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { CLOCK, DATABASE, currentTransaction, type Clock, type Trx } from '../../../kernel';
-import { PeopleService } from '../../identity';
+import { PeopleService, PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import {
   loadEntryContext,
   openRosterRow,
@@ -60,6 +60,7 @@ export class EligibilityService implements EligibilityPort {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(SUSPENSION_CHECK_PORT) private readonly suspensions: SuspensionCheckPort,
     private readonly people: PeopleService,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly directory: PersonDirectoryPort,
   ) {}
 
   async evaluatePlayer(
@@ -99,6 +100,9 @@ export class EligibilityService implements EligibilityPort {
           : r,
       );
 
+    // CMP-08 (SPK-IAM-007, IF-09): rows recorded under a person merged into this one count as theirs.
+    const resolving = await this.directory.personIdsResolvingTo(organizationId, personId, trx);
+    const personIds = [...new Set([personId, ...resolving])];
     const person = await this.people.loadPerson(db, organizationId, personId);
     if (!person) {
       add({
@@ -195,10 +199,16 @@ export class EligibilityService implements EligibilityPort {
       }
     }
 
-    // Existing membership on this entry.
-    const open = await openRosterRow(db, organizationId, entry.id, personId);
+    // Existing membership on this entry (under the person's id or a merged one).
+    let open = await openRosterRow(db, organizationId, entry.id, personId);
+    for (const mergedId of personIds) {
+      if (open !== null && statusAt(open) !== null) break;
+      if (mergedId === personId) continue;
+      const row = await openRosterRow(db, organizationId, entry.id, mergedId);
+      if (row && statusAt(row) !== null) open = row;
+    }
     const openPlaying = open !== null && statusAt(open) !== null;
-    if (openPlaying && !existing) {
+    if (open !== null && openPlaying && !existing) {
       add({
         code: 'already_on_roster',
         severity: 'blocking',
@@ -287,7 +297,7 @@ export class EligibilityService implements EligibilityPort {
     const others = await personSeasonMemberships(
       db,
       organizationId,
-      personId,
+      personIds,
       season.id,
       at,
       entry.id,
@@ -370,7 +380,7 @@ export class EligibilityService implements EligibilityPort {
 
     // Conflicting participation for a specific fixture (SPK-CAP-004).
     if (options.fixtureId) {
-      await this.fixtureConflicts(db, context, personId, options.fixtureId, add);
+      await this.fixtureConflicts(db, context, personIds, options.fixtureId, add);
     }
 
     return this.result(context, personId, at, membershipStatus, reasons);
@@ -379,7 +389,7 @@ export class EligibilityService implements EligibilityPort {
   private async fixtureConflicts(
     db: Reader,
     context: EntryContext,
-    personId: string,
+    personIds: readonly string[],
     fixtureId: string,
     add: (r: ReasonInput) => void,
   ): Promise<void> {
@@ -396,7 +406,7 @@ export class EligibilityService implements EligibilityPort {
       fixture.home_entry_id === context.entry.id ? fixture.away_entry_id : fixture.home_entry_id;
     if (opposing) {
       const rows = await rosterRowsEffectiveAt(db, organizationId, opposing, at);
-      if (rows.some((r) => r.person_id === personId && statusAt(r) !== null)) {
+      if (rows.some((r) => personIds.includes(r.person_id) && statusAt(r) !== null)) {
         add({
           code: 'opposing_roster',
           severity: 'blocking',
@@ -432,7 +442,7 @@ export class EligibilityService implements EligibilityPort {
         .where('f.status', '=', 'scheduled')
         .where('f.scheduled_start', '<', fixture.scheduled_end)
         .where('f.scheduled_end', '>', fixture.scheduled_start)
-        .where('rm.person_id', '=', personId)
+        .where('rm.person_id', 'in', [...personIds])
         .where('rm.status', 'in', ['active', 'guest', 'substitute', 'removed'])
         .execute();
       for (const row of conflicts) {

@@ -1,6 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { systemPrincipal } from '@sportspark/contracts';
-import { CLOCK, OperationalExceptions, UnitOfWork, type Clock, type Trx } from '../../../kernel';
+import {
+  CLOCK,
+  FacilityDirectory,
+  OperationalExceptions,
+  UnitOfWork,
+  type Clock,
+  type Trx,
+} from '../../../kernel';
 import {
   resolveLocal,
   type FixtureObligation,
@@ -31,6 +38,7 @@ export class FixtureObligationsService implements FixtureObligationPort {
     private readonly uow: UnitOfWork,
     private readonly exceptions: OperationalExceptions,
     @Inject(CLOCK) private readonly clock: Clock,
+    private readonly facilities: FacilityDirectory,
   ) {}
 
   async verify(check: FixtureObligationCheck): Promise<FixtureObligation[]> {
@@ -175,13 +183,20 @@ export class FixtureObligationsService implements FixtureObligationPort {
       });
       return;
     }
-    const open = await trx
-      .selectFrom('operational_exceptions')
-      .select('id')
-      .where('organization_id', '=', check.organizationId)
-      .where('dedupe_key', '=', dedupeKey)
-      .where('status', 'in', ['open', 'acknowledged'])
-      .executeTakeFirst();
+    // CMP-11 (§4.2): the season's open exception through the kernel's reads (IF-29).
+    const open = (
+      await this.exceptions.list(
+        check.organizationId,
+        {
+          statuses: ['open', 'acknowledged'],
+          category: INCOMPLETE_SEASON.category,
+          affectedType: 'season',
+          affectedId: seasonId,
+          limit: 1,
+        },
+        trx,
+      )
+    ).items[0];
     if (open) {
       await this.exceptions.transition(
         trx,
@@ -203,12 +218,10 @@ export class FixtureObligationsService implements FixtureObligationPort {
     facilityId: string,
     endsOn: string,
   ): Promise<Date | null> {
-    const facility = await db
-      .selectFrom('facilities')
-      .select('timezone')
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', facilityId)
-      .executeTakeFirst();
+    // CMP-11 (§4.2): the facility's time zone through the kernel's directory (IF-03).
+    const facility = (await this.facilities.describe(organizationId, [facilityId], db)).get(
+      facilityId,
+    );
     if (!facility) return null;
     return resolveLocal(addDays(endsOn, 1), '00:00', facility.timezone)?.instant ?? null;
   }

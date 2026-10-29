@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { PolicyVersion, QuotePolicyReferences } from '@sportspark/contracts';
+import { errors, type PolicyVersion, type QuotePolicyReferences } from '@sportspark/contracts';
 import type { Trx } from '../../../kernel';
 import { POLICY_PORT, type PolicyPort } from '../../catalog';
 import {
@@ -115,6 +115,51 @@ export class FinancePolicyResolver {
         defaults,
       },
     };
+  }
+
+  /**
+   * §3.16, POL-040 (DEC-073 pending): the deposit plan a rental's or party's approved booking terms
+   * name (`installmentPolicyKey`): the approved installment policy version of that key effective at
+   * `at`, read for the two values a deposit schedule needs, `installments` (the number of payments,
+   * the first one due at checkout) and `intervalDays`. Nothing is assumed: a missing version or a
+   * missing value refuses the quote (no engineering default stands in for a deposit rule).
+   */
+  async bookingDeposit(
+    organizationId: string,
+    key: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<{ policyVersionId: string; count: number; intervalDays: number }> {
+    const version = await this.policies.currentPolicyVersion(
+      organizationId,
+      'installment',
+      key,
+      at,
+      trx,
+    );
+    if (!version) {
+      throw errors.resourceConflict(
+        'The booking terms name a deposit plan that has no approved version in effect.',
+        { code: 'BOOKING_DEPOSIT_POLICY_MISSING', installmentPolicyKey: key },
+      );
+    }
+    const count = positiveInt(version.content['installments']);
+    const intervalDays = positiveInt(version.content['intervalDays']);
+    if (!count || count < 2 || count > 24 || !intervalDays) {
+      throw errors.resourceConflict(
+        'The deposit plan does not state its number of installments (2 to 24) and their interval.',
+        {
+          code: 'BOOKING_DEPOSIT_POLICY_INCOMPLETE',
+          installmentPolicyKey: key,
+          policyVersionId: version.id,
+          missing: [
+            ...(!count || count < 2 || count > 24 ? ['installments'] : []),
+            ...(!intervalDays ? ['intervalDays'] : []),
+          ],
+        },
+      );
+    }
+    return { policyVersionId: version.id, count, intervalDays };
   }
 
   private async recorded(

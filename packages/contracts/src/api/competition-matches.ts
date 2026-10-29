@@ -1,12 +1,18 @@
 import { z } from '../zod';
 import { Revision, withCommandMeta } from '../commands';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
+import { PageRequestSchema, pageSchema } from '../pagination';
 import { StaffRole } from '../principal';
 import { Instant } from '../time';
 import {
   EligibilitySeveritySchema,
+  FixtureDetailSchema,
   FixtureStatusSchema,
+  FixtureVenueSchema,
+  RosterPlayingStatusSchema,
+  TeamEntrySchema,
   TeamEntryStatusSchema,
+  TeamRoleSchema,
   TiebreakerSchema,
 } from './competition';
 import { ActorSnapshotSchema } from './facilities';
@@ -159,6 +165,8 @@ export const ResultRevisionSchema = z
     homeScore: z.number().int().nullable(),
     awayScore: z.number().int().nullable(),
     forfeitingEntryId: z.uuid().nullable(),
+    /** CMP-10: the shootout winner of a drawn playoff game (rule set `tiebreak.playoff` shootout). */
+    shootoutWinnerEntryId: z.uuid().nullable(),
     details: ResultDetailsSchema,
     submittedBy: ActorSnapshotSchema,
     submittedAt: Instant.nullable(),
@@ -183,6 +191,11 @@ const resultShape = {
   awayScore: Score.optional(),
   /** Required for a forfeit: the entry that forfeited. */
   forfeitingEntryId: z.uuid().optional(),
+  /**
+   * CMP-10: a drawn playoff game decided by a shootout names the winning side; only when the
+   * season's rule set says `tiebreak.playoff: shootout` and the game is in a bracket node.
+   */
+  shootoutWinnerEntryId: z.uuid().optional(),
   cards: z.array(ResultCardSchema).max(60).optional(),
   incidents: z.array(ResultIncidentInputSchema).max(20).optional(),
   abandonment: AbandonmentDetailsSchema.optional(),
@@ -196,6 +209,7 @@ interface ResultShapeOutput {
   homeScore?: number | undefined;
   awayScore?: number | undefined;
   forfeitingEntryId?: string | undefined;
+  shootoutWinnerEntryId?: string | undefined;
   abandonment?: AbandonmentDetails | undefined;
 }
 
@@ -214,7 +228,18 @@ function refineResult<T extends z.ZodType<ResultShapeOutput>>(schema: T): T {
     .refine((b) => b.classification !== 'abandoned' || b.abandonment !== undefined, {
       message: 'an abandonment carries its details',
       path: ['abandonment'],
-    });
+    })
+    .refine(
+      (b) =>
+        b.shootoutWinnerEntryId === undefined ||
+        (b.classification === 'completed' &&
+          b.homeScore !== undefined &&
+          b.homeScore === b.awayScore),
+      {
+        message: 'a shootout winner is named only for a completed game with equal scores',
+        path: ['shootoutWinnerEntryId'],
+      },
+    );
 }
 
 /**
@@ -352,6 +377,9 @@ export const BracketNodeSchema = z
     sourceRule: z.object({ home: BracketSourceSchema, away: BracketSourceSchema }),
     homeEntryId: z.uuid().nullable(),
     awayEntryId: z.uuid().nullable(),
+    /** CMP-01: the slot holders' team names (null while the slot is empty). */
+    homeTeamName: z.string().nullable(),
+    awayTeamName: z.string().nullable(),
     fixtureId: z.uuid().nullable(),
     winnerEntryId: z.uuid().nullable(),
     published: z.boolean(),
@@ -383,6 +411,38 @@ export const PublishBracketNodeBody = withCommandMeta({})
 export type PublishBracketNodeInput = z.infer<typeof PublishBracketNodeBody>;
 
 export const ListBracketNodesQuery = z.object({ divisionId: z.uuid().optional() });
+
+/**
+ * CMP-10 / CMP-15 (SPK-COMP-001 bracket progression): seed an unpublished node's slots from the
+ * standings of a division, or of a tournament pool, once every fixture of that table has an
+ * official result. An unresolved tie at the rank refuses the seeding with the tied entries named.
+ */
+export const StandingsSeedSourceSchema = z
+  .object({
+    divisionId: z.uuid().optional(),
+    poolId: z.uuid().optional(),
+    rank: z.number().int().min(1).max(64),
+    slot: z.enum(['home', 'away']),
+  })
+  .refine((s) => (s.divisionId === undefined) !== (s.poolId === undefined), {
+    message: 'give exactly one of divisionId or poolId',
+    path: ['divisionId'],
+  })
+  .openapi('StandingsSeedSource');
+export type StandingsSeedSource = z.infer<typeof StandingsSeedSourceSchema>;
+
+export const SeedFromStandingsBody = withCommandMeta({
+  sources: z
+    .array(StandingsSeedSourceSchema)
+    .min(1)
+    .max(2)
+    .refine((list) => new Set(list.map((s) => s.slot)).size === list.length, {
+      message: 'each slot is seeded once',
+    }),
+})
+  .extend({ expectedRevision: Revision })
+  .openapi('SeedFromStandingsRequest');
+export type SeedFromStandingsInput = z.infer<typeof SeedFromStandingsBody>;
 
 // ---------------------------------------------------------------------------------------------
 // Fixture generation (SPK-FIX-001..005)
@@ -461,6 +521,10 @@ export const FixtureSpecificationSchema = z
     requiredResourceIds: z.array(z.uuid()),
     playoffStructure: PlayoffStructureSchema.nullable(),
     fairnessPreferences: z.array(FairnessPreferenceSchema),
+    /** CMP-15 compressed play: games a team may play on one facility-local day (null = no cap). */
+    maxGamesPerTeamPerDay: z.number().int().nullable(),
+    /** CMP-15: officials each game needs, for the per-day demand report (null = not stated). */
+    officialsPerGame: z.number().int().nullable(),
     revision: Revision,
     createdAt: Instant,
     updatedAt: Instant,
@@ -489,10 +553,49 @@ export const CreateFixtureSpecificationBody = withCommandMeta({
   requiredResourceIds: z.array(z.uuid()).min(1).max(20),
   playoffStructure: PlayoffStructureSchema.optional(),
   fairnessPreferences: z.array(FairnessPreferenceSchema).max(20).default([]),
+  /** CMP-15 compressed play (tournaments): optional cap of games per team per day. */
+  maxGamesPerTeamPerDay: z.number().int().min(1).max(20).optional(),
+  /** CMP-15: officials each game needs (reported per day, assigned in workforce). */
+  officialsPerGame: z.number().int().min(1).max(10).optional(),
 })
   .refine((b) => b.startsOn <= b.endsOn, { message: 'startsOn must not be after endsOn' })
   .openapi('CreateFixtureSpecificationRequest');
 export type CreateFixtureSpecificationInput = z.infer<typeof CreateFixtureSpecificationBody>;
+
+/**
+ * CMP-12 (SPK-FIX-001): change a specification while no generation run from it sits in an open
+ * scheduling draft (else INVALID_TRANSITION `SPECIFICATION_IN_USE`). Omitted fields keep their
+ * value; nullable fields take null to clear.
+ */
+export const UpdateFixtureSpecificationBody = withCommandMeta({
+  name: z.string().trim().min(1).max(200).optional(),
+  facilityId: z.uuid().optional(),
+  gamesPerTeam: z.number().int().min(1).max(100).optional(),
+  opponentFrequency: z.number().int().min(1).max(10).optional(),
+  startsOn: DateOnly.optional(),
+  endsOn: DateOnly.optional(),
+  blackouts: z.array(BlackoutSchema).max(100).optional(),
+  byesAllowed: z.boolean().optional(),
+  minimumRestMinutes: z
+    .number()
+    .int()
+    .min(0)
+    .max(14 * 24 * 60)
+    .optional(),
+  allowedStartTimes: z.array(AllowedStartTimeSchema).min(1).max(200).optional(),
+  matchDurationMinutes: z.number().int().min(10).max(300).optional(),
+  requiredResourceIds: z.array(z.uuid()).min(1).max(20).optional(),
+  playoffStructure: PlayoffStructureSchema.nullable().optional(),
+  fairnessPreferences: z.array(FairnessPreferenceSchema).max(20).optional(),
+  maxGamesPerTeamPerDay: z.number().int().min(1).max(20).nullable().optional(),
+  officialsPerGame: z.number().int().min(1).max(10).nullable().optional(),
+})
+  .extend({ expectedRevision: Revision })
+  .refine((b) => !b.startsOn || !b.endsOn || b.startsOn <= b.endsOn, {
+    message: 'startsOn must not be after endsOn',
+  })
+  .openapi('UpdateFixtureSpecificationRequest');
+export type UpdateFixtureSpecificationInput = z.infer<typeof UpdateFixtureSpecificationBody>;
 
 export const SearchSettingsSchema = z
   .object({
@@ -519,6 +622,9 @@ export const ProposedGameSchema = z
     homeEntryId: z.uuid(),
     /** Null for a bye. */
     awayEntryId: z.uuid().nullable(),
+    /** CMP-01: team names, read with the run (null for a bye). */
+    homeTeamName: z.string(),
+    awayTeamName: z.string().nullable(),
     fixtureId: z.uuid().nullable(),
     scheduledStart: Instant.nullable(),
     scheduledEnd: Instant.nullable(),
@@ -601,6 +707,22 @@ export const SolverExplanationSchema = z
     stoppedBy: z.enum(['exhausted', 'candidate_limit', 'time_limit', 'proof']),
     /** Why the outcome is what it is, in plain words (SPK-AT-011). */
     summary: z.string(),
+    /**
+     * CMP-15 (compressed play, SPK-FIX-004): per facility-local day, the games proposed, the most
+     * games running at once, and the official assignments they need (null when the specification
+     * states no officials per game). Absent on runs recorded before this report existed.
+     */
+    dailyDemand: z
+      .array(
+        z.object({
+          date: DateOnly,
+          games: z.number().int(),
+          peakConcurrentGames: z.number().int(),
+          officialAssignments: z.number().int().nullable(),
+          peakConcurrentOfficials: z.number().int().nullable(),
+        }),
+      )
+      .optional(),
   })
   .openapi('SolverExplanation');
 export type SolverExplanation = z.infer<typeof SolverExplanationSchema>;
@@ -676,6 +798,111 @@ export const FixtureReadinessSchema = z
   .openapi('FixtureReadiness');
 export type FixtureReadiness = z.infer<typeof FixtureReadinessSchema>;
 
+/** CMP-01 (SPK-READY-001): at most this many fixtures are evaluated by one season readiness read. */
+export const SEASON_READINESS_MAX_FIXTURES = 100;
+
+export const SeasonReadinessQuery = z.object({
+  /** Fixtures whose scheduled end is after `from`. */
+  from: Instant.optional(),
+  /** Fixtures whose scheduled start is before `to`. */
+  to: Instant.optional(),
+});
+export type SeasonReadinessQuery = z.infer<typeof SeasonReadinessQuery>;
+
+/** Counts only: unknown evidence stays unknown, never ready (SPK-READY-002). */
+export const ReadinessCountsSchema = z
+  .object({
+    status: ReadinessStatusSchema,
+    blockingCount: z.number().int(),
+    unknownCount: z.number().int(),
+  })
+  .openapi('ReadinessCounts');
+export type ReadinessCounts = z.infer<typeof ReadinessCountsSchema>;
+
+export const SeasonReadinessSchema = z
+  .object({
+    seasonId: z.uuid(),
+    evaluatedAt: Instant,
+    items: z.array(ReadinessCountsSchema.extend({ fixtureId: z.uuid() })),
+  })
+  .openapi('SeasonReadiness');
+export type SeasonReadiness = z.infer<typeof SeasonReadinessSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// My teams and my fixtures (CMP-02, SPK-CAP-001, SCR-C-04, SCR-C-21)
+// ---------------------------------------------------------------------------------------------
+export const MyTeamEntriesQuery = z.object({ status: TeamEntryStatusSchema.optional() });
+export type MyTeamEntriesQuery = z.infer<typeof MyTeamEntriesQuery>;
+
+export const MyTeamEntrySchema = z
+  .object({
+    teamEntry: TeamEntrySchema,
+    teamName: z.string(),
+    seasonId: z.uuid(),
+    seasonName: z.string(),
+    divisionName: z.string().nullable(),
+    /** The viewer and the people they hold `view` over who are on the entry. */
+    members: z.array(
+      z.object({
+        personId: z.uuid(),
+        roles: z.array(TeamRoleSchema),
+        rosterStatus: RosterPlayingStatusSchema.nullable(),
+      }),
+    ),
+    nextFixture: z
+      .object({
+        fixtureId: z.uuid(),
+        scheduledStart: Instant.nullable(),
+        opponentTeamName: z.string().nullable(),
+        venue: FixtureVenueSchema.nullable(),
+        readiness: ReadinessCountsSchema,
+      })
+      .nullable(),
+  })
+  .openapi('MyTeamEntry');
+export type MyTeamEntry = z.infer<typeof MyTeamEntrySchema>;
+
+/** At most this many days of fixtures are read by one `GET /v1/me/fixtures`. */
+export const MY_FIXTURES_MAX_DAYS = 120;
+
+export const MyFixturesQuery = z.object({ from: Instant.optional(), to: Instant.optional() });
+export type MyFixturesQuery = z.infer<typeof MyFixturesQuery>;
+
+// ---------------------------------------------------------------------------------------------
+// Match sheet (CMP-06, SPK-UX-007, SPK-STAFF-002/005, §4.14)
+// ---------------------------------------------------------------------------------------------
+/**
+ * The field-limited player list an accepted official, league staff or a captain reads: names,
+ * jersey numbers, playing status and team roles from the effective roster at kickoff, never dates
+ * of birth, contacts, eligibility reasons, suspension details or guardian data. A captain's view
+ * carries names and numbers only (no person ids, playing status or roles).
+ */
+export const MatchSheetSchema = z
+  .object({
+    fixtureId: z.uuid(),
+    scheduledStart: Instant.nullable(),
+    status: FixtureStatusSchema,
+    venue: FixtureVenueSchema.nullable(),
+    view: z.enum(['full', 'captain']),
+    sides: z.array(
+      z.object({
+        entryId: z.uuid(),
+        teamName: z.string(),
+        players: z.array(
+          z.object({
+            personId: z.uuid().nullable(),
+            displayName: z.string(),
+            jerseyNumber: z.number().int().nullable(),
+            playingStatus: RosterPlayingStatusSchema.nullable(),
+            roles: z.array(TeamRoleSchema),
+          }),
+        ),
+      }),
+    ),
+  })
+  .openapi('MatchSheet');
+export type MatchSheet = z.infer<typeof MatchSheetSchema>;
+
 // ---------------------------------------------------------------------------------------------
 // Disputes (SPK-RESULT-005)
 // ---------------------------------------------------------------------------------------------
@@ -732,6 +959,20 @@ export const DecideDisputeBody = withCommandMeta({
   )
   .openapi('DecideDisputeRequest');
 export type DecideDisputeInput = z.infer<typeof DecideDisputeBody>;
+
+/** CMP-12 (SPK-RESULT-005): the submitter or a captain of the submitting entry withdraws a dispute. */
+export const WithdrawDisputeBody = withCommandMeta({})
+  .extend({ reason: Reason })
+  .openapi('WithdrawDisputeRequest');
+export type WithdrawDisputeInput = z.infer<typeof WithdrawDisputeBody>;
+
+/** CMP-05: staff lists, newest first (created_at desc, id desc), keyset cursor. */
+export const ListDisputesQuery = PageRequestSchema.extend({
+  seasonId: z.uuid().optional(),
+  fixtureId: z.uuid().optional(),
+  status: DisputeStatusSchema.optional(),
+});
+export type ListDisputesQuery = z.infer<typeof ListDisputesQuery>;
 
 // ---------------------------------------------------------------------------------------------
 // Discipline (SPK-DISC-001..005)
@@ -986,6 +1227,87 @@ export const DecideAppealBody = withCommandMeta({
   .openapi('DecideAppealRequest');
 export type DecideAppealInput = z.infer<typeof DecideAppealBody>;
 
+export const ListAppealsQuery = PageRequestSchema.extend({
+  status: AppealStatusSchema.optional(),
+  decisionId: z.uuid().optional(),
+});
+export type ListAppealsQuery = z.infer<typeof ListAppealsQuery>;
+
+export const ListDisciplinaryDecisionsQuery = PageRequestSchema.extend({
+  personId: z.uuid().optional(),
+  competitionId: z.uuid().optional(),
+  status: DisciplinaryDecisionStatusSchema.optional(),
+});
+export type ListDisciplinaryDecisionsQuery = z.infer<typeof ListDisciplinaryDecisionsQuery>;
+
+export const ListSolverRunsQuery = PageRequestSchema;
+export type ListSolverRunsQuery = z.infer<typeof ListSolverRunsQuery>;
+
+export const ListResultRevisionsQuery = PageRequestSchema.extend({
+  status: ResultStatusSchema.optional(),
+});
+export type ListResultRevisionsQuery = z.infer<typeof ListResultRevisionsQuery>;
+
+/** At most this many specifications are listed for one division (bounded, not paged). */
+export const DIVISION_SPECIFICATIONS_LIMIT = 200;
+
+export const FixtureSpecificationListSchema = z
+  .object({ items: z.array(FixtureSpecificationSchema) })
+  .openapi('FixtureSpecificationList');
+
+// ---------------------------------------------------------------------------------------------
+// Tournament pools (CMP-15, §3.16 Tournaments; capability `tournaments`, DEC-016, DEC-078)
+// ---------------------------------------------------------------------------------------------
+export const PoolSchema = z
+  .object({
+    id: z.uuid(),
+    seasonId: z.uuid(),
+    divisionId: z.uuid(),
+    name: z.string(),
+    entries: z.array(
+      z.object({ teamEntryId: z.uuid(), teamName: z.string(), seed: z.number().int().nullable() }),
+    ),
+    revision: Revision,
+    createdAt: Instant,
+    updatedAt: Instant,
+  })
+  .openapi('Pool');
+export type Pool = z.infer<typeof PoolSchema>;
+
+export const CreatePoolBody = withCommandMeta({
+  name: z.string().trim().min(1).max(200),
+}).openapi('CreatePoolRequest');
+export type CreatePoolInput = z.infer<typeof CreatePoolBody>;
+
+export const AddPoolEntryBody = withCommandMeta({
+  teamEntryId: z.uuid(),
+  seed: z.number().int().min(1).max(64).optional(),
+}).openapi('AddPoolEntryRequest');
+export type AddPoolEntryInput = z.infer<typeof AddPoolEntryBody>;
+
+export const RemovePoolEntryBody = withCommandMeta({})
+  .extend({ reason: Reason })
+  .openapi('RemovePoolEntryRequest');
+export type RemovePoolEntryInput = z.infer<typeof RemovePoolEntryBody>;
+
+/** Pool standings: the pool's official results among its entries, ordered by the rule set. */
+export const PoolStandingsSchema = z
+  .object({
+    poolId: z.uuid(),
+    seasonId: z.uuid(),
+    divisionId: z.uuid(),
+    ruleSetId: z.uuid(),
+    ruleSetVersion: z.number().int(),
+    computedAt: Instant,
+    sourceResultIds: z.array(z.uuid()),
+    /** Fixtures between pool entries without an official result yet (seeding waits for none). */
+    pendingFixtureIds: z.array(z.uuid()),
+    rows: z.array(StandingsRowSchema),
+    tiebreakExplanations: z.array(TiebreakExplanationSchema),
+  })
+  .openapi('PoolStandings');
+export type PoolStandings = z.infer<typeof PoolStandingsSchema>;
+
 /** Roles the proposed defaults let publish; the rule set's `resultApproval.approveRoles` adds to them (DEC-065). */
 export const ResultPublicationRolesSchema = z.array(StaffRole);
 
@@ -1096,9 +1418,39 @@ command(
 );
 query(
   '/seasons/{id}/standings',
-  'Official standings with tiebreak explanations (SPK-RESULT-003)',
+  'Official standings with tiebreak explanations; a divided season needs divisionId (SPK-RESULT-003, CMP-12)',
   StandingsQuery,
   StandingsSchema,
+);
+query(
+  '/seasons/{id}/result-revisions',
+  'Result revisions of a season, newest first (CMP-05, SPK-RESULT-004)',
+  ListResultRevisionsQuery,
+  pageSchema(ResultRevisionSchema),
+);
+query(
+  '/seasons/{id}/readiness',
+  'Readiness counts of each fixture of a season in one read (CMP-01, SPK-READY-001)',
+  SeasonReadinessQuery,
+  SeasonReadinessSchema,
+);
+query(
+  '/me/team-entries',
+  'The teams I and the people I may view are on, with the next fixture (CMP-02, SPK-CAP-001)',
+  MyTeamEntriesQuery,
+  z.array(MyTeamEntrySchema),
+);
+query(
+  '/me/fixtures',
+  'Fixtures of my and my children’s teams in a window of at most 120 days (CMP-02)',
+  MyFixturesQuery,
+  z.array(FixtureDetailSchema),
+);
+query(
+  '/fixtures/{id}/match-sheet',
+  'Field-limited match sheet for accepted officials, captains and league staff (CMP-06, SPK-UX-007)',
+  null,
+  MatchSheetSchema,
 );
 
 command(
@@ -1122,6 +1474,14 @@ command(
   BracketNodeSchema,
   200,
 );
+command(
+  'post',
+  '/bracket-nodes/{id}/seed-from-standings',
+  'Seed an unpublished bracket node from final division or pool standings (CMP-10, CMP-15)',
+  SeedFromStandingsBody,
+  BracketNodeSchema,
+  200,
+);
 
 command(
   'post',
@@ -1135,6 +1495,26 @@ query(
   'Read a fixture specification',
   null,
   FixtureSpecificationSchema,
+);
+command(
+  'patch',
+  '/fixture-specifications/{id}',
+  'Change a fixture specification not in use by an open schedule draft (CMP-12, SPK-FIX-001)',
+  UpdateFixtureSpecificationBody,
+  FixtureSpecificationSchema,
+  200,
+);
+query(
+  '/divisions/{id}/fixture-specifications',
+  'The fixture specifications of a division (CMP-05)',
+  null,
+  FixtureSpecificationListSchema,
+);
+query(
+  '/fixture-specifications/{id}/solver-runs',
+  'Solver runs of a specification, newest first (CMP-05, SPK-FIX-004)',
+  ListSolverRunsQuery,
+  pageSchema(SolverRunSchema),
 );
 command(
   'post',
@@ -1160,7 +1540,21 @@ command(
   DisputeSchema,
 );
 query('/fixtures/{id}/disputes', 'List the disputes of a fixture', null, z.array(DisputeSchema));
+query(
+  '/disputes',
+  'Disputes by season, fixture and status (CMP-05, SPK-RESULT-005)',
+  ListDisputesQuery,
+  pageSchema(DisputeSchema),
+);
 query('/disputes/{id}', 'Read a dispute', null, DisputeSchema);
+command(
+  'post',
+  '/disputes/{id}/withdraw',
+  'Withdraw a dispute (submitter or a captain of the submitting entry; CMP-12)',
+  WithdrawDisputeBody,
+  DisputeSchema,
+  200,
+);
 command(
   'post',
   '/disputes/{id}/decide',
@@ -1199,6 +1593,12 @@ command(
   CreateDisciplinaryDecisionBody,
   DisciplinaryDecisionSchema,
 );
+query(
+  '/disciplinary-decisions',
+  'Disciplinary decisions by person, competition and status (CMP-05, SPK-DISC-003)',
+  ListDisciplinaryDecisionsQuery,
+  pageSchema(DisciplinaryDecisionSchema),
+);
 query('/disciplinary-decisions/{id}', 'Read a decision', null, DisciplinaryDecisionSchema);
 command(
   'post',
@@ -1226,6 +1626,12 @@ command(
   200,
 );
 command('post', '/appeals', 'Submit an appeal', CreateAppealBody, AppealSchema);
+query(
+  '/appeals',
+  'Appeals by status and decision (CMP-05, SPK-DISC-005)',
+  ListAppealsQuery,
+  pageSchema(AppealSchema),
+);
 query('/appeals/{id}', 'Read an appeal', null, AppealSchema);
 command(
   'post',
@@ -1234,4 +1640,45 @@ command(
   DecideAppealBody,
   AppealSchema,
   200,
+);
+
+command(
+  'post',
+  '/divisions/{id}/pools',
+  'Create a tournament pool in a division (CMP-15; capability tournaments)',
+  CreatePoolBody,
+  PoolSchema,
+);
+query('/pools/{id}', 'Read a tournament pool', null, PoolSchema);
+command(
+  'post',
+  '/pools/{id}/entries',
+  'Place a division entry in a pool (CMP-15; capability tournaments)',
+  AddPoolEntryBody,
+  PoolSchema,
+  200,
+);
+openApiRegistry.registerPath({
+  method: 'post',
+  path: '/pools/{id}/entries/{teamEntryId}/remove',
+  summary: 'Remove an entry from a pool (CMP-15; capability tournaments)',
+  tags: [TAG],
+  request: {
+    params: z.object({ id: z.uuid(), teamEntryId: z.uuid() }),
+    headers: idempotencyHeader,
+    body: { content: { 'application/json': { schema: RemovePoolEntryBody } } },
+  },
+  responses: {
+    200: ok('Command outcome', PoolSchema),
+    400: err('Validation failed'),
+    403: err('Access denied'),
+    404: err('Not found or not visible'),
+    409: err('Conflict (STALE_REVISION, IDEMPOTENCY_*)'),
+  },
+});
+query(
+  '/pools/{id}/standings',
+  'Pool standings with the rule set tiebreakers (CMP-15)',
+  null,
+  PoolStandingsSchema,
 );

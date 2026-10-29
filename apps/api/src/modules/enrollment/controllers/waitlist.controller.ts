@@ -4,6 +4,7 @@ import {
   DeclineWaitlistOfferBody,
   JoinWaitlistBody,
   ListWaitlistQuery,
+  OfferWaitlistEntryBody,
   RemoveWaitlistEntryBody,
   WithdrawWaitlistBody,
   z,
@@ -12,7 +13,14 @@ import {
   type WaitlistEntry,
   type WaitlistOffer,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CorrelationId } from '../enrollment.shared';
 import { WaitlistService } from '../services/waitlist.service';
 
@@ -71,6 +79,20 @@ export class WaitlistController {
     @CorrelationId() correlationId: string | null,
   ): Promise<WaitlistEntry> {
     return this.waitlist.remove(principal, params.id, body, correlationId);
+  }
+
+  /** ENR-04 (SPK-REG-008): staff offer the next waiting entry its place. */
+  @Post('waitlist-entries/:id/offer')
+  @HttpCode(200)
+  @Idempotent()
+  @RecordAuthority('program')
+  offer(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodBody(OfferWaitlistEntryBody) body: z.infer<typeof OfferWaitlistEntryBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<WaitlistEntry> {
+    return this.waitlist.offerNext(principal, params.id, body, correlationId);
   }
 
   @Get('waitlist-offers/:id')

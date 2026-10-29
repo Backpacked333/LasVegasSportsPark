@@ -1,8 +1,9 @@
-import { newId, type StaffRole } from '@sportspark/contracts';
-import { pgErrorCode } from '@sportspark/db';
+import type { TestingModuleBuilder } from '@nestjs/testing';
+import { DomainError, newId, type StaffRole } from '@sportspark/contracts';
+import { pgErrorCode, type Db } from '@sportspark/db';
 import { expect } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing';
-import { OutboxDispatcher } from '../../../kernel';
+import { currentTransaction, DATABASE, OutboxDispatcher, type Trx } from '../../../kernel';
 import {
   createDivisionFixture,
   createSeasonFixture,
@@ -14,6 +15,8 @@ import {
   createAccountFixture,
   createPersonFixture,
   createStaffMemberFixture,
+  PeopleService,
+  PERSON_DIRECTORY_PORT,
 } from '../../identity';
 import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
 import { WorkforceModule } from '../workforce.module';
@@ -25,11 +28,75 @@ export const CLOCK_START = '2027-01-16T20:00:00Z';
 
 export const key = (): string => `k-${newId()}`;
 
-export function workforceTestApp(options: { clockStart?: string } = {}): Promise<TestApp> {
+/**
+ * Policy settings most workforce tests run with (WRK-06). They are TEST configuration, not
+ * defaults: the module has none (DEC-011 / POL-033 pending). Tests of the unconfigured behaviour
+ * pass `settings: {}`.
+ */
+export const CONFIGURED_POLICY_ENV: NodeJS.ProcessEnv = {
+  WORKFORCE_OFFICIAL_TURNAROUND_MINUTES: '30',
+  WORKFORCE_COACH_TURNAROUND_MINUTES: '15',
+  WORKFORCE_UNCOVERED_ESCALATION_HOURS: '48',
+  WORKFORCE_ACCESS_TRAILING_HOURS: '24',
+};
+
+export function workforceTestApp(
+  options: { clockStart?: string; settings?: NodeJS.ProcessEnv } = {},
+): Promise<TestApp> {
   return createTestApp({
     imports: [WorkforceModule],
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
+    env: options.settings ?? CONFIGURED_POLICY_ENV,
+    configure: withPersonDirectoryDouble,
+  });
+}
+
+function isDeclaredNotImplemented(error: unknown): boolean {
+  return (
+    DomainError.is(error) &&
+    error.code === 'INTERNAL_ERROR' &&
+    /declared but not implemented/.test(error.message)
+  );
+}
+
+/**
+ * IF-09 (ID-01, identity's work item): `personIdsResolvingTo` answers from identity when its
+ * implementation is present; until then this double follows `persons.merged_into_person_id`
+ * through identity's own `resolveCanonicalPersonId` (the same rule: canonical first, then every
+ * person merged into it). Test support only; the module reads merges through the port.
+ */
+export function withPersonDirectoryDouble(builder: TestingModuleBuilder): TestingModuleBuilder {
+  return builder.overrideProvider(PERSON_DIRECTORY_PORT).useFactory({
+    inject: [PeopleService, DATABASE],
+    factory: (people: PeopleService, db: Db) => {
+      const port = Object.create(people) as PeopleService;
+      port.personIdsResolvingTo = async (organizationId, personId, trx) => {
+        try {
+          return await people.personIdsResolvingTo(organizationId, personId, trx);
+        } catch (error) {
+          if (!isDeclaredNotImplemented(error)) throw error;
+        }
+        const reader: Db | Trx = trx ?? currentTransaction() ?? db;
+        if (!(await people.findPerson(organizationId, personId, trx))) return [];
+        const canonical = await people.resolveCanonicalPersonId(organizationId, personId, trx);
+        const merged = await reader
+          .selectFrom('persons')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('merged_into_person_id', 'is not', null)
+          .orderBy('id')
+          .execute();
+        const ids: string[] = [];
+        for (const row of merged) {
+          if ((await people.resolveCanonicalPersonId(organizationId, row.id, trx)) === canonical) {
+            ids.push(row.id);
+          }
+        }
+        return [canonical, ...ids];
+      };
+      return port;
+    },
   });
 }
 

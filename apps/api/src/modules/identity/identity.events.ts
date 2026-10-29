@@ -64,7 +64,13 @@ export const IdentityEvents = {
   ),
   accessRestrictionLifted: defineEvent(
     'identity.access_restriction_lifted',
-    z.object({ reviewId: z.uuid(), subjectPersonId: z.uuid(), grantIds: z.array(z.uuid()) }),
+    z.object({
+      reviewId: z.uuid(),
+      subjectPersonId: z.uuid(),
+      grantIds: z.array(z.uuid()),
+      /** ID-08, IF-26: why it was lifted; absent means 'decision'. */
+      cause: z.enum(['decision', 'window_ended']).optional(),
+    }),
   ),
   invitationCreated: defineEvent(
     'identity.invitation_created',
@@ -88,9 +94,24 @@ export const IdentityEvents = {
     'identity.invitation_revoked',
     z.object({ invitationId: z.uuid(), reason: z.string() }),
   ),
+  /** ID-03, IF-10 (SPK-IAM-004): the recipient declined; dispatched with no handler yet. */
+  invitationDeclined: defineEvent(
+    'identity.invitation_declined',
+    z.object({ invitationId: z.uuid(), declinedByPersonId: z.uuid() }),
+  ),
+  /** ID-07, IF-25: emitted once per expiry, whichever path wins the row lock. */
+  invitationExpired: defineEvent(
+    'identity.invitation_expired',
+    z.object({ invitationId: z.uuid(), via: z.enum(['sweep', 'acceptance_attempt']) }),
+  ),
   claimIssued: defineEvent(
     'identity.claim_issued',
     z.object({ claimId: z.uuid(), subjectPersonId: z.uuid(), kind: z.string() }),
+  ),
+  /** ID-07, IF-25: emitted once per expiry, whichever path wins the row lock. */
+  claimExpired: defineEvent(
+    'identity.claim_expired',
+    z.object({ claimId: z.uuid(), via: z.enum(['sweep', 'acceptance_attempt']) }),
   ),
   claimRevoked: defineEvent(
     'identity.claim_revoked',

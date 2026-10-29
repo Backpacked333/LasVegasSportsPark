@@ -4,7 +4,9 @@ import {
   CreateCalendarFeedBody,
   InboxQuery,
   MarkReadBody,
+  RegisterPushDeviceBody,
   RevokeCalendarFeedBody,
+  RevokePushDeviceBody,
   UpdatePreferencesBody,
   z,
   type CalendarFeed,
@@ -13,18 +15,29 @@ import {
   type InboxItem,
   type Page,
   type Principal,
+  type PushDevice,
+  type PushDeviceList,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  NoRecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CalendarFeedsService } from '../services/calendar-feeds.service';
 import { InboxService } from '../services/inbox.service';
 import { PreferencesService } from '../services/preferences.service';
+import { PushDevicesService } from '../services/push-devices.service';
 import { CorrelationId } from './correlation.decorator';
 
 const IdParams = z.object({ id: z.uuid() });
 
 /**
- * Self-service surface: the inbox (SPK-UX-003), channel preferences (SPK-COMMS-007) and private
- * calendar feeds (SPK-COMMS-008) of the authenticated person. Never addresses another person.
+ * Self-service surface: the inbox (SPK-UX-003), channel preferences (SPK-COMMS-007), private
+ * calendar feeds (SPK-COMMS-008) and push devices (SPK-UX-001) of the authenticated person and
+ * account. Never addresses another person.
  */
 @Controller('me')
 export class MeCommunicationsController {
@@ -32,6 +45,7 @@ export class MeCommunicationsController {
     private readonly inbox: InboxService,
     private readonly preferences: PreferencesService,
     private readonly feeds: CalendarFeedsService,
+    private readonly pushDevices: PushDevicesService,
   ) {}
 
   @Get('inbox')
@@ -107,5 +121,35 @@ export class MeCommunicationsController {
     @CorrelationId() correlationId: string | null,
   ): Promise<CalendarFeed> {
     return this.feeds.revoke(principal, params.id, body, correlationId);
+  }
+
+  @Post('push-devices')
+  // §4.14: the request carries the token; the response never does (tokenHint only).
+  @Idempotent()
+  @NoRecordAuthority('Not a §5.3 record category')
+  registerPushDevice(
+    @CurrentPrincipal() principal: Principal,
+    @ZodBody(RegisterPushDeviceBody) body: z.infer<typeof RegisterPushDeviceBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<PushDevice> {
+    return this.pushDevices.register(principal, body, correlationId);
+  }
+
+  @Get('push-devices')
+  listPushDevices(@CurrentPrincipal() principal: Principal): Promise<PushDeviceList> {
+    return this.pushDevices.listMine(principal);
+  }
+
+  @Post('push-devices/:id/revoke')
+  @HttpCode(200)
+  @Idempotent()
+  @NoRecordAuthority('Not a §5.3 record category')
+  revokePushDevice(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodBody(RevokePushDeviceBody) body: z.infer<typeof RevokePushDeviceBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<PushDevice> {
+    return this.pushDevices.revoke(principal, params.id, body, correlationId);
   }
 }

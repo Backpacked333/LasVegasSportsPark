@@ -1,4 +1,4 @@
-import { z } from '../zod';
+import { QueryBoolean, z } from '../zod';
 import { CommandMetaSchema, Revision, withCommandMeta } from '../commands';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
@@ -43,7 +43,14 @@ export const InspectionOutcome = z.enum(['passed', 'failed']);
 export type InspectionOutcome = z.infer<typeof InspectionOutcome>;
 export const RestrictionKind = z.enum(['closed', 'limited']);
 export type RestrictionKind = z.infer<typeof RestrictionKind>;
-export const RestrictionStatus = z.enum(['proposed', 'approved', 'active', 'released']);
+/** `withdrawn` (FAC-01, migration 0903): a proposed or approved restriction withdrawn before it took effect. */
+export const RestrictionStatus = z.enum([
+  'proposed',
+  'approved',
+  'active',
+  'released',
+  'withdrawn',
+]);
 export type RestrictionStatus = z.infer<typeof RestrictionStatus>;
 export const PreventiveScheduleStatus = z.enum(['active', 'paused', 'ended']);
 export type PreventiveScheduleStatus = z.infer<typeof PreventiveScheduleStatus>;
@@ -128,7 +135,8 @@ export const ListAssetsQuery = z.object({
   resourceId: z.uuid().optional(),
   kind: AssetKind.optional(),
   status: AssetStatus.optional(),
-  includeRetired: z.coerce.boolean().optional(),
+  /** IF-06: only `true` or `false` (`?includeRetired=false` reads as false). */
+  includeRetired: QueryBoolean.optional(),
 });
 export type ListAssetsQuery = z.infer<typeof ListAssetsQuery>;
 
@@ -246,7 +254,7 @@ export const ListMaintenanceTasksQuery = PageRequestSchema.extend({
   resourceId: z.uuid().optional(),
   assignedOwnerPersonId: z.uuid().optional(),
   /** Only tasks whose due instant is in the past and that are not resolved or closed. */
-  overdue: z.coerce.boolean().optional(),
+  overdue: QueryBoolean.optional(),
 });
 export type ListMaintenanceTasksQuery = z.infer<typeof ListMaintenanceTasksQuery>;
 
@@ -276,7 +284,11 @@ export const RestrictionSchema = z
     releasedBy: ActorSnapshotSchema.nullable(),
     releasedAt: Instant.nullable(),
     releaseReason: z.string().nullable(),
-    /** The last approve/release operation (readable at GET /v1/operations/{id}). */
+    /** FAC-01 (SPK-FAC-004): who withdrew a proposed or approved restriction, when and why. */
+    withdrawnBy: ActorSnapshotSchema.nullable(),
+    withdrawnAt: Instant.nullable(),
+    withdrawalReason: z.string().nullable(),
+    /** The last approve/release/withdraw operation (readable at GET /v1/operations/{id}). */
     operationId: z.uuid().nullable(),
     revision: Revision,
     createdAt: Instant,
@@ -327,6 +339,15 @@ export const ReleaseRestrictionBody = z
   .object({ ...CommandMetaSchema.shape, reason: z.string().min(1).max(2000) })
   .openapi('ReleaseRestrictionBody');
 export type ReleaseRestrictionBody = z.infer<typeof ReleaseRestrictionBody>;
+
+/**
+ * FAC-01 (SPK-FAC-004): `reason` is the withdrawal reason (required). A proposed restriction, or an
+ * approved one whose scheduling closure is still pending, is withdrawn together with that closure.
+ */
+export const WithdrawRestrictionBody = z
+  .object({ ...CommandMetaSchema.shape, reason: z.string().min(1).max(2000) })
+  .openapi('WithdrawRestrictionBody');
+export type WithdrawRestrictionBody = z.infer<typeof WithdrawRestrictionBody>;
 
 export const ListRestrictionsQuery = z.object({
   facilityId: z.uuid(),
@@ -634,6 +655,14 @@ command(
   '/maintenance-restrictions/{id}/release',
   'Authorized release: return the area to service by lifting the closure (SPK-FAC-004)',
   ReleaseRestrictionBody,
+  RestrictionSchema,
+  200,
+);
+command(
+  'post',
+  '/maintenance-restrictions/{id}/withdraw',
+  'Withdraw a proposed restriction, or an approved one with its pending closure, before it takes effect (SPK-FAC-004); an active restriction is released instead',
+  WithdrawRestrictionBody,
   RestrictionSchema,
   200,
 );

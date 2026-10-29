@@ -10,6 +10,7 @@ import {
   type DiscountEligibilityRules,
   type EntitlementDefinition,
   type Offering,
+  type OfferingFacility,
   type OfferingLocation,
   type OfferingSession,
   type PolicyVersion,
@@ -89,6 +90,7 @@ export const offeringColumns = [
   'offerings.closed_at',
   'offerings.archived_at',
   'offerings.copied_from_offering_id',
+  'offerings.booking_terms_key',
   'offerings.revision',
   'offerings.created_at',
   'offerings.updated_at',
@@ -121,6 +123,7 @@ export interface OfferingRow {
   closed_at: Date | string | null;
   archived_at: Date | string | null;
   copied_from_offering_id: string | null;
+  booking_terms_key: string | null;
   revision: number;
   created_at: Date | string;
   updated_at: Date | string;
@@ -130,6 +133,10 @@ export interface OfferingViewContext {
   ageBand: AgeBand;
   price: PriceRule | null;
   requiredFormPolicyVersionIds: string[];
+  /** SPK-SCHED-008: the facility and its IANA zone (kernel facility directory, K-04). */
+  facility: OfferingFacility;
+  /** CAT-02: the approved booking terms version effective at the view instant (rental, party). */
+  bookingTermsPolicyVersionId: string | null;
 }
 
 export function capacityUnitsOf(row: { capacity_units: unknown[] }): CapacityUnit[] {
@@ -147,6 +154,7 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
     id: row.id,
     programId: row.program_id,
     facilityId: row.facility_id,
+    facility: ctx.facility,
     name: row.name,
     description: row.description,
     kind: row.kind,
@@ -172,6 +180,7 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
     cancellationPolicyVersionId: row.cancellation_policy_version_id,
     requiredFormPolicyVersionIds: ctx.requiredFormPolicyVersionIds,
     entitlementDefinitionId: row.entitlement_definition_id,
+    bookingTermsPolicyVersionId: ctx.bookingTermsPolicyVersionId,
   };
 }
 
@@ -189,6 +198,7 @@ export function toOffering(
           capacityUnits: capacityUnitsOf(row),
           responsibleManagerPersonId: row.responsible_manager_person_id,
           copiedFromOfferingId: row.copied_from_offering_id,
+          bookingTermsKey: row.booking_terms_key,
           publishedAt: isoOrNull(row.published_at),
           registrationOpenedAt: isoOrNull(row.registration_opened_at),
           closedAt: isoOrNull(row.closed_at),
@@ -213,6 +223,7 @@ export function toProgram(row: Selectable<ProgramsTable>): Program {
     format: row.format,
     ageBand: row.age_band as AgeBand,
     status: row.status,
+    source: row.source,
     revision: row.revision,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),

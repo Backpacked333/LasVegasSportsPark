@@ -89,4 +89,26 @@ export const ClosureLifted = defineEvent(
   }),
 );
 
-export const SchedulingEvents = { EventChanged, SchedulePublished, ClosureApplied, ClosureLifted };
+/**
+ * SCH-01, IF-12 (SPK-FAC-003): a pending closure was withdrawn before it ever applied, so it never
+ * affected availability. Dispatched with no handler yet.
+ */
+export const ClosureWithdrawn = defineEvent(
+  'scheduling.closure_withdrawn',
+  z.object({
+    closureId: z.uuid(),
+    facilityId: z.uuid(),
+    resourceId: z.uuid().nullable(),
+    interval: z.object({ start: z.string(), end: z.string() }),
+    source: z.enum(['manual', 'maintenance', 'holiday']),
+    reason: z.string(),
+  }),
+);
+
+export const SchedulingEvents = {
+  EventChanged,
+  SchedulePublished,
+  ClosureApplied,
+  ClosureLifted,
+  ClosureWithdrawn,
+};

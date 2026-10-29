@@ -14,13 +14,43 @@ import {
   DATABASE,
   Outbox,
   UnitOfWork,
+  executorFor,
   snapshotActor,
   type Clock,
 } from '../../../kernel';
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
-import { organizationOf, toCashTender, type CashTenderRow } from '../finance.shared';
+import {
+  afterKeysetDesc,
+  decodeKeyset,
+  iso,
+  keysetAt,
+  keysetPage,
+  organizationOf,
+  toCashTender,
+  type CashTenderRow,
+  type Reader,
+} from '../finance.shared';
 import { MoneyFacts } from './money-facts.service';
+
+/**
+ * A recorded tender as other modules list it (FIN-02, for support's timeline SUP-03): what, how
+ * much, where and when; never the evidence (§4.14: references and notes stay with finance).
+ */
+export interface CashTenderListItem {
+  id: string;
+  facilityId: string;
+  tenderKind: CashTender['tenderKind'];
+  payerPersonId: string;
+  amountMinor: number;
+  currency: string;
+  obligationId: string | null;
+  checkoutId: string | null;
+  recordedByPersonId: string;
+  recordedAt: string;
+  status: CashTender['status'];
+  reconciliationId: string | null;
+}
 
 /**
  * Cash and externally recorded tenders (SPK-PAY-012): only permitted desk and finance staff,
@@ -40,6 +70,49 @@ export class CashTendersService {
     private readonly outbox: Outbox,
     private readonly facts: MoneyFacts,
   ) {}
+
+  /**
+   * The tenders paid by any of `personIds` (FIN-02, in-process for SUP-03): newest first on
+   * (recorded_at desc, id desc), a keyset page. Reads through the given transaction or the root
+   * database; the caller authorizes its own context first (this is a lookup, not an authorization).
+   */
+  async listForPersons(
+    organizationId: string,
+    personIds: readonly string[],
+    page: { cursor?: string; limit: number },
+    trx?: Reader,
+  ): Promise<{ items: CashTenderListItem[]; nextCursor: string | null }> {
+    if (personIds.length === 0) return { items: [], nextCursor: null };
+    const cursor = decodeKeyset(page.cursor);
+    let q = (trx ?? executorFor(this.db))
+      .selectFrom('cash_tenders')
+      .selectAll()
+      .select(keysetAt('cash_tenders', 'recorded_at').as('cursor_at'))
+      .where('organization_id', '=', organizationId)
+      .where('payer_person_id', 'in', [...personIds])
+      .orderBy('recorded_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(page.limit + 1);
+    if (cursor) q = q.where(afterKeysetDesc('cash_tenders', cursor, 'recorded_at'));
+    const result = keysetPage(await q.execute(), page.limit);
+    return {
+      items: result.rows.map((row) => ({
+        id: row.id,
+        facilityId: row.facility_id,
+        tenderKind: row.tender_kind,
+        payerPersonId: row.payer_person_id,
+        amountMinor: row.amount_minor,
+        currency: row.currency,
+        obligationId: row.obligation_id,
+        checkoutId: row.checkout_id,
+        recordedByPersonId: row.recorded_by_person_id,
+        recordedAt: iso(row.recorded_at),
+        status: row.status,
+        reconciliationId: row.reconciliation_id,
+      })),
+      nextCursor: result.nextCursor,
+    };
+  }
 
   async record(
     principal: Principal,

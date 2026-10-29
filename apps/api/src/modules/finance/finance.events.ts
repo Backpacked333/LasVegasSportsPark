@@ -273,6 +273,54 @@ export const SettlementReconciled = defineEvent(
   }),
 );
 
+// Package G finance facts (declared by stage 3; emitted by FIN-06 and FIN-07). Dispatched with no
+// handler yet; payloads carry identifiers, states and amounts only (§4.14).
+
+/** FIN-07, IF-37: an accounting mapping was proposed, approved or retired. */
+export const AccountingMappingChanged = defineEvent(
+  'finance.accounting_mapping_changed',
+  z.object({
+    mappingId: z.uuid(),
+    ledgerAccount: z.string(),
+    status: z.enum(['proposed', 'approved', 'retired']),
+  }),
+);
+
+/** FIN-07, IF-37: an accounting export batch changed state. */
+export const AccountingBatchChanged = defineEvent(
+  'finance.accounting_batch_changed',
+  z.object({
+    batchId: z.uuid(),
+    status: z.enum(['prepared', 'submitted', 'accepted', 'rejected', 'unknown', 'canceled']),
+    lineCount: z.number().int().min(0),
+  }),
+);
+
+/** FIN-06, IF-49: a point-of-sale sale changed state. */
+export const PosSaleChanged = defineEvent(
+  'finance.pos_sale_changed',
+  z.object({
+    saleId: z.uuid(),
+    registerSessionId: z.uuid(),
+    status: z.enum(['open', 'paid', 'voided', 'partially_returned', 'returned']),
+    totalMinor: z.number().int(),
+    currency: z.string(),
+  }),
+);
+
+/** FIN-06, IF-49: a register session closed with its counted cash and variance. */
+export const PosRegisterSessionClosed = defineEvent(
+  'finance.pos_register_session_closed',
+  z.object({
+    sessionId: z.uuid(),
+    registerId: z.uuid(),
+    expectedCashMinor: z.number().int(),
+    countedCashMinor: z.number().int(),
+    varianceMinor: z.number().int(),
+    currency: z.string(),
+  }),
+);
+
 export const FinanceEvents = {
   quoteCreated: QuoteCreated,
   checkoutStarted: CheckoutStarted,
@@ -300,4 +348,8 @@ export const FinanceEvents = {
   installmentNotice: InstallmentNotice,
   cashTenderRecorded: CashTenderRecorded,
   settlementReconciled: SettlementReconciled,
+  accountingMappingChanged: AccountingMappingChanged,
+  accountingBatchChanged: AccountingBatchChanged,
+  posSaleChanged: PosSaleChanged,
+  posRegisterSessionClosed: PosRegisterSessionClosed,
 } as const;

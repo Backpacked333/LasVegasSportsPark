@@ -232,7 +232,7 @@ function IssueList({ issues, label }: { issues: readonly ValidationIssue[]; labe
             label={issue.severity === 'error' ? 'Error' : 'Warning'}
           />{' '}
           {issue.message} <span className="caption">({issue.code}</span>
-          {issue.detail?.conflictingEventIds.length ? (
+          {issue.detail?.conflictingEventIds?.length ? (
             <span className="caption">
               , conflicts with {issue.detail.conflictingEventIds.length} event
               {issue.detail.conflictingEventIds.length === 1 ? '' : 's'}

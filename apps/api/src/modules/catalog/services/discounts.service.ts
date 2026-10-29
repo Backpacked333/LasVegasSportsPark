@@ -31,6 +31,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  databaseConstraintOf,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -50,6 +51,9 @@ import { DiscountMachine } from '../catalog.state-machines';
 import { evaluateDiscounts, type EvaluableDiscount } from '../pricing/discount-evaluator';
 
 const Cursor = z.object({ name: z.string(), id: z.string() });
+
+/** CAT-04 (migration 0207): the database refuses a redemption beyond the per-person limit. */
+export const PER_PERSON_LIMIT_CONSTRAINT = 'discount_redemption_entries_per_person_limit';
 
 /**
  * Discount definitions (SPK-PAY-003) and their redemption counters (§4.7 invariant 7). Evaluation
@@ -524,16 +528,13 @@ export class DiscountsService {
     organizationId: string,
     input: RedeemDiscountInput,
   ): Promise<RedemptionOutcome> {
-    const definition = await trx
-      .selectFrom('discount_definitions')
-      .select(['id', 'status', 'per_person_limit', 'effective_from', 'effective_to'])
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', input.discountDefinitionId)
-      .executeTakeFirst();
-    if (!definition) throw errors.notFound('discount', input.discountDefinitionId);
-    // Lock the counter row before anything is counted (SPK-PAY-003 per-person limit): concurrent
+    // Lock the definition, then the counter, before anything is counted (SPK-PAY-003): concurrent
     // redemptions of one discount serialize here, so the replay check and the participant's
-    // ledger count below see every redemption committed before the lock was granted.
+    // ledger count below see every redemption committed before the lock was granted. Every path
+    // (redeem, release, update, retire) takes the definition before the counter, and the lock is
+    // FOR NO KEY UPDATE (as in the guard of migration 0208), which does not block the FOR KEY
+    // SHARE a ledger insert's foreign-key check takes, so no two paths wait on each other.
+    const definition = await this.lockDefinition(trx, organizationId, input.discountDefinitionId);
     const counterBefore = await this.counter(trx, organizationId, definition.id, true);
     const existing = await this.entry(trx, organizationId, input, 'redeem');
     if (existing) {
@@ -565,17 +566,34 @@ export class DiscountsService {
         at: now.toISOString(),
       });
     }
+    const perPersonLimitReached = () =>
+      errors.resourceConflict('The participant has already used this discount.', {
+        code: 'DISCOUNT_PER_PERSON_LIMIT',
+        discountDefinitionId: definition.id,
+        perPersonLimit: definition.per_person_limit,
+      });
+    // A per-person limit cannot be counted for a redemption that names no one: refused (the
+    // conservative behaviour; the database refuses it too, migration 0208).
+    if (definition.per_person_limit !== null && !input.personId) {
+      throw errors.validation('A discount with a per-person limit is redeemed for a person.', {
+        path: 'personId',
+        code: 'DISCOUNT_PERSON_REQUIRED',
+        discountDefinitionId: definition.id,
+      });
+    }
+    // Early feedback; the guarantee is the database trigger of migrations 0207/0208 (CAT-04).
     if (definition.per_person_limit !== null && input.personId) {
       const used = await this.personRedemptions(trx, organizationId, definition.id, input.personId);
-      if (used >= definition.per_person_limit) {
-        throw errors.resourceConflict('The participant has already used this discount.', {
-          code: 'DISCOUNT_PER_PERSON_LIMIT',
-          discountDefinitionId: definition.id,
-          perPersonLimit: definition.per_person_limit,
-        });
-      }
+      if (used >= definition.per_person_limit) throw perPersonLimitReached();
     }
-    await this.insertEntry(trx, organizationId, input, 'redeem');
+    try {
+      await this.insertEntry(trx, organizationId, input, 'redeem');
+    } catch (error) {
+      if (databaseConstraintOf(error)?.constraint === PER_PERSON_LIMIT_CONSTRAINT) {
+        throw perPersonLimitReached();
+      }
+      throw error;
+    }
     // Conditional update: the row only changes while under the limit; the check constraint on
     // discount_redemptions is the final guarantee (§4.7 invariant 7).
     const updated = await trx
@@ -660,6 +678,8 @@ export class DiscountsService {
         path: 'personId',
       });
     }
+    // Definition before counter, the order every path takes (see redeem).
+    await this.lockDefinition(trx, organizationId, input.discountDefinitionId);
     const counterBefore = await this.counter(trx, organizationId, input.discountDefinitionId, true);
     const existing = await this.entry(trx, organizationId, input, 'release');
     if (existing) {
@@ -728,10 +748,23 @@ export class DiscountsService {
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('id', '=', id)
-      .forUpdate()
+      .forNoKeyUpdate()
       .executeTakeFirst();
     if (!row) throw errors.notFound('discount', id);
     return row;
+  }
+
+  /** Locks the definition FOR NO KEY UPDATE (see redeem for the lock order). */
+  private async lockDefinition(trx: Trx, organizationId: string, id: string) {
+    const definition = await trx
+      .selectFrom('discount_definitions')
+      .select(['id', 'status', 'per_person_limit', 'effective_from', 'effective_to'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .forNoKeyUpdate()
+      .executeTakeFirst();
+    if (!definition) throw errors.notFound('discount', id);
+    return definition;
   }
 
   private async counter(db: Db | Trx, organizationId: string, id: string, forUpdate = false) {

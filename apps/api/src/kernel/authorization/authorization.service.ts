@@ -114,6 +114,50 @@ export class AuthorizationService {
     return { allowed: false, reason: denial, protectedRecord };
   }
 
+  /**
+   * The subject persons a customer "my ..." list starts from for `action` (K-05, IF-02,
+   * SPK-IAM-003, §4.14): the principal themselves when the action allows self (and, when it names a
+   * permission, only if they hold it over themselves, so a child never lists pay or collect over
+   * themselves), plus everyone over whom they hold the action's permission now. Anonymous, system
+   * and personless principals get []; staff roles never contribute (a staff member's own family is
+   * their relationships, not their role). Consumers expand each subject with the person
+   * directory's merge history (personIdsResolvingTo) before reading their records.
+   */
+  async customerSubjects(
+    principal: Principal,
+    action: ActionId | ActionDefinition,
+  ): Promise<string[]> {
+    const definition = typeof action === 'string' ? actionRegistry.get(action) : action;
+    if (!definition) return [];
+    if (principal.kind === 'anonymous' || principal.kind === 'system') return [];
+    const personId = principal.personId;
+    const organizationId = principal.organizationId;
+    if (!personId || !organizationId) return [];
+    const subjects: string[] = [];
+    if (definition.allowSelf) {
+      const selfOk =
+        !definition.subjectPermission ||
+        (await this.relationships.hasPermission(
+          organizationId,
+          personId,
+          personId,
+          definition.subjectPermission,
+        ));
+      if (selfOk) subjects.push(personId);
+    }
+    if (definition.subjectPermission) {
+      const others = await this.relationships.subjectsWithPermission(
+        organizationId,
+        personId,
+        definition.subjectPermission,
+      );
+      for (const subject of [...new Set(others)].sort()) {
+        if (subject !== personId) subjects.push(subject);
+      }
+    }
+    return subjects;
+  }
+
   /** Throws ACCESS_DENIED (or NOT_FOUND for protected records) unless allowed. */
   async require(
     principal: Principal,

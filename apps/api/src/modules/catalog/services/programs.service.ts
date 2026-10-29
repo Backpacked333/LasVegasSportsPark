@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  CreateProgramBody,
   decodeCursor,
   encodeCursor,
   errors,
@@ -7,19 +8,28 @@ import {
   z,
   type AgeBand,
   type CreateProgramInput,
+  type ImportProvenance,
   type ListProgramsQuery,
   type Page,
   type Principal,
   type Program,
   type UpdateProgramInput,
 } from '@sportspark/contracts';
-import { isUniqueViolation, json, type Db, type ProgramStatus } from '@sportspark/db';
-import { sql } from 'kysely';
+import {
+  isUniqueViolation,
+  json,
+  type Db,
+  type ProgramsTable,
+  type ProgramStatus,
+} from '@sportspark/db';
+import { sql, type Selectable } from 'kysely';
 import {
   assertExpectedRevision,
+  assertImportPrincipal,
   AuditWriter,
   AuthorizationService,
   DATABASE,
+  importContentMismatch,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -41,6 +51,24 @@ function sameAgeBand(a: AgeBand, b: AgeBand): boolean {
   );
 }
 
+/** CAT-03, IF-40: the import command's own options (in-process only, never an HTTP field). */
+export interface CreateProgramOptions {
+  importProvenance?: ImportProvenance;
+}
+
+/** Whether an imported program row holds exactly the content a re-import submits (IF-40). */
+function sameImportedContent(row: Selectable<ProgramsTable>, input: CreateProgramInput): boolean {
+  return (
+    row.source === 'import' &&
+    row.name === input.name &&
+    row.description === (input.description ?? null) &&
+    row.activity_type === input.activityType &&
+    row.format === (input.format ?? null) &&
+    sameAgeBand(row.age_band as AgeBand, input.ageBand) &&
+    row.status === input.status
+  );
+}
+
 /** Reusable program definitions, separate from dated offerings (SPK-CAT-001, SPK-YOUTH-001). */
 @Injectable()
 export class ProgramsService {
@@ -52,18 +80,58 @@ export class ProgramsService {
     private readonly outbox: Outbox,
   ) {}
 
+  /**
+   * Creates a program. Staff over HTTP always create `source: 'staff'` programs.
+   *
+   * CAT-03, IF-40 (§5.3, §5.4, SPK-AT-024): with `importProvenance` this is the migration import
+   * command. Only that batch's import principal may call it (`assertImportPrincipal`); it joins the
+   * caller's unit of work and creates the program once with `id = recordId` and `source: 'import'`.
+   * A re-import with equal content returns the existing program with no audit, event or other
+   * effect; different content is RESOURCE_CONFLICT `IMPORT_CONTENT_MISMATCH`. It does not consult
+   * RECORD_AUTHORITY_PORT (the batch is the sanctioned writer).
+   */
   async create(
     principal: Principal,
-    body: CreateProgramInput,
+    input: z.input<typeof CreateProgramBody>,
     correlationId: string | null,
+    options: CreateProgramOptions = {},
   ): Promise<Program> {
+    const provenance = options.importProvenance;
+    if (provenance) assertImportPrincipal(principal, provenance);
     const organizationId = organizationOf(principal);
+    // Parsed on every path: an in-process caller may pass input without the defaulted fields
+    // (ageBand, status), and parsing already-parsed controller input changes nothing.
+    const parsed = CreateProgramBody.safeParse(input);
+    if (!parsed.success) {
+      throw errors.validation(
+        provenance ? 'The imported program is invalid.' : 'The program is invalid.',
+        parsed.error.issues.map((i) => ({
+          path: i.path.map(String).join('.'),
+          message: i.message,
+          code: i.code,
+        })),
+      );
+    }
+    const body: CreateProgramInput = parsed.data;
     await this.authorization.require(principal, CatalogActions.managePrograms, {
       type: 'program',
       organizationId,
     });
     return this.uow.run(async ({ trx }) => {
-      const id = newId();
+      const id = provenance?.recordId ?? newId();
+      if (provenance) {
+        const existing = await trx
+          .selectFrom('programs')
+          .selectAll()
+          .where('id', '=', id)
+          .executeTakeFirst();
+        if (existing) {
+          if (existing.organization_id === organizationId && sameImportedContent(existing, body)) {
+            return toProgram(existing);
+          }
+          throw importContentMismatch({ programId: id, batchId: provenance.batchId });
+        }
+      }
       let row;
       try {
         row = await trx
@@ -77,6 +145,7 @@ export class ProgramsService {
             format: body.format ?? null,
             age_band: json(body.ageBand),
             status: body.status,
+            source: provenance ? 'import' : 'staff',
             created_by: json(snapshotActor(principal)),
           })
           .returningAll()
@@ -96,6 +165,13 @@ export class ProgramsService {
         afterRevision: row.revision,
         reason: body.reason ?? null,
         correlationId,
+        details: provenance
+          ? {
+              source: 'import',
+              batchId: provenance.batchId,
+              externalKey: provenance.externalKey,
+            }
+          : {},
       });
       await this.outbox.enqueue(trx, CatalogEvents.programCreated, {
         organizationId,

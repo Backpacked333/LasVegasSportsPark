@@ -4,6 +4,7 @@ import {
   SessionBookingMachine,
   errors,
   newId,
+  type AcceptedConsequence,
   type CancelEnrollmentInput,
   type CancellationPreview,
   type CompleteEnrollmentInput,
@@ -55,7 +56,11 @@ import {
 } from '../enrollment.ports';
 import {
   actorSnapshot,
+  beforeCursor,
+  cursorAt,
+  decodeCreatedCursor,
   isStaffLike,
+  keysetPage,
   organizationOf,
   redactEnrollment,
   toEnrollment,
@@ -65,6 +70,7 @@ import {
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
 import { CapacityService, type HoldRow } from './capacity.service';
+import { EnrollmentViews } from './enrollment-views';
 import { RegistrationEvaluator } from './registration-evaluator';
 import { EnrollmentFacilityScope } from './facility-scope';
 
@@ -83,6 +89,8 @@ export interface CreatePendingEnrollmentInput {
   basketLineId?: string | null;
   placementRequestId?: string | null;
   trialParticipationId?: string | null;
+  /** ENR-12: the membership a renewal line continues. */
+  renewedFromEnrollmentId?: string | null;
   priceSnapshot: PriceSnapshot | null;
   policyReferences: PolicyReferences;
   eligibilityResult: EligibilityResult | null;
@@ -111,6 +119,7 @@ export class EnrollmentsService implements EnrollmentPort {
     private readonly exceptions: OperationalExceptions,
     private readonly scope: EnrollmentFacilityScope,
     @Inject(ROSTER_PORT) private readonly rosters: RosterPort,
+    private readonly views: EnrollmentViews,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -198,7 +207,7 @@ export class EnrollmentsService implements EnrollmentPort {
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return redactEnrollment(principal, toEnrollment(row));
+    return this.views.view(this.db, organizationId, principal, row);
   }
 
   async list(principal: Principal, query: ListEnrollmentsQuery): Promise<Page<Enrollment>> {
@@ -221,22 +230,26 @@ export class EnrollmentsService implements EnrollmentPort {
       query.participantPersonId,
     );
     if (offerings?.length === 0) return { items: [], nextCursor: null };
+    // ENR-02 (§4.5): keyset pages, newest first.
+    const cursor = decodeCreatedCursor(query.cursor);
     let q = this.db
       .selectFrom('enrollments')
       .selectAll()
+      .select(cursorAt('enrollments').as('cursor_at'))
       .where('organization_id', '=', organizationId)
       .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
-      .limit(query.limit);
+      .limit(query.limit + 1);
     if (query.participantPersonId)
       q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
     if (offerings) q = q.where('offering_id', 'in', offerings);
     if (query.status) q = q.where('status', '=', query.status);
-    const rows = await q.execute();
+    if (cursor) q = q.where(beforeCursor('enrollments', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
     return {
-      items: rows.map((r) => redactEnrollment(principal, toEnrollment(r))),
-      nextCursor: null,
+      items: await this.views.views(this.db, organizationId, principal, page.rows),
+      nextCursor: page.nextCursor,
     };
   }
 
@@ -288,6 +301,7 @@ export class EnrollmentsService implements EnrollmentPort {
           basket_line_id: input.basketLineId ?? null,
           placement_request_id: input.placementRequestId ?? null,
           trial_participation_id: input.trialParticipationId ?? null,
+          renewed_from_enrollment_id: input.renewedFromEnrollmentId ?? null,
           order_ref: null,
           last_operation_id: null,
           price_snapshot: input.priceSnapshot ? json(input.priceSnapshot) : null,
@@ -689,6 +703,7 @@ export class EnrollmentsService implements EnrollmentPort {
     reason: string,
     actor: Principal,
     correlationId: string | null = null,
+    operationId: string | null = null,
   ): Promise<Enrollment> {
     const row = await this.load(trx, organizationId, enrollmentId, true);
     if (!row) throw errors.notFound('enrollment', enrollmentId);
@@ -707,6 +722,7 @@ export class EnrollmentsService implements EnrollmentPort {
       correlationId,
       null,
       'failed',
+      operationId,
     );
     return toEnrollment(updated);
   }
@@ -919,6 +935,8 @@ export class EnrollmentsService implements EnrollmentPort {
         },
         trx,
       );
+      // ENR-03: the consequence recomputed now is committed only as the customer accepted it.
+      this.assertConsequenceAccepted(consequence, input.acceptedConsequence);
       const updated = await this.cancelInTrx(
         trx,
         organizationId,
@@ -929,7 +947,7 @@ export class EnrollmentsService implements EnrollmentPort {
         consequence,
         'released',
       );
-      return redactEnrollment(principal, toEnrollment(updated));
+      return this.views.view(trx, organizationId, principal, updated);
     });
   }
 
@@ -941,7 +959,6 @@ export class EnrollmentsService implements EnrollmentPort {
     correlationId: string | null,
   ): Promise<Enrollment> {
     const organizationId = organizationOf(principal);
-    const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('enrollment');
@@ -954,39 +971,66 @@ export class EnrollmentsService implements EnrollmentPort {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
-      const status = EnrollmentMachine.next(row.status, 'complete');
-      await trx
-        .updateTable('enrollments')
-        .set({ status, completed_at: now, revision: row.revision + 1 })
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', id)
-        .where('revision', '=', row.revision)
-        .execute();
-      await this.audit.record(trx, {
+      await this.completeInTrx(
+        trx,
         organizationId,
-        actor: principal,
-        action: EnrollmentActions.completeEnrollment.id,
-        targetType: 'enrollment',
-        targetId: id,
-        beforeRevision: row.revision,
-        afterRevision: row.revision + 1,
-        reason: input.reason ?? null,
+        row,
+        principal,
+        input.reason ?? null,
         correlationId,
-      });
-      await this.outbox.enqueue(trx, EnrollmentEvents.enrollmentCompleted, {
-        organizationId,
-        aggregateType: 'enrollment',
-        aggregateId: id,
-        correlationId,
-        payload: {
-          organizationId,
-          enrollmentId: id,
-          offeringId: row.offering_id,
-          participantPersonId: row.participant_person_id,
-        },
-      });
+      );
       return toEnrollment((await this.load(trx, organizationId, id))!);
     });
+  }
+
+  /**
+   * Completes a confirmed enrollment (EnrollmentMachine confirmed → completed): the staff command
+   * and the membership lifecycle job (ENR-12, a membership whose term ended).
+   */
+  async completeInTrx(
+    trx: Trx,
+    organizationId: string,
+    row: EnrollmentRow,
+    actor: Principal,
+    reason: string | null,
+    correlationId: string | null,
+  ): Promise<EnrollmentRow> {
+    const now = this.clock.now();
+    const id = row.id;
+    const status = EnrollmentMachine.next(row.status, 'complete');
+    await trx
+      .updateTable('enrollments')
+      .set({ status, completed_at: now, revision: row.revision + 1 })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .where('revision', '=', row.revision)
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: EnrollmentActions.completeEnrollment.id,
+      targetType: 'enrollment',
+      targetId: id,
+      beforeRevision: row.revision,
+      afterRevision: row.revision + 1,
+      reason,
+      correlationId,
+    });
+    await this.outbox.enqueue(trx, EnrollmentEvents.enrollmentCompleted, {
+      organizationId,
+      aggregateType: 'enrollment',
+      aggregateId: id,
+      correlationId,
+      payload: {
+        organizationId,
+        enrollmentId: id,
+        offeringId: row.offering_id,
+        participantPersonId: row.participant_person_id,
+      },
+    });
+    const updated = await this.load(trx, organizationId, id);
+    if (!updated) throw errors.internal('enrollment vanished');
+    return updated;
   }
 
   /** Shared cancellation body: machine guard, capacity release, line outcome, audit, events. */
@@ -999,6 +1043,8 @@ export class EnrollmentsService implements EnrollmentPort {
     correlationId: string | null,
     consequence: FinancialConsequence | null,
     lineOutcome: 'failed' | 'released',
+    /** ENR-06 (§4.11 step 4): the checkout or compensation operation that ended it, if any. */
+    operationId: string | null = null,
   ): Promise<EnrollmentRow> {
     const now = this.clock.now();
     const canceledStatus = EnrollmentMachine.next(row.status, 'cancel');
@@ -1038,6 +1084,7 @@ export class EnrollmentsService implements EnrollmentPort {
         cancellation_policy_version_id:
           (row.policy_references['cancellationPolicyVersionId'] as string | null) ?? null,
         cancellation_consequence: consequence ? json(consequence) : null,
+        last_operation_id: operationId ?? row.last_operation_id,
         revision: row.revision + 1,
       })
       .where('organization_id', '=', organizationId)
@@ -1086,6 +1133,201 @@ export class EnrollmentsService implements EnrollmentPort {
   // Transfer (§4.8 POST /enrollments/{id}/transfer, SPK-REG-010): preview, then commit
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * ENR-03 (SPK-REG-010): the read-only transfer preview against the target offering as it is now
+   * (never a replayed answer), with the transfer's own authorization. Nothing is written: pools
+   * the target does not have yet are shown from its catalog limits (`poolId` null).
+   */
+  async transferPreview(
+    principal: Principal,
+    id: string,
+    targetOfferingId: string,
+  ): Promise<TransferPreview> {
+    const organizationId = organizationOf(principal);
+    const row = await this.load(this.db, organizationId, id);
+    if (!row) throw errors.protectedNotFound('enrollment');
+    await this.requireTransferAuthority(principal, organizationId, row, targetOfferingId);
+    const facts = await this.transferFacts(
+      this.db,
+      undefined,
+      organizationId,
+      principal,
+      row,
+      targetOfferingId,
+      this.clock.now(),
+      'read',
+    );
+    return facts.preview;
+  }
+
+  private async requireTransferAuthority(
+    principal: Principal,
+    organizationId: string,
+    row: EnrollmentRow,
+    targetOfferingId: string,
+    trx?: Trx,
+  ): Promise<void> {
+    // §4.3: a transfer acts at the source and the target offering's facility.
+    await this.scope.requireAt(
+      principal,
+      EnrollmentActions.transferEnrollment,
+      {
+        type: 'enrollment',
+        id: row.id,
+        organizationId,
+        subjectPersonIds: [row.participant_person_id],
+        protected: true,
+      },
+      await this.scope.facilitiesOf(organizationId, [row.offering_id, targetOfferingId], trx),
+    );
+    if (targetOfferingId === row.offering_id) {
+      throw errors.validation('The target offering must differ from the current one.');
+    }
+  }
+
+  /**
+   * Everything a transfer decision rests on, computed once for the preview and the commit:
+   * eligibility, capacity (with the waitlist ahead, DEC-006), the price and the financial
+   * consequence finance answers (DEC-009). `read` never writes; `commit` creates the target pools.
+   */
+  private async transferFacts(
+    db: Reader,
+    trx: Trx | undefined,
+    organizationId: string,
+    principal: Principal,
+    row: EnrollmentRow,
+    targetOfferingId: string,
+    now: Date,
+    mode: 'read' | 'commit',
+  ) {
+    const source = await this.evaluator.snapshot(trx, organizationId, row.offering_id, now);
+    const target = await this.evaluator.snapshot(trx, organizationId, targetOfferingId, now);
+    const person = await this.evaluator.participant(trx, organizationId, row.participant_person_id);
+    const evaluation = await this.evaluator.evaluate(
+      trx,
+      organizationId,
+      { snapshot: target, person, intent: row.intent },
+      now,
+    );
+    const targetPools =
+      mode === 'commit' && trx
+        ? this.capacity.poolsForIntent(
+            await this.capacity.ensurePoolsForOffering(trx, organizationId, target, principal),
+            row.intent,
+          )
+        : await this.capacity.previewPoolsForIntent(db, organizationId, target, row.intent);
+    const released = await db
+      .selectFrom('allocations')
+      .innerJoin('capacity_pools', (join) =>
+        join
+          .onRef('capacity_pools.id', '=', 'allocations.pool_id')
+          .onRef('capacity_pools.organization_id', '=', 'allocations.organization_id'),
+      )
+      .select([
+        'allocations.pool_id as pool_id',
+        'capacity_pools.unit as unit',
+        'allocations.quantity as quantity',
+      ])
+      .where('allocations.organization_id', '=', organizationId)
+      .where('allocations.enrollment_id', '=', row.id)
+      .where('allocations.status', '=', 'active')
+      .execute();
+    const targetPrice = await this.evaluator.priceSnapshot(
+      trx,
+      organizationId,
+      target.offering.id,
+      now,
+    );
+    const fromPrice = this.priceOf(row);
+    const consequence = await this.finance.transferConsequence(
+      organizationId,
+      {
+        enrollmentId: row.id,
+        participantPersonId: row.participant_person_id,
+        fromOfferingId: row.offering_id,
+        toOfferingId: target.offering.id,
+        fromPrice,
+        toPrice: targetPrice
+          ? { amountMinor: targetPrice.basePriceMinor, currency: targetPrice.currency }
+          : null,
+        at: now,
+      },
+      trx,
+    );
+    const required = targetPools.map((p) => ({
+      poolId: p.id,
+      unit: p.unit,
+      constraintKind: p.constraint_kind,
+      available: p.capacity - p.committed - p.held,
+    }));
+    // DEC-006 (proposed `waitlistFirst`): a transfer does not skip people waiting for the target.
+    const waitlistAhead = this.evaluator.configuration.waitlistFirst
+      ? await this.capacity.othersWaiting(
+          db,
+          organizationId,
+          { offeringId: target.offering.id, sessionId: null },
+          row.participant_person_id,
+        )
+      : 0;
+    const preview: TransferPreview = {
+      enrollmentId: row.id,
+      existing: this.participation(
+        source,
+        fromPrice ? (row.price_snapshot as unknown as PriceSnapshot) : null,
+      ),
+      proposed: this.participation(target, targetPrice),
+      affectedDates: {
+        existingRange: { startsOn: source.offering.startsOn, endsOn: source.offering.endsOn },
+        proposedRange: { startsOn: target.offering.startsOn, endsOn: target.offering.endsOn },
+        overlapping:
+          source.offering.startsOn <= target.offering.endsOn &&
+          target.offering.startsOn <= source.offering.endsOn,
+      },
+      capacity: {
+        released: released.map((r) => ({ poolId: r.pool_id, unit: r.unit })),
+        required,
+        waitlistAhead,
+        sufficient: waitlistAhead === 0 && required.every((r) => r.available >= 1),
+      },
+      eligibility: evaluation.result,
+      financialConsequence: consequence,
+      requiredApproval: evaluation.requiresApproval,
+      committed: false,
+      newEnrollment: null,
+      previousEnrollment: null,
+    };
+    return { preview, target, evaluation, targetPools, targetPrice, consequence, waitlistAhead };
+  }
+
+  /**
+   * ENR-03 (SPK-REG-010, §4.9, §4.11): a refund, credit or charge is committed only as the customer
+   * accepted it. The consequence was recomputed in the command's transaction; when it is not
+   * `none`, the accepted one must be present and equal in kind, amount and currency, or nothing is
+   * committed and the caller gets the current consequence to review again.
+   */
+  private assertConsequenceAccepted(
+    consequence: FinancialConsequence,
+    accepted: AcceptedConsequence | undefined,
+  ): void {
+    if (consequence.kind === 'none') return;
+    if (!accepted) {
+      throw errors.resourceConflict(
+        'Review and accept the financial consequence before committing.',
+        { code: 'CONSEQUENCE_ACCEPTANCE_REQUIRED', consequence },
+      );
+    }
+    if (
+      accepted.kind !== consequence.kind ||
+      accepted.amountMinor !== consequence.amountMinor ||
+      accepted.currency !== consequence.currency
+    ) {
+      throw errors.resourceConflict(
+        'The financial consequence changed since it was previewed; review and accept it again.',
+        { code: 'CONSEQUENCE_CHANGED', consequence },
+      );
+    }
+  }
+
   async transfer(
     principal: Principal,
     id: string,
@@ -1097,130 +1339,30 @@ export class EnrollmentsService implements EnrollmentPort {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, input.commit);
       if (!row) throw errors.protectedNotFound('enrollment');
-      // §4.3: a transfer acts at the source and the target offering's facility.
-      await this.scope.requireAt(
+      await this.requireTransferAuthority(
         principal,
-        EnrollmentActions.transferEnrollment,
-        {
-          type: 'enrollment',
-          id,
-          organizationId,
-          subjectPersonIds: [row.participant_person_id],
-          protected: true,
-        },
-        await this.scope.facilitiesOf(
-          organizationId,
-          [row.offering_id, input.targetOfferingId],
-          trx,
-        ),
+        organizationId,
+        row,
+        input.targetOfferingId,
+        trx,
       );
       assertExpectedRevision(input.expectedRevision, row.revision);
-      if (input.targetOfferingId === row.offering_id) {
-        throw errors.validation('The target offering must differ from the current one.');
-      }
-      const source = await this.evaluator.snapshot(trx, organizationId, row.offering_id, now);
-      const target = await this.evaluator.snapshot(
+      const facts = await this.transferFacts(
+        trx,
         trx,
         organizationId,
+        principal,
+        row,
         input.targetOfferingId,
         now,
+        input.commit ? 'commit' : 'read',
       );
-      const person = await this.evaluator.participant(
-        trx,
-        organizationId,
-        row.participant_person_id,
-      );
-      const evaluation = await this.evaluator.evaluate(
-        trx,
-        organizationId,
-        { snapshot: target, person, intent: row.intent },
-        now,
-      );
-      const targetPools = this.capacity.poolsForIntent(
-        await this.capacity.ensurePoolsForOffering(trx, organizationId, target, principal),
-        row.intent,
-      );
-      const released = await trx
-        .selectFrom('allocations')
-        .innerJoin('capacity_pools', (join) =>
-          join
-            .onRef('capacity_pools.id', '=', 'allocations.pool_id')
-            .onRef('capacity_pools.organization_id', '=', 'allocations.organization_id'),
-        )
-        .select([
-          'allocations.pool_id as pool_id',
-          'capacity_pools.unit as unit',
-          'allocations.quantity as quantity',
-        ])
-        .where('allocations.organization_id', '=', organizationId)
-        .where('allocations.enrollment_id', '=', id)
-        .where('allocations.status', '=', 'active')
-        .execute();
-      const targetPrice = await this.evaluator.priceSnapshot(
-        trx,
-        organizationId,
-        target.offering.id,
-        now,
-      );
-      const fromPrice = this.priceOf(row);
-      const consequence = await this.finance.transferConsequence(
-        organizationId,
-        {
-          enrollmentId: id,
-          participantPersonId: row.participant_person_id,
-          fromOfferingId: row.offering_id,
-          toOfferingId: target.offering.id,
-          fromPrice,
-          toPrice: targetPrice
-            ? { amountMinor: targetPrice.basePriceMinor, currency: targetPrice.currency }
-            : null,
-          at: now,
-        },
-        trx,
-      );
-      const required = targetPools.map((p) => ({
-        poolId: p.id,
-        unit: p.unit,
-        constraintKind: p.constraint_kind,
-        available: p.capacity - p.committed - p.held,
-      }));
-      // DEC-006 (proposed `waitlistFirst`): a transfer does not skip people waiting for the target.
-      const waitlistAhead = this.evaluator.configuration.waitlistFirst
-        ? await this.capacity.othersWaiting(
-            trx,
-            organizationId,
-            { offeringId: target.offering.id, sessionId: null },
-            row.participant_person_id,
-          )
-        : 0;
-      const preview: TransferPreview = {
-        enrollmentId: id,
-        existing: this.participation(
-          source,
-          fromPrice ? (row.price_snapshot as unknown as PriceSnapshot) : null,
-        ),
-        proposed: this.participation(target, targetPrice),
-        affectedDates: {
-          existingRange: { startsOn: source.offering.startsOn, endsOn: source.offering.endsOn },
-          proposedRange: { startsOn: target.offering.startsOn, endsOn: target.offering.endsOn },
-          overlapping:
-            source.offering.startsOn <= target.offering.endsOn &&
-            target.offering.startsOn <= source.offering.endsOn,
-        },
-        capacity: {
-          released: released.map((r) => ({ poolId: r.pool_id, unit: r.unit })),
-          required,
-          waitlistAhead,
-          sufficient: waitlistAhead === 0 && required.every((r) => r.available >= 1),
-        },
-        eligibility: evaluation.result,
-        financialConsequence: consequence,
-        requiredApproval: evaluation.requiresApproval,
-        committed: false,
-        newEnrollment: null,
-        previousEnrollment: null,
-      };
+      const { preview, target, evaluation, targetPrice, consequence, waitlistAhead } = facts;
+      // Deprecated (ENR-03): `commit: false` still previews; GET .../transfer-preview is read-only.
       if (!input.commit) return preview;
+      const targetPools = facts.targetPools.filter(
+        (p): p is (typeof facts.targetPools)[number] & { id: string } => p.id !== null,
+      );
 
       // ---- commit -------------------------------------------------------------------------
       const transferredStatus = EnrollmentMachine.next(row.status, 'transfer');
@@ -1253,15 +1395,7 @@ export class EnrollmentsService implements EnrollmentPort {
           { offeringId: target.offering.id, waitlistFirst: true, waitlistAhead },
         );
       }
-      if (consequence.kind !== 'none' && !input.acceptConsequence) {
-        throw errors.resourceConflict(
-          'Review and accept the financial consequence before committing the transfer.',
-          {
-            code: 'CONSEQUENCE_NOT_ACCEPTED',
-            consequence,
-          },
-        );
-      }
+      this.assertConsequenceAccepted(consequence, input.acceptedConsequence);
       const operationId = await this.operations.create(trx, {
         organizationId,
         kind: 'enrollment.transfer',
@@ -1349,6 +1483,7 @@ export class EnrollmentsService implements EnrollmentPort {
           toOfferingId: target.offering.id,
           consequence,
           consequenceAccepted: consequence.kind !== 'none',
+          acceptedConsequence: input.acceptedConsequence ?? null,
         },
       });
       await this.audit.record(trx, {

@@ -410,10 +410,10 @@ function RosterContent({ workspace, refetch }: { workspace: Workspace; refetch: 
       <Title>{`${workspace.team.name}: roster`}</Title>
       <InviteForm workspace={workspace} />
       <Section title="Open invitations">
-        {workspace.pendingInvitations.length === 0 ? (
+        {(workspace.pendingInvitations ?? []).length === 0 ? (
           <Body>No open invitations.</Body>
         ) : (
-          workspace.pendingInvitations.map((invitation) => (
+          (workspace.pendingInvitations ?? []).map((invitation) => (
             <PendingInvitation
               key={invitation.id}
               invitation={invitation}
@@ -424,10 +424,10 @@ function RosterContent({ workspace, refetch }: { workspace: Workspace; refetch: 
         )}
       </Section>
       <Section title="Join requests">
-        {workspace.pendingJoinRequests.length === 0 ? (
+        {(workspace.pendingJoinRequests ?? []).length === 0 ? (
           <Body>No join requests waiting.</Body>
         ) : (
-          workspace.pendingJoinRequests.map((request) => (
+          (workspace.pendingJoinRequests ?? []).map((request) => (
             <JoinRequestItem
               key={request.id}
               request={request}

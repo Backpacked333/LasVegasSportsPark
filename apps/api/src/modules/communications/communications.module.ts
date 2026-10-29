@@ -1,8 +1,28 @@
-import { Module, type OnModuleDestroy, type OnModuleInit, type Provider } from '@nestjs/common';
+import {
+  Inject,
+  Module,
+  type OnModuleDestroy,
+  type OnModuleInit,
+  type Provider,
+} from '@nestjs/common';
 import { DeliveryReceiptSchema, type EventPayload } from '@sportspark/contracts';
 import { ModuleRef } from '@nestjs/core';
-import { BackgroundWorkers, EventHandlerRegistry, Inbox, lazyPort } from '../../kernel';
-import { CHANGE_NOTICE_CHECK_IMPL, CompetitionModule } from '../competition';
+import {
+  BackgroundWorkers,
+  EventHandlerRegistry,
+  INTEGRATION_REGISTRY,
+  Inbox,
+  PeriodicJobRegistry,
+  lazyPort,
+  moduleSettings,
+  type IntegrationRegistryPort,
+} from '../../kernel';
+import {
+  CHANGE_NOTICE_CHECK_IMPL,
+  CompetitionEvents,
+  CompetitionModule,
+  MatchEvents,
+} from '../competition';
 import { IdentityEvents, IdentityModule } from '../identity';
 import {
   ClosureImpactContributors,
@@ -13,6 +33,7 @@ import {
 import { DeliveryRequested } from './communications.events';
 import { COMMUNICATIONS_POLICY, DEFAULT_COMMUNICATIONS_POLICY } from './communications.policy';
 import { CalendarFeedController } from './controllers/calendar-feed.controller';
+import { DeliveryAttemptsController } from './controllers/delivery-attempts.controller';
 import { MeCommunicationsController } from './controllers/me.controller';
 import { NotificationsController } from './controllers/notifications.controller';
 import { MessagingWebhooksController } from './controllers/webhooks.controller';
@@ -31,20 +52,28 @@ import {
   FakePushProvider,
   FakeSmsProvider,
 } from './providers/fake-messaging.provider';
+import { ActivityReminders } from './services/activity-reminders';
 import { AudienceResolver } from './services/audience-resolver';
 import { CalendarEntriesService } from './services/calendar-entries.service';
 import { CalendarFeedsService } from './services/calendar-feeds.service';
 import { CompetitionTeamMembership } from './services/competition-team-membership';
 import { ChangeNoticeCheck } from './services/change-notice-check';
+import { CompetitionNotices } from './services/competition-notices';
+import { DeliveryRetryService } from './services/delivery-retry.service';
 import { DeliveryWorker } from './services/delivery-worker';
 import { InboxService } from './services/inbox.service';
 import { NotificationsService } from './services/notifications.service';
+import { MergedPersons } from './services/merged-persons';
+import { PersonMergeFollowUp } from './services/person-merge-follow-up';
 import { PreferencesService } from './services/preferences.service';
+import { PushDevicesService } from './services/push-devices.service';
 import { RecipientAddresses } from './services/recipient-addresses';
 import { ScheduleNotices } from './services/schedule-notices';
 
 const providers: Provider[] = [
   { provide: COMMUNICATIONS_POLICY, useValue: DEFAULT_COMMUNICATIONS_POLICY },
+  // K-15, IF-43: the communication policy's settings without defaults (DEC-012).
+  moduleSettings('communications'),
   // Provider-selection gate (§5.2, DEC-020): one deterministic fake per external channel.
   FakePushProvider,
   FakeEmailProvider,
@@ -65,6 +94,7 @@ const providers: Provider[] = [
       lazyPort(moduleRef, SESSION_AUDIENCE_IMPL, noSessionAudience, null),
   },
   AudienceResolver,
+  MergedPersons,
   RecipientAddresses,
   PreferencesService,
   NotificationsService,
@@ -73,6 +103,11 @@ const providers: Provider[] = [
   CalendarEntriesService,
   CalendarFeedsService,
   ScheduleNotices,
+  PushDevicesService,
+  DeliveryRetryService,
+  CompetitionNotices,
+  PersonMergeFollowUp,
+  ActivityReminders,
   // Fixture readiness "Material change notifications" (SPK-READY-001): this module's delivery
   // evidence for the schedule-change notice.
   ChangeNoticeCheck,
@@ -92,6 +127,7 @@ const providers: Provider[] = [
   providers,
   controllers: [
     NotificationsController,
+    DeliveryAttemptsController,
     MeCommunicationsController,
     CalendarFeedController,
     MessagingWebhooksController,
@@ -105,6 +141,9 @@ const providers: Provider[] = [
     DeliveryWorker,
     AudienceResolver,
     ScheduleNotices,
+    PushDevicesService,
+    DeliveryRetryService,
+    ActivityReminders,
     CHANNEL_PROVIDERS,
     TEAM_MEMBERSHIP_PORT,
     COMMUNICATIONS_POLICY,
@@ -122,9 +161,30 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
     private readonly scheduleNotices: ScheduleNotices,
     private readonly worker: DeliveryWorker,
     private readonly impactContributors: ClosureImpactContributors,
+    private readonly pushDevices: PushDevicesService,
+    private readonly competitionNotices: CompetitionNotices,
+    private readonly mergeFollowUp: PersonMergeFollowUp,
+    private readonly reminders: ActivityReminders,
+    private readonly periodicJobs: PeriodicJobRegistry,
+    @Inject(INTEGRATION_REGISTRY) private readonly integrations: IntegrationRegistryPort,
   ) {}
 
   onModuleInit(): void {
+    // §5.1, §5.2 (COM-01, K-09, DEC-020): the channel adapters this module runs, all deterministic
+    // fakes refused in production; failed deliveries reach the front desk's queue.
+    for (const channel of ['push', 'email', 'sms'] as const) {
+      this.integrations.register({
+        id: `communications.${channel}_provider`,
+        gate: 'messaging',
+        port: 'CHANNEL_PROVIDERS',
+        adapter: { name: FAKE_MESSAGING_PROVIDER, kind: 'fake' },
+        productionAllowed: false,
+        scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
+        reconciliationOwner: 'front_desk',
+      });
+    }
+    // COM-06 (SPK-CAP-001 "remind", K-06): composes nothing until the lead time is configured.
+    this.periodicJobs.register(this.reminders.job());
     // SPK-SCHED-009 "messages": a closure preview names the unsent notices about affected events.
     this.impactContributors.register(
       'communications.pending_notices',
@@ -201,6 +261,48 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
         }
       },
       { failureOwner: 'front_desk' },
+    );
+    // SPK-AT-025, SPK-IAM-006 (COM-01): a recovered account's devices receive nothing more.
+    this.registry.on<EventPayload<typeof IdentityEvents.accountRelinked>>(
+      IdentityEvents.accountRelinked.type,
+      'communications.revoke_push_on_relink',
+      async (event, ctx) => {
+        await this.pushDevices.revokeForAccount(
+          ctx.trx,
+          event.organizationId,
+          event.payload.accountId,
+          event.correlationId,
+        );
+      },
+      { failureOwner: 'support_operator' },
+    );
+    // SPK-IAM-007 (COM-05): the survivor reads the merged person's rows; conflicts go to support.
+    this.registry.on<EventPayload<typeof IdentityEvents.personsMerged>>(
+      IdentityEvents.personsMerged.type,
+      'communications.follow_person_merge',
+      async (event, ctx) => {
+        await this.mergeFollowUp.onPersonsMerged(ctx.trx, event);
+      },
+      { failureOwner: 'support_operator' },
+    );
+    // SPK-COMMS-002 notices about competition facts (COM-03, COM-06; IF-22).
+    this.registry.on<EventPayload<typeof CompetitionEvents.teamInvitationCreated>>(
+      CompetitionEvents.teamInvitationCreated.type,
+      'communications.notify_team_invitation',
+      (event, ctx) => this.competitionNotices.onTeamInvitationCreated(ctx.trx, event),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof MatchEvents.resultPublished>>(
+      MatchEvents.resultPublished.type,
+      'communications.notify_result_published',
+      (event, ctx) => this.competitionNotices.onResultPublished(ctx.trx, event),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof CompetitionEvents.availabilityRequested>>(
+      CompetitionEvents.availabilityRequested.type,
+      'communications.notify_availability_request',
+      (event, ctx) => this.competitionNotices.onAvailabilityRequested(ctx.trx, event),
+      { failureOwner: 'league_manager' },
     );
     // Provider receipts resolve accepted/unknown attempts; duplicates are ignored (SPK-COMMS-004).
     this.inbox.on(

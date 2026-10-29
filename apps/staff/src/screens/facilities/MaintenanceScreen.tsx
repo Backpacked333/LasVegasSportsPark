@@ -94,8 +94,8 @@ function TaskList({ facility }: { facility: FacilityContext }) {
         limit,
         ...(status ? { status } : {}),
         ...(severity ? { severity } : {}),
-        // Only `true` is sent: the API reads any value of this flag as true.
-        ...(overdueOnly ? { overdue: true } : {}),
+        // The flag is the string 'true' or 'false' (QueryBoolean, FAC-01); only 'true' is sent.
+        ...(overdueOnly ? { overdue: 'true' as const } : {}),
       },
     },
   });
@@ -524,7 +524,10 @@ function Assets({ facility }: { facility: FacilityContext }) {
   const assets = useApiQuery({
     path: '/assets',
     request: {
-      query: { facilityId: facility.id, ...(includeRetired ? { includeRetired: true } : {}) },
+      query: {
+        facilityId: facility.id,
+        ...(includeRetired ? { includeRetired: 'true' as const } : {}),
+      },
     },
   });
   const { resources } = useFacilityNames(facility.id);
@@ -648,10 +651,9 @@ function Assets({ facility }: { facility: FacilityContext }) {
 
 function recurrenceText(s: Schema<'PreventiveSchedule'>): string {
   const r = s.recurrence;
+  const interval = r.interval ?? 1;
   const every =
-    r.interval > 1
-      ? `every ${r.interval} ${r.frequency === 'daily' ? 'days' : 'weeks'}`
-      : r.frequency;
+    interval > 1 ? `every ${interval} ${r.frequency === 'daily' ? 'days' : 'weeks'}` : r.frequency;
   const days = r.byWeekday?.length
     ? ` on ${r.byWeekday.map((d) => WEEKDAY_LABEL[d] ?? d).join(', ')}`
     : '';

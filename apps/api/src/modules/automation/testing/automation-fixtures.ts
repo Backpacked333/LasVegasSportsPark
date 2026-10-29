@@ -55,8 +55,9 @@ function snapshot(kind: 'customer' | 'staff', accountId: string, personId: strin
 }
 
 /**
- * An answered assistant request written directly (with its running-then-succeeded operation), for
- * schema tests and tests that need a recommendation to hang off.
+ * An assistant request written directly, for schema tests and tests that need a recommendation to
+ * hang off: `answered` (default) with its succeeded operation, or `processing` with its running
+ * operation, as a request whose process stopped mid-request leaves it (AUT-03).
  */
 export async function createAssistantRequestFixture(
   ctx: AutomationFixtureContext,
@@ -66,12 +67,15 @@ export async function createAssistantRequestFixture(
     kind?: 'customer' | 'staff';
     status?: 'processing' | 'answered';
     organizationId?: string;
+    /** When the request was received (default: now). */
+    receivedAt?: Date;
   },
 ): Promise<{ assistantRequestId: string; operationId: string }> {
   const organizationId = input.organizationId ?? ctx.organizationId;
   const id = newId();
   const operationId = newId();
-  const now = ctx.clock.now();
+  const now = input.receivedAt ?? ctx.clock.now();
+  const answered = (input.status ?? 'answered') === 'answered';
   const requester = snapshot(
     input.kind ?? 'staff',
     input.requesterAccountId,
@@ -84,13 +88,13 @@ export async function createAssistantRequestFixture(
         id: operationId,
         organization_id: organizationId,
         kind: 'automation.assistant_request',
-        status: 'succeeded',
+        status: answered ? 'succeeded' : 'running',
         requested_by: json(requester),
         correlation_id: null,
         input: null,
         result: null,
         error: null,
-        completed_at: now,
+        completed_at: answered ? now : null,
       })
       .execute();
     await trx
@@ -111,7 +115,7 @@ export async function createAssistantRequestFixture(
         completed_at: null,
       })
       .execute();
-    if ((input.status ?? 'answered') === 'answered') {
+    if (answered) {
       await trx
         .updateTable('assistant_requests')
         .set({

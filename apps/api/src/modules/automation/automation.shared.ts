@@ -6,12 +6,14 @@ import {
   type AssistantMissingEvidence,
   type Principal,
   type Recommendation,
+  type RecommendationApplySettlement,
   type RecommendationCommand,
   type ToolInvocation,
 } from '@sportspark/contracts';
 import type {
   AssistantRequestsTable,
   Db,
+  RecommendationApplySettlementsTable,
   RecommendationsTable,
   ToolInvocationsTable,
 } from '@sportspark/db';
@@ -24,6 +26,7 @@ export type Reader = Db | Trx;
 export type AssistantRequestRow = Selectable<AssistantRequestsTable>;
 export type RecommendationRow = Selectable<RecommendationsTable>;
 export type ToolInvocationRow = Selectable<ToolInvocationsTable>;
+export type ApplySettlementRow = Selectable<RecommendationApplySettlementsTable>;
 
 export function organizationOf(principal: Principal): string {
   if (!principal.organizationId) throw errors.authenticationRequired();
@@ -115,7 +118,40 @@ export interface EvidenceAging {
   maxAgeMinutes: number;
 }
 
-export function toRecommendation(row: RecommendationRow, aging: EvidenceAging): Recommendation {
+/**
+ * AUT-03: the apply whose outcome the owning module did not report — the claim is held, and the
+ * module recorded `unknown` for that very operation (the operation is `recovery_required`).
+ */
+export function unknownApplyOf(
+  row: RecommendationRow,
+): { operationId: string; details: Readonly<Record<string, unknown>> } | null {
+  if (row.status !== 'approved' || !row.apply_operation_id) return null;
+  const details = (row.last_apply_error as { details?: unknown } | null)?.details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+  const d = details as Record<string, unknown>;
+  if (d['outcome'] !== 'unknown' || d['operationId'] !== row.apply_operation_id) return null;
+  return { operationId: row.apply_operation_id, details: d };
+}
+
+export function toApplySettlement(row: ApplySettlementRow): RecommendationApplySettlement {
+  return {
+    id: row.id,
+    applyOperationId: row.apply_operation_id,
+    outcome: row.outcome,
+    evidence: row.evidence,
+    reason: row.reason,
+    policyReferences: (row.policy_references ?? []).map(String),
+    settledBy: actorOf(row.settled_by),
+    settledAt: iso(row.settled_at),
+    auditRecordId: row.audit_record_id,
+  };
+}
+
+export function toRecommendation(
+  row: RecommendationRow,
+  aging: EvidenceAging,
+  settlements: readonly ApplySettlementRow[] = [],
+): Recommendation {
   const command = commandOf(row);
   const applyState: Recommendation['apply']['state'] = !command
     ? 'not_applicable'
@@ -168,6 +204,7 @@ export function toRecommendation(row: RecommendationRow, aging: EvidenceAging): 
           ? { type: row.applied_record_type, id: row.applied_record_id }
           : null,
       lastError: row.last_apply_error ?? null,
+      settlements: settlements.map(toApplySettlement),
     },
     expiredAt: isoOrNull(row.expired_at),
     revision: row.revision,

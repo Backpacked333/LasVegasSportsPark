@@ -8,7 +8,7 @@ import {
   type RelationshipAuthorityPort,
   type Trx,
 } from '../../../kernel';
-import type { AuthorityLookupPort } from '../identity.ports';
+import type { AuthorityLookupPort, EffectiveGrant } from '../identity.ports';
 import { currentTransaction } from '../identity.transaction-context';
 
 /** Permissions a child never holds over themselves, whatever their account (SPK-IAM-003, SPK-ENTRY-007). */
@@ -128,6 +128,71 @@ export class RelationshipAuthority implements RelationshipAuthorityPort, Authori
     return row !== undefined;
   }
 
+  /**
+   * RelationshipAuthorityPort.subjectsWithPermission (K-05, IF-01, ID-04): the people other than
+   * the actor over whom the actor holds `permission` now, with `hasPermission`'s effectivity rule,
+   * read through the active transaction (customer "my ..." lists start from these subjects).
+   */
+  async subjectsWithPermission(
+    organizationId: string,
+    actorPersonId: string,
+    permission: GrantPermissionValue,
+  ): Promise<string[]> {
+    const rows = await this.effectiveGrantRows(currentTransaction() ?? this.db, organizationId)
+      .select('access_grants.subject_person_id')
+      .distinct()
+      .where('access_grants.actor_person_id', '=', actorPersonId)
+      .where('access_grants.permission', '=', permission)
+      .where('access_grants.subject_person_id', '<>', actorPersonId)
+      .execute();
+    return rows.map((r) => r.subject_person_id).sort();
+  }
+
+  /**
+   * AuthorityLookupPort.effectiveGrant (ID-09, IF-46, SPK-ENTRY-007 "record the authority used"):
+   * the grant that makes `hasPermission` true, evaluated with the same rule at `at` (unrevoked,
+   * not under a suspension in force, inside its own and its relationship's dates, relationship
+   * active). With several, the one with the latest effectiveFrom (then the highest id) is named.
+   * Null whenever `hasPermission` would answer false, and for self authority, which no grant
+   * carries.
+   */
+  async effectiveGrant(
+    organizationId: string,
+    actorPersonId: string,
+    subjectPersonId: string,
+    permission: GrantPermissionValue,
+    at: Date,
+    trx?: Trx,
+  ): Promise<EffectiveGrant | null> {
+    if (actorPersonId === subjectPersonId) return null;
+    const row = await this.effectiveGrantRows(
+      trx ?? currentTransaction() ?? this.db,
+      organizationId,
+      at,
+    )
+      .where('access_grants.subject_person_id', '=', subjectPersonId)
+      .where('access_grants.permission', '=', permission)
+      .where('access_grants.actor_person_id', '=', actorPersonId)
+      .select([
+        'access_grants.id',
+        'access_grants.relationship_id',
+        'access_grants.source',
+        'access_grants.effective_from',
+        'access_grants.effective_to',
+      ])
+      .orderBy('access_grants.effective_from', 'desc')
+      .orderBy('access_grants.id', 'desc')
+      .executeTakeFirst();
+    if (!row) return null;
+    return {
+      grantId: row.id,
+      relationshipId: row.relationship_id,
+      source: row.source,
+      effectiveFrom: new Date(row.effective_from).toISOString(),
+      effectiveTo: row.effective_to === null ? null : new Date(row.effective_to).toISOString(),
+    };
+  }
+
   async actorsWithPermission(
     organizationId: string,
     subjectPersonId: string,
@@ -206,9 +271,12 @@ export class RelationshipAuthority implements RelationshipAuthorityPort, Authori
       .where('access_grants.permission', '=', permission);
   }
 
-  /** The one effectivity rule, in SQL (mirrors `isGrantEffective` plus the relationship window). */
-  private effectiveGrantRows(db: Db | Trx, organizationId: string) {
-    const now = this.clock.now();
+  /**
+   * The one effectivity rule, in SQL (mirrors `isGrantEffective` plus the relationship window),
+   * evaluated at the clock unless `at` is given (ID-09).
+   */
+  private effectiveGrantRows(db: Db | Trx, organizationId: string, at?: Date) {
+    const now = at ?? this.clock.now();
     return (
       db
         .selectFrom('access_grants')
