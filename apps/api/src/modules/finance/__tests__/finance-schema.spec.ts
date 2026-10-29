@@ -786,6 +786,7 @@ describe('finance database guarantees (§4.7 invariants 5, 6, 7; SPK-PAY-004/008
       select indexname, indexdef from pg_indexes
       where indexname in ('receipts_order_idx', 'receipts_obligation_idx', 'obligations_order_idx',
         'credit_redemptions_reference_idx', 'enrollments_basket_line_idx', 'suspensions_decision_idx')
+        and schemaname = current_schema()
       order by indexname`.execute(t.db);
     expect(
       indexes.rows.map((r) => [r.indexname, r.indexdef.replace(/^.* USING btree /, '')]),
