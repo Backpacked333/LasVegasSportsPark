@@ -9,13 +9,19 @@ import {
 import type { TeamMembershipPort } from '../ports';
 import { uniqueStrings } from '../communications.shared';
 
+/** Team roles whose holders belong to a team audience with or without a roster row (COM-03). */
+export const TEAM_AUDIENCE_ROLES = ['captain', 'co_captain'] as const;
+
 /**
  * TEAM_MEMBERSHIP_PORT over the competition module's exported ports (§4.2: never its tables).
  * Membership is the effective roster at the clock (SPK-COMP-005): active, guest and substitute
- * rows whose effective window covers "now". A player removed today is no longer a recipient of a
- * team notice composed tomorrow, and a protected notice still awaiting hand-off is re-checked
- * against this same answer (SPK-COMMS-003). Reads go through the caller's transaction when one is
- * active so a roster change made earlier in the same command counts.
+ * rows whose effective window covers "now", plus the people holding the captain or co-captain role
+ * on the entry at the clock with or without a roster row (COM-03, IF-15 `roleHolders`), so a
+ * non-playing co-captain hears the team's notices. A player removed today, or a captain whose role
+ * ended, is no longer a recipient of a team notice composed tomorrow, and a protected notice still
+ * awaiting hand-off is re-checked against this same answer (SPK-COMMS-003). Reads go through the
+ * caller's transaction when one is active so a roster change made earlier in the same command
+ * counts.
  */
 @Injectable()
 export class CompetitionTeamMembership implements TeamMembershipPort {
@@ -26,13 +32,20 @@ export class CompetitionTeamMembership implements TeamMembershipPort {
   ) {}
 
   async membersOf(organizationId: string, teamEntryId: string, trx?: Trx): Promise<string[]> {
-    const members = await this.roster.effectiveRoster(
+    const at = this.clock.now();
+    const reader = trx ?? currentTransaction();
+    const members = await this.roster.effectiveRoster(organizationId, teamEntryId, at, reader);
+    const holders = await this.entries.roleHolders(
       organizationId,
       teamEntryId,
-      this.clock.now(),
-      trx ?? currentTransaction(),
+      TEAM_AUDIENCE_ROLES,
+      at,
+      reader,
     );
-    return uniqueStrings(members.map((m) => m.personId)).sort();
+    return uniqueStrings([
+      ...members.map((m) => m.personId),
+      ...holders.map((h) => h.personId),
+    ]).sort();
   }
 
   async isMember(

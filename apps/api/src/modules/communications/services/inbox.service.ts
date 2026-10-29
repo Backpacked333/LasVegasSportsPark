@@ -39,6 +39,7 @@ import {
   type InboxRow,
 } from '../communications.shared';
 import { AudienceResolver } from './audience-resolver';
+import { MergedPersons } from './merged-persons';
 
 const InboxCursor = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
 
@@ -49,7 +50,6 @@ interface EntitlementRow extends InboxRow {
   recipient_person_id: string;
   resolved_basis: RecipientBasisValue;
   basis_detail: string | null;
-  subject_person_ids: string[];
 }
 
 /**
@@ -59,6 +59,11 @@ interface EntitlementRow extends InboxRow {
  * A protected notice is served only while the recipient still holds the authority that justified
  * it, re-checked on every read like a calendar feed (SPK-IAM-006 "revocation must affect new
  * protected requests", SPK-AT-017, invariant 10); the delivered fact itself is never rewritten.
+ *
+ * Person merges (COM-05, SPK-IAM-007): nothing is rewritten. The survivor's inbox lists the notices
+ * delivered to every person merged into them (identity's `personIdsResolvingTo`), and they read and
+ * acknowledge them as their own. A protected notice of a merged person is re-checked for the
+ * survivor, who holds the merged person's re-pointed authority.
  */
 @Injectable()
 export class InboxService {
@@ -69,6 +74,7 @@ export class InboxService {
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
     private readonly resolver: AudienceResolver,
+    private readonly merges: MergedPersons,
   ) {}
 
   async list(principal: Principal, query: InboxQuery): Promise<Page<InboxItem>> {
@@ -76,7 +82,9 @@ export class InboxService {
     const personId = personOf(principal);
     await this.authorize(principal, organizationId, personId, CommunicationsActions.readInbox);
     const cursor = decodeCursor(query.cursor, InboxCursor);
-    let q = this.inboxQuery(this.uow.reader(), organizationId, personId)
+    const reader = this.uow.reader();
+    const personIds = await this.inboxPersons(reader, organizationId, personId);
+    let q = this.inboxQuery(reader, organizationId, personIds)
       .orderBy('a.created_at', 'desc')
       .orderBy('a.id', 'desc')
       .limit(query.limit + 1);
@@ -89,7 +97,7 @@ export class InboxService {
     const rows = await q.execute();
     const items: InboxItem[] = [];
     for (const row of rows.slice(0, query.limit)) {
-      if (await this.stillEntitled(organizationId, row)) items.push(toInboxItem(row));
+      if (await this.stillEntitled(organizationId, personId, row)) items.push(toInboxItem(row));
     }
     // The cursor follows the rows read, so paging moves past items withheld above.
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
@@ -110,12 +118,13 @@ export class InboxService {
     const organizationId = organizationOf(principal);
     const personId = personOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const attempt = await this.loadMine(trx, organizationId, personId, attemptId);
+      const personIds = await this.inboxPersons(trx, organizationId, personId);
+      const attempt = await this.loadMine(trx, organizationId, personIds, attemptId);
       await this.authorize(principal, organizationId, personId, CommunicationsActions.acknowledge);
-      await this.assertEntitled(trx, organizationId, personId, attemptId);
+      await this.assertEntitled(trx, organizationId, personId, personIds, attemptId);
       assertExpectedRevision(input.expectedRevision, attempt.revision);
       if (attempt.status === 'read' || attempt.status === 'acknowledged') {
-        return this.itemFor(trx, organizationId, personId, attemptId); // reading twice is not an error
+        return this.itemFor(trx, organizationId, personIds, attemptId); // reading twice is not an error
       }
       const now = this.clock.now();
       await trx
@@ -152,7 +161,7 @@ export class InboxService {
         },
         correlationId,
       });
-      return this.itemFor(trx, organizationId, personId, attemptId);
+      return this.itemFor(trx, organizationId, personIds, attemptId);
     });
   }
 
@@ -165,12 +174,13 @@ export class InboxService {
     const organizationId = organizationOf(principal);
     const personId = personOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const attempt = await this.loadMine(trx, organizationId, personId, attemptId);
+      const personIds = await this.inboxPersons(trx, organizationId, personId);
+      const attempt = await this.loadMine(trx, organizationId, personIds, attemptId);
       await this.authorize(principal, organizationId, personId, CommunicationsActions.acknowledge);
-      await this.assertEntitled(trx, organizationId, personId, attemptId);
+      await this.assertEntitled(trx, organizationId, personId, personIds, attemptId);
       assertExpectedRevision(input.expectedRevision, attempt.revision);
       if (attempt.status === 'acknowledged') {
-        return this.itemFor(trx, organizationId, personId, attemptId); // recorded once per recipient
+        return this.itemFor(trx, organizationId, personIds, attemptId); // recorded once per recipient
       }
       const now = this.clock.now();
       const to = DeliveryAttemptMachine.next(attempt.status, 'acknowledge');
@@ -227,11 +237,19 @@ export class InboxService {
         },
         correlationId,
       });
-      return this.itemFor(trx, organizationId, personId, attemptId);
+      return this.itemFor(trx, organizationId, personIds, attemptId);
     });
   }
 
   // -------------------------------------------------------------------------------------------
+  /**
+   * The people whose in-app notices this person reads (COM-05, SPK-IAM-007): themself and, after a
+   * merge, everyone merged into them (identity's merge chain, MergedPersons).
+   */
+  private inboxPersons(db: Db | Trx, organizationId: string, personId: string): Promise<string[]> {
+    return this.merges.resolving(db, organizationId, personId);
+  }
+
   private async authorize(
     principal: Principal,
     organizationId: string,
@@ -247,11 +265,14 @@ export class InboxService {
     });
   }
 
-  /** An in-app attempt addressed to this person, locked for update; anything else is not found (§4.10). */
+  /**
+   * An in-app attempt addressed to this person (or a person merged into them), locked for update;
+   * anything else is not found (§4.10).
+   */
   private async loadMine(
     trx: Trx,
     organizationId: string,
-    personId: string,
+    personIds: readonly string[],
     attemptId: string,
   ): Promise<AttemptRow> {
     const attempt = await trx
@@ -268,11 +289,13 @@ export class InboxService {
       .select('person_id')
       .where('id', '=', attempt.recipient_id)
       .executeTakeFirst();
-    if (recipient?.person_id !== personId) throw errors.protectedNotFound('notice');
+    if (!recipient || !personIds.includes(recipient.person_id)) {
+      throw errors.protectedNotFound('notice');
+    }
     return attempt;
   }
 
-  private inboxQuery(db: Db | Trx, organizationId: string, personId: string) {
+  private inboxQuery(db: Db | Trx, organizationId: string, personIds: readonly string[]) {
     return (
       db
         .selectFrom('delivery_attempts as a')
@@ -289,6 +312,7 @@ export class InboxService {
         .select([
           'a.id as attempt_id',
           'a.status as attempt_status',
+          'a.revision as attempt_revision',
           'a.created_at as attempt_created_at',
           'a.delivered_at',
           'a.read_at',
@@ -313,7 +337,7 @@ export class InboxService {
         ])
         .where('a.organization_id', '=', organizationId)
         .where('a.channel', '=', 'in_app')
-        .where('r.person_id', '=', personId)
+        .where('r.person_id', 'in', [...personIds])
         // A recipient revoked from a protected notice is never served it (SPK-IAM-006).
         .where((eb) => eb.or([eb('n.protected', '=', false), eb('r.status', '!=', 'revoked')]))
     );
@@ -321,22 +345,27 @@ export class InboxService {
 
   /**
    * Unprotected notices are served as delivered. A protected one only while the recipient still
-   * holds, right now, the authority that justified their inclusion (invariant 10, SPK-AT-017).
+   * holds, right now, the authority that justified their inclusion (invariant 10, SPK-AT-017). A
+   * notice addressed to a person merged into the reader is re-checked for the reader (the survivor
+   * holds the merged person's re-pointed grants; COM-05): the merged person stands for the reader
+   * as recipient and as their own subject.
    */
   private async stillEntitled(
     organizationId: string,
+    readerPersonId: string,
     row: EntitlementRow,
     trx?: Trx,
   ): Promise<boolean> {
     if (!row.protected) return true;
     const audience = AudienceSchema.parse(row.audience);
+    const merged = row.recipient_person_id !== readerPersonId ? row.recipient_person_id : null;
     return this.resolver.isStillAuthorized(
       organizationId,
       {
-        personId: row.recipient_person_id,
+        personId: readerPersonId,
         basis: row.resolved_basis,
         basisDetail: row.basis_detail,
-        subjectPersonIds: row.subject_person_ids,
+        subjectPersonIds: row.subject_person_ids.map((s) => (s === merged ? readerPersonId : s)),
         audience,
       },
       audience.facilityId,
@@ -349,12 +378,13 @@ export class InboxService {
     trx: Trx,
     organizationId: string,
     personId: string,
+    personIds: readonly string[],
     attemptId: string,
   ): Promise<void> {
-    const row = await this.inboxQuery(trx, organizationId, personId)
+    const row = await this.inboxQuery(trx, organizationId, personIds)
       .where('a.id', '=', attemptId)
       .executeTakeFirst();
-    if (!row || !(await this.stillEntitled(organizationId, row, trx))) {
+    if (!row || !(await this.stillEntitled(organizationId, personId, row, trx))) {
       throw errors.protectedNotFound('notice');
     }
   }
@@ -363,10 +393,10 @@ export class InboxService {
   private async itemFor(
     trx: Trx,
     organizationId: string,
-    personId: string,
+    personIds: readonly string[],
     attemptId: string,
   ): Promise<InboxItem> {
-    const row = await this.inboxQuery(trx, organizationId, personId)
+    const row = await this.inboxQuery(trx, organizationId, personIds)
       .where('a.id', '=', attemptId)
       .executeTakeFirst();
     if (!row) throw errors.protectedNotFound('notice');
