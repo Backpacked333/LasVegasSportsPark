@@ -1,5 +1,6 @@
 import { AsyncResource } from 'node:async_hooks';
 import { newId, systemPrincipal } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AuditWriter, EventHandlerRegistry, type EventHandler } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -270,6 +271,68 @@ describe('temporary access after follow-up changes (SPK-STAFF-004, §4.14, §4.7
     t.clock.set(new Date(new Date(until).getTime() + HOUR));
     expect((await me(sub)).kind).toBe('customer');
     t.clock.set(clockAt);
+  });
+
+  it('§4.12 / §4.6: a fixture_changed delivered after a newer reschedule never retimes the assignment or its access back', async () => {
+    const game = await scheduleFixture(t, world, { date: '2027-03-20' });
+    const sub = await adultCustomer(t);
+    const accepted = await acceptedSubstitute(game.fixtureId, sub);
+    await drainOutbox(t);
+    const trail =
+      new Date(accepted.assignment.access.until).getTime() -
+      new Date(accepted.assignment.scheduledEnd).getTime();
+    // The delivery that will arrive late: the fixture's change from before the reschedule.
+    const stale = await t.db
+      .selectFrom('outbox_events')
+      .selectAll()
+      .where('event_type', '=', 'competition.fixture_changed')
+      .where('aggregate_id', '=', game.fixtureId)
+      .orderBy('occurred_at', 'desc')
+      .executeTakeFirstOrThrow();
+    const fixture = await t.http.get(`/v1/fixtures/${game.fixtureId}`).set(lm.header);
+    const newStart = at('2027-03-27', '18:00');
+    const newEnd = at('2027-03-27', '19:00');
+    const moved = await t.http
+      .patch(`/v1/fixtures/${game.fixtureId}`)
+      .set(lm.header)
+      .set('Idempotency-Key', key())
+      .send({
+        action: 'reschedule',
+        expectedRevision: fixture.body.revision,
+        reason: 'Pitch swap',
+        schedule: {
+          facilityId: t.facilityId,
+          resourceIds: [world.pitch.pitchId],
+          scheduledStart: newStart,
+          scheduledEnd: newEnd,
+        },
+      });
+    expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+    await drainOutbox(t);
+    // A retry (or a second change committed in the same instant) delivers the older change last.
+    await t.db
+      .insertInto('outbox_events')
+      .values({
+        id: newId(),
+        organization_id: stale.organization_id,
+        event_type: stale.event_type,
+        aggregate_type: stale.aggregate_type,
+        aggregate_id: stale.aggregate_id,
+        payload: json(stale.payload),
+        occurred_at: stale.occurred_at,
+        correlation_id: stale.correlation_id,
+        available_at: t.clock.now(),
+      })
+      .execute();
+    await drainOutbox(t);
+    const after = await t.http.get(`/v1/assignments/${accepted.assignment.id}`).set(sub.header);
+    const until = new Date(new Date(newEnd).getTime() + trail).toISOString();
+    expect(after.body).toMatchObject({
+      status: 'accepted',
+      scheduledStart: newStart,
+      scheduledEnd: newEnd,
+      access: { status: 'granted', until },
+    });
   });
 
   it('§4.7-12: an acceptance and its access grant commit together or not at all', async () => {

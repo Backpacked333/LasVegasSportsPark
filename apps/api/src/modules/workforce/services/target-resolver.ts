@@ -13,6 +13,7 @@ import {
   FIXTURE_PORT,
   TEAM_ENTRY_QUERY_PORT,
   type FixturePort,
+  type FixtureSummary,
   type TeamEntryQueryPort,
 } from '../../competition';
 import { EventsService } from '../../scheduling';
@@ -149,6 +150,19 @@ export class TargetResolver {
       offeringSessionId: null,
       offeringId: null,
     };
+  }
+
+  /**
+   * The fixture's latest committed state, read through the handler's transaction, or null when it
+   * is not found. Like `currentEvent`, follow-ups apply this rather than a `fixture_changed`
+   * payload, which can be delivered after a newer change (§4.12, §4.6).
+   */
+  async currentFixture(
+    trx: Trx,
+    organizationId: string,
+    fixtureId: string,
+  ): Promise<FixtureSummary | null> {
+    return this.fixtures.findFixture(organizationId, fixtureId, trx);
   }
 
   /**

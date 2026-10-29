@@ -826,9 +826,14 @@ export class AssignmentsService {
   ): Promise<void> {
     const p = event.payload;
     const rows = await this.liveFor(ctx.trx, event.organizationId, 'fixture', p.fixtureId);
-    if (['canceled', 'postponed', 'unscheduled'].includes(p.status)) {
+    // §4.12, §4.6: a delivery can arrive after a newer change of the same fixture (a retry, or two
+    // changes committed together), so assignments follow the fixture's CURRENT state read in this
+    // transaction, never the payload: every delivery, in any order, converges on the latest times.
+    const current = await this.targets.currentFixture(ctx.trx, event.organizationId, p.fixtureId);
+    if (!current) return;
+    if (['canceled', 'postponed', 'unscheduled'].includes(current.status)) {
       for (const row of rows) {
-        await this.systemWithdraw(ctx.trx, row, `The fixture was ${p.status}.`, event, false);
+        await this.systemWithdraw(ctx.trx, row, `The fixture was ${current.status}.`, event, false);
       }
       // SPK-UX-006, SPK-AT-012: the slot no longer needs covering at this time; the queue must not
       // keep sending managers to the replacement workflow of a game that will not be played.
@@ -837,19 +842,19 @@ export class AssignmentsService {
         event.organizationId,
         'fixture',
         p.fixtureId,
-        `The fixture was ${p.status}.`,
+        `The fixture was ${current.status}.`,
         event.correlationId,
       );
       return;
     }
     if (rows.length === 0) return;
-    if (p.status === 'scheduled' && p.scheduledStart && p.scheduledEnd) {
+    if (current.status === 'scheduled' && current.scheduledStart && current.scheduledEnd) {
       await this.retime(
         ctx.trx,
         rows,
-        new Date(p.scheduledStart),
-        new Date(p.scheduledEnd),
-        p.schedulingEventId,
+        new Date(current.scheduledStart),
+        new Date(current.scheduledEnd),
+        current.schedulingEventId,
         event,
       );
     }
