@@ -5,16 +5,19 @@ import {
   CreateOfferingBody,
   CreateOfferingSessionBody,
   CreatePriceRuleBody,
+  ListFacilitySessionsQuery,
   ListPublicOfferingsQuery,
   OfferingTransitionBody,
   UpdateOfferingBody,
   z,
+  type FacilitySession,
   type Offering,
+  type OfferingListItem,
   type OfferingSession,
   type Page,
   type PriceRule,
   type Principal,
-  type PublicOffering,
+  type PublicationCheck,
 } from '@sportspark/contracts';
 import {
   CurrentPrincipal,
@@ -51,14 +54,35 @@ export class OfferingsController {
     return this.offerings.create(principal, body, correlationId);
   }
 
-  /** Public discovery: published offerings, child-safe fields only (§4.14). */
+  /**
+   * Discovery: published offerings, child-safe fields only (§4.14); `view=staff` lists every
+   * state with staff details for holders of catalog.manage_offerings in their facilities (CAT-01).
+   */
   @Get('offerings')
   @Public()
   listPublic(
     @CurrentPrincipal() principal: Principal,
     @ZodQuery(ListPublicOfferingsQuery) query: ListPublicOfferingsQuery,
-  ): Promise<Page<PublicOffering>> {
+  ): Promise<Page<OfferingListItem>> {
     return this.offerings.listPublic(principal, query);
+  }
+
+  /** CAT-01 (SPK-CAT-004): what publish would report, with nothing written. */
+  @Get('offerings/:id/publication-check')
+  publicationCheck(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<PublicationCheck> {
+    return this.offerings.publicationCheck(principal, params.id);
+  }
+
+  /** CAT-01 (SPK-SCHED-008): a facility's sessions in a window of at most 31 days (staff). */
+  @Get('sessions')
+  listFacilitySessions(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListFacilitySessionsQuery) query: ListFacilitySessionsQuery,
+  ): Promise<Page<FacilitySession>> {
+    return this.sessions.listAtFacility(principal, query);
   }
 
   @Get('offerings/:id')

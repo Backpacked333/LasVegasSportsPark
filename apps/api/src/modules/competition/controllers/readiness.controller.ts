@@ -1,6 +1,12 @@
 import { Controller, Get } from '@nestjs/common';
-import { z, type FixtureReadiness, type Principal } from '@sportspark/contracts';
-import { CurrentPrincipal, ZodParams } from '../../../kernel';
+import {
+  SeasonReadinessQuery,
+  z,
+  type FixtureReadiness,
+  type Principal,
+  type SeasonReadiness,
+} from '@sportspark/contracts';
+import { CurrentPrincipal, ZodParams, ZodQuery } from '../../../kernel';
 import { ReadinessService } from '../services/readiness.service';
 
 const IdParams = z.object({ id: z.uuid() });
@@ -16,5 +22,15 @@ export class ReadinessController {
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
   ): Promise<FixtureReadiness> {
     return this.readiness.evaluate(principal, params.id);
+  }
+
+  /** CMP-01 (SPK-READY-001): each fixture of a season in one read, at most 100 (staff). */
+  @Get('seasons/:id/readiness')
+  season(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodQuery(SeasonReadinessQuery) query: z.infer<typeof SeasonReadinessQuery>,
+  ): Promise<SeasonReadiness> {
+    return this.readiness.seasonSummary(principal, params.id, query);
   }
 }

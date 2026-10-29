@@ -93,6 +93,7 @@ export function toResultRevision(row: Selectable<ResultRevisionsTable>): ResultR
     homeScore: row.home_score,
     awayScore: row.away_score,
     forfeitingEntryId: row.forfeiting_entry_id,
+    shootoutWinnerEntryId: row.shootout_winner_entry_id ?? null,
     details: detailsOf(row),
     submittedBy: requiredActor(row.submitted_by),
     submittedAt: isoOrNull(row.submitted_at),
@@ -124,7 +125,10 @@ export function toStandings(row: Selectable<StandingsProjectionsTable>): Standin
   };
 }
 
-export function toBracketNode(row: Selectable<BracketNodesTable>): BracketNode {
+/** Team names keyed by entry id (CMP-01: read with one join per page, `teamNamesOf`). */
+export type TeamNames = ReadonlyMap<string, string>;
+
+export function toBracketNode(row: Selectable<BracketNodesTable>, names: TeamNames): BracketNode {
   const rule = row.source_rule as { home: BracketSource; away: BracketSource };
   return {
     id: row.id,
@@ -136,6 +140,8 @@ export function toBracketNode(row: Selectable<BracketNodesTable>): BracketNode {
     sourceRule: { home: rule.home, away: rule.away },
     homeEntryId: row.home_entry_id,
     awayEntryId: row.away_entry_id,
+    homeTeamName: row.home_entry_id ? (names.get(row.home_entry_id) ?? null) : null,
+    awayTeamName: row.away_entry_id ? (names.get(row.away_entry_id) ?? null) : null,
     fixtureId: row.fixture_id,
     winnerEntryId: row.winner_entry_id,
     published: row.published,
@@ -177,20 +183,40 @@ export function toFixtureSpecification(
     requiredResourceIds: row.required_resource_ids,
     playoffStructure: (row.playoff_structure as FixtureSpecification['playoffStructure']) ?? null,
     fairnessPreferences: row.fairness_preferences as FixtureSpecification['fairnessPreferences'],
+    maxGamesPerTeamPerDay: row.max_games_per_team_per_day ?? null,
+    officialsPerGame: row.officials_per_game ?? null,
     revision: row.revision,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
 }
 
-export function toSolverRun(row: Selectable<SolverRunsTable>): SolverRun {
+/** The entry ids a stored proposal names (to read their team names with one query). */
+export function proposalEntryIds(row: Pick<Selectable<SolverRunsTable>, 'proposal'>): string[] {
+  const games = (row.proposal as { games?: StoredGame[] } | null)?.games ?? [];
+  return games.flatMap((g) => (g.awayEntryId ? [g.homeEntryId, g.awayEntryId] : [g.homeEntryId]));
+}
+
+/** A proposed game as the solver run stores it (names are read with the run, CMP-01). */
+type StoredGame = Omit<ProposedGame, 'homeTeamName' | 'awayTeamName'>;
+
+export function toSolverRun(row: Selectable<SolverRunsTable>, names: TeamNames): SolverRun {
+  const stored = (row.proposal as { games: StoredGame[] } | null) ?? null;
   return {
     id: row.id,
     specificationId: row.specification_id,
     ruleSetId: row.rule_set_id,
     searchSettings: row.search_settings as unknown as SearchSettings,
     outcome: row.outcome,
-    proposal: (row.proposal as { games: ProposedGame[] } | null) ?? null,
+    proposal: stored
+      ? {
+          games: stored.games.map((g) => ({
+            ...g,
+            homeTeamName: names.get(g.homeEntryId) ?? 'Unknown team',
+            awayTeamName: g.awayEntryId ? (names.get(g.awayEntryId) ?? 'Unknown team') : null,
+          })),
+        }
+      : null,
     completenessReport: row.completeness_report as unknown as CompletenessReport,
     explanation: row.explanation as unknown as SolverExplanation,
     dryRun: row.dry_run,
@@ -350,6 +376,8 @@ export const specificationColumns = [
   'fixture_specifications.required_resource_ids',
   'fixture_specifications.playoff_structure',
   'fixture_specifications.fairness_preferences',
+  'fixture_specifications.max_games_per_team_per_day',
+  'fixture_specifications.officials_per_game',
   'fixture_specifications.created_by',
   'fixture_specifications.revision',
   'fixture_specifications.created_at',

@@ -2,7 +2,7 @@ import { Logger, Module, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { ConflictDetector } from './conflicts/conflict-detector';
 import { PartyCommitmentSources } from './conflicts/party-commitment-sources';
-import { ClosuresController } from './controllers/closures.controller';
+import { ClosureImpactController, ClosuresController } from './controllers/closures.controller';
 import { EventSeriesController } from './controllers/event-series.controller';
 import { EventsController } from './controllers/events.controller';
 import { ResourcesController } from './controllers/resources.controller';
@@ -21,6 +21,7 @@ import { DEFAULT_SCHEDULING_POLICY, SCHEDULING_POLICY } from './scheduling.polic
 import { ClosureImpactContributors } from './services/closure-impact-contributors';
 import { ClosureLiftGuards } from './services/closure-lift-guards';
 import { ClosuresService } from './services/closures.service';
+import { EventImportService } from './services/event-import.service';
 import { EventSeriesService } from './services/event-series.service';
 import { EventWriter } from './services/event-writer';
 import { EventsService } from './services/events.service';
@@ -67,12 +68,13 @@ const providers: Provider[] = [
   PartyCommitmentSources,
   ConflictDetector,
   EventWriter,
+  EventSeriesService,
+  EventImportService,
   EventsService,
   ResourcesService,
   ClosureLiftGuards,
   ClosureImpactContributors,
   ClosuresService,
-  EventSeriesService,
   ScheduleDraftsService,
   { provide: EVENT_SCHEDULING_PORT, useExisting: EventsService },
   { provide: AVAILABILITY_PORT, useExisting: EventsService },
@@ -91,6 +93,7 @@ const providers: Provider[] = [
   controllers: [
     ResourcesController,
     ClosuresController,
+    ClosureImpactController,
     EventsController,
     EventSeriesController,
     ScheduleDraftsController,

@@ -3,12 +3,14 @@ import {
   type CapacityUnit,
   type ChargeLine,
   type DiscountEligibilityRules,
+  type EntitlementKind,
   type OfferingKind,
   type PolicyKind,
   type PublicationState,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import type { Clock } from '../../../kernel';
+import { BOOKING_OFFERING_KINDS, REQUIRED_ENTITLEMENT_KIND } from '../catalog.policy';
 
 /**
  * Catalog fixtures for downstream module tests (enrollment, finance, competition, entry,
@@ -35,6 +37,8 @@ export async function createProgramFixture(
     format?: string | null;
     ageBand?: { minAgeYears?: number; maxAgeYears?: number };
     status?: 'draft' | 'active' | 'archived';
+    /** CAT-03: `import` mimics a program the migration import created. */
+    source?: 'staff' | 'import';
     organizationId?: string;
   } = {},
 ): Promise<string> {
@@ -50,10 +54,36 @@ export async function createProgramFixture(
       format: input.format === undefined ? '7v7' : input.format,
       age_band: json(input.ageBand ?? { minAgeYears: 6, maxAgeYears: 12 }),
       status: input.status ?? 'active',
+      source: input.source ?? 'staff',
       created_by: json(FIXTURE_ACTOR),
     })
     .execute();
   return id;
+}
+
+/**
+ * Fixture content per policy kind: booking terms and taxes or fees have closed shapes (CAT-02), so
+ * their fixture content is complete. These are test values, never policy defaults.
+ */
+function fixturePolicyContent(kind: PolicyKind): Record<string, unknown> {
+  if (kind === 'booking_terms') {
+    return {
+      confirmationMode: 'instant',
+      installmentPolicyKey: null,
+      accessConditions: null,
+      hostResponsibilities: null,
+    };
+  }
+  if (kind === 'tax_fee') {
+    return {
+      code: 'fixture_tax',
+      label: 'Fixture tax',
+      kind: 'tax',
+      rateBasisPoints: 0,
+      rounding: 'half_up',
+    };
+  }
+  return { text: `${kind} policy wording` };
 }
 
 export async function createPolicyVersionFixture(
@@ -82,7 +112,7 @@ export async function createPolicyVersionFixture(
       key: input.key ?? `${input.kind}-${next()}`,
       version: input.version ?? 1,
       title: input.title ?? `${input.kind} policy`,
-      content: json(input.content ?? { text: `${input.kind} policy wording` }),
+      content: json(input.content ?? fixturePolicyContent(input.kind)),
       effective_from: input.effectiveFrom ?? new Date(now.getTime() - 86_400_000),
       effective_to: input.effectiveTo ?? null,
       approval_status: approved ? 'approved' : 'draft',
@@ -96,25 +126,49 @@ export async function createPolicyVersionFixture(
   return id;
 }
 
+/**
+ * A complete scope for each typed kind (CAT-02: every key is required). Test values only: the
+ * attendance effect of a fixture membership is `none`, never an implied unlimited.
+ */
+export function fixtureEntitlementScope(kind: EntitlementKind): Record<string, unknown> {
+  switch (kind) {
+    case 'membership_benefit':
+      return {
+        attendance: { mode: 'none' },
+        term: { kind: 'offering_dates' },
+        renewal: { noticeLeadDays: null },
+      };
+    case 'package_credits':
+      return { credits: 5, appliesTo: { programIds: [newId()] }, expiry: { kind: 'none' } };
+    case 'party_package':
+      return {
+        durationMinutes: 120,
+        guestLimit: 20,
+        resources: { resourceIds: [newId()], count: 1 },
+        staffing: [],
+        equipmentAssetIds: [],
+      };
+    case 'rental_resource':
+      return { resources: { resourceIds: [newId()], count: 1 }, staffing: [] };
+    default:
+      return { sessionsIncluded: 'all' };
+  }
+}
+
 export async function createEntitlementDefinitionFixture(
   ctx: CatalogFixtureContext,
   input: {
     name?: string;
-    kind?:
-      | 'team_entry'
-      | 'roster_place'
-      | 'seat'
-      | 'session_seat'
-      | 'camp_group_place'
-      | 'rental_resource'
-      | 'package_credits'
-      | 'membership_benefit';
+    kind?: EntitlementKind;
+    /** Defaults to a complete scope for the kind (`fixtureEntitlementScope`). */
+    scope?: Record<string, unknown>;
     equivalenceScope?: 'offering' | 'program' | 'program_period' | 'session' | 'none';
     status?: 'active' | 'archived';
     organizationId?: string;
   } = {},
 ): Promise<string> {
   const id = newId();
+  const kind = input.kind ?? 'seat';
   await ctx.db
     .insertInto('entitlement_definitions')
     .values({
@@ -122,8 +176,8 @@ export async function createEntitlementDefinitionFixture(
       organization_id: input.organizationId ?? ctx.organizationId,
       name: input.name ?? `Entitlement ${next()}`,
       description: null,
-      kind: input.kind ?? 'seat',
-      scope: json({ sessionsIncluded: 'all' }),
+      kind,
+      scope: json(input.scope ?? fixtureEntitlementScope(kind)),
       equivalence_scope: input.equivalenceScope ?? 'offering',
       equivalence_rule: json({}),
       status: input.status ?? 'active',
@@ -143,6 +197,8 @@ export interface OfferingFixture {
   entitlementDefinitionId: string;
   priceRuleId: string | null;
   responsibleManagerPersonId: string;
+  /** CAT-02: the booking terms family of a rental or party offering (null otherwise). */
+  bookingTermsKey: string | null;
 }
 
 export interface CreateOfferingFixture {
@@ -165,14 +221,22 @@ export interface CreateOfferingFixture {
   eligibilityPolicyVersionId?: string;
   cancellationPolicyVersionId?: string;
   formPolicyVersionId?: string;
+  /** Defaults to a definition of the kind the offering requires (CAT-02), else a seat. */
   entitlementDefinitionId?: string;
+  /**
+   * CAT-02: rental and party offerings default to a new approved booking terms family; pass null
+   * for none (only valid in draft or archived).
+   */
+  bookingTermsKey?: string | null;
   organizationId?: string;
 }
 
 /**
  * A fully configured offering (every SPK-CAT-001 field) in the requested publication state, with
- * approved eligibility/cancellation/form policies, an entitlement definition and a price rule
- * effective since yesterday, so downstream modules can quote and enroll against it immediately.
+ * approved eligibility/cancellation/form policies, an entitlement definition (of the kind a
+ * membership, package, rental or party offering requires), approved booking terms for rentals and
+ * parties, and a price rule effective since yesterday, so downstream modules can quote and enroll
+ * against it immediately. Fixtures write rows directly and are never capability-gated.
  */
 export async function createOfferingFixture(
   ctx: CatalogFixtureContext,
@@ -191,9 +255,22 @@ export async function createOfferingFixture(
   const formPolicyVersionId =
     input.formPolicyVersionId ??
     (await createPolicyVersionFixture(ctx, { kind: 'form', organizationId }));
+  const kind = input.kind ?? 'term';
   const entitlementDefinitionId =
     input.entitlementDefinitionId ??
-    (await createEntitlementDefinitionFixture(ctx, { organizationId }));
+    (await createEntitlementDefinitionFixture(ctx, {
+      organizationId,
+      kind: REQUIRED_ENTITLEMENT_KIND[kind] ?? 'seat',
+    }));
+  let bookingTermsKey: string | null = input.bookingTermsKey ?? null;
+  if (input.bookingTermsKey === undefined && BOOKING_OFFERING_KINDS.includes(kind)) {
+    bookingTermsKey = `booking-terms-${next()}`;
+    await createPolicyVersionFixture(ctx, {
+      kind: 'booking_terms',
+      key: bookingTermsKey,
+      organizationId,
+    });
+  }
   const state = input.publicationState ?? 'registration_open';
   const published = state !== 'draft';
   const offeringId = newId();
@@ -208,7 +285,7 @@ export async function createOfferingFixture(
       facility_id: facilityId,
       name: input.name ?? `Offering ${next()}`,
       description: 'Fixture offering',
-      kind: input.kind ?? 'term',
+      kind,
       activity_type: 'soccer',
       format: '7v7',
       location: json({ label: 'Main complex' }),
@@ -235,6 +312,7 @@ export async function createOfferingFixture(
       closed_at: state === 'closed' ? now : null,
       archived_at: state === 'archived' ? now : null,
       copied_from_offering_id: null,
+      booking_terms_key: bookingTermsKey,
       created_by: json(FIXTURE_ACTOR),
     })
     .execute();
@@ -268,6 +346,7 @@ export async function createOfferingFixture(
     entitlementDefinitionId,
     priceRuleId,
     responsibleManagerPersonId: input.responsibleManagerPersonId,
+    bookingTermsKey,
   };
 }
 

@@ -1,24 +1,32 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  BookingTermsContentSchema,
+  CAPABILITIES,
   decodeCursor,
   encodeCursor,
+  ENTITLEMENT_SCOPE_SCHEMAS,
   errors,
   newId,
   PUBLIC_PUBLICATION_STATES,
+  staffFacilityScope,
   z,
   type AgeBand,
   type CapacityUnit,
   type CopyOfferingInput,
   type DstResolution,
   type CreateOfferingInput,
+  type EntitlementDefinition,
+  type EntitlementKind,
   type ListProgramOfferingsQuery,
   type ListPublicOfferingsQuery,
   type Offering,
+  type OfferingKind,
+  type OfferingListItem,
   type OfferingTransitionInput,
   type Page,
   type Principal,
+  type PublicationCheck,
   type PublicationProblem,
-  type PublicOffering,
   type UpdateOfferingInput,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
@@ -27,8 +35,10 @@ import {
   assertExpectedRevision,
   AuditWriter,
   AuthorizationService,
+  CapabilityService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -46,8 +56,17 @@ import {
 } from '../../scheduling';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
-import { staffingIncreaseNeedsReason } from '../catalog.policy';
-import type { OfferingLookupPort, OfferingSnapshot } from '../catalog.ports';
+import {
+  BOOKING_OFFERING_KINDS,
+  OFFERING_KIND_CAPABILITY,
+  REQUIRED_ENTITLEMENT_KIND,
+  staffingIncreaseNeedsReason,
+} from '../catalog.policy';
+import type {
+  OfferingLookupPort,
+  OfferingSnapshot,
+  SnapshotEntitlementDefinition,
+} from '../catalog.ports';
 import {
   capacityUnitsOf,
   eligibilityReferenceDateOf,
@@ -68,6 +87,23 @@ import { PoliciesService } from './policies.service';
 import { PriceRulesService } from './price-rules.service';
 
 const Cursor = z.object({ startsOn: z.string(), id: z.string() });
+
+/**
+ * IF-23: the definition with its scope typed by kind. A Package G definition whose stored scope
+ * does not satisfy its schema yields null, so a consumer refuses instead of guessing an effect.
+ */
+export function typedEntitlementDefinition(
+  definition: EntitlementDefinition,
+): SnapshotEntitlementDefinition | null {
+  const schema = (ENTITLEMENT_SCOPE_SCHEMAS as Partial<Record<EntitlementKind, z.ZodType>>)[
+    definition.kind
+  ];
+  if (!schema) return definition as SnapshotEntitlementDefinition;
+  const parsed = schema.safeParse(definition.scope);
+  return parsed.success
+    ? ({ ...definition, scope: parsed.data } as SnapshotEntitlementDefinition)
+    : null;
+}
 
 export function addDays(dateOnly: string, days: number): string {
   const d = new Date(`${dateOnly}T00:00:00Z`);
@@ -109,7 +145,31 @@ export class OfferingsService implements OfferingLookupPort {
     private readonly outbox: Outbox,
     private readonly priceRules: PriceRulesService,
     private readonly policies: PoliciesService,
+    private readonly capabilities: CapabilityService,
+    private readonly facilities: FacilityDirectory,
   ) {}
+
+  /**
+   * CAT-02, K-12 (DEC-016): creating, copying or publishing an offering of a conditional kind
+   * needs the organization's capability switch; archive, close and edits stay ungated.
+   */
+  private async requireKindCapability(
+    trx: Trx,
+    organizationId: string,
+    kind: OfferingKind,
+  ): Promise<void> {
+    const capability = OFFERING_KIND_CAPABILITY[kind];
+    if (capability) await this.capabilities.require(organizationId, capability, trx);
+  }
+
+  /** CAT-02: only rental and party offerings name booking terms (also a database check). */
+  private assertBookingTermsKey(kind: OfferingKind, key: string | null | undefined): void {
+    if (key && !BOOKING_OFFERING_KINDS.includes(kind)) {
+      throw errors.validation('Only rental and party offerings have booking terms.', {
+        path: 'bookingTermsKey',
+      });
+    }
+  }
 
   // -------------------------------------------------------------------------------------------
   // Commands
@@ -127,6 +187,7 @@ export class OfferingsService implements OfferingLookupPort {
       facilityId: body.facilityId,
     });
     return this.uow.run(async ({ trx }) => {
+      await this.requireKindCapability(trx, organizationId, body.kind);
       const program = await trx
         .selectFrom('programs')
         .select(['id', 'status', 'activity_type', 'format'])
@@ -137,6 +198,7 @@ export class OfferingsService implements OfferingLookupPort {
       if (program.status === 'archived') {
         throw errors.invalidTransition('Program', 'archived', 'add_offering');
       }
+      this.assertBookingTermsKey(body.kind, body.bookingTermsKey);
       await this.validateReferences(trx, organizationId, body);
       const id = newId();
       await trx
@@ -171,6 +233,7 @@ export class OfferingsService implements OfferingLookupPort {
           closed_at: null,
           archived_at: null,
           copied_from_offering_id: null,
+          booking_terms_key: body.bookingTermsKey ?? null,
           created_by: json(snapshotActor(principal)),
         })
         .execute();
@@ -265,7 +328,10 @@ export class OfferingsService implements OfferingLookupPort {
           body.responsibleManagerPersonId === undefined
             ? current.responsible_manager_person_id
             : body.responsibleManagerPersonId,
+        booking_terms_key:
+          body.bookingTermsKey === undefined ? current.booking_terms_key : body.bookingTermsKey,
       };
+      this.assertBookingTermsKey(merged.kind, merged.booking_terms_key);
       if (merged.starts_on > merged.ends_on) {
         throw errors.validation('startsOn must not be after endsOn.', { path: 'endsOn' });
       }
@@ -356,6 +422,7 @@ export class OfferingsService implements OfferingLookupPort {
           capacity_units: body.capacityUnits === undefined ? undefined : json(body.capacityUnits),
           cancellation_policy_version_id: body.cancellationPolicyVersionId,
           responsible_manager_person_id: body.responsibleManagerPersonId,
+          booking_terms_key: body.bookingTermsKey,
           revision: current.revision + 1,
         })
         .where('organization_id', '=', organizationId)
@@ -487,6 +554,7 @@ export class OfferingsService implements OfferingLookupPort {
       const now = this.clock.now();
       let approvalId: string | null = null;
       if (event === 'publish') {
+        await this.requireKindCapability(trx, organizationId, current.kind);
         const forms = (await this.requiredFormIds(trx, organizationId, [id])).get(id) ?? [];
         const problems = await this.validatePublication(trx, organizationId, current, forms);
         if (problems.length > 0) {
@@ -603,6 +671,7 @@ export class OfferingsService implements OfferingLookupPort {
         organizationId,
         facilityId: source.facility_id,
       });
+      await this.requireKindCapability(trx, organizationId, source.kind);
       const facilityId = body.facilityId ?? source.facility_id;
       if (facilityId !== source.facility_id) {
         await this.validateReferences(trx, organizationId, { facilityId });
@@ -622,14 +691,13 @@ export class OfferingsService implements OfferingLookupPort {
       // so a copy across a daylight-saving change does not move every session by an hour. Local
       // times that do not exist or are ambiguous on the new date are resolved by the default DST
       // policy and recorded in the audit details.
-      const zones = await trx
-        .selectFrom('facilities')
-        .select(['id', 'timezone'])
-        .where('organization_id', '=', organizationId)
-        .where('id', 'in', [source.facility_id, facilityId])
-        .execute();
+      const zones = await this.facilities.describe(
+        organizationId,
+        [source.facility_id, facilityId],
+        trx,
+      );
       const zoneOf = (facility: string): string => {
-        const zone = zones.find((z) => z.id === facility)?.timezone;
+        const zone = zones.get(facility)?.timezone;
         if (!zone) throw errors.internal(`facility ${facility} has no timezone`);
         return zone;
       };
@@ -716,6 +784,7 @@ export class OfferingsService implements OfferingLookupPort {
           closed_at: null,
           archived_at: null,
           copied_from_offering_id: source.id,
+          booking_terms_key: source.booking_terms_key,
           created_by: json(snapshotActor(principal)),
         })
         .execute();
@@ -820,11 +889,17 @@ export class OfferingsService implements OfferingLookupPort {
     return this.view(this.db, row, staff);
   }
 
-  /** Public discovery (@Public): published states only, child-safe fields only (§4.14). */
+  /**
+   * Discovery (@Public): published states only, child-safe fields only (§4.14), `staff: null`.
+   * CAT-01: `view=staff` gives holders of catalog.manage_offerings every publication state with
+   * staff details, narrowed to the facilities their managing roles cover; anyone else asking for
+   * it gets the public view. Filters: facility, kind, program, format and the date overlap
+   * [from, to] (ends on or after `from`, starts on or before `to`).
+   */
   async listPublic(
     principal: Principal,
     query: ListPublicOfferingsQuery,
-  ): Promise<Page<PublicOffering>> {
+  ): Promise<Page<OfferingListItem>> {
     let organizationId = principal.organizationId;
     if (query.organization) {
       const organization = await this.db
@@ -843,19 +918,31 @@ export class OfferingsService implements OfferingLookupPort {
         path: 'organization',
       });
     }
+    // §4.14 least privilege: the managing roles' own facility scope, never the union of roles.
+    const managedScope =
+      principal.kind === 'staff' && principal.organizationId === organizationId
+        ? staffFacilityScope(principal, CatalogActions.manageOfferings.staffRoles)
+        : [];
+    const staffView = query.view === 'staff' && (managedScope === null || managedScope.length > 0);
     const cursor = decodeCursor(query.cursor, Cursor);
     let q = this.db
       .selectFrom('offerings')
       .select(offeringColumns)
       .where('offerings.organization_id', '=', organizationId)
-      .where('offerings.publication_state', 'in', [...PUBLIC_PUBLICATION_STATES])
       .orderBy('offerings.starts_on')
       .orderBy('offerings.id')
       .limit(query.limit + 1);
+    if (!staffView) {
+      q = q.where('offerings.publication_state', 'in', [...PUBLIC_PUBLICATION_STATES]);
+    } else if (managedScope !== null) {
+      q = q.where('offerings.facility_id', 'in', [...managedScope]);
+    }
     if (query.facilityId) q = q.where('offerings.facility_id', '=', query.facilityId);
     if (query.kind) q = q.where('offerings.kind', '=', query.kind);
     if (query.programId) q = q.where('offerings.program_id', '=', query.programId);
+    if (query.format) q = q.where('offerings.format', '=', query.format);
     if (query.from) q = q.where(sql<boolean>`offerings.ends_on >= ${query.from}::date`);
+    if (query.to) q = q.where(sql<boolean>`offerings.starts_on <= ${query.to}::date`);
     if (cursor) {
       q = q.where(
         sql<boolean>`(offerings.starts_on, offerings.id) > (${cursor.startsOn}::date, ${cursor.id}::uuid)`,
@@ -864,7 +951,11 @@ export class OfferingsService implements OfferingLookupPort {
     const rows = (await q.execute()) as unknown as OfferingRow[];
     const page = rows.slice(0, query.limit);
     const contexts = await this.contexts(this.db, organizationId, page, this.clock.now());
-    const items = page.map((row) => toPublicOffering(row, contexts.get(row.id)!));
+    const items = page.map((row) =>
+      staffView
+        ? toOffering(row, contexts.get(row.id)!, true)
+        : toPublicOffering(row, contexts.get(row.id)!),
+    );
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
     return {
       items,
@@ -914,6 +1005,42 @@ export class OfferingsService implements OfferingLookupPort {
     return {
       items,
       nextCursor: last ? encodeCursor({ startsOn: last.starts_on, id: last.id }) : null,
+    };
+  }
+
+  /**
+   * CAT-01 (SPK-CAT-004): the dry run of publication for staff who may publish the offering at
+   * its facility. It runs publish's own validation with publish's form resolution and reports a
+   * disabled capability (CAT-02) as a problem; it writes nothing (no approval, audit or event).
+   */
+  async publicationCheck(principal: Principal, id: string): Promise<PublicationCheck> {
+    const organizationId = organizationOf(principal);
+    const row = await this.loadOffering(this.db, organizationId, id);
+    if (!row) throw errors.notFound('offering', id);
+    await this.authorization.require(principal, CatalogActions.publishOffering, {
+      type: 'offering',
+      id,
+      organizationId,
+      facilityId: row.facility_id,
+    });
+    const problems: PublicationProblem[] = [];
+    const capability = OFFERING_KIND_CAPABILITY[row.kind];
+    if (capability && !(await this.capabilities.isEnabled(organizationId, capability, this.db))) {
+      problems.push({
+        code: 'capability_disabled',
+        field: 'kind',
+        message: `This organization has not enabled ${capability.replaceAll('_', ' ')} (${CAPABILITIES[capability].applicabilityReferences.join(', ')}).`,
+      });
+    }
+    const forms = (await this.requiredFormIds(this.db, organizationId, [id])).get(id) ?? [];
+    problems.push(...(await this.validatePublication(this.db, organizationId, row, forms)));
+    return {
+      offeringId: row.id,
+      publicationState: row.publication_state,
+      revision: row.revision,
+      publishable:
+        problems.length === 0 && OfferingPublicationMachine.can(row.publication_state, 'publish'),
+      problems,
     };
   }
 
@@ -988,6 +1115,17 @@ export class OfferingsService implements OfferingLookupPort {
       const form = await this.policies.getPolicyVersion(organizationId, formId, trx);
       if (form) requiredForms.push(form);
     }
+    // CAT-02, IF-23: the approved booking terms effective at the instant (rental, party).
+    const bookingTerms =
+      BOOKING_OFFERING_KINDS.includes(row.kind) && row.booking_terms_key
+        ? await this.policies.currentPolicyVersion(
+            organizationId,
+            'booking_terms',
+            row.booking_terms_key,
+            at,
+            trx,
+          )
+        : null;
     const opens = row.registration_opens_at ? new Date(row.registration_opens_at).getTime() : null;
     const closes = row.registration_closes_at
       ? new Date(row.registration_closes_at).getTime()
@@ -995,14 +1133,15 @@ export class OfferingsService implements OfferingLookupPort {
     return {
       offering,
       priceRule: ctx.price,
-      entitlementDefinition: entitlementRow ? toEntitlementDefinition(entitlementRow) : null,
+      entitlementDefinition: entitlementRow
+        ? typedEntitlementDefinition(toEntitlementDefinition(entitlementRow))
+        : null,
       capacityUnits: capacityUnitsOf(row),
       eligibilityReferenceDate: eligibilityReferenceDateOf(row),
       eligibilityPolicy,
       cancellationPolicy,
       requiredForms,
-      // IF-23: declared by stage 3; CAT-02 resolves the approved booking terms (until then none).
-      bookingTerms: null,
+      bookingTerms,
       registrationOpen:
         row.publication_state === 'registration_open' &&
         opens !== null &&
@@ -1092,13 +1231,16 @@ export class OfferingsService implements OfferingLookupPort {
         'entitlementDefinitionId',
         'An entitlement definition is required.',
       );
-    } else {
-      const entitlement = await trx
-        .selectFrom('entitlement_definitions')
-        .select('status')
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', row.entitlement_definition_id)
-        .executeTakeFirst();
+    }
+    const entitlement = row.entitlement_definition_id
+      ? await trx
+          .selectFrom('entitlement_definitions')
+          .select(['status', 'kind', 'scope'])
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', row.entitlement_definition_id)
+          .executeTakeFirst()
+      : undefined;
+    if (row.entitlement_definition_id) {
       if (!entitlement) {
         problem(
           'entitlement_missing',
@@ -1111,6 +1253,67 @@ export class OfferingsService implements OfferingLookupPort {
           'entitlementDefinitionId',
           'The entitlement definition is archived.',
         );
+      }
+    }
+    // CAT-02 (SPK-COND-001 to SPK-COND-003): a membership, package, rental or party offering grants
+    // a definition of its own kind whose scope states every effect.
+    const requiredKind = REQUIRED_ENTITLEMENT_KIND[row.kind];
+    if (requiredKind) {
+      const schema =
+        ENTITLEMENT_SCOPE_SCHEMAS[requiredKind as keyof typeof ENTITLEMENT_SCOPE_SCHEMAS];
+      if (!entitlement || entitlement.kind !== requiredKind) {
+        problem(
+          'ENTITLEMENT_DEFINITION_REQUIRED',
+          'entitlementDefinitionId',
+          `A ${row.kind} offering needs a ${requiredKind} entitlement definition.`,
+        );
+      } else if (!schema.safeParse(entitlement.scope).success) {
+        problem(
+          'ENTITLEMENT_DEFINITION_REQUIRED',
+          'entitlementDefinitionId',
+          `The ${requiredKind} entitlement definition does not state every required effect.`,
+        );
+      }
+    }
+    const now = this.clock.now();
+    // CAT-02 (SPK-COND-003, POL-040): a rental or party is booked under approved booking terms in
+    // effect when customers can first book it; a deposit plan they name must be approved too.
+    if (BOOKING_OFFERING_KINDS.includes(row.kind)) {
+      const opensAt = row.registration_opens_at ? new Date(row.registration_opens_at) : null;
+      const at = opensAt && opensAt.getTime() > now.getTime() ? opensAt : now;
+      const terms = row.booking_terms_key
+        ? await this.policies.currentPolicyVersion(
+            organizationId,
+            'booking_terms',
+            row.booking_terms_key,
+            at,
+            trx as Trx,
+          )
+        : null;
+      const content = terms ? BookingTermsContentSchema.safeParse(terms.content) : null;
+      if (!terms || !content?.success) {
+        problem(
+          'BOOKING_TERMS_REQUIRED',
+          'bookingTermsKey',
+          row.booking_terms_key
+            ? `No approved booking terms "${row.booking_terms_key}" with complete content are effective at ${at.toISOString()}.`
+            : 'A rental or party offering needs approved booking terms.',
+        );
+      } else if (content.data.installmentPolicyKey) {
+        const plan = await this.policies.currentPolicyVersion(
+          organizationId,
+          'installment',
+          content.data.installmentPolicyKey,
+          at,
+          trx as Trx,
+        );
+        if (!plan) {
+          problem(
+            'booking_terms_installment_policy_missing',
+            'bookingTermsKey',
+            `The booking terms take their deposit from installment policy "${content.data.installmentPolicyKey}", which has no approved version effective at ${at.toISOString()}.`,
+          );
+        }
       }
     }
     if (!row.responsible_manager_person_id) {
@@ -1133,7 +1336,6 @@ export class OfferingsService implements OfferingLookupPort {
         );
       }
     }
-    const now = this.clock.now();
     const priced = await trx
       .selectFrom('price_rules')
       .select('id')
@@ -1241,13 +1443,10 @@ export class OfferingsService implements OfferingLookupPort {
     refs: ReferenceInput,
   ): Promise<void> {
     if (refs.facilityId) {
-      const facility = await trx
-        .selectFrom('facilities')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', refs.facilityId)
-        .executeTakeFirst();
-      if (!facility) throw errors.validation('Unknown facility.', { path: 'facilityId' });
+      const facility = await this.facilities.describe(organizationId, [refs.facilityId], trx);
+      if (!facility.has(refs.facilityId)) {
+        throw errors.validation('Unknown facility.', { path: 'facilityId' });
+      }
     }
     const policyIds = [
       ...(refs.eligibilityPolicyVersionId ? [refs.eligibilityPolicyVersionId] : []),
@@ -1370,11 +1569,35 @@ export class OfferingsService implements OfferingLookupPort {
         : undefined,
     );
     const forms = await this.requiredFormIds(db, organizationId, ids);
+    // SPK-SCHED-008: the facility's IANA zone travels with every offering view (K-04).
+    const facilities = await this.facilities.describe(
+      organizationId,
+      rows.map((r) => r.facility_id),
+      db,
+    );
+    // CAT-02: the booking terms version in effect at the view instant (rental, party).
+    const termKeys = rows
+      .filter((r) => BOOKING_OFFERING_KINDS.includes(r.kind) && r.booking_terms_key)
+      .map((r) => r.booking_terms_key as string);
+    const terms = await this.policies.currentVersionIdsByKey(
+      db,
+      organizationId,
+      'booking_terms',
+      termKeys,
+      at,
+    );
     for (const row of rows) {
+      const facility = facilities.get(row.facility_id);
+      if (!facility) throw errors.internal(`facility ${row.facility_id} is not in the directory`);
       out.set(row.id, {
         ageBand: ageBands.get(row.program_id) ?? {},
         price: prices.get(row.id) ?? null,
         requiredFormPolicyVersionIds: forms.get(row.id) ?? [],
+        facility: { id: facility.id, name: facility.name, timezone: facility.timezone },
+        bookingTermsPolicyVersionId:
+          BOOKING_OFFERING_KINDS.includes(row.kind) && row.booking_terms_key
+            ? (terms.get(row.booking_terms_key) ?? null)
+            : null,
       });
     }
     return out;

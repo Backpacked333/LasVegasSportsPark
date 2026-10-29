@@ -15,8 +15,16 @@ export interface ChannelSendRequest {
   notificationId: string;
   channel: ExternalChannel;
   personId: string;
-  /** Email address, phone number or push registration handle resolved immediately before the call. */
+  /**
+   * The first of `addresses`: the email address or phone number, or the first active push token,
+   * resolved immediately before the call.
+   */
   address: string;
+  /**
+   * Every address the hand-off goes to (COM-01): one email address or phone number, or each active
+   * push device token of the person (the push provider fans out per device). Never empty.
+   */
+  addresses: string[];
   title: string;
   body: string;
   category: NotificationCategoryValue;

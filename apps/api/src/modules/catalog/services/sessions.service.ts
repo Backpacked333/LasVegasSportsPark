@@ -1,21 +1,29 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   newId,
   systemPrincipal,
+  z,
   type CancelOfferingSessionInput,
   type DomainEvent,
   type CreateOfferingSessionInput,
+  type FacilitySession,
+  type ListFacilitySessionsQuery,
   type OfferingSession,
+  type Page,
   type Principal,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, type Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   assertExpectedRevision,
   AuditWriter,
   AuthorizationService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
   Outbox,
   UnitOfWork,
   type Clock,
@@ -33,6 +41,8 @@ import {
 import { EDITABLE_PUBLICATION_STATES, OfferingSessionMachine } from '../catalog.state-machines';
 import { OfferingsService } from './offerings.service';
 
+const FacilitySessionCursor = z.object({ scheduledStart: z.string(), id: z.string() });
+
 /**
  * Individual sessions of an offering (§4.4 Session, SPK-CAT-002). A session may point at the
  * scheduling event that reserves its space; scheduling remains the authority for that event.
@@ -47,7 +57,86 @@ export class SessionsService {
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
     private readonly offerings: OfferingsService,
+    private readonly facilities: FacilityDirectory,
   ) {}
+
+  /**
+   * CAT-01 (SPK-SCHED-008, §4.14): the sessions at one facility that overlap [from, to) (at most
+   * 31 days, checked by the query schema), for staff holding catalog.read_catalog at that
+   * facility, so a desk can build an attendance ActivityRef (offeringId + sessionId). Ordered and
+   * paged by (scheduled_start, id); offerings in every publication state are included. Each row
+   * carries the facility's IANA time zone.
+   */
+  async listAtFacility(
+    principal: Principal,
+    query: ListFacilitySessionsQuery,
+  ): Promise<Page<FacilitySession>> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, CatalogActions.readCatalog, {
+      type: 'offering_session',
+      organizationId,
+      facilityId: query.facilityId,
+    });
+    const facility = (
+      await this.facilities.describe(organizationId, [query.facilityId], this.db)
+    ).get(query.facilityId);
+    if (!facility) throw errors.notFound('facility', query.facilityId);
+    const cursor = decodeCursor(query.cursor, FacilitySessionCursor);
+    let q = this.db
+      .selectFrom('offering_sessions as s')
+      .innerJoin('offerings as o', (join) =>
+        join
+          .onRef('o.organization_id', '=', 's.organization_id')
+          .onRef('o.id', '=', 's.offering_id'),
+      )
+      .select([
+        's.id',
+        's.offering_id',
+        's.sequence',
+        's.title',
+        's.scheduled_start',
+        's.scheduled_end',
+        's.status',
+        'o.name as offering_name',
+        'o.facility_id',
+      ])
+      .where('s.organization_id', '=', organizationId)
+      .where('o.facility_id', '=', query.facilityId)
+      .where('s.scheduled_start', '<', new Date(query.to))
+      .where('s.scheduled_end', '>', new Date(query.from))
+      .orderBy('s.scheduled_start')
+      .orderBy('s.id')
+      .limit(query.limit + 1);
+    if (query.status) q = q.where('s.status', '=', query.status);
+    if (cursor) {
+      q = q.where(
+        sql<boolean>`(s.scheduled_start, s.id) > (${cursor.scheduledStart}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const rows = await q.execute();
+    const items = rows.slice(0, query.limit).map((r): FacilitySession => ({
+      sessionId: r.id,
+      offeringId: r.offering_id,
+      offeringName: r.offering_name,
+      sequence: r.sequence,
+      title: r.title,
+      scheduledStart: new Date(r.scheduled_start).toISOString(),
+      scheduledEnd: new Date(r.scheduled_end).toISOString(),
+      status: r.status,
+      facilityId: r.facility_id,
+      timezone: facility.timezone,
+    }));
+    const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
+    return {
+      items,
+      nextCursor: last
+        ? encodeCursor({
+            scheduledStart: new Date(last.scheduled_start).toISOString(),
+            id: last.id,
+          })
+        : null,
+    };
+  }
 
   async create(
     principal: Principal,

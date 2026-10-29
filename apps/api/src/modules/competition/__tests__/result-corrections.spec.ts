@@ -10,7 +10,14 @@ import {
   createTeamEntryFixture,
   type SeasonFixture,
 } from '../testing/competition-fixtures';
-import { adultCustomer, competitionTestApp, key, staffMember, type Actor } from './support';
+import {
+  adultCustomer,
+  atKickoff,
+  competitionTestApp,
+  key,
+  staffMember,
+  type Actor,
+} from './support';
 
 interface Team {
   teamEntryId: string;
@@ -108,6 +115,7 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
   }
 
   async function submit(fixtureId: string, body: object) {
+    await atKickoff(t, fixtureId);
     const res = await post(`/fixtures/${fixtureId}/results`, leagueManager, body);
     expect(res.status).toBe(201);
     return res.body as { id: string; revision: number };
@@ -369,6 +377,26 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
     expect(reuse.status).toBe(201);
     const stale = await publish(reuse.body, { reviewExceptionId: open.id });
     expect(stale.status).toBe(400);
+  });
+
+  it('CMP-11: a league manager resolves a result review task as the audited actor', async () => {
+    const resolved = await t.db
+      .selectFrom('operational_exceptions')
+      .select('id')
+      .where('category', '=', 'competition.result_correction_review')
+      .where('status', '=', 'resolved')
+      .execute();
+    expect(resolved.length).toBeGreaterThanOrEqual(1);
+    for (const task of resolved) {
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select(['action', 'actor'])
+        .where('target_id', '=', task.id)
+        .where('action', '=', 'exceptions.resolved')
+        .executeTakeFirstOrThrow();
+      // the reviewer, not a system principal, is recorded (exceptions.manage_own_queue)
+      expect(audit.actor).toMatchObject({ kind: 'staff', personId: leagueManager.personId });
+    }
   });
 
   it('SPK-RESULT-004: returning a correction that waits for review closes its review task; the official playoff result stands', async () => {

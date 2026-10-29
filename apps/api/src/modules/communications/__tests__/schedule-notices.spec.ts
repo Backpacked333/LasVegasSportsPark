@@ -37,7 +37,9 @@ import {
   fakeProviders,
   inboxOf,
   recipientsOf,
+  registerPushDeviceFixture,
 } from '../testing/communications-fixtures';
+import { withDeclaredPortDoubles } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -54,6 +56,7 @@ describe('schedule notices (SPK-COMMS-002 "schedule publication or change", SPK-
 
   beforeAll(async () => {
     t = await createTestApp({
+      configure: withDeclaredPortDoubles,
       imports: [CommunicationsModule, SchedulingModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',
@@ -67,6 +70,9 @@ describe('schedule notices (SPK-COMMS-002 "schedule publication or change", SPK-
     adultPlayer = await createPersonFixture(t, { kind: 'adult' });
     await createAccountFixture(t, { personId: adultPlayer });
     staff = await authHeaderForPerson(t, people.staff.personId);
+    // COM-01: the push channel reaches registered devices.
+    await registerPushDeviceFixture(t, { personId: adultPlayer });
+    await registerPushDeviceFixture(t, { personId: people.adult.personId });
   });
   afterAll(async () => {
     await t.close();

@@ -22,6 +22,8 @@ export interface ResultRevisionsTable {
   home_score: number | null;
   away_score: number | null;
   forfeiting_entry_id: string | null;
+  /** CMP-10 (migration 0457): the shootout winner of a drawn playoff game. */
+  shootout_winner_entry_id: Generated<string | null>;
   details: GeneratedJson<Record<string, unknown>>;
   submitted_by: Json<Record<string, unknown>>;
   submitted_by_person_id: string | null;
@@ -99,6 +101,9 @@ export interface FixtureSpecificationsTable {
   required_resource_ids: Generated<string[]>;
   playoff_structure: Json<Record<string, unknown>> | null;
   fairness_preferences: GeneratedJson<unknown[]>;
+  /** CMP-15 (migration 0459): compressed play, both optional. */
+  max_games_per_team_per_day: Generated<number | null>;
+  officials_per_game: Generated<number | null>;
   created_by: Json<Record<string, unknown>>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;

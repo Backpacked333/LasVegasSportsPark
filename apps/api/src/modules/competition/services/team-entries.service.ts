@@ -36,7 +36,6 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
-  declaredNotImplemented,
   snapshotActor,
   executorFor,
   type Clock,
@@ -83,6 +82,45 @@ const CAPACITY_CONSTRAINT = 'team_entries_division_capacity';
 export interface EntryViewer {
   /** Staff in scope, or a captain/co-captain: may see pending invitations and requests. */
   canManage: boolean;
+}
+
+/**
+ * CMP-02 (SPK-UX-002/003): the actions a workspace viewer may be offered, each with the entry
+ * states in which its command can succeed. The kernel decides the authority; the state check only
+ * hides commands the entry's lifecycle would refuse anyway.
+ */
+const WORKSPACE_ACTIONS: ReadonlyArray<{
+  action: (typeof CompetitionActions)[keyof typeof CompetitionActions];
+  when: (context: EntryContext) => boolean;
+}> = [
+  {
+    action: CompetitionActions.approveTeamEntry,
+    when: (c) => TeamEntryMachine.can(c.entry.status, 'approve'),
+  },
+  {
+    action: CompetitionActions.withdrawTeamEntry,
+    when: (c) => TeamEntryMachine.can(c.entry.status, 'withdraw'),
+  },
+  { action: CompetitionActions.manageTeam, when: (c) => c.team.status !== 'archived' },
+  { action: CompetitionActions.invitePlayer, when: takesPlayers },
+  { action: CompetitionActions.revokeTeamInvitation, when: takesPlayers },
+  { action: CompetitionActions.decideJoinRequest, when: takesPlayers },
+  { action: CompetitionActions.manageRoster, when: rosterOpen },
+  { action: CompetitionActions.handoverTeamRole, when: rosterOpen },
+  { action: CompetitionActions.requestAvailability, when: takesPlayers },
+  { action: CompetitionActions.renewTeamEntry, when: (c) => c.entry.status === 'approved' },
+];
+
+function takesPlayers(context: EntryContext): boolean {
+  return context.entry.status === 'applied' || context.entry.status === 'approved';
+}
+
+function rosterOpen(context: EntryContext): boolean {
+  return (
+    takesPlayers(context) &&
+    context.season.status !== 'completed' &&
+    context.season.status !== 'archived'
+  );
 }
 
 /**
@@ -771,6 +809,9 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       });
     }
 
+    const viewerRoles = principal.personId
+      ? roleRows.filter((r) => r.person_id === principal.personId).map((r) => r.role)
+      : [];
     return {
       entry: await this.entryView(db, context, now),
       team: toTeam(context.team),
@@ -801,10 +842,36 @@ export class TeamEntriesService implements TeamEntryQueryPort {
         pendingJoinRequests: pendingJoinRequests.length,
         issues,
       },
-      pendingInvitations: viewer.canManage ? pendingInvitations.map(toTeamInvitation) : [],
-      pendingJoinRequests: viewer.canManage ? pendingJoinRequests.map(toJoinRequest) : [],
+      // CMP-02: null when the viewer may not see them, [] when there are none.
+      pendingInvitations: viewer.canManage ? pendingInvitations.map(toTeamInvitation) : null,
+      pendingJoinRequests: viewer.canManage ? pendingJoinRequests.map(toJoinRequest) : null,
       upcomingFixtures: await this.upcomingFixtures(db, context, principal, counts.total, now),
+      viewer: {
+        roles: viewerRoles,
+        actingAsCaptain:
+          viewerRoles.includes('captain') ||
+          (viewerRoles.includes('co_captain') && rules.roster.coCaptainMayActAsCaptain === true),
+        availableActions: await this.availableActions(principal, context),
+      },
     };
+  }
+
+  /** CMP-02: the workspace commands the kernel allows the viewer on this entry in its state. */
+  private async availableActions(principal: Principal, context: EntryContext): Promise<string[]> {
+    const organizationId = context.entry.organization_id;
+    const target = {
+      type: 'team_entry',
+      id: context.entry.id,
+      organizationId,
+      teamEntryId: context.entry.id,
+    };
+    const out: string[] = [];
+    for (const { action, when } of WORKSPACE_ACTIONS) {
+      if (!when(context)) continue;
+      const decision = await this.authorization.decide(principal, action, target);
+      if (decision.allowed) out.push(action.id);
+    }
+    return out;
   }
 
   /**
@@ -998,7 +1065,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
   }
 
   async entryView(db: Reader, context: EntryContext, at: Date): Promise<TeamEntry> {
-    return toTeamEntry(context.entry, await this.rosterFacts(db, context, at));
+    return toTeamEntry(context.entry, await this.rosterFacts(db, context, at), context.team.name);
   }
 
   async entryViewById(
@@ -1066,24 +1133,53 @@ export class TeamEntriesService implements TeamEntryQueryPort {
   // -------------------------------------------------------------------------------------------
   // TeamEntryQueryPort
   // -------------------------------------------------------------------------------------------
-  /** IF-15: declared by stage 3; CMP-01 implements it. */
+  /**
+   * CMP-01, IF-15 (SPK-PLACE-001): the season whose `registration_offering_ref` names the catalog
+   * offering, or null. When several seasons name it (a reused offering), the most recently created
+   * one that is not archived answers.
+   */
   async seasonForOffering(
-    _organizationId: string,
-    _offeringId: string,
-    _trx?: Trx,
+    organizationId: string,
+    offeringId: string,
+    trx?: Trx,
   ): Promise<{ seasonId: string; competitionId: string } | null> {
-    return declaredNotImplemented('TeamEntryQueryPort.seasonForOffering', 'CMP-01');
+    const row = await (trx ?? executorFor(this.db))
+      .selectFrom('seasons')
+      .select(['id', 'competition_id'])
+      .where('organization_id', '=', organizationId)
+      .where('registration_offering_ref', '=', offeringId)
+      .orderBy(sql`case when status = 'archived' then 1 else 0 end`)
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    return row ? { seasonId: row.id, competitionId: row.competition_id } : null;
   }
 
-  /** IF-15: declared by stage 3; CMP-01 implements it. */
+  /**
+   * CMP-01, IF-15: the people holding any of `roles` on the entry at `at` (half-open effectivity),
+   * whether or not they also hold a roster row. Ordered by role, then person.
+   */
   async roleHolders(
-    _organizationId: string,
-    _teamEntryId: string,
-    _roles: readonly TeamRoleValue[],
-    _at: Date,
-    _trx?: Trx,
+    organizationId: string,
+    teamEntryId: string,
+    roles: readonly TeamRoleValue[],
+    at: Date,
+    trx?: Trx,
   ): Promise<Array<{ personId: string; role: TeamRoleValue }>> {
-    return declaredNotImplemented('TeamEntryQueryPort.roleHolders', 'CMP-01');
+    if (roles.length === 0) return [];
+    const rows = await (trx ?? executorFor(this.db))
+      .selectFrom('team_roles')
+      .select(['person_id', 'role'])
+      .where('organization_id', '=', organizationId)
+      .where('team_entry_id', '=', teamEntryId)
+      .where('role', 'in', [...roles])
+      .where('effective_from', '<=', at)
+      .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]))
+      .orderBy('role')
+      .orderBy('person_id')
+      .execute();
+    return rows.map((r) => ({ personId: r.person_id, role: r.role }));
   }
 
   async findTeamEntry(

@@ -18,7 +18,6 @@ import {
   AuditWriter,
   AuthorizationService,
   UnitOfWork,
-  declaredNotImplemented,
   executorFor,
 } from '../../../kernel';
 import { DATABASE } from '../../../kernel/tokens';
@@ -39,14 +38,14 @@ import type {
 import { SchedulingActions } from '../scheduling.actions';
 import { EventMachine } from '../scheduling.state-machines';
 import { localMinuteSpan, minutesOf } from '../time/local-time';
+import { EventImportService } from './event-import.service';
+import { EventSeriesService } from './event-series.service';
 import { EventWriter, sameResourceSet } from './event-writer';
+import { organizationOf } from './organization';
+
+export { organizationOf } from './organization';
 
 const Cursor = z.object({ start: z.string(), id: z.string() });
-
-export function organizationOf(principal: Principal): string {
-  if (!principal.organizationId) throw errors.authenticationRequired();
-  return principal.organizationId;
-}
 
 /**
  * Direct scheduling for owning records (fixtures, sessions, rentals …) and read access to the
@@ -62,8 +61,15 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly writer: EventWriter,
+    private readonly series: EventSeriesService,
+    private readonly imports: EventImportService,
   ) {}
 
+  /**
+   * EventSchedulingPort.createEvent: joins the caller's unit of work, so an owning record and its
+   * event commit or roll back together. §5.6 (K-11, IF-42): asserts the facility's future-schedule
+   * authority inside the unit.
+   */
   async createEvent(principal: Principal, input: CreateEventInput): Promise<Event> {
     const organizationId = organizationOf(principal);
     const scheduledStart = new Date(input.scheduledStart);
@@ -78,6 +84,8 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         organizationId,
         facilityId: facility.id,
       });
+      await this.writer.assertScheduleAuthority(trx, organizationId, facility.id);
+      this.writer.assertPortSource(principal, input.kind, input.sourceType);
       const resources = await this.writer.loadResources(
         trx,
         organizationId,
@@ -165,6 +173,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         organizationId,
         facilityId: facility.id,
       });
+      await this.writer.assertScheduleAuthority(trx, organizationId, facility.id);
       assertExpectedRevision(input.expectedRevision, event.revision);
       if (event.status === 'canceled') throw errors.invalidTransition('Event', 'canceled', 'move');
       const resources = await this.writer.loadResources(
@@ -256,6 +265,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         organizationId,
         facilityId: event.facility_id,
       });
+      await this.writer.assertScheduleAuthority(trx, organizationId, event.facility_id);
       assertExpectedRevision(input.expectedRevision, event.revision);
       EventMachine.next(event.status, 'cancel');
       const wasPublished = event.status === 'published';
@@ -287,26 +297,26 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
     });
   }
 
-  /** EventSchedulingPort.createEventSeries (IF-31): declared by stage 3; SCH-02 implements it. */
+  /** EventSchedulingPort.createEventSeries (SCH-02, IF-31): `EventSeriesService.createPortSeries`. */
   async createEventSeries(
-    _principal: Principal,
-    _input: CreateEventSeriesInput,
+    principal: Principal,
+    input: CreateEventSeriesInput,
   ): Promise<EventSeriesCreated> {
-    return declaredNotImplemented('EventSchedulingPort.createEventSeries', 'SCH-02');
+    return this.series.createPortSeries(principal, input);
   }
 
-  /** EventSchedulingPort.cancelEventSeries (IF-31): declared by stage 3; SCH-02 implements it. */
+  /** EventSchedulingPort.cancelEventSeries (SCH-02, IF-31): `EventSeriesService.cancelPortSeries`. */
   async cancelEventSeries(
-    _principal: Principal,
-    _seriesId: string,
-    _input: CancelEventSeriesInput,
+    principal: Principal,
+    seriesId: string,
+    input: CancelEventSeriesInput,
   ): Promise<{ canceledEventIds: string[] }> {
-    return declaredNotImplemented('EventSchedulingPort.cancelEventSeries', 'SCH-02');
+    return this.series.cancelPortSeries(principal, seriesId, input);
   }
 
-  /** EventSchedulingPort.importEvent (IF-31, IF-40): declared by stage 3; SCH-04 implements it. */
-  async importEvent(_principal: Principal, _input: ImportEventInput): Promise<Event> {
-    return declaredNotImplemented('EventSchedulingPort.importEvent', 'SCH-04');
+  /** EventSchedulingPort.importEvent (SCH-04, IF-31, IF-40): `EventImportService.importEvent`. */
+  async importEvent(principal: Principal, input: ImportEventInput): Promise<Event> {
+    return this.imports.importEvent(principal, input);
   }
 
   /** Staff in scope, a committed participant (self) or a guardian with view permission; otherwise not found (§4.10). */

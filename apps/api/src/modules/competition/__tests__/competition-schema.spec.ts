@@ -553,7 +553,12 @@ describe('competition schema invariants (migration 0400)', () => {
     for (const status of TeamInvitationMachine.states) {
       await db
         .updateTable('team_invitations')
-        .set({ status, accepted_at: status === 'accepted' ? clock.now() : null })
+        .set({
+          status,
+          accepted_at: status === 'accepted' ? clock.now() : null,
+          // migration 0454: a declined invitation records when it was declined
+          declined_at: status === 'declined' ? clock.now() : null,
+        })
         .where('id', '=', inviteId)
         .execute();
     }

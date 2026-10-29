@@ -32,8 +32,10 @@ import {
   dispatchOutbox,
   fakeProviders,
   recipientsOf,
+  registerPushDeviceFixture,
   type FakeProviders,
 } from '../testing/communications-fixtures';
+import { withDeclaredPortDoubles } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -59,6 +61,7 @@ describe('team audiences (SPK-COMMS-003 via competition roster port, SPK-COMMS-0
 
   beforeAll(async () => {
     t = await createTestApp({
+      configure: withDeclaredPortDoubles,
       imports: [CommunicationsModule, SchedulingModule, CompetitionModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',
@@ -75,6 +78,9 @@ describe('team audiences (SPK-COMMS-003 via competition roster port, SPK-COMMS-0
     await createAccountFixture(t, { personId: captain });
     adultPlayer = await createPersonFixture(t, { kind: 'adult' });
     await createAccountFixture(t, { personId: adultPlayer });
+    // COM-01: the push channel reaches registered devices.
+    await registerPushDeviceFixture(t, { personId: captain });
+    await registerPushDeviceFixture(t, { personId: adultPlayer });
     const season = await createSeasonFixture(t, {});
     const entry = await createTeamEntryFixture(t, {
       seasonId: season.seasonId,
@@ -197,6 +203,7 @@ describe('team audiences (SPK-COMMS-003 via competition roster port, SPK-COMMS-0
     async function family(childCount = 1) {
       const guardian = await createPersonFixture(t, { kind: 'adult' });
       await createAccountFixture(t, { personId: guardian });
+      await registerPushDeviceFixture(t, { personId: guardian });
       const children: string[] = [];
       const grants: string[] = [];
       for (let i = 0; i < childCount; i += 1) {

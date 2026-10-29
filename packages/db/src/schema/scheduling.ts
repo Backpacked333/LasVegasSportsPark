@@ -99,6 +99,14 @@ export interface ClosuresTable {
   resolution: Json<JsonObject> | null;
   applied_at: NullableTimestamp;
   lifted_at: NullableTimestamp;
+  /** Migration 0302 (SCH-01): set exactly when the closure is withdrawn (pending -> withdrawn). */
+  withdrawn_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  withdrawn_by: ColumnType<
+    Record<string, unknown> | null,
+    string | null | undefined,
+    string | null
+  >;
+  withdrawal_reason: ColumnType<string | null, string | null | undefined, string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

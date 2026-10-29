@@ -30,6 +30,9 @@ export const NotificationKindSchema = z
     'renewal_opportunity',
     'youth_feedback',
     'staff_broadcast',
+    // SPK-CAP-001 "request availability, remind" (COM-06, migration 1007)
+    'availability_request',
+    'activity_reminder',
   ])
   .openapi('NotificationKind');
 export type NotificationKindValue = z.infer<typeof NotificationKindSchema>;
@@ -209,6 +212,8 @@ export const NotificationRecipientSchema = z
     basis: RecipientBasisSchema,
     basisDetail: z.string().nullable(),
     subjectPersonIds: z.array(z.uuid()),
+    /** The recipient's name from the person directory (SPK-UX-006); null when it has none. */
+    displayName: z.string().nullable(),
     status: RecipientStatusSchema,
     resolvedAt: Instant,
     authorizedAt: Instant.nullable(),
@@ -237,6 +242,8 @@ export const DeliveryAttemptSchema = z
     acknowledgedAt: Instant.nullable(),
     failureCode: DeliveryFailureCodeSchema.nullable(),
     error: z.string().nullable(),
+    /** The failed attempt this one retries (SPK-COMMS-004, COM-02); null for a first attempt. */
+    retryOfAttemptId: z.uuid().nullable(),
     revision: Revision,
   })
   .openapi('DeliveryAttempt');
@@ -250,6 +257,15 @@ export const NotificationDeliveriesSchema = z
   })
   .openapi('NotificationDeliveries');
 export type NotificationDeliveries = z.infer<typeof NotificationDeliveriesSchema>;
+
+/**
+ * SPK-COMMS-004 (COM-02): retry one failed external delivery as a new attempt. An unknown outcome
+ * is never retried (it may have reached the person); a revoked recipient is refused.
+ */
+export const RetryDeliveryBody = withCommandMeta({})
+  .extend({ reason: Reason })
+  .openapi('RetryDeliveryRequest');
+export type RetryDeliveryInput = z.infer<typeof RetryDeliveryBody>;
 
 // ---------------------------------------------------------------------------------------------
 // Inbox (in-app notices = delivery attempts on the in_app channel; SPK-UX-003)
@@ -272,6 +288,14 @@ export const InboxItemSchema = z
     acknowledgedAt: Instant.nullable(),
     /** Set when a newer notice about the same subject replaced this one (SPK-COMMS-005). */
     supersededByNotificationId: z.uuid().nullable(),
+    /**
+     * The participants this notice concerns for the reader (SPK-UX-003 "each action must identify
+     * the participant"): the reader themself, or the people whose `receive_messages` grant reached
+     * them. Ids only; names come from the person directory.
+     */
+    subjectPersonIds: z.array(z.uuid()),
+    /** Revision of the delivery attempt; send it as `expectedRevision` to read or acknowledge. */
+    revision: Revision,
     createdAt: Instant,
   })
   .openapi('InboxItem');
@@ -380,6 +404,51 @@ export type RevokeCalendarFeedInput = z.infer<typeof RevokeCalendarFeedBody>;
 export const CalendarFeedListSchema = z
   .object({ feeds: z.array(CalendarFeedSchema) })
   .openapi('CalendarFeedList');
+
+// ---------------------------------------------------------------------------------------------
+// Push devices (SPK-UX-001 push notification registration, SPK-COMMS-003/004, SPK-IAM-006; COM-01)
+// ---------------------------------------------------------------------------------------------
+export const PushPlatformSchema = z.enum(['ios', 'android', 'web']).openapi('PushPlatform');
+export type PushPlatformValue = z.infer<typeof PushPlatformSchema>;
+export const PushDeviceStatusSchema = z.enum(['active', 'revoked']).openapi('PushDeviceStatus');
+export type PushDeviceStatusValue = z.infer<typeof PushDeviceStatusSchema>;
+
+/** A registered device. The token is never returned, logged or audited: only its last 4 characters. */
+export const PushDeviceSchema = z
+  .object({
+    id: z.uuid(),
+    personId: z.uuid(),
+    accountId: z.uuid(),
+    platform: PushPlatformSchema,
+    tokenHint: z.string(),
+    appVersion: z.string().nullable(),
+    status: PushDeviceStatusSchema,
+    registeredAt: Instant,
+    lastSeenAt: Instant,
+    revokedAt: Instant.nullable(),
+    revokedReason: z.string().nullable(),
+    revision: Revision,
+  })
+  .openapi('PushDevice');
+export type PushDevice = z.infer<typeof PushDeviceSchema>;
+
+export const RegisterPushDeviceBody = withCommandMeta({
+  platform: PushPlatformSchema,
+  /** The platform push token of this app install (opaque; stored only while the device is active). */
+  token: z.string().trim().min(1).max(4096),
+  appVersion: z.string().trim().min(1).max(50).optional(),
+}).openapi('RegisterPushDeviceRequest');
+export type RegisterPushDeviceInput = z.infer<typeof RegisterPushDeviceBody>;
+
+export const RevokePushDeviceBody = withCommandMeta({})
+  .extend({ reason: Reason })
+  .openapi('RevokePushDeviceRequest');
+export type RevokePushDeviceInput = z.infer<typeof RevokePushDeviceBody>;
+
+export const PushDeviceListSchema = z
+  .object({ devices: z.array(PushDeviceSchema) })
+  .openapi('PushDeviceList');
+export type PushDeviceList = z.infer<typeof PushDeviceListSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Provider delivery receipts (webhooks, §4.11): authenticated, durably recorded, duplicate-tolerant
@@ -520,6 +589,17 @@ register({
   response: NotificationDeliveriesSchema,
 });
 register({
+  method: 'post',
+  path: '/delivery-attempts/{id}/retry',
+  summary:
+    'Retry one failed push, email or SMS delivery as a new queued attempt; unknown outcomes and revoked recipients are refused',
+  requirements: 'SPK-COMMS-004, SPK-COMMS-003, §4.7 invariant 10',
+  params: IdParams,
+  body: RetryDeliveryBody,
+  response: DeliveryAttemptSchema,
+  idempotent: true,
+});
+register({
   method: 'get',
   path: '/me/inbox',
   summary: 'In-app notices for the authenticated person, newest first',
@@ -590,6 +670,34 @@ register({
   params: IdParams,
   body: RevokeCalendarFeedBody,
   response: CalendarFeedSchema,
+  status: 200,
+  idempotent: true,
+});
+register({
+  method: 'post',
+  path: '/me/push-devices',
+  summary:
+    'Register this app install for push notices; re-registering the same token refreshes it, and a token active for another account moves here',
+  requirements: 'SPK-UX-001, SPK-COMMS-003, SPK-COMMS-004',
+  body: RegisterPushDeviceBody,
+  response: PushDeviceSchema,
+  idempotent: true,
+});
+register({
+  method: 'get',
+  path: '/me/push-devices',
+  summary: 'Push devices registered by the signed-in account (token hints only)',
+  requirements: 'SPK-UX-001',
+  response: PushDeviceListSchema,
+});
+register({
+  method: 'post',
+  path: '/me/push-devices/{id}/revoke',
+  summary: 'Revoke a push device: it receives nothing more and its token is erased',
+  requirements: 'SPK-UX-001, SPK-IAM-006',
+  params: IdParams,
+  body: RevokePushDeviceBody,
+  response: PushDeviceSchema,
   status: 200,
   idempotent: true,
 });

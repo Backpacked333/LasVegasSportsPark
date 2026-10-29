@@ -77,7 +77,10 @@ export function toNotification(row: NotificationRow): Notification {
   };
 }
 
-export function toRecipient(row: RecipientRow): NotificationRecipient {
+export function toRecipient(
+  row: RecipientRow,
+  displayName: string | null = null,
+): NotificationRecipient {
   return {
     id: row.id,
     notificationId: row.notification_id,
@@ -85,6 +88,7 @@ export function toRecipient(row: RecipientRow): NotificationRecipient {
     basis: row.resolved_basis,
     basisDetail: row.basis_detail,
     subjectPersonIds: [...row.subject_person_ids],
+    displayName,
     status: row.status,
     resolvedAt: iso(row.resolved_at),
     authorizedAt: isoOrNull(row.authorized_at),
@@ -112,6 +116,7 @@ export function toAttempt(row: AttemptRow): DeliveryAttempt {
     acknowledgedAt: isoOrNull(row.acknowledged_at),
     failureCode: row.failure_code,
     error: row.error,
+    retryOfAttemptId: row.retry_of_attempt_id,
     revision: row.revision,
   };
 }
@@ -120,6 +125,8 @@ export function toAttempt(row: AttemptRow): DeliveryAttempt {
 export interface InboxRow {
   attempt_id: string;
   attempt_status: AttemptRow['status'];
+  attempt_revision: number;
+  subject_person_ids: string[];
   attempt_created_at: Date | string;
   delivered_at: Date | string | null;
   read_at: Date | string | null;
@@ -157,6 +164,8 @@ export function toInboxItem(row: InboxRow): InboxItem {
     readAt: isoOrNull(row.read_at),
     acknowledgedAt: isoOrNull(row.acknowledged_at),
     supersededByNotificationId: row.superseded_by_notification_id,
+    subjectPersonIds: [...row.subject_person_ids],
+    revision: row.attempt_revision,
     createdAt: iso(row.attempt_created_at),
   };
 }

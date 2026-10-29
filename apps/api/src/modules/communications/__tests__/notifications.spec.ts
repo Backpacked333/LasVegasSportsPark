@@ -14,6 +14,7 @@ import {
 } from '../../identity';
 import { CommunicationsModule } from '../communications.module';
 import { attemptsOf, dispatchOutbox, recipientsOf } from '../testing/communications-fixtures';
+import { withDeclaredPortDoubles } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -26,6 +27,7 @@ describe('staff composition flow (SPK-COMMS-002/003/006, §4.9 commands)', () =>
 
   beforeAll(async () => {
     t = await createTestApp({
+      configure: withDeclaredPortDoubles,
       imports: [CommunicationsModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',

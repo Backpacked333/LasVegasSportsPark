@@ -31,6 +31,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  databaseConstraintOf,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -50,6 +51,9 @@ import { DiscountMachine } from '../catalog.state-machines';
 import { evaluateDiscounts, type EvaluableDiscount } from '../pricing/discount-evaluator';
 
 const Cursor = z.object({ name: z.string(), id: z.string() });
+
+/** CAT-04 (migration 0207): the database refuses a redemption beyond the per-person limit. */
+export const PER_PERSON_LIMIT_CONSTRAINT = 'discount_redemption_entries_per_person_limit';
 
 /**
  * Discount definitions (SPK-PAY-003) and their redemption counters (§4.7 invariant 7). Evaluation
@@ -524,16 +528,19 @@ export class DiscountsService {
     organizationId: string,
     input: RedeemDiscountInput,
   ): Promise<RedemptionOutcome> {
+    // Lock the definition, then the counter, before anything is counted (SPK-PAY-003): concurrent
+    // redemptions of one discount serialize here, so the replay check and the participant's
+    // ledger count below see every redemption committed before the lock was granted. The order
+    // (definition, then counter) is the one discount updates take, and the per-person trigger of
+    // migration 0207 locks the same definition row, so no two paths wait on each other.
     const definition = await trx
       .selectFrom('discount_definitions')
       .select(['id', 'status', 'per_person_limit', 'effective_from', 'effective_to'])
       .where('organization_id', '=', organizationId)
       .where('id', '=', input.discountDefinitionId)
+      .forUpdate()
       .executeTakeFirst();
     if (!definition) throw errors.notFound('discount', input.discountDefinitionId);
-    // Lock the counter row before anything is counted (SPK-PAY-003 per-person limit): concurrent
-    // redemptions of one discount serialize here, so the replay check and the participant's
-    // ledger count below see every redemption committed before the lock was granted.
     const counterBefore = await this.counter(trx, organizationId, definition.id, true);
     const existing = await this.entry(trx, organizationId, input, 'redeem');
     if (existing) {
@@ -565,17 +572,25 @@ export class DiscountsService {
         at: now.toISOString(),
       });
     }
+    const perPersonLimitReached = () =>
+      errors.resourceConflict('The participant has already used this discount.', {
+        code: 'DISCOUNT_PER_PERSON_LIMIT',
+        discountDefinitionId: definition.id,
+        perPersonLimit: definition.per_person_limit,
+      });
+    // Early feedback; the guarantee is the database trigger of migration 0207 (CAT-04).
     if (definition.per_person_limit !== null && input.personId) {
       const used = await this.personRedemptions(trx, organizationId, definition.id, input.personId);
-      if (used >= definition.per_person_limit) {
-        throw errors.resourceConflict('The participant has already used this discount.', {
-          code: 'DISCOUNT_PER_PERSON_LIMIT',
-          discountDefinitionId: definition.id,
-          perPersonLimit: definition.per_person_limit,
-        });
-      }
+      if (used >= definition.per_person_limit) throw perPersonLimitReached();
     }
-    await this.insertEntry(trx, organizationId, input, 'redeem');
+    try {
+      await this.insertEntry(trx, organizationId, input, 'redeem');
+    } catch (error) {
+      if (databaseConstraintOf(error)?.constraint === PER_PERSON_LIMIT_CONSTRAINT) {
+        throw perPersonLimitReached();
+      }
+      throw error;
+    }
     // Conditional update: the row only changes while under the limit; the check constraint on
     // discount_redemptions is the final guarantee (§4.7 invariant 7).
     const updated = await trx

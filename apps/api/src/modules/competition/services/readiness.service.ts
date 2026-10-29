@@ -1,16 +1,29 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  errors,
+  SEASON_READINESS_MAX_FIXTURES,
   systemPrincipal,
   type EligibilitySeverity,
   type Event,
+  type FixtureDetail,
   type FixtureReadiness,
   type FixtureReadinessIssue,
   type Principal,
+  type ReadinessCounts,
   type ReadinessStatus,
+  type SeasonReadiness,
+  type SeasonReadinessQuery,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { sql } from 'kysely';
-import { CLOCK, DATABASE, type Clock } from '../../../kernel';
+import {
+  AuditReader,
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  executorFor,
+  type Clock,
+} from '../../../kernel';
 import { ClosuresService, EventsService, ResourcesService } from '../../scheduling';
 import {
   CHANGE_NOTICE_CHECK_PORT,
@@ -21,6 +34,8 @@ import {
   type FinancialConditionsPort,
   type FormsCheckPort,
 } from '../competition-matches.ports';
+import { MatchActions } from '../competition-matches.actions';
+import { CompetitionActions } from '../competition.actions';
 import { loadRuleSetRow, loadSeasonRow } from '../competition.queries';
 import {
   RESTRICTED_SOURCE_TYPES,
@@ -84,12 +99,73 @@ export class ReadinessService {
     @Inject(FORMS_CHECK_PORT) private readonly forms: FormsCheckPort,
     @Inject(FINANCIAL_CONDITIONS_PORT) private readonly finance: FinancialConditionsPort,
     @Inject(CHANGE_NOTICE_CHECK_PORT) private readonly notices: ChangeNoticeCheckPort,
+    private readonly auditReader: AuditReader,
+    private readonly authorization: AuthorizationService,
   ) {}
 
   async evaluate(principal: Principal, fixtureId: string): Promise<FixtureReadiness> {
-    const organizationId = organizationOf(principal);
     // Authorization: whoever may read the fixture may read its readiness (protected NOT_FOUND, §4.10).
     const detail = await this.fixtures.get(principal, fixtureId);
+    return this.assess(organizationOf(principal), detail, { restricted: !isStaffLike(principal) });
+  }
+
+  /**
+   * CMP-01 (SPK-READY-001): the readiness of each fixture of a season in one read, for staff who
+   * hold the readiness read action. At most SEASON_READINESS_MAX_FIXTURES fixtures (narrow the
+   * window with from/to); counts only, unknown stays unknown.
+   */
+  async seasonSummary(
+    principal: Principal,
+    seasonId: string,
+    query: SeasonReadinessQuery,
+  ): Promise<SeasonReadiness> {
+    const organizationId = organizationOf(principal);
+    const db = executorFor(this.db);
+    const season = await loadSeasonRow(db, organizationId, seasonId);
+    if (!season) throw errors.notFound('season', seasonId);
+    // Staff only: a customer principal names no subject, so the kernel refuses it.
+    await this.authorization.require(principal, MatchActions.readReadiness, {
+      type: 'season',
+      id: seasonId,
+      organizationId,
+    });
+    let q = db
+      .selectFrom('fixtures')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('season_id', '=', seasonId);
+    if (query.from) q = q.where('scheduled_end', '>', new Date(query.from));
+    if (query.to) q = q.where('scheduled_start', '<', new Date(query.to));
+    const rows = await q
+      .orderBy(sql`scheduled_start asc nulls last`)
+      .orderBy('id')
+      .limit(SEASON_READINESS_MAX_FIXTURES + 1)
+      .execute();
+    if (rows.length > SEASON_READINESS_MAX_FIXTURES) {
+      throw errors.validation(
+        `More than ${SEASON_READINESS_MAX_FIXTURES} fixtures match; narrow the window with from and to.`,
+        { code: 'TOO_MANY_FIXTURES', limit: SEASON_READINESS_MAX_FIXTURES },
+      );
+    }
+    const evaluatedAt = iso(this.clock.now());
+    const items: SeasonReadiness['items'] = [];
+    for (const row of rows) {
+      const detail = await this.fixtures.detail(db, principal, row);
+      items.push({ fixtureId: row.id, ...countsOf(await this.assess(organizationId, detail)) });
+    }
+    return { seasonId, evaluatedAt, items };
+  }
+
+  /**
+   * The assessment of one fixture whose read the caller has authorized. `restricted` hides
+   * restricted source record ids (customers).
+   */
+  async assess(
+    organizationId: string,
+    detail: FixtureDetail,
+    options: { restricted?: boolean } = {},
+  ): Promise<FixtureReadiness> {
+    const fixtureId = detail.id;
     const now = this.clock.now();
     const evaluatedAt = iso(now);
     // The fixture's copied time until the authoritative event is read below (SPK-READY-004).
@@ -102,7 +178,7 @@ export class ReadinessService {
     // issues whatever order the checks report in.
     const issues: Array<FixtureReadinessIssue & { check: string }> = [];
     const checkNames: string[] = [];
-    const restricted = !isStaffLike(principal);
+    const restricted = options.restricted ?? false;
     const add = (check: string, input: IssueInput): void => {
       if (!checkNames.includes(check)) checkNames.push(check);
       issues.push({
@@ -428,22 +504,23 @@ export class ReadinessService {
     //     records) says whether a published game was moved or postponed; delivery evidence
     //     belongs to the communications module (CHANGE_NOTICE_CHECK_PORT, unknown by default).
     check('notifications');
-    const change = await this.db
-      .selectFrom('audit_records')
-      .select(['id', 'occurred_at'])
-      .where('organization_id', '=', organizationId)
-      .where('target_type', '=', 'fixture')
-      .where('target_id', '=', fixtureId)
-      .where(
-        sql<boolean>`(details->>'change' in ('rescheduled', 'postponed') or (details->>'change' = 'synced_from_scheduling' and details->>'previousStatus' = 'scheduled'))`,
-      )
-      .orderBy('occurred_at', 'desc')
-      .limit(1)
-      .executeTakeFirst();
+    // CMP-11 (§4.2): the fixture's audited history through the kernel's AuditReader (IF-44).
+    const history = await this.auditReader.forTarget(organizationId, 'fixture', fixtureId, {
+      actions: [CompetitionActions.manageFixtures.id],
+      limit: 200,
+    });
+    const change = history.find((record) => {
+      const kind = record.details['change'];
+      return (
+        kind === 'rescheduled' ||
+        kind === 'postponed' ||
+        (kind === 'synced_from_scheduling' && record.details['previousStatus'] === 'scheduled')
+      );
+    });
     if (change) {
       const findings = await this.notices.changeNotices(organizationId, {
         ...conditionContext,
-        changedAt: new Date(change.occurred_at),
+        changedAt: new Date(change.occurredAt),
         schedulingEventId: detail.schedulingEventId,
         scheduledStart,
         scheduledEnd,
@@ -498,6 +575,15 @@ export class ReadinessService {
       deadline: finding.deadline,
     });
   }
+}
+
+/** CMP-01: the counts a summary carries (unknown stays unknown, never ready). */
+export function countsOf(readiness: FixtureReadiness): ReadinessCounts {
+  return {
+    status: readiness.status,
+    blockingCount: readiness.issues.filter((i) => i.severity === 'blocking').length,
+    unknownCount: readiness.issues.filter((i) => i.severity === 'unknown').length,
+  };
 }
 
 /** SPK-READY-002: blocked when anything blocks; unknown when evidence is missing; warning; else ready. */

@@ -8,7 +8,14 @@ import {
   createTeamEntryFixture,
   type SeasonFixture,
 } from '../testing/competition-fixtures';
-import { adultCustomer, competitionTestApp, key, staffMember, type Actor } from './support';
+import {
+  adultCustomer,
+  atKickoff,
+  competitionTestApp,
+  key,
+  staffMember,
+  type Actor,
+} from './support';
 
 interface Team {
   teamEntryId: string;
@@ -186,6 +193,7 @@ describe('discipline and disputes (SPK-DISC-001..005, SPK-RESULT-005, SPK-AT-013
       fixtureIds.push(created.body.fixture.id);
     }
     for (const [index, fixtureId] of fixtureIds.entries()) {
+      await atKickoff(t, fixtureId);
       const submitted = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
         classification: 'completed',
         homeScore: 1,
@@ -413,7 +421,9 @@ describe('discipline and disputes (SPK-DISC-001..005, SPK-RESULT-005, SPK-AT-013
       .select('id')
       .where('season_id', '=', season.seasonId)
       .where('status', '=', 'played')
-      .orderBy('scheduled_start')
+      // the most recently played game: results are only taken from kickoff on (CMP-12), so the
+      // clock is now past the earlier game's protest window
+      .orderBy('scheduled_start', 'desc')
       .executeTakeFirstOrThrow();
     const stranger = await teamOf(season, 'Strangers', divisionId);
     const byStranger = await post(`/fixtures/${fixture.id}/disputes`, stranger.captain, {

@@ -259,12 +259,17 @@ export interface RosterFacts {
   rosterMax: number;
 }
 
-export function toTeamEntry(row: Selectable<TeamEntriesTable>, roster: RosterFacts): TeamEntry {
+export function toTeamEntry(
+  row: Selectable<TeamEntriesTable>,
+  roster: RosterFacts,
+  teamName: string,
+): TeamEntry {
   return {
     id: row.id,
     seasonId: row.season_id,
     divisionId: row.division_id,
     teamId: row.team_id,
+    teamName,
     status: row.status,
     appliedByPersonId: row.applied_by_person_id,
     appliedAt: iso(row.applied_at),
