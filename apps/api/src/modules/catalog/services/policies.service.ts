@@ -35,6 +35,7 @@ import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { POLICY_APPROVAL_ACTION } from '../catalog.policy';
 import type { PolicyPort } from '../catalog.ports';
+import { assertCatalogReferences } from './entitlement-definitions.service';
 import { organizationOf, toApproval, toPolicyVersion } from '../catalog.shared';
 import { PolicyVersionMachine } from '../catalog.state-machines';
 
@@ -94,6 +95,15 @@ export class PoliciesService implements PolicyPort {
     });
     const content = parsePolicyContent(body.kind, body.content);
     return this.uow.run(async ({ trx }) => {
+      // §4.3: an eligibility rule requiring membership names offerings or programs that exist.
+      if (body.kind === 'eligibility') {
+        await assertCatalogReferences(
+          trx,
+          organizationId,
+          content['membershipRequired'] as { offeringIds?: string[]; programIds?: string[] },
+          'content.membershipRequired',
+        );
+      }
       const latest = await trx
         .selectFrom('policy_versions')
         .select((eb) => eb.fn.max('version').as('version'))

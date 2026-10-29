@@ -60,6 +60,16 @@ describe('per-person discount redemption guard (CAT-04)', () => {
     );
   const refusedByGuard = (error: unknown) =>
     isCheckViolation(error) && pgConstraintName(error) === PER_PERSON_LIMIT_CONSTRAINT;
+  const systemActor = (): Principal => ({
+    kind: 'system',
+    organizationId: t.organizationId,
+    accountId: null,
+    personId: null,
+    staffRoles: [],
+    facilityIds: [],
+    sessionId: null,
+    actorLabel: 'finance.checkout',
+  });
   /** Keeps the first transaction open while the second inserts (PostgreSQL only). */
   const overlap = () =>
     t.database.concurrent ? new Promise((resolve) => setTimeout(resolve, 300)) : Promise.resolve();
@@ -85,12 +95,112 @@ describe('per-person discount redemption guard (CAT-04)', () => {
     expect(await redeemedBy(limited, person)).toBe(2);
     // the limit is per person: another participant still redeems
     await insert(t.db, entry(limited, people.adult.personId));
-    // a redemption that names no participant is limited only by the organization-wide counter
-    await insert(t.db, entry(limited, null));
     // no per-person limit: unlimited per person
     const open = await createDiscountFixture(t, { perPersonLimit: null, redemptionLimit: null });
     for (let i = 0; i < 3; i += 1) await insert(t.db, entry(open, person));
     expect(await redeemedBy(open, person)).toBe(3);
+  });
+
+  it('SPK-PAY-003: a redemption of a per-person-limited discount that names no person is refused by the database and the service', async () => {
+    const limited = await createDiscountFixture(t, { perPersonLimit: 1, redemptionLimit: null });
+    const anonymous = await outcome(insert(t.db, entry(limited, null)));
+    expect(anonymous.ok).toBe(false);
+    expect(isCheckViolation(anonymous.error)).toBe(true);
+    expect(pgConstraintName(anonymous.error)).toBe('discount_redemption_entries_person_required');
+    // without a per-person limit nothing needs counting per person
+    const open = await createDiscountFixture(t, { perPersonLimit: null, redemptionLimit: null });
+    await insert(t.db, entry(open, null));
+    await expect(
+      uow.run(({ trx }) =>
+        pricing.redeemDiscount(trx, t.organizationId, {
+          discountDefinitionId: limited,
+          referenceType: 'order',
+          referenceId: newId(),
+          amountMinor: 500,
+          currency: 'USD',
+          actor: systemActor(),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { path: 'personId', code: 'DISCOUNT_PERSON_REQUIRED' },
+    });
+  });
+
+  it('SPK-PAY-003: an orphan release, or one naming another person, cannot lower a count past the limit', async () => {
+    const people = await createOrganizationPeople(t);
+    const person = people.child.personId;
+    const other = people.adult.personId;
+    const id = await createDiscountFixture(t, { perPersonLimit: 1, redemptionLimit: null });
+    const reference = newId();
+    await insert(t.db, entry(id, person, 'redeem', reference));
+    // a release reversing nothing
+    const orphan = await outcome(insert(t.db, entry(id, person, 'release')));
+    expect(orphan.ok).toBe(false);
+    expect(pgConstraintName(orphan.error)).toBe(
+      'discount_redemption_entries_release_matches_redeem',
+    );
+    // a release of the person's redemption that names someone else
+    const misnamed = await outcome(insert(t.db, entry(id, other, 'release', reference)));
+    expect(pgConstraintName(misnamed.error)).toBe(
+      'discount_redemption_entries_release_matches_redeem',
+    );
+    // so the person is still at the limit
+    expect(refusedByGuard((await outcome(insert(t.db, entry(id, person)))).error)).toBe(true);
+    expect(await redeemedBy(id, person)).toBe(1);
+  });
+
+  it('a release and a redemption of one discount overlap without a deadlock (PGlite and TEST_DATABASE_URL)', async () => {
+    const people = await createOrganizationPeople(t);
+    const id = await createDiscountFixture(t, { perPersonLimit: 5, redemptionLimit: 10 });
+    const reference = newId();
+    await uow.run(({ trx }) =>
+      pricing.redeemDiscount(trx, t.organizationId, {
+        discountDefinitionId: id,
+        referenceType: 'order',
+        referenceId: reference,
+        personId: people.adult.personId,
+        amountMinor: 500,
+        currency: 'USD',
+        actor: systemActor(),
+      }),
+    );
+    const results = await Promise.all([
+      outcome(
+        uow.run(async ({ trx }) => {
+          await pricing.releaseDiscount(trx, t.organizationId, {
+            discountDefinitionId: id,
+            referenceType: 'order',
+            referenceId: reference,
+            amountMinor: 500,
+            currency: 'USD',
+            actor: systemActor(),
+          });
+          await overlap();
+        }),
+      ),
+      outcome(
+        uow.run(async ({ trx }) => {
+          await pricing.redeemDiscount(trx, t.organizationId, {
+            discountDefinitionId: id,
+            referenceType: 'order',
+            referenceId: newId(),
+            personId: people.child.personId,
+            amountMinor: 500,
+            currency: 'USD',
+            actor: systemActor(),
+          });
+          await overlap();
+        }),
+      ),
+    ]);
+    expect(results.map((r) => r.error)).toEqual([null, null]);
+    const counter = await t.db
+      .selectFrom('discount_redemptions')
+      .select('redeemed_count')
+      .where('discount_definition_id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(counter.redeemed_count).toBe(1);
   });
 
   it('SPK-PAY-003: the pricing service reports the database refusal as DISCOUNT_PER_PERSON_LIMIT', async () => {

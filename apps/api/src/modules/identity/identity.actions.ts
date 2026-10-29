@@ -97,6 +97,27 @@ export const IdentityActions = defineActions({
     subjectPermission: 'register',
     requirements: ['SPK-IAM-001'],
   },
+  /**
+   * Audit ids for the ID-06 contact-point commands. Authorization of both stays
+   * identity.add_contact_point (same roles, self and `register`); these ids name what the audit
+   * record did, so a removal is never filed under an add.
+   */
+  makePrimaryContactPoint: {
+    id: 'identity.make_primary_contact_point',
+    description: 'Make a contact point the primary one of its kind for a person',
+    staffRoles: SUPPORT_STAFF,
+    allowSelf: true,
+    subjectPermission: 'register',
+    requirements: ['SPK-IAM-001'],
+  },
+  removeContactPoint: {
+    id: 'identity.remove_contact_point',
+    description: 'Remove a contact point from a person',
+    staffRoles: SUPPORT_STAFF,
+    allowSelf: true,
+    subjectPermission: 'register',
+    requirements: ['SPK-IAM-001'],
+  },
   manageAccount: {
     id: 'identity.manage_account',
     description: 'Provision, recover or disable login accounts',

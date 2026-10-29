@@ -144,6 +144,77 @@ describe('invitation reads and decline (ID-03; SPK-IAM-004, §4.6, §4.10)', () 
     }
   });
 
+  it('§4.10 / SPK-IAM-004: an invitation naming a person is not readable by another holder of its contact', async () => {
+    const family = await createOrganizationPeople(t, { guardianPermissions: ['view'] });
+    const parent = await authHeaderForPerson(t, family.adult.personId);
+    const addressee = await adultWithAccount();
+    const sharedEmail = `family-${newId()}@example.test`;
+    await createContactPointFixture(t, {
+      personId: addressee.personId,
+      kind: 'email',
+      value: sharedEmail,
+      verified: true,
+    });
+    // a second person holds the same address, verified but not primary (a shared family inbox)
+    const other = await adultWithAccount();
+    await createContactPointFixture(t, {
+      personId: other.personId,
+      kind: 'email',
+      value: sharedEmail,
+      verified: true,
+      isPrimary: false,
+    });
+    const invitation = await invite(parent, {
+      recipientPersonId: addressee.personId,
+      recipientContact: { kind: 'email', value: sharedEmail },
+      scope: { type: 'person', personId: family.child.personId },
+      requestedPermissions: ['view'],
+    });
+    const otherList = await t.http.get('/v1/me/invitations').set(other.header);
+    expect(otherList.status).toBe(200);
+    expect(otherList.body.items).toEqual([]);
+    const otherRead = await t.http.get(`/v1/me/invitations/${invitation.id}`).set(other.header);
+    expect(otherRead.status).toBe(404);
+    expect(otherRead.body.code).toBe('NOT_FOUND');
+    // the named person still reads it
+    const mine = await t.http.get('/v1/me/invitations').set(addressee.header);
+    expect(mine.body.items.map((i: { id: string }) => i.id)).toEqual([invitation.id]);
+    expect(
+      (await t.http.get(`/v1/me/invitations/${invitation.id}`).set(addressee.header)).status,
+    ).toBe(200);
+  });
+
+  it('§4.9: a decline made against a stale read is refused with STALE_REVISION', async () => {
+    const family = await createOrganizationPeople(t, { guardianPermissions: ['view'] });
+    const parent = await authHeaderForPerson(t, family.adult.personId);
+    const sitter = await adultWithAccount();
+    const invitation = await invite(parent, {
+      recipientPersonId: sitter.personId,
+      scope: { type: 'person', personId: family.child.personId },
+      requestedPermissions: ['view'],
+    });
+    const stale = await t.http
+      .post(`/v1/invitations/${invitation.id}/decline`)
+      .set(sitter.header)
+      .set('Idempotency-Key', key())
+      .send({ token: invitation.token, expectedRevision: 7 });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    const row = await t.db
+      .selectFrom('invitations')
+      .select(['status', 'revision'])
+      .where('id', '=', invitation.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ status: 'pending', revision: 1 });
+    const current = await t.http
+      .post(`/v1/invitations/${invitation.id}/decline`)
+      .set(sitter.header)
+      .set('Idempotency-Key', key())
+      .send({ token: invitation.token, expectedRevision: 1 });
+    expect(current.status).toBe(200);
+    expect(current.body).toMatchObject({ status: 'declined', revision: 2 });
+  });
+
   it('SPK-IAM-004: a declined invitation can no longer be accepted', async () => {
     const family = await createOrganizationPeople(t, { guardianPermissions: ['view', 'collect'] });
     const parent = await authHeaderForPerson(t, family.adult.personId);

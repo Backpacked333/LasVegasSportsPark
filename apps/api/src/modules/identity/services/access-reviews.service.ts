@@ -300,6 +300,7 @@ export class AccessReviewsService {
           affectedGrantIds = own.map((s) => s.grant_id).sort();
           if (affectedGrantIds.length > 0) {
             await this.lockGrants(trx, organizationId, affectedGrantIds);
+            const wasProjected = await this.projectedGrants(trx, organizationId, affectedGrantIds);
             await this.endSuspensions(
               trx,
               organizationId,
@@ -313,7 +314,12 @@ export class AccessReviewsService {
               affectedGrantIds,
               now,
             );
-            const restored = affectedGrantIds.filter((g) => !stillSuspended.has(g));
+            // A lift is emitted only for a grant that this change restores: it was projected as
+            // suspended before and is not now. A grant whose projection an earlier lift or window
+            // end already cleared is not announced twice.
+            const restored = affectedGrantIds.filter(
+              (g) => wasProjected.has(g) && !stillSuspended.has(g),
+            );
             if (restored.length > 0) {
               await this.outbox.enqueue(trx, IdentityEvents.accessRestrictionLifted, {
                 organizationId,
@@ -582,6 +588,7 @@ export class AccessReviewsService {
       if (due.length === 0) return false;
       const grantIds = [...new Set(due.map((d) => d.grant_id))].sort();
       await this.lockGrants(trx, organizationId, grantIds);
+      const wasProjected = await this.projectedGrants(trx, organizationId, grantIds);
       const decisionId = newId();
       for (const suspension of due) {
         await trx
@@ -593,7 +600,9 @@ export class AccessReviewsService {
           .execute();
       }
       const stillSuspended = await this.projectSuspensions(trx, organizationId, grantIds, now);
-      const restored = grantIds.filter((g) => !stillSuspended.has(g));
+      // Only grants this window end restores (projected before, not now) are announced, so two
+      // elapsed reviews of one grant produce one identity.access_restriction_lifted.
+      const restored = grantIds.filter((g) => wasProjected.has(g) && !stillSuspended.has(g));
       const windowEnd = new Date(
         Math.min(...due.map((d) => new Date(d.suspended_until as Date).getTime())),
       );
@@ -768,6 +777,23 @@ export class AccessReviewsService {
    * names the review whose restriction lasts longest. Callers hold the grants' row locks.
    * Returns the grants that remain suspended.
    */
+  /** The grants whose projection currently records a suspension (read under the grant locks). */
+  private async projectedGrants(
+    trx: Trx,
+    organizationId: string,
+    grantIds: string[],
+  ): Promise<Set<string>> {
+    if (grantIds.length === 0) return new Set();
+    const rows = await trx
+      .selectFrom('access_grants')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', grantIds)
+      .where('suspended_at', 'is not', null)
+      .execute();
+    return new Set(rows.map((r) => r.id));
+  }
+
   private async projectSuspensions(
     trx: Trx,
     organizationId: string,

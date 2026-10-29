@@ -143,6 +143,15 @@ export class EventWriter {
         sourceType,
       });
     }
+    this.assertBookingPrincipal(principal, sourceType);
+  }
+
+  /**
+   * Least privilege for the booking principal (SCH-02): `systemPrincipal(org, 'enrollment.booking')`
+   * creates, moves and cancels booking events only, never a league fixture, a catalog session or
+   * any other event. Every write path that names an existing event checks it too.
+   */
+  assertBookingPrincipal(principal: Principal, sourceType: string | null): void {
     if (
       principal.kind === 'system' &&
       principal.actorLabel === BOOKING_SOURCE_TYPE &&

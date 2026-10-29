@@ -468,7 +468,13 @@ describe('restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
       facilityId: facility,
       resourceId: pitch.southHalfId,
       name: 'Weekly line marking',
-      recurrence: { frequency: 'weekly', byWeekday: [1], startDate: '2026-10-26', count: 2 },
+      recurrence: {
+        frequency: 'weekly',
+        interval: 1,
+        byWeekday: [1],
+        startDate: '2026-10-26',
+        count: 2,
+      },
       leadTimeDays: 21,
     });
     // a proposal left by an interrupted generation for occurrence 0

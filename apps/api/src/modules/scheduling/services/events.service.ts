@@ -174,6 +174,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         facilityId: facility.id,
       });
       await this.writer.assertScheduleAuthority(trx, organizationId, facility.id);
+      this.writer.assertBookingPrincipal(principal, event.source_type);
       assertExpectedRevision(input.expectedRevision, event.revision);
       if (event.status === 'canceled') throw errors.invalidTransition('Event', 'canceled', 'move');
       const resources = await this.writer.loadResources(
@@ -266,6 +267,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         facilityId: event.facility_id,
       });
       await this.writer.assertScheduleAuthority(trx, organizationId, event.facility_id);
+      this.writer.assertBookingPrincipal(principal, event.source_type);
       assertExpectedRevision(input.expectedRevision, event.revision);
       EventMachine.next(event.status, 'cancel');
       const wasPublished = event.status === 'published';

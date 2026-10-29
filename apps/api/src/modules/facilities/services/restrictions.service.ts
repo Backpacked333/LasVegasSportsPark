@@ -878,6 +878,29 @@ export class RestrictionsService implements OperatingStatusPort {
     );
   }
 
+  /**
+   * The closure guard for a direct withdrawal (scheduling's POST /v1/closures/{id}/withdraw): a
+   * closure that a proposed, approved or active restriction holds is withdrawn only with its
+   * restriction (FAC-01, SPK-FAC-003, §4.2), answered RESOURCE_CONFLICT OWNED_BY_RESTRICTION.
+   */
+  async assertClosureWithdrawAllowed(
+    trx: Trx,
+    organizationId: string,
+    closureId: string,
+  ): Promise<void> {
+    const restriction = await this.reader
+      .restrictionQuery(trx)
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_closure_id', '=', closureId)
+      .where('status', 'in', ['proposed', 'approved', 'active'])
+      .executeTakeFirst();
+    if (!restriction) return;
+    throw errors.resourceConflict(
+      'This closure belongs to a maintenance restriction; withdraw the restriction instead.',
+      { code: 'OWNED_BY_RESTRICTION', closureId, restrictionId: restriction.id },
+    );
+  }
+
   /** Whether the restriction's operation is its own facilities release, still in progress. */
   private async releaseInProgress(
     trx: Trx,

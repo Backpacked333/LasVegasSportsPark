@@ -99,23 +99,20 @@ export class ProgramsService {
     const provenance = options.importProvenance;
     if (provenance) assertImportPrincipal(principal, provenance);
     const organizationId = organizationOf(principal);
-    let body: CreateProgramInput;
-    if (provenance) {
-      const parsed = CreateProgramBody.safeParse(input);
-      if (!parsed.success) {
-        throw errors.validation(
-          'The imported program is invalid.',
-          parsed.error.issues.map((i) => ({
-            path: i.path.map(String).join('.'),
-            message: i.message,
-            code: i.code,
-          })),
-        );
-      }
-      body = parsed.data;
-    } else {
-      body = input as CreateProgramInput;
+    // Parsed on every path: an in-process caller may pass input without the defaulted fields
+    // (ageBand, status), and parsing already-parsed controller input changes nothing.
+    const parsed = CreateProgramBody.safeParse(input);
+    if (!parsed.success) {
+      throw errors.validation(
+        provenance ? 'The imported program is invalid.' : 'The program is invalid.',
+        parsed.error.issues.map((i) => ({
+          path: i.path.map(String).join('.'),
+          message: i.message,
+          code: i.code,
+        })),
+      );
     }
+    const body: CreateProgramInput = parsed.data;
     await this.authorization.require(principal, CatalogActions.managePrograms, {
       type: 'program',
       organizationId,

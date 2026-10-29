@@ -503,6 +503,52 @@ describe('bracket seeding, shootouts and tournament pools (CMP-10, CMP-15; SPK-C
     await t.enableCapability('tournaments');
   });
 
+  it('CMP-15: approving a pooled applied entry into another division is refused, never a raw key violation', async () => {
+    await t.enableCapability('tournaments');
+    const divisionId = await createDivisionFixture(t, {
+      seasonId: season.seasonId,
+      name: 'Pooled cup',
+    });
+    const other = await createDivisionFixture(t, {
+      seasonId: season.seasonId,
+      name: 'Pooled plate',
+    });
+    const captain = await adultCustomer(t);
+    const applied = await createTeamEntryFixture(t, {
+      seasonId: season.seasonId,
+      captainPersonId: captain.personId,
+      teamName: 'Swifts',
+      divisionId,
+      status: 'applied',
+    });
+    const pool = await post(`/divisions/${divisionId}/pools`, leagueManager, { name: 'Cup A' });
+    expect(pool.status).toBe(201);
+    const added = await post(`/pools/${pool.body.id}/entries`, leagueManager, {
+      teamEntryId: applied.teamEntryId,
+    });
+    expect(added.status).toBe(200);
+    const entry = await t.db
+      .selectFrom('team_entries')
+      .select('revision')
+      .where('id', '=', applied.teamEntryId)
+      .executeTakeFirstOrThrow();
+    const moved = await post(`/team-entries/${applied.teamEntryId}/approve`, leagueManager, {
+      divisionId: other,
+      expectedRevision: entry.revision,
+    });
+    expect(moved.status, JSON.stringify(moved.body)).toBe(409);
+    expect(moved.body).toMatchObject({
+      code: 'INVALID_TRANSITION',
+      details: { code: 'ENTRY_IN_POOL', teamEntryId: applied.teamEntryId, poolId: pool.body.id },
+    });
+    // approving in its own division still works
+    const approved = await post(`/team-entries/${applied.teamEntryId}/approve`, leagueManager, {
+      expectedRevision: entry.revision,
+    });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body.status).toBe('approved');
+  });
+
   it('SPK-COMP-001: pool standings seed a bracket only after every pool result is official', async () => {
     await t.enableCapability('tournaments');
     const divisionId = await createDivisionFixture(t, {

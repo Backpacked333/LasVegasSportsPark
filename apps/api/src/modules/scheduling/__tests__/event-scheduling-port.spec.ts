@@ -17,6 +17,7 @@ import {
 } from '../ports';
 import { SchedulingModule } from '../scheduling.module';
 import { EventsService } from '../services/events.service';
+import { ResourcesService } from '../services/resources.service';
 import { BOOKING_SOURCE_TYPE } from '../services/event-writer';
 import { localTimeOf } from '../time/local-time';
 import {
@@ -405,6 +406,114 @@ describe('EVENT_SCHEDULING_PORT series, cancellation and authority (SCH-02, SCH-
     expect(staffSeries.eventIds).toHaveLength(2);
   });
 
+  it('SCH-02: the booking principal cannot move or cancel an event that is not a booking', async () => {
+    const fixture = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.northHalfId],
+      start: at('2026-12-08', '18:00'),
+      end: at('2026-12-08', '19:00'),
+    });
+    const cancel = await caught(
+      uow.run(() => port.cancelEvent(booking, fixture.id, { reason: 'not mine' })),
+    );
+    expect(cancel.code).toBe('ACCESS_DENIED');
+    expect(cancel.details).toMatchObject({ code: 'BOOKING_SOURCE_REQUIRED' });
+    const move = await caught(
+      uow.run(() =>
+        port.moveEvent(booking, fixture.id, {
+          scheduledStart: at('2026-12-08', '20:00'),
+          scheduledEnd: at('2026-12-08', '21:00'),
+        }),
+      ),
+    );
+    expect(move.code).toBe('ACCESS_DENIED');
+    expect(move.details).toMatchObject({ code: 'BOOKING_SOURCE_REQUIRED' });
+    const after = await events.getEvent(staffPrincipal(org, ['scheduler']), fixture.id);
+    expect(after).toMatchObject({ status: 'published', revision: fixture.revision });
+    const holds = await t.db
+      .selectFrom('reservations')
+      .select('status')
+      .where('event_id', '=', fixture.id)
+      .execute();
+    expect(holds.map((h) => h.status)).toEqual(['active']);
+  });
+
+  it('SCH-02: over HTTP a series sourced as a booking must be a rental or party series', async () => {
+    const auth = await t.authHeader(staffPrincipal(org, ['scheduler']));
+    const sourceId = newId();
+    const res = await t.http
+      .post('/v1/event-series')
+      .set(auth)
+      .set('Idempotency-Key', `k-${newId()}`)
+      .send({
+        kind: 'game',
+        title: 'Not a booking',
+        facilityId: facility,
+        resourceIds: [pitch.northHalfId],
+        recurrence: {
+          frequency: 'weekly',
+          interval: 1,
+          byWeekday: [3],
+          startDate: '2026-12-09',
+          count: 2,
+        },
+        localStartTime: '06:00',
+        durationMinutes: 60,
+        sourceType: BOOKING_SOURCE_TYPE,
+        sourceId,
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(res.body.details).toMatchObject({ code: 'BOOKING_EVENT_KIND' });
+    const series = await t.db
+      .selectFrom('event_series')
+      .select('id')
+      .where('source_id', '=', sourceId)
+      .execute();
+    expect(series).toEqual([]);
+  });
+
+  it('SPK-SCHED-007: cancelEventSeries never cancels an occurrence that already started, whatever fromInstant says', async () => {
+    const created = await uow.run(() =>
+      port.createEventSeries(
+        booking,
+        weekly({
+          resourceIds: [pitch.southHalfId],
+          localStartTime: '22:00',
+          recurrence: {
+            frequency: 'weekly',
+            interval: 1,
+            byWeekday: [4],
+            startDate: '2026-10-22',
+            count: 3,
+          },
+        }),
+      ),
+    );
+    const first = await events.getEvent(staffPrincipal(org, ['scheduler']), created.eventIds[0]!);
+    // the clock is past the first occurrence; the caller names its start anyway
+    t.clock.advance(5 * 24 * HOUR);
+    try {
+      const result = await uow.run(() =>
+        port.cancelEventSeries(booking, created.seriesId, {
+          reason: 'Customer canceled',
+          fromInstant: first.scheduledStart,
+        }),
+      );
+      expect(result.canceledEventIds).toEqual(created.eventIds.slice(1));
+      const past = await events.getEvent(staffPrincipal(org, ['scheduler']), first.id);
+      expect(past.status).toBe('published');
+      const hold = await t.db
+        .selectFrom('reservations')
+        .select('status')
+        .where('event_id', '=', first.id)
+        .executeTakeFirstOrThrow();
+      expect(hold.status).toBe('active');
+    } finally {
+      t.clock.advance(-5 * 24 * HOUR);
+    }
+  });
+
   it('SCH-02: two overlapping series race; one wins and the other writes nothing (PGlite and TEST_DATABASE_URL)', async () => {
     const first = weekly({
       resourceIds: [pitch.pitchId],
@@ -494,6 +603,41 @@ describe('EVENT_SCHEDULING_PORT series, cancellation and authority (SCH-02, SCH-
       .where('id', 'in', series.eventIds)
       .execute();
     expect(stamp(occurrenceRows)).toEqual([now, now]);
+
+    // an inventory change that extends an existing hold stamps the new unit from the Clock too
+    t.clock.advance(HOUR + 3_000);
+    const later = t.clock.now().getTime();
+    const unitId = newId();
+    await t.db
+      .insertInto('conflict_units')
+      .values({
+        id: unitId,
+        organization_id: org,
+        facility_id: facility,
+        name: `Goal mouth ${unitId.slice(-6)}`,
+      })
+      .execute();
+    const resources = t.app.get(ResourcesService);
+    const scheduler = staffPrincipal(org, ['scheduler', 'facilities_operator']);
+    const north = await resources.getResource(scheduler, pitch.northHalfId);
+    const current = await t.db
+      .selectFrom('resource_conflict_units')
+      .select('conflict_unit_id')
+      .where('resource_id', '=', pitch.northHalfId)
+      .execute();
+    await resources.updateResource(scheduler, pitch.northHalfId, {
+      expectedRevision: north.revision,
+      conflictUnitIds: [...current.map((c) => c.conflict_unit_id), unitId],
+    });
+    const extended = await t.db
+      .selectFrom('reservation_units')
+      .select(['created_at', 'updated_at'])
+      .where('event_id', '=', event.id)
+      .where('conflict_unit_id', '=', unitId)
+      .execute();
+    expect(extended).toHaveLength(1);
+    expect(new Date(extended[0]!.created_at).getTime()).toBe(later);
+    expect(new Date(extended[0]!.updated_at).getTime()).toBe(later);
   });
 });
 

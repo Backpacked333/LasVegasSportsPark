@@ -1,8 +1,9 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import type { EventPayload } from '@sportspark/contracts';
 import { EventHandlerRegistry } from '../../kernel';
+import { FacilitiesModule } from '../facilities';
 import { IdentityModule } from '../identity';
-import { EventChanged } from '../scheduling';
+import { EventChanged, SchedulingModule } from '../scheduling';
 import { OFFERING_LOOKUP_PORT, POLICY_PORT, PRICING_PORT } from './catalog.ports';
 import { DiscountsController } from './controllers/discounts.controller';
 import { EntitlementDefinitionsController } from './controllers/entitlement-definitions.controller';
@@ -28,7 +29,10 @@ import { SessionsService } from './services/sessions.service';
  * scheduling event cancels the catalog sessions linked to it (SPK-AT-009). See README.md.
  */
 @Module({
-  imports: [IdentityModule],
+  // Scheduling and facilities are read through their exported services only: publication checks
+  // that a rental or party definition names resources and equipment a booking can reserve
+  // (SPK-COND-003).
+  imports: [IdentityModule, SchedulingModule, FacilitiesModule],
   controllers: [
     ProgramsController,
     EntitlementDefinitionsController,

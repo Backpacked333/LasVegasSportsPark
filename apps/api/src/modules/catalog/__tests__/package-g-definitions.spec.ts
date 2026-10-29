@@ -7,6 +7,7 @@ import {
   createOrganizationPeople,
   createStaffMemberFixture,
 } from '../../identity';
+import { seedPitchWithHalves } from '../../scheduling/testing/scheduling-fixtures';
 import { CatalogModule } from '../catalog.module';
 import { OFFERING_LOOKUP_PORT, type OfferingLookupPort } from '../catalog.ports';
 import {
@@ -208,9 +209,21 @@ describe('Package G catalog definitions (CAT-02)', () => {
       expiry: { kind: 'none' },
     });
     expect(never.status).toBe(201);
-    const dated = await defineEntitlement('package_credits', {
+    // §4.3: what a package applies to exists in this organization
+    const unknown = await defineEntitlement('package_credits', {
       credits: 5,
       appliesTo: { offeringIds: [newId()] },
+      expiry: { kind: 'fixed_date', date: '2027-06-30' },
+    });
+    expect(unknown.status).toBe(400);
+    expect(issuePaths(unknown.body)).toContain('scope.appliesTo.offeringIds');
+    const target = await createOfferingFixture(t, {
+      responsibleManagerPersonId: managerPersonId,
+      programId,
+    });
+    const dated = await defineEntitlement('package_credits', {
+      credits: 5,
+      appliesTo: { offeringIds: [target.offeringId] },
       expiry: { kind: 'fixed_date', date: '2027-06-30' },
     });
     expect(dated.status).toBe(201);
@@ -272,6 +285,132 @@ describe('Package G catalog definitions (CAT-02)', () => {
     await rejectsWith(
       insertDefinition('rental_resource', { resources }),
       'entitlement_definitions_rental_resource_scope',
+    );
+  });
+
+  it('SPK-COND-001 to 003: the database refuses a scope whose mode states no real effect (migration 0209)', async () => {
+    const appliesTo = { programIds: [programId] };
+    const term = { kind: 'offering_dates' };
+    const renewal = { noticeLeadDays: null };
+    const membership = 'entitlement_definitions_membership_benefit_scope';
+    // unlimited or included sessions with no stated scope, included sessions with no limit
+    await rejectsWith(
+      insertDefinition('membership_benefit', { attendance: { mode: 'unlimited' }, term, renewal }),
+      membership,
+    );
+    await rejectsWith(
+      insertDefinition('membership_benefit', {
+        attendance: { mode: 'unlimited', appliesTo: { offeringIds: [] } },
+        term,
+        renewal,
+      }),
+      membership,
+    );
+    await rejectsWith(
+      insertDefinition('membership_benefit', {
+        attendance: { mode: 'included_sessions', appliesTo },
+        term,
+        renewal,
+      }),
+      membership,
+    );
+    await rejectsWith(
+      insertDefinition('membership_benefit', {
+        attendance: { mode: 'included_sessions', appliesTo, limit: { count: 2, period: 'week' } },
+        term,
+        renewal,
+      }),
+      membership,
+    );
+    await rejectsWith(
+      insertDefinition('membership_benefit', {
+        attendance: { mode: 'none' },
+        term: { kind: 'from_confirmation' },
+        renewal,
+      }),
+      membership,
+    );
+    await rejectsWith(
+      insertDefinition('membership_benefit', {
+        attendance: { mode: 'none' },
+        term,
+        renewal: { noticeLeadDays: 'soon' },
+      }),
+      membership,
+    );
+    // a complete included-sessions membership is accepted
+    await insertDefinition('membership_benefit', {
+      attendance: {
+        mode: 'included_sessions',
+        appliesTo,
+        limit: { count: 2, period: 'week', weekStartsOn: 1 },
+      },
+      term: { kind: 'from_confirmation', lengthDays: 30 },
+      renewal: { noticeLeadDays: 7 },
+    });
+    const credits = 'entitlement_definitions_package_credits_scope';
+    await rejectsWith(
+      insertDefinition('package_credits', {
+        credits: 3,
+        appliesTo,
+        expiry: { kind: 'days_after_issue' },
+      }),
+      credits,
+    );
+    await rejectsWith(
+      insertDefinition('package_credits', {
+        credits: 3,
+        appliesTo,
+        expiry: { kind: 'fixed_date' },
+      }),
+      credits,
+    );
+    await rejectsWith(
+      insertDefinition('package_credits', { credits: 1.5, appliesTo, expiry: { kind: 'none' } }),
+      credits,
+    );
+    await rejectsWith(
+      insertDefinition('package_credits', { credits: 3, appliesTo: {}, expiry: { kind: 'none' } }),
+      credits,
+    );
+    await insertDefinition('package_credits', {
+      credits: 3,
+      appliesTo,
+      expiry: { kind: 'days_after_issue', days: 90 },
+    });
+    const staffing = [{ kind: 'organizer', role: 'party_host', count: 1, qualifications: [] }];
+    const party = {
+      durationMinutes: 120,
+      guestLimit: 16,
+      resources: { resourceIds: [newId()], count: 1 },
+      staffing,
+      equipmentAssetIds: [],
+    };
+    const partyCheck = 'entitlement_definitions_party_package_scope';
+    await rejectsWith(insertDefinition('party_package', { ...party, resources: {} }), partyCheck);
+    await rejectsWith(
+      insertDefinition('party_package', {
+        ...party,
+        resources: { resourceIds: [newId()], count: 2 },
+      }),
+      partyCheck,
+    );
+    await rejectsWith(
+      insertDefinition('party_package', { ...party, staffing: [{ kind: 'organizer' }] }),
+      partyCheck,
+    );
+    await insertDefinition('party_package', party);
+    const rentalCheck = 'entitlement_definitions_rental_resource_scope';
+    await rejectsWith(
+      insertDefinition('rental_resource', { resources: { resourceIds: [] }, staffing: [] }),
+      rentalCheck,
+    );
+    await rejectsWith(
+      insertDefinition('rental_resource', {
+        resources: { resourceIds: [newId()], count: 1 },
+        staffing: [{ kind: 'supervisor', count: 1, qualifications: [] }],
+      }),
+      rentalCheck,
     );
   });
 
@@ -393,21 +532,49 @@ describe('Package G catalog definitions (CAT-02)', () => {
     expect(codes(bare)).toEqual(['ENTITLEMENT_DEFINITION_REQUIRED', 'BOOKING_TERMS_REQUIRED']);
 
     // name the terms and a party package definition; the terms are still only a draft
-    const party = await defineEntitlement('party_package', {
+    // a definition naming a resource that does not exist cannot publish (SPK-COND-003, §4.3)
+    const ghost = await defineEntitlement('party_package', {
       durationMinutes: 90,
       guestLimit: 12,
       resources: { resourceIds: [newId()], count: 1 },
+      staffing: [],
+      equipmentAssetIds: [newId()],
+    });
+    expect(ghost.status).toBe(201);
+    const pitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: `Party pitch ${newId()}`,
+    });
+    const party = await defineEntitlement('party_package', {
+      durationMinutes: 90,
+      guestLimit: 12,
+      resources: { resourceIds: [pitch.pitchId], count: 1 },
       staffing: [{ kind: 'organizer', role: 'party_host', count: 1, qualifications: [] }],
       equipmentAssetIds: [],
     });
     expect(party.status).toBe(201);
+    {
+      const withGhost = await t.http
+        .patch(`/v1/offerings/${id}`)
+        .set(pm)
+        .set('Idempotency-Key', key())
+        .send({ expectedRevision: 1, entitlementDefinitionId: ghost.body.id });
+      expect(withGhost.status).toBe(200);
+      const check = await t.http.get(`/v1/offerings/${id}/publication-check`).set(pm);
+      expect(check.body.problems.map((p: { code: string }) => p.code)).toEqual([
+        'booking_resource_unknown',
+        'booking_equipment_unknown',
+        'BOOKING_TERMS_REQUIRED',
+      ]);
+    }
     const termsKey = `party-${newId().slice(-8)}`;
     const patched = await t.http
       .patch(`/v1/offerings/${id}`)
       .set(pm)
       .set('Idempotency-Key', key())
       .send({
-        expectedRevision: 1,
+        expectedRevision: 2,
         bookingTermsKey: termsKey,
         entitlementDefinitionId: party.body.id,
       });

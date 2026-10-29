@@ -541,6 +541,8 @@ export class InvitationsService {
         await this.expire(trx, principal, invitation, correlationId, 'acceptance_attempt');
         return { expired: true as const };
       }
+      // §4.9: a decision made against a stale read is refused, not applied silently.
+      assertExpectedRevision(input.expectedRevision, invitation.revision);
       const next = InvitationMachine.next(invitation.status, 'decline');
       const declined = await trx
         .updateTable('invitations')
@@ -607,8 +609,12 @@ export class InvitationsService {
       base = base.where((eb) =>
         eb.or([
           eb('recipient_person_id', '=', me),
+          // A contact match addresses the caller only when the invitation names no person: when
+          // it does, that person is the only addressee (accept and decline use the same rule), so
+          // another holder of the same verified address never reads it (§4.10, SPK-IAM-004).
           ...contacts.map((c) =>
             eb.and([
+              eb('recipient_person_id', 'is', null),
               eb('recipient_contact_kind', '=', c.kind),
               eb('recipient_contact_value', '=', c.value),
             ]),
@@ -637,7 +643,12 @@ export class InvitationsService {
       .executeTakeFirst();
     if (!row || !me) throw errors.protectedNotFound('invitation');
     let related = row.recipient_person_id === me || row.invited_by_person_id === me;
-    if (!related && row.recipient_contact_kind && row.recipient_contact_value) {
+    if (
+      !related &&
+      row.recipient_person_id === null &&
+      row.recipient_contact_kind &&
+      row.recipient_contact_value
+    ) {
       const contacts = await this.verifiedContacts(this.db, organizationId, me);
       related = contacts.some(
         (c) => c.kind === row.recipient_contact_kind && c.value === row.recipient_contact_value,

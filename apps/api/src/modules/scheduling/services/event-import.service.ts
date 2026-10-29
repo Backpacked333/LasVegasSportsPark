@@ -105,7 +105,12 @@ export class EventImportService {
       };
 
       const existing = await this.writer.loadEvent(trx, organizationId, recordId);
-      if (existing) return this.sameImport(existing, batchId, externalKey, content);
+      if (existing) {
+        return this.sameImport(existing, batchId, externalKey, content, {
+          setupMinutes: input.setupMinutes,
+          cleanupMinutes: input.cleanupMinutes,
+        });
+      }
 
       // A draft holds nothing: this check against the current schedule is the import's own.
       const proposal: ProposedEvent = {
@@ -152,7 +157,10 @@ export class EventImportService {
         if (databaseConstraintOf(error)?.code !== '23505') throw error;
         const raced = await this.writer.loadEvent(trx, organizationId, recordId);
         if (!raced) throw error;
-        return this.sameImport(raced, batchId, externalKey, content);
+        return this.sameImport(raced, batchId, externalKey, content, {
+          setupMinutes: input.setupMinutes,
+          cleanupMinutes: input.cleanupMinutes,
+        });
       }
       await this.audit.record(trx, {
         organizationId,
@@ -196,13 +204,22 @@ export class EventImportService {
     });
   }
 
-  /** Same record and content: the existing event with no new effects; otherwise a mismatch. */
+  /**
+   * Same record and content: the existing event with no new effects; otherwise a mismatch (K-13).
+   * Buffers are compared with what the legacy record asked for, not only with today's derivation:
+   * the stored value is the larger of the request and the resources' turnover floor when it was
+   * imported, so a later change of a resource's default buffer does not turn an unchanged record
+   * into IMPORT_CONTENT_MISMATCH.
+   */
   private sameImport(
     existing: EventRow,
     batchId: string,
     externalKey: string,
     content: ImportedContent,
+    requested: { setupMinutes?: number; cleanupMinutes?: number },
   ): Event {
+    const bufferMatches = (stored: number, derivedNow: number, asked: number | undefined) =>
+      stored === derivedNow || (asked === undefined ? stored >= 0 : stored >= asked);
     const same =
       existing.source_type === IMPORT_SOURCE_TYPE &&
       existing.source_id === batchId &&
@@ -212,8 +229,8 @@ export class EventImportService {
       (existing.format ?? null) === content.format &&
       new Date(existing.scheduled_start).getTime() === content.scheduledStart.getTime() &&
       new Date(existing.scheduled_end).getTime() === content.scheduledEnd.getTime() &&
-      existing.setup_minutes === content.setupMinutes &&
-      existing.cleanup_minutes === content.cleanupMinutes &&
+      bufferMatches(existing.setup_minutes, content.setupMinutes, requested.setupMinutes) &&
+      bufferMatches(existing.cleanup_minutes, content.cleanupMinutes, requested.cleanupMinutes) &&
       sameResourceSet(existing.resource_ids, content.resourceIds) &&
       commitmentKey(this.writer.commitmentsOf(existing)) === commitmentKey(content.commitments);
     if (!same) throw importContentMismatch({ recordId: existing.id, externalKey });

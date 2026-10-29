@@ -37,7 +37,7 @@ describe('declared module interfaces (stage 3)', () => {
     await t?.close();
   });
 
-  it('new ports answer their declared defaults until their work item registers an implementation', async () => {
+  it('stage-3 ports are registered by their modules and answer unknown records conservatively', async () => {
     const assets = t.app.get<AssetDirectoryPort>(ASSET_DIRECTORY_PORT);
     expect((await assets.describe(t.organizationId, [newId()])).size).toBe(0);
     const bookings = t.app.get<BookingQueryPort>(BOOKING_QUERY_PORT);
@@ -48,19 +48,19 @@ describe('declared module interfaces (stage 3)', () => {
       }),
     ).toEqual([]);
     const staffing = t.app.get<WorkforceStaffingPort>(WORKFORCE_STAFFING_PORT);
-    await expect(
-      staffing.withdrawRequirements(systemPrincipal(t.organizationId, 'enrollment.booking'), {
+    // WRK-02 is registered: withdrawing the staffing of an unknown target withdraws nothing
+    expect(
+      await staffing.withdrawRequirements(systemPrincipal(t.organizationId, 'enrollment.booking'), {
         targetType: 'event',
         targetId: newId(),
         reason: 'probe',
       }),
-    ).rejects.toMatchObject({ code: 'INTERNAL_ERROR', message: expect.stringContaining('WRK-02') });
+    ).toEqual({ withdrawnAssignmentIds: [], retiredRequirementIds: [] });
     expect(t.app.get(ACCOUNTING_EXPORT_PORT)).toBeInstanceOf(FakeAccountingProvider);
     expect(t.app.get(ACCESS_DEVICE_PORT)).toBeInstanceOf(FakeAccessControlProvider);
     const persons = t.app.get<PersonDirectoryPort>(PERSON_DIRECTORY_PORT);
-    await expect(persons.personIdsResolvingTo(t.organizationId, newId())).rejects.toMatchObject({
-      message: expect.stringContaining('ID-01'),
-    });
+    // ID-01 is registered: an unknown person resolves to nobody
+    expect(await persons.personIdsResolvingTo(t.organizationId, newId())).toEqual([]);
   });
 
   it('declared events accept their payloads', () => {

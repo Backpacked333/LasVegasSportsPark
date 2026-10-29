@@ -720,9 +720,13 @@ export const ListInvitationsQuery = PageRequestSchema.extend({
   status: InvitationStatusSchema.optional(),
 });
 export type ListInvitationsQueryInput = z.infer<typeof ListInvitationsQuery>;
-/** ID-03: declining needs the same proof as accepting (the token, sent in the body). */
-export const DeclineInvitationBody = z
-  .object({ token: Token, reason: Reason.optional() })
+/**
+ * ID-03: declining needs the same proof as accepting (the token, sent in the body). A command
+ * (§4.9): `expectedRevision` is the revision read through GET /v1/me/invitations/{id}, so a
+ * decision made against a stale view is refused (STALE_REVISION).
+ */
+export const DeclineInvitationBody = withCommandMeta({ token: Token })
+  .extend({ reason: Reason.optional() })
   .openapi('DeclineInvitationRequest');
 export type DeclineInvitationInput = z.infer<typeof DeclineInvitationBody>;
 

@@ -9,8 +9,8 @@
     "pnpm": ">=10"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.build.json",
-    "typecheck": "tsc -b tsconfig.build.json && tsc -p packages/contracts/tsconfig.spec.json && tsc -p packages/db/tsconfig.spec.json && tsc -p apps/api/tsconfig.spec.json && pnpm typecheck:clients",
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b tsconfig.build.json",
+    "typecheck": "pnpm build && tsc -p packages/contracts/tsconfig.spec.json && tsc -p packages/db/tsconfig.spec.json && NODE_OPTIONS=--max-old-space-size=4096 tsc -p apps/api/tsconfig.spec.json && pnpm typecheck:clients",
     "typecheck:clients": "tsc -p packages/api-client/tsconfig.json && tsc -p apps/staff/tsconfig.json && tsc -p apps/mobile/tsconfig.json",
     "clean": "find . -name dist -type d -not -path '*/node_modules/*' -prune -exec rm -rf {} + ; find . -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete",
     "test": "vitest run && pnpm test:mobile",

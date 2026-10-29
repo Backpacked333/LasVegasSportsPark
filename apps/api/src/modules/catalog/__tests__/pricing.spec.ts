@@ -514,7 +514,12 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
       redeemedCount: 2,
       replayed: false,
     });
+    // a per-person-limited discount is always redeemed for a person (migration 0208)
     await expect(redeem(ref3)).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { path: 'personId', code: 'DISCOUNT_PERSON_REQUIRED' },
+    });
+    await expect(redeem(ref3, people.staff.personId)).rejects.toMatchObject({
       code: 'RESOURCE_CONFLICT',
       details: { code: 'DISCOUNT_REDEMPTION_LIMIT' },
     });
@@ -540,7 +545,7 @@ describe('price rules and discounts (SPK-PAY-001..003, §4.5, §4.7 invariant 7)
     expect(await release(ref1)).toMatchObject({ redeemedCount: 1, replayed: false });
     expect(await release(ref1)).toMatchObject({ redeemedCount: 1, replayed: true });
     await expect(release(newId())).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    expect(await redeem(ref3)).toMatchObject({ redeemedCount: 2 });
+    expect(await redeem(ref3, people.staff.personId)).toMatchObject({ redeemedCount: 2 });
     const events = await t.db
       .selectFrom('outbox_events')
       .select('event_type')

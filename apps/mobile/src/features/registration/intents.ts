@@ -18,6 +18,9 @@ export const INTENT_OFFERING_KINDS: Record<RegistrationIntent, readonly Offering
   makeup: ['makeup', 'session', 'term', 'camp'],
   pickup: ['pickup'],
   rental_request: ['rental'],
+  membership: ['membership'],
+  package_purchase: ['package'],
+  party_request: ['party'],
 };
 
 /**
@@ -39,6 +42,12 @@ export const INTENT_HANDLING: Record<RegistrationIntent, IntentHandling> = {
   trial: 'session_booking',
   makeup: 'session_booking',
   pickup: 'session_booking',
+  // Package G (behind each organization's capability switch, DEC-016): a membership or package
+  // is bought through a basket line; a party is booked through POST /v1/bookings, which this
+  // screen group does not build.
+  membership: 'basket',
+  package_purchase: 'basket',
+  party_request: 'session_booking',
 };
 
 export const INTENT_LABELS: Record<RegistrationIntent, { title: string; description: string }> = {
@@ -62,6 +71,9 @@ export const INTENT_LABELS: Record<RegistrationIntent, { title: string; descript
   makeup: { title: 'Makeup session', description: 'Use a makeup for a missed session.' },
   pickup: { title: 'Pickup session', description: 'Book a place in one pickup session.' },
   rental_request: { title: 'Rental request', description: 'Request this rental.' },
+  membership: { title: 'Membership', description: 'Join this membership.' },
+  package_purchase: { title: 'Session package', description: 'Buy this package of sessions.' },
+  party_request: { title: 'Party booking', description: 'Book this party.' },
 };
 
 /** Intents the API accepts for this kind of offering, in the order SPK-REG-001 lists them. */

@@ -444,18 +444,58 @@ export class DisciplineService implements SuspensionCheckPort {
       seasonId: string;
       cards: RuleSetContent['cards'];
       resultCards: ResultCard[];
+      /** The cards of the official revision this correction supersedes. */
+      previousCards?: ResultCard[];
       correlationId: string | null;
       operationId: string | null;
     },
   ): Promise<{ overturned: string[]; flagged: string[] }> {
     const rules = input.cards;
+    const countsAsYellow = (card: ResultCard) =>
+      card.kind === 'yellow' || (card.kind === 'second_yellow' && !rules.secondYellowIsRed);
+    const yellowsOf = (cards: ResultCard[]) => {
+      const counts = new Map<string, number>();
+      for (const card of cards) {
+        if (countsAsYellow(card)) counts.set(card.personId, (counts.get(card.personId) ?? 0) + 1);
+      }
+      return counts;
+    };
+    // An accumulation suspension is sourced at the fixture where the threshold was crossed, so a
+    // correction of an earlier fixture that removes a counted yellow reaches suspensions sourced
+    // anywhere in the season: every person who lost a counted yellow here is re-examined.
+    const before = yellowsOf(input.previousCards ?? []);
+    const after = yellowsOf(input.resultCards);
+    const lostYellow = [...before.entries()]
+      .filter(([personId, n]) => (after.get(personId) ?? 0) < n)
+      .map(([personId]) => personId);
     const rows = await trx
       .selectFrom('suspensions')
       .selectAll()
       .where('organization_id', '=', input.organizationId)
-      .where('source_fixture_id', '=', input.fixtureId)
-      .where('source_kind', 'in', ['red_card', 'yellow_accumulation'])
       .where('status', 'in', ['proposed', 'active'])
+      .where((eb) => {
+        const here = eb.and([
+          eb('source_fixture_id', '=', input.fixtureId),
+          eb('source_kind', 'in', ['red_card', 'yellow_accumulation']),
+        ]);
+        if (lostYellow.length === 0) return here;
+        return eb.or([
+          here,
+          eb.and([
+            eb('source_kind', '=', 'yellow_accumulation'),
+            eb('subject_person_id', 'in', lostYellow),
+            eb(
+              'source_fixture_id',
+              'in',
+              eb
+                .selectFrom('fixtures')
+                .select('id')
+                .where('organization_id', '=', input.organizationId)
+                .where('season_id', '=', input.seasonId),
+            ),
+          ]),
+        ]);
+      })
       .orderBy('created_at')
       .orderBy('id')
       .forUpdate()

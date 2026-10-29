@@ -274,4 +274,48 @@ describe('event import (SCH-04: §5.3, §5.4, SPK-AT-024)', () => {
     // re-running the batch after publication changes nothing
     expect((await importRun(input)).status).toBe('published');
   });
+
+  it('K-13: a resource turnover change between runs does not turn an unchanged record into a mismatch', async () => {
+    const resource = await t.db
+      .selectFrom('resources')
+      .select(['default_setup_minutes', 'default_cleanup_minutes'])
+      .where('id', '=', pitch.southHalfId)
+      .executeTakeFirstOrThrow();
+    const input = legacyFixture({
+      resourceIds: [pitch.southHalfId],
+      scheduledStart: at('2027-02-20', '06:00'),
+      scheduledEnd: at('2027-02-20', '07:00'),
+    });
+    const first = await importRun(input);
+    await t.db
+      .updateTable('resources')
+      .set({
+        default_setup_minutes: resource.default_setup_minutes + 15,
+        default_cleanup_minutes: resource.default_cleanup_minutes + 15,
+      })
+      .where('id', '=', pitch.southHalfId)
+      .execute();
+    try {
+      const again = await importRun(input);
+      expect(again).toEqual(first);
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select('id')
+        .where('target_id', '=', input.importProvenance.recordId)
+        .execute();
+      expect(audit).toHaveLength(1);
+      // a record whose legacy content did change is still a mismatch
+      const changed = await caught(importRun({ ...input, title: 'Renamed in the legacy system' }));
+      expect(changed.details).toMatchObject({ code: 'IMPORT_CONTENT_MISMATCH' });
+    } finally {
+      await t.db
+        .updateTable('resources')
+        .set({
+          default_setup_minutes: resource.default_setup_minutes,
+          default_cleanup_minutes: resource.default_cleanup_minutes,
+        })
+        .where('id', '=', pitch.southHalfId)
+        .execute();
+    }
+  });
 });

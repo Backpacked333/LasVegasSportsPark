@@ -179,14 +179,19 @@ describe('catalog discovery and publication check (CAT-01)', () => {
     });
   });
 
-  it('§4.14: the publication check needs catalog.publish_offering at the offering facility', async () => {
+  it('§4.14, §4.10: the publication check needs catalog.publish_offering at the offering facility', async () => {
     const west = await createOfferingFixture(t, {
       responsibleManagerPersonId: managerPersonId,
       publicationState: 'draft',
     });
     const path = `/v1/offerings/${west.offeringId}/publication-check`;
     expect((await t.http.get(path).set(frontDesk)).status).toBe(403);
-    expect((await t.http.get(path).set(customer)).status).toBe(403);
+    // §4.10: a customer cannot tell a draft id from an id that names nothing
+    const draft = await t.http.get(path).set(customer);
+    const unknown = await t.http.get(`/v1/offerings/${newId()}/publication-check`).set(customer);
+    expect(draft.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    expect(draft.body.code).toBe(unknown.body.code);
     expect((await t.http.get(path)).status).toBe(401);
     // a manager scoped to another facility may not check it
     expect((await t.http.get(path).set(eastManager)).status).toBe(403);

@@ -3,12 +3,14 @@ import {
   BookingTermsContentSchema,
   CAPABILITIES,
   decodeCursor,
+  DomainError,
   encodeCursor,
   ENTITLEMENT_SCOPE_SCHEMAS,
   errors,
   newId,
   PUBLIC_PUBLICATION_STATES,
   staffFacilityScope,
+  systemPrincipal,
   z,
   type AgeBand,
   type CapacityUnit,
@@ -46,12 +48,14 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
+import { ASSET_DIRECTORY_PORT, type AssetDirectoryPort } from '../../facilities';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import {
   addDays as addLocalDays,
   DEFAULT_DST_POLICY,
   localDateOf,
   localTimeOf,
+  ResourcesService,
   resolveLocal,
 } from '../../scheduling';
 import { CatalogActions } from '../catalog.actions';
@@ -147,6 +151,8 @@ export class OfferingsService implements OfferingLookupPort {
     private readonly policies: PoliciesService,
     private readonly capabilities: CapabilityService,
     private readonly facilities: FacilityDirectory,
+    private readonly resources: ResourcesService,
+    @Inject(ASSET_DIRECTORY_PORT) private readonly assets: AssetDirectoryPort,
   ) {}
 
   /**
@@ -1015,6 +1021,13 @@ export class OfferingsService implements OfferingLookupPort {
    */
   async publicationCheck(principal: Principal, id: string): Promise<PublicationCheck> {
     const organizationId = organizationOf(principal);
+    // §4.10: a caller who cannot read the catalog learns nothing about the id, whether or not an
+    // offering (possibly an unpublished draft) exists under it.
+    const reader = await this.authorization.decide(principal, CatalogActions.readCatalog, {
+      type: 'offering',
+      organizationId,
+    });
+    if (!reader.allowed) throw errors.protectedNotFound('offering');
     const row = await this.loadOffering(this.db, organizationId, id);
     if (!row) throw errors.notFound('offering', id);
     await this.authorization.require(principal, CatalogActions.publishOffering, {
@@ -1155,6 +1168,74 @@ export class OfferingsService implements OfferingLookupPort {
   // Publication validation (SPK-CAT-004)
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * SPK-COND-003, §4.3: the resources and equipment a rental or party definition names must be
+   * records a booking can reserve: scheduling resources of this organization at the offering's
+   * facility that are not closed, and facilities assets of this organization at that facility
+   * that are not retired. Resolved through the owners' exported reads (scheduling
+   * ResourcesService, facilities ASSET_DIRECTORY_PORT), never their tables.
+   */
+  private async checkBookingReferences(
+    trx: Trx | Db,
+    organizationId: string,
+    row: OfferingRow,
+    scope: { resources: { resourceIds: string[] }; equipmentAssetIds?: string[] },
+    problem: (code: string, field: string, message: string) => void,
+  ): Promise<void> {
+    const reader = systemPrincipal(organizationId, 'catalog.publication_check');
+    for (const resourceId of scope.resources.resourceIds) {
+      const resource = await this.resources.getResource(reader, resourceId).catch((error) => {
+        if (error instanceof DomainError && error.code === 'NOT_FOUND') return null;
+        throw error;
+      });
+      if (!resource) {
+        problem(
+          'booking_resource_unknown',
+          'entitlementDefinitionId',
+          `Resource ${resourceId} named by the entitlement definition does not exist in this organization.`,
+        );
+      } else if (resource.facilityId !== row.facility_id) {
+        problem(
+          'booking_resource_other_facility',
+          'entitlementDefinitionId',
+          `Resource ${resourceId} is not at the offering's facility.`,
+        );
+      } else if (resource.status === 'closed') {
+        problem(
+          'booking_resource_closed',
+          'entitlementDefinitionId',
+          `Resource ${resourceId} is closed.`,
+        );
+      }
+    }
+    const equipment = scope.equipmentAssetIds ?? [];
+    if (equipment.length > 0) {
+      const known = await this.assets.describe(organizationId, equipment, trx as Trx);
+      for (const assetId of equipment) {
+        const asset = known.get(assetId);
+        if (!asset) {
+          problem(
+            'booking_equipment_unknown',
+            'entitlementDefinitionId',
+            `Equipment ${assetId} named by the entitlement definition does not exist in this organization.`,
+          );
+        } else if (asset.facilityId !== row.facility_id) {
+          problem(
+            'booking_equipment_other_facility',
+            'entitlementDefinitionId',
+            `Equipment ${assetId} is not at the offering's facility.`,
+          );
+        } else if (asset.status === 'retired') {
+          problem(
+            'booking_equipment_retired',
+            'entitlementDefinitionId',
+            `Equipment ${assetId} is retired.`,
+          );
+        }
+      }
+    }
+  }
+
   async validatePublication(
     trx: Trx | Db,
     organizationId: string,
@@ -1267,12 +1348,23 @@ export class OfferingsService implements OfferingLookupPort {
           'entitlementDefinitionId',
           `A ${row.kind} offering needs a ${requiredKind} entitlement definition.`,
         );
-      } else if (!schema.safeParse(entitlement.scope).success) {
-        problem(
-          'ENTITLEMENT_DEFINITION_REQUIRED',
-          'entitlementDefinitionId',
-          `The ${requiredKind} entitlement definition does not state every required effect.`,
-        );
+      } else {
+        const parsed = schema.safeParse(entitlement.scope);
+        if (!parsed.success) {
+          problem(
+            'ENTITLEMENT_DEFINITION_REQUIRED',
+            'entitlementDefinitionId',
+            `The ${requiredKind} entitlement definition does not state every required effect.`,
+          );
+        } else if (requiredKind === 'party_package' || requiredKind === 'rental_resource') {
+          await this.checkBookingReferences(
+            trx,
+            organizationId,
+            row,
+            parsed.data as { resources: { resourceIds: string[] }; equipmentAssetIds?: string[] },
+            problem,
+          );
+        }
       }
     }
     const now = this.clock.now();

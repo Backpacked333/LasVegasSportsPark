@@ -341,6 +341,72 @@ describe('identity periodic jobs (ID-07, ID-08; SPK-IAM-002, SPK-IAM-004, SPK-IA
       expect(await events(second, 'identity.access_restriction_lifted')).toEqual([]);
     });
 
+    it('two reviews whose windows both elapse before one sweep announce the lift of their grant once', async () => {
+      const family = await createOrganizationPeople(t, {
+        guardianPermissions: ['view', 'collect'],
+      });
+      const header = await reviewer();
+      const child = family.child.personId;
+      const first = await openReview(header, child);
+      const second = await openReview(header, child);
+      const collect = family.guardianGrants.collect as string;
+      await decide(header, first, {
+        kind: 'restrict',
+        grantIds: [collect],
+        effectiveTo: new Date(t.clock.now().getTime() + HOUR).toISOString(),
+      });
+      await decide(header, second, {
+        kind: 'restrict',
+        grantIds: [collect],
+        effectiveTo: new Date(t.clock.now().getTime() + 2 * HOUR).toISOString(),
+      });
+      t.clock.advance(3 * HOUR);
+      await t.runPeriodicJobs([END_ELAPSED_RESTRICTIONS_JOB]);
+      await t.runPeriodicJobs([END_ELAPSED_RESTRICTIONS_JOB]);
+      const lifts = [
+        ...(await events(first, 'identity.access_restriction_lifted')),
+        ...(await events(second, 'identity.access_restriction_lifted')),
+      ] as Array<{ grantIds: string[] }>;
+      expect(lifts.filter((l) => l.grantIds.includes(collect))).toHaveLength(1);
+      const ended = await t.db
+        .selectFrom('access_grant_suspensions')
+        .select('ended_at')
+        .where('grant_id', '=', collect)
+        .execute();
+      expect(ended).toHaveLength(2);
+      expect(ended.every((e) => e.ended_at !== null)).toBe(true);
+      expect(
+        await authority.hasPermission(t.organizationId, family.adult.personId, child, 'collect'),
+      ).toBe(true);
+    });
+
+    it('a manual lift after another review’s window passed, then that window’s sweep, announce one lift', async () => {
+      const family = await createOrganizationPeople(t, {
+        guardianPermissions: ['view', 'collect'],
+      });
+      const header = await reviewer();
+      const child = family.child.personId;
+      const first = await openReview(header, child);
+      const second = await openReview(header, child);
+      const collect = family.guardianGrants.collect as string;
+      await decide(header, first, {
+        kind: 'restrict',
+        grantIds: [collect],
+        effectiveTo: new Date(t.clock.now().getTime() + HOUR).toISOString(),
+      });
+      await decide(header, second, { kind: 'restrict', grantIds: [collect] });
+      t.clock.advance(2 * HOUR);
+      await decide(header, second, { kind: 'lift', grantIds: [collect] });
+      await t.runPeriodicJobs([END_ELAPSED_RESTRICTIONS_JOB]);
+      const lifts = [
+        ...(await events(first, 'identity.access_restriction_lifted')),
+        ...(await events(second, 'identity.access_restriction_lifted')),
+      ] as Array<{ grantIds: string[]; cause: string }>;
+      expect(lifts.filter((l) => l.grantIds.includes(collect))).toEqual([
+        expect.objectContaining({ cause: 'decision' }),
+      ]);
+    });
+
     it('a manual lift naming actorPersonId ends only that actor’s suspensions (cause decision)', async () => {
       const family = await createOrganizationPeople(t, { guardianPermissions: ['view'] });
       const otherParent = await createPersonFixture(t, { kind: 'adult' });

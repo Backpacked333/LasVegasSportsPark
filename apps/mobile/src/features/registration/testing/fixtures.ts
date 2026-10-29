@@ -81,6 +81,8 @@ export function offering(overrides: Partial<Schema<'Offering'>> = {}): Schema<'O
     cancellationPolicyVersionId: IDS.cancellationPolicy,
     requiredFormPolicyVersionIds: [IDS.formPolicy],
     entitlementDefinitionId: null,
+    bookingTermsPolicyVersionId: null,
+    facility: { id: IDS.facility, name: 'Test complex', timezone: 'America/Los_Angeles' },
     staff: null,
     ...overrides,
   };
@@ -348,6 +350,7 @@ export function payment(
     orderId: IDS.order,
     obligationId: null,
     contributionRequestId: null,
+    posSaleId: null,
     installmentId: null,
     unknownSince: null,
     resolvedAt: T,
@@ -437,6 +440,8 @@ export function enrollment(
     trialParticipationId: null,
     orderRef: null,
     lastOperationId: null,
+    offering: null,
+    pendingReason: null,
     price: null,
     policies: {
       eligibilityPolicyVersionId: null,

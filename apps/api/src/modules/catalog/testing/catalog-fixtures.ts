@@ -10,6 +10,7 @@ import {
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import type { Clock } from '../../../kernel';
+import { seedPitchWithHalves } from '../../scheduling/testing/scheduling-fixtures';
 import { BOOKING_OFFERING_KINDS, REQUIRED_ENTITLEMENT_KIND } from '../catalog.policy';
 
 /**
@@ -256,12 +257,29 @@ export async function createOfferingFixture(
     input.formPolicyVersionId ??
     (await createPolicyVersionFixture(ctx, { kind: 'form', organizationId }));
   const kind = input.kind ?? 'term';
-  const entitlementDefinitionId =
-    input.entitlementDefinitionId ??
-    (await createEntitlementDefinitionFixture(ctx, {
+  let entitlementDefinitionId = input.entitlementDefinitionId;
+  if (!entitlementDefinitionId) {
+    const definitionKind = REQUIRED_ENTITLEMENT_KIND[kind] ?? 'seat';
+    let scope: Record<string, unknown> | undefined;
+    if (definitionKind === 'party_package' || definitionKind === 'rental_resource') {
+      // A rental or party names a real scheduling resource at the offering's facility, so the
+      // offering passes the publication reference check (SPK-COND-003).
+      const pitch = await seedPitchWithHalves(ctx.db, {
+        organizationId,
+        facilityId,
+        name: `Fixture pitch ${newId()}`,
+      });
+      scope = {
+        ...fixtureEntitlementScope(definitionKind),
+        resources: { resourceIds: [pitch.pitchId], count: 1 },
+      };
+    }
+    entitlementDefinitionId = await createEntitlementDefinitionFixture(ctx, {
       organizationId,
-      kind: REQUIRED_ENTITLEMENT_KIND[kind] ?? 'seat',
-    }));
+      kind: definitionKind,
+      scope,
+    });
+  }
   let bookingTermsKey: string | null = input.bookingTermsKey ?? null;
   if (input.bookingTermsKey === undefined && BOOKING_OFFERING_KINDS.includes(kind)) {
     bookingTermsKey = `booking-terms-${next()}`;

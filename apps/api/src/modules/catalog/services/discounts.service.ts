@@ -530,17 +530,11 @@ export class DiscountsService {
   ): Promise<RedemptionOutcome> {
     // Lock the definition, then the counter, before anything is counted (SPK-PAY-003): concurrent
     // redemptions of one discount serialize here, so the replay check and the participant's
-    // ledger count below see every redemption committed before the lock was granted. The order
-    // (definition, then counter) is the one discount updates take, and the per-person trigger of
-    // migration 0207 locks the same definition row, so no two paths wait on each other.
-    const definition = await trx
-      .selectFrom('discount_definitions')
-      .select(['id', 'status', 'per_person_limit', 'effective_from', 'effective_to'])
-      .where('organization_id', '=', organizationId)
-      .where('id', '=', input.discountDefinitionId)
-      .forUpdate()
-      .executeTakeFirst();
-    if (!definition) throw errors.notFound('discount', input.discountDefinitionId);
+    // ledger count below see every redemption committed before the lock was granted. Every path
+    // (redeem, release, update, retire) takes the definition before the counter, and the lock is
+    // FOR NO KEY UPDATE (as in the guard of migration 0208), which does not block the FOR KEY
+    // SHARE a ledger insert's foreign-key check takes, so no two paths wait on each other.
+    const definition = await this.lockDefinition(trx, organizationId, input.discountDefinitionId);
     const counterBefore = await this.counter(trx, organizationId, definition.id, true);
     const existing = await this.entry(trx, organizationId, input, 'redeem');
     if (existing) {
@@ -578,7 +572,16 @@ export class DiscountsService {
         discountDefinitionId: definition.id,
         perPersonLimit: definition.per_person_limit,
       });
-    // Early feedback; the guarantee is the database trigger of migration 0207 (CAT-04).
+    // A per-person limit cannot be counted for a redemption that names no one: refused (the
+    // conservative behaviour; the database refuses it too, migration 0208).
+    if (definition.per_person_limit !== null && !input.personId) {
+      throw errors.validation('A discount with a per-person limit is redeemed for a person.', {
+        path: 'personId',
+        code: 'DISCOUNT_PERSON_REQUIRED',
+        discountDefinitionId: definition.id,
+      });
+    }
+    // Early feedback; the guarantee is the database trigger of migrations 0207/0208 (CAT-04).
     if (definition.per_person_limit !== null && input.personId) {
       const used = await this.personRedemptions(trx, organizationId, definition.id, input.personId);
       if (used >= definition.per_person_limit) throw perPersonLimitReached();
@@ -675,6 +678,8 @@ export class DiscountsService {
         path: 'personId',
       });
     }
+    // Definition before counter, the order every path takes (see redeem).
+    await this.lockDefinition(trx, organizationId, input.discountDefinitionId);
     const counterBefore = await this.counter(trx, organizationId, input.discountDefinitionId, true);
     const existing = await this.entry(trx, organizationId, input, 'release');
     if (existing) {
@@ -743,10 +748,23 @@ export class DiscountsService {
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('id', '=', id)
-      .forUpdate()
+      .forNoKeyUpdate()
       .executeTakeFirst();
     if (!row) throw errors.notFound('discount', id);
     return row;
+  }
+
+  /** Locks the definition FOR NO KEY UPDATE (see redeem for the lock order). */
+  private async lockDefinition(trx: Trx, organizationId: string, id: string) {
+    const definition = await trx
+      .selectFrom('discount_definitions')
+      .select(['id', 'status', 'per_person_limit', 'effective_from', 'effective_to'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .forNoKeyUpdate()
+      .executeTakeFirst();
+    if (!definition) throw errors.notFound('discount', id);
+    return definition;
   }
 
   private async counter(db: Db | Trx, organizationId: string, id: string, forUpdate = false) {

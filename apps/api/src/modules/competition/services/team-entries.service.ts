@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   errors,
   newId,
   type ApproveTeamEntryInput,
@@ -475,6 +476,21 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       const next = TeamEntryMachine.next(entry.status, 'approve');
       const divisionId = input.divisionId ?? entry.division_id;
       if (input.divisionId && input.divisionId !== entry.division_id) {
+        // CMP-15: a pooled entry belongs to its division's pool (composite key of migration 0459);
+        // it leaves the pool before it changes division, never through a raw key violation.
+        const pooled = await trx
+          .selectFrom('pool_entries')
+          .select('pool_id')
+          .where('organization_id', '=', organizationId)
+          .where('team_entry_id', '=', id)
+          .executeTakeFirst();
+        if (pooled) {
+          throw new DomainError(
+            'INVALID_TRANSITION',
+            'The entry is in a pool of its division; remove it from the pool before moving it.',
+            { details: { code: 'ENTRY_IN_POOL', teamEntryId: id, poolId: pooled.pool_id } },
+          );
+        }
         await this.assertDivisionHasRoom(trx, organizationId, entry, input.divisionId);
       }
       try {

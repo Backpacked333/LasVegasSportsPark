@@ -296,8 +296,10 @@ export class ClosuresService implements ClosurePort {
    * INVALID_TRANSITION: it is lifted, not withdrawn. Joins the caller's unit of work.
    *
    * Through CLOSURE_PORT any source is withdrawn (facilities withdraws the closure of a withdrawn
-   * restriction). `refuseRestrictionOwned` (the HTTP route) refuses a `maintenance` closure with
-   * RESOURCE_CONFLICT `OWNED_BY_RESTRICTION`: its restriction is withdrawn instead (§4.2).
+   * restriction). `refuseRestrictionOwned` (the HTTP route) runs the closure guards with operation
+   * `withdraw`, the same ownership decision a lift makes: a closure that a facilities restriction
+   * still holds answers RESOURCE_CONFLICT `OWNED_BY_RESTRICTION` (its restriction is withdrawn
+   * instead, §4.2), while any other closure, whatever its `source`, is withdrawn here.
    */
   async withdrawClosure(
     principal: Principal,
@@ -306,6 +308,11 @@ export class ClosuresService implements ClosurePort {
     options: { refuseRestrictionOwned?: boolean } = {},
   ): Promise<Closure> {
     const organizationId = organizationOf(principal);
+    if (!input.reason || input.reason.trim().length === 0 || input.reason.length > 2000) {
+      throw errors.validation('A withdrawal reason of 1 to 2000 characters is required.', {
+        path: 'reason',
+      });
+    }
     return this.uow.run(async ({ trx }) => {
       const closure = await this.load(trx, organizationId, closureId, true);
       if (!closure) throw errors.notFound('closure', closureId);
@@ -317,11 +324,8 @@ export class ClosuresService implements ClosurePort {
       });
       assertExpectedRevision(input.expectedRevision, closure.revision);
       const next = ClosureMachine.next(closure.status, 'withdraw');
-      if (options.refuseRestrictionOwned && closure.source === 'maintenance') {
-        throw errors.resourceConflict(
-          'This closure belongs to a maintenance restriction; withdraw the restriction instead.',
-          { code: 'OWNED_BY_RESTRICTION', closureId },
-        );
+      if (options.refuseRestrictionOwned) {
+        await this.liftGuards.check(trx, organizationId, closureId, 'withdraw');
       }
       const updated = await trx
         .updateTable('closures')

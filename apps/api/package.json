@@ -5,14 +5,14 @@
   "description": "Sportspark operating API — NestJS modular monolith and durable workers",
   "main": "./dist/main.js",
   "scripts": {
-    "build": "tsc -b",
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b",
     "start": "node dist/main.js",
     "start:worker": "node dist/worker.js",
-    "dev": "tsc -b && node dist/main.js",
+    "dev": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && node dist/main.js",
     "test": "vitest run",
     "openapi": "tsx scripts/emit-openapi.ts",
     "permission-matrix": "tsx scripts/emit-permission-matrix.ts",
-    "seed:dev": "tsc -b && tsx scripts/seed-dev.ts"
+    "seed:dev": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && tsx scripts/seed-dev.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.2.0",

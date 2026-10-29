@@ -191,7 +191,7 @@ describe('contact point management (ID-06; SPK-IAM-001, §4.9, §4.14)', () => {
       .selectFrom('audit_records')
       .select(['details', 'reason'])
       .where('target_id', '=', me.personId)
-      .where('action', '=', 'identity.add_contact_point')
+      .where('action', '=', 'identity.remove_contact_point')
       .executeTakeFirstOrThrow();
     expect(audit.reason).toBe('old number');
     expect(audit.details).toMatchObject({ operation: 'remove', kind: 'phone', value: '***2222' });
@@ -227,6 +227,14 @@ describe('contact point management (ID-06; SPK-IAM-001, §4.9, §4.14)', () => {
       .set('Idempotency-Key', key())
       .send({});
     expect(ok.status).toBe(200);
+    // the audit names what the command did, not the add it is authorized as
+    const actions = await t.db
+      .selectFrom('audit_records')
+      .select('action')
+      .where('target_id', '=', withRegister.child.personId)
+      .where('action', 'like', 'identity.%contact_point')
+      .execute();
+    expect(actions.map((a) => a.action)).toEqual(['identity.make_primary_contact_point']);
     const viewOnly = await createOrganizationPeople(t, { guardianPermissions: ['view'] });
     const cp2 = await createContactPointFixture(t, {
       personId: viewOnly.child.personId,

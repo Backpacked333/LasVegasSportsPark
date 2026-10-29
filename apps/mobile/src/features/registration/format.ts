@@ -77,6 +77,7 @@ export const OFFERING_KIND_LABELS: Record<OfferingKind, string> = {
   rental: 'Rental',
   package: 'Package',
   membership: 'Membership',
+  party: 'Party',
 };
 
 export function ageBandLabel(band: { minAgeYears?: number; maxAgeYears?: number }): string | null {

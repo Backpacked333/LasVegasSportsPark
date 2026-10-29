@@ -282,16 +282,24 @@ describe('SPK-AT-012: referee declines shortly before kickoff — uncovered assi
     });
     // 8. SPK-STAFF-005: the accepted substitute (time-bounded official role) submits the result;
     //    the withdrawn referee no longer may.
+    //    A played result waits for kickoff (CMP-12, SPK-RESULT-001): the clock moves to the start
+    //    of the game for the submission and back afterwards.
     const result = { classification: 'completed', homeScore: 1, awayScore: 0 };
-    const byWithdrawn = await post(t, `/v1/fixtures/${game.fixtureId}/results`, referee, result);
-    expect(byWithdrawn.status).toBe(403);
-    const bySubstitute = await post(
-      t,
-      `/v1/fixtures/${game.fixtureId}/results`,
-      substitute,
-      result,
-    );
-    expect(bySubstitute.status, JSON.stringify(bySubstitute.body)).toBe(201);
+    const toKickoff = new Date(game.start).getTime() - t.clock.now().getTime();
+    t.clock.advance(toKickoff);
+    try {
+      const byWithdrawn = await post(t, `/v1/fixtures/${game.fixtureId}/results`, referee, result);
+      expect(byWithdrawn.status).toBe(403);
+      const bySubstitute = await post(
+        t,
+        `/v1/fixtures/${game.fixtureId}/results`,
+        substitute,
+        result,
+      );
+      expect(bySubstitute.status, JSON.stringify(bySubstitute.body)).toBe(201);
+    } finally {
+      t.clock.advance(-toKickoff);
+    }
 
     const coverage = await t.http
       .get(`/v1/assignment-requirements?targetType=fixture&targetId=${game.fixtureId}`)

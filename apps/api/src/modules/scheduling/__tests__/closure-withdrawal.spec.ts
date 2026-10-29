@@ -1,10 +1,11 @@
-import { newId, type Principal } from '@sportspark/contracts';
+import { errors, newId, type Principal } from '@sportspark/contracts';
 import { isCheckViolation, json, pgErrorCode, tstzrange } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { CLOSURE_PORT, type ClosurePort } from '../ports';
 import { SchedulingModule } from '../scheduling.module';
+import { ClosureLiftGuards } from '../services/closure-lift-guards';
 import { ClosuresService } from '../services/closures.service';
 import { EventsService } from '../services/events.service';
 import {
@@ -30,6 +31,7 @@ describe('closure withdrawal and impact preview (SCH-01: SPK-FAC-003, SPK-SCHED-
   let pitch: PitchFixture;
   let scheduler: Principal;
   let auth: { Authorization: string };
+  const owned = new Set<string>();
 
   beforeAll(async () => {
     t = await createTestApp({ imports: [SchedulingModule], clockStart: '2026-10-19T12:00:00Z' });
@@ -44,6 +46,16 @@ describe('closure withdrawal and impact preview (SCH-01: SPK-FAC-003, SPK-SCHED-
     });
     scheduler = staffPrincipal(org, ['scheduler']);
     auth = await t.authHeader(scheduler);
+    t.app
+      .get(ClosureLiftGuards)
+      .register('test.restriction_owner', async (_trx, _org, closureId, operation) => {
+        if (operation === 'withdraw' && owned.has(closureId)) {
+          throw errors.resourceConflict('owned by a restriction', {
+            code: 'OWNED_BY_RESTRICTION',
+            closureId,
+          });
+        }
+      });
   });
   afterAll(async () => {
     await t.close();
@@ -202,13 +214,16 @@ describe('closure withdrawal and impact preview (SCH-01: SPK-FAC-003, SPK-SCHED-
     expect((await closures.getClosure(scheduler, closure.id)).status).toBe('active');
   });
 
-  it('§4.2: a maintenance closure is withdrawn through its restriction: OWNED_BY_RESTRICTION over HTTP, allowed through CLOSURE_PORT inside the caller’s unit of work', async () => {
+  it('§4.2: a closure a restriction owns is withdrawn through its restriction: OWNED_BY_RESTRICTION over HTTP, allowed through CLOSURE_PORT inside the caller’s unit of work', async () => {
     const closure = await createPending({
       start: at('2026-11-04', '08:00'),
       end: at('2026-11-04', '12:00'),
       source: 'maintenance',
       reason: 'Goal repair',
     });
+    // The owning module's guard decides ownership, as for a lift (facilities registers one for
+    // the closures its restrictions hold; this scheduling-only app registers a stand-in).
+    owned.add(closure.id);
     const http = await t.http
       .post(`/v1/closures/${closure.id}/withdraw`)
       .set(auth)
@@ -245,6 +260,38 @@ describe('closure withdrawal and impact preview (SCH-01: SPK-FAC-003, SPK-SCHED-
       source: 'maintenance',
       withdrawalReason: 'Restriction withdrawn',
     });
+  });
+
+  it('§4.2: a staff-created maintenance closure that no restriction holds is withdrawn over HTTP', async () => {
+    const closure = await createPending({
+      start: at('2026-11-04', '13:00'),
+      end: at('2026-11-04', '15:00'),
+      source: 'maintenance',
+      reason: 'Line painting',
+    });
+    const http = await t.http
+      .post(`/v1/closures/${closure.id}/withdraw`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ reason: 'Painting moved to next week' });
+    expect(http.status, JSON.stringify(http.body)).toBe(200);
+    expect(http.body).toMatchObject({ status: 'withdrawn', source: 'maintenance' });
+  });
+
+  it('CLOSURE_PORT.withdrawClosure refuses an empty or oversized reason as VALIDATION_FAILED', async () => {
+    const closure = await createPending({
+      start: at('2026-11-04', '16:00'),
+      end: at('2026-11-04', '17:00'),
+    });
+    const port = t.app.get<ClosurePort>(CLOSURE_PORT);
+    const operator = staffPrincipal(org, ['facilities_operator']);
+    const uow = t.app.get(UnitOfWork);
+    for (const reason of ['', 'x'.repeat(2001)]) {
+      await expect(
+        uow.run(() => port.withdrawClosure(operator, closure.id, { reason })),
+      ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    }
+    expect((await closures.getClosure(scheduler, closure.id)).status).toBe('pending');
   });
 
   it('authorization: front desk cannot withdraw a closure or preview an impact', async () => {
@@ -365,7 +412,7 @@ describe('closure withdrawal and impact preview (SCH-01: SPK-FAC-003, SPK-SCHED-
     expect([403, 404]).toContain(unknownFacility.status);
   });
 
-  it('the database rejects a withdrawn closure without withdrawal facts and a status change out of withdrawn (migration 0302)', async () => {
+  it('the database rejects a withdrawn closure without withdrawal facts, a status change out of withdrawn and any transition ClosureMachine forbids (migrations 0302, 0303)', async () => {
     const base = (overrides: Record<string, unknown>) => ({
       id: newId(),
       organization_id: org,
@@ -455,6 +502,13 @@ describe('closure withdrawal and impact preview (SCH-01: SPK-FAC-003, SPK-SCHED-
         .where('id', '=', liftedId)
         .execute(),
     ).rejects.toSatisfy(isRestrict);
+    await expect(
+      t.db
+        .updateTable('closures')
+        .set({ created_by: json({ kind: 'staff', rewritten: true }) })
+        .where('id', '=', liftedId)
+        .execute(),
+    ).rejects.toSatisfy(isRestrict);
     // a pending closure still moves through its lifecycle
     const pendingId = newId();
     await insert({ id: pendingId, status: 'pending' });
@@ -462,6 +516,42 @@ describe('closure withdrawal and impact preview (SCH-01: SPK-FAC-003, SPK-SCHED-
       .updateTable('closures')
       .set({ status: 'withdrawn', ...facts })
       .where('id', '=', pendingId)
+      .execute();
+
+    // migration 0303: only the transitions ClosureMachine allows
+    const pendingToLift = newId();
+    await insert({ id: pendingToLift, status: 'pending' });
+    await expect(
+      t.db
+        .updateTable('closures')
+        .set({ status: 'lifted', applied_at: now, lifted_at: now })
+        .where('id', '=', pendingToLift)
+        .execute(),
+    ).rejects.toSatisfy(isRestrict);
+    const activeId = newId();
+    await insert({ id: activeId, status: 'active', applied_at: now });
+    await expect(
+      t.db.updateTable('closures').set({ status: 'pending' }).where('id', '=', activeId).execute(),
+    ).rejects.toSatisfy(isRestrict);
+    await expect(
+      t.db
+        .updateTable('closures')
+        .set({ status: 'withdrawn', applied_at: null, ...facts })
+        .where('id', '=', activeId)
+        .execute(),
+    ).rejects.toSatisfy(isRestrict);
+    // a lifted closure records its application and its lift
+    await expect(insert({ status: 'lifted', lifted_at: now })).rejects.toSatisfy(isCheckViolation);
+    // the allowed moves still pass
+    await t.db
+      .updateTable('closures')
+      .set({ status: 'active', applied_at: now })
+      .where('id', '=', pendingToLift)
+      .execute();
+    await t.db
+      .updateTable('closures')
+      .set({ status: 'lifted', lifted_at: now })
+      .where('id', '=', activeId)
       .execute();
   });
 });

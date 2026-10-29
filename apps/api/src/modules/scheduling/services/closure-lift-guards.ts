@@ -1,14 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import type { Trx } from '../../../kernel';
 
+/** What the guarded command does to the closure. */
+export type ClosureGuardedOperation = 'lift' | 'withdraw';
+
 /**
- * A check another module runs before a scheduling closure is lifted. It throws a domain error to
- * refuse the lift and returns to allow it; it reads through `trx`, the lift's own transaction.
+ * A check another module runs before a scheduling closure is lifted, or withdrawn over HTTP. It
+ * throws a domain error to refuse the change and returns to allow it; it reads through `trx`, the
+ * command's own transaction.
  */
 export type ClosureLiftGuard = (
   trx: Trx,
   organizationId: string,
   closureId: string,
+  operation: ClosureGuardedOperation,
 ) => Promise<void>;
 
 /**
@@ -28,7 +33,14 @@ export class ClosureLiftGuards {
     this.guards.set(name, guard);
   }
 
-  async check(trx: Trx, organizationId: string, closureId: string): Promise<void> {
-    for (const guard of this.guards.values()) await guard(trx, organizationId, closureId);
+  async check(
+    trx: Trx,
+    organizationId: string,
+    closureId: string,
+    operation: ClosureGuardedOperation = 'lift',
+  ): Promise<void> {
+    for (const guard of this.guards.values()) {
+      await guard(trx, organizationId, closureId, operation);
+    }
   }
 }

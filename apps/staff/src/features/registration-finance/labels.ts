@@ -277,6 +277,9 @@ export const REGISTRATION_INTENT: Record<Schema<'RegistrationIntent'>, string> =
   makeup: 'Makeup',
   pickup: 'Pickup',
   rental_request: 'Rental request',
+  membership: 'Membership (when applicable)',
+  package_purchase: 'Session package (when applicable)',
+  party_request: 'Party request (when applicable)',
 };
 
 export const OFFERING_KIND: Record<Schema<'OfferingKind'>, string> = {
@@ -291,6 +294,7 @@ export const OFFERING_KIND: Record<Schema<'OfferingKind'>, string> = {
   rental: 'Rental (when applicable)',
   package: 'Package (when applicable)',
   membership: 'Membership (when applicable)',
+  party: 'Party (when applicable)',
 };
 
 export const CAPACITY_UNIT: Record<Schema<'CapacityUnitKind'>, string> = {
@@ -311,6 +315,9 @@ export const LEDGER_ACCOUNT: Record<Schema<'LedgerAccount'>, string> = {
   refunds: 'Refunds',
   cash_on_hand: 'Cash on hand',
   overpayment_liability: 'Overpayment liability',
+  pos_revenue: 'Point-of-sale revenue',
+  taxes_payable: 'Taxes payable',
+  fees_payable: 'Fees payable',
 };
 
 export const TENDER_KIND: Record<Schema<'CashTenderKind'>, string> = {

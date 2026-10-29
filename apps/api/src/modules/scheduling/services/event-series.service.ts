@@ -152,6 +152,8 @@ export class EventSeriesService {
         organizationId,
         facilityId: facility.id,
       });
+      // SCH-02: the booking source holds rental and party series only, on HTTP as on the port.
+      this.writer.assertPortSource(principal, body.kind, body.sourceType ?? null);
       const { series, eventIds } = await this.writeSeries(trx, principal, facility, {
         spec: {
           kind: body.kind,
@@ -271,7 +273,10 @@ export class EventSeriesService {
       });
       await this.writer.assertScheduleAuthority(trx, organizationId, series.facility_id);
       this.writer.assertPortSource(principal, series.kind, series.source_type);
-      const fromInstant = from ?? this.clock.now();
+      // History keeps its identity (SPK-SCHED-007): an instant in the past never cancels an
+      // occurrence that already started, so the effective start is never before now.
+      const now = this.clock.now();
+      const fromInstant = from && from.getTime() > now.getTime() ? from : now;
       const occurrences = await trx
         .selectFrom('events')
         .selectAll()

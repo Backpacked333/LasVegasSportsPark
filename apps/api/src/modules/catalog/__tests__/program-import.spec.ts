@@ -168,6 +168,22 @@ describe('program import provenance (CAT-03)', () => {
     expect(res.body.id).not.toBe(provenance.recordId);
   });
 
+  it('an in-process staff create without the defaulted fields gets the schema defaults', async () => {
+    const created = await programs.create(
+      staffPrincipal(t.organizationId, ['program_manager']),
+      { name: `In process ${newId().slice(-6)}`, activityType: 'soccer' },
+      null,
+    );
+    expect(created).toMatchObject({ status: 'draft', source: 'staff', ageBand: {} });
+    await expect(
+      programs.create(
+        staffPrincipal(t.organizationId, ['program_manager']),
+        { name: '' } as never,
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+  });
+
   it('CAT-03: the database accepts only staff or import as a program source', async () => {
     const error = await t.db
       .insertInto('programs')

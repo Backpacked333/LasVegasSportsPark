@@ -626,6 +626,7 @@ export class ResultsService {
           seasonId: context.fixture.season_id,
           cards: context.rules.cards,
           resultCards: detailsOf(updated).cards,
+          previousCards: detailsOf(official).cards,
           correlationId,
           operationId,
         });

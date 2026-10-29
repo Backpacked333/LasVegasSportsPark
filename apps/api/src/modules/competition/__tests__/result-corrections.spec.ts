@@ -803,4 +803,43 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
     ).toEqual([]);
     expect((await accumulation()).map((r) => r.source_fixture_id).sort()).toEqual([f2, f3].sort());
   });
+
+  it('SPK-DISC-001 / CMP-12: correcting an earlier fixture that removes a counted yellow overturns the accumulation suspension sourced at a later fixture', async () => {
+    const division = await createDivisionFixture(t, { seasonId: season.seasonId, name: 'Review' });
+    const g = await teamOf('Grebes', division);
+    const h = await teamOf('Hawks', division);
+    const yellow = (minute: number) => ({
+      personId: g.player.personId,
+      teamEntryId: g.teamEntryId,
+      kind: 'yellow',
+      minute,
+    });
+    // threshold 2: a yellow in f1 and one in f2 propose a suspension sourced at f2
+    const f1 = await fixture(g, h, division);
+    await played(f1, 1, 0, { cards: [yellow(10)] });
+    const f2 = await fixture(h, g, division);
+    const crossing = await played(f2, 0, 0, { cards: [yellow(20)] });
+    expect(crossing.proposedSuspensionIds).toHaveLength(1);
+    const suspensionId = crossing.proposedSuspensionIds[0] as string;
+    // the official correction of f1 removes its yellow: the season now counts one
+    const res = await publish(
+      await submit(f1, {
+        classification: 'completed',
+        homeScore: 1,
+        awayScore: 0,
+        reason: 'The caution was shown to another player.',
+      }),
+    );
+    expect(res.status).toBe(200);
+    const after = await t.db
+      .selectFrom('suspensions')
+      .select(['status', 'overturn_reason', 'source_fixture_id'])
+      .where('id', '=', suspensionId)
+      .executeTakeFirstOrThrow();
+    expect(after).toEqual({
+      status: 'overturned',
+      overturn_reason: 'card removed by correction',
+      source_fixture_id: f2,
+    });
+  });
 });

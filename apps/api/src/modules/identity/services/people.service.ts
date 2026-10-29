@@ -429,7 +429,7 @@ export class PeopleService implements PersonDirectoryPort {
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
-        action: IdentityActions.addContactPoint.id,
+        action: IdentityActions.makePrimaryContactPoint.id,
         targetType: 'person',
         targetId: personId,
         beforeRevision: person.revision,
@@ -517,7 +517,7 @@ export class PeopleService implements PersonDirectoryPort {
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
-        action: IdentityActions.addContactPoint.id,
+        action: IdentityActions.removeContactPoint.id,
         targetType: 'person',
         targetId: personId,
         beforeRevision: person.revision,
@@ -621,6 +621,12 @@ export class PeopleService implements PersonDirectoryPort {
     let rows = this.db
       .selectFrom('persons')
       .select(['id', 'given_name', 'family_name', 'kind', 'status'])
+      // The keyset cursor is encoded from the database's own lowercasing, the same expressions the
+      // order and the row comparison use, so a non-ASCII name never misplaces the page boundary.
+      .select([
+        sql<string>`lower(family_name)`.as('sort_family'),
+        sql<string>`lower(given_name)`.as('sort_given'),
+      ])
       .where('organization_id', '=', organizationId)
       .where((eb) => {
         const given = eb.fn<string>('lower', ['given_name']);
@@ -666,11 +672,7 @@ export class PeopleService implements PersonDirectoryPort {
       })),
       nextCursor:
         found.length > query.limit && last
-          ? encodeCursor({
-              f: last.family_name.toLowerCase(),
-              g: last.given_name.toLowerCase(),
-              id: last.id,
-            })
+          ? encodeCursor({ f: last.sort_family, g: last.sort_given, id: last.id })
           : null,
     };
   }

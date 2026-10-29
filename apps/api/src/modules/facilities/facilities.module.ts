@@ -93,8 +93,14 @@ export class FacilitiesModule implements OnModuleInit {
   onModuleInit(): void {
     // SPK-FAC-004: a closure backing an unreleased restriction is lifted only by the facilities
     // release (inspection and release authority checked), never directly in scheduling.
-    this.liftGuards.register('facilities.restriction_release', (trx, organizationId, closureId) =>
-      this.restrictions.assertClosureLiftAllowed(trx, organizationId, closureId),
+    // A closure a restriction still holds is withdrawn with that restriction, never directly
+    // over the scheduling route (OWNED_BY_RESTRICTION, FAC-01).
+    this.liftGuards.register(
+      'facilities.restriction_release',
+      (trx, organizationId, closureId, operation) =>
+        operation === 'withdraw'
+          ? this.restrictions.assertClosureWithdrawAllowed(trx, organizationId, closureId)
+          : this.restrictions.assertClosureLiftAllowed(trx, organizationId, closureId),
     );
     // Due timer (enqueued with availableAt = dueAt): escalate an overdue critical task once (SPK-UX-006).
     this.registry.on<EventPayload<typeof MaintenanceTaskDueReached>>(
