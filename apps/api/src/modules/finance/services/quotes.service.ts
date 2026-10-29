@@ -185,7 +185,7 @@ export class QuotesService {
       });
     }
     const resolved = await this.policy.resolve(organizationId, now);
-    const plan: PlanInput =
+    let plan: PlanInput =
       input.paymentPlan.kind === 'full'
         ? { kind: 'full' }
         : {
@@ -193,7 +193,8 @@ export class QuotesService {
             count: input.paymentPlan.count,
             intervalDays: resolved.config.installments.intervalDays,
           };
-    if (plan.kind === 'installments') {
+    const assertRequestedPlan = () => {
+      if (plan.kind !== 'installments') return;
       if (!resolved.config.installments.enabled) {
         throw errors.validation('Installment plans are not offered (POL-016).');
       }
@@ -202,15 +203,19 @@ export class QuotesService {
           maxInstallments: resolved.config.installments.maxInstallments,
         });
       }
-    }
+    };
 
     // SPK-PAY-001: the price is the catalog price rule effective now, never the client's.
     const lineInputs: QuoteLineInput[] = [];
     let currency: string | null = null;
     const evaluationLines = [];
+    const depositKeys = new Set<string>();
     for (const line of lines) {
       const snapshot = await this.offerings.getOffering(organizationId, line.offeringId, now);
       if (!snapshot) throw errors.notFound('offering', line.offeringId);
+      // §3.16 (POL-040): a rental's or party's approved booking terms may name a deposit plan.
+      const depositKey = snapshot.bookingTerms?.content['installmentPolicyKey'];
+      if (typeof depositKey === 'string' && depositKey.length > 0) depositKeys.add(depositKey);
       const rule = await this.pricing.effectivePriceRule(organizationId, line.offeringId, now);
       if (rule) {
         currency ??= rule.currency;
@@ -250,6 +255,38 @@ export class QuotesService {
         participantPersonId: line.participantPersonId,
         baseAmountMinor: (rule?.basePriceMinor ?? 0) * line.quantity,
       });
+    }
+    // §3.16, POL-040 (DEC-073 pending): a booking whose terms name a deposit plan is quoted on that
+    // plan: the first installment is due at checkout and the balance becomes scheduled
+    // obligations. The plan is the terms' own (its installment policy is recorded on the quote);
+    // a request for another number of installments is refused, and whether a customer may pay such
+    // a booking in full instead is a policy question the terms do not answer (POL-040).
+    if (depositKeys.size > 1) {
+      throw errors.validation('Bookings with different deposit plans are paid separately.', {
+        code: 'BOOKING_DEPOSIT_PLANS_DIFFER',
+        installmentPolicyKeys: [...depositKeys].sort(),
+      });
+    }
+    if (depositKeys.size === 1) {
+      const deposit = await this.policy.bookingDeposit(
+        organizationId,
+        [...depositKeys][0] as string,
+        now,
+      );
+      if (input.paymentPlan.kind === 'installments' && input.paymentPlan.count !== deposit.count) {
+        throw errors.validation('The booking terms set the number of installments.', {
+          code: 'BOOKING_DEPOSIT_PLAN_FIXED',
+          installments: deposit.count,
+        });
+      }
+      plan = { kind: 'installments', count: deposit.count, intervalDays: deposit.intervalDays };
+      resolved.references = {
+        ...resolved.references,
+        installmentPolicyVersionId: deposit.policyVersionId,
+        defaults: resolved.references.defaults.filter((d) => !d.startsWith('installment:')),
+      };
+    } else {
+      assertRequestedPlan();
     }
     const quoteCurrency = currency ?? basket.currency ?? 'USD';
     const discountEvaluation =
