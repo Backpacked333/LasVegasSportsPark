@@ -24,6 +24,37 @@
       }
     },
     "schemas": {
+      "CapabilityId": {
+        "type": "string",
+        "enum": [
+          "memberships",
+          "session_packages",
+          "rentals",
+          "parties",
+          "tournaments",
+          "point_of_sale",
+          "access_hardware",
+          "accounting",
+          "youth_progression",
+          "pickup_sessions",
+          "assistant",
+          "installments",
+          "supervised_pickup",
+          "advanced_fairness",
+          "retention_tools"
+        ]
+      },
+      "CapabilityEnforcement": {
+        "type": "string",
+        "enum": [
+          "commands",
+          "recorded_only"
+        ]
+      },
+      "DecisionReference": {
+        "type": "string",
+        "pattern": "^DEC-[0-9]{3}$"
+      },
       "ErrorResponse": {
         "type": "object",
         "properties": {
@@ -18336,6 +18367,947 @@
         "required": [
           "action",
           "expectedRevision"
+        ]
+      },
+      "FacilityStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "closed",
+          "archived"
+        ]
+      },
+      "FacilitySummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FacilityStatus"
+          },
+          "address": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {}
+          },
+          "inStaffScope": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "timezone",
+          "status",
+          "address",
+          "inStaffScope"
+        ]
+      },
+      "FacilityList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FacilitySummary"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AdminOrganizationSettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "archived"
+            ]
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "status",
+          "revision",
+          "settings"
+        ]
+      },
+      "AdminFacilitySettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FacilityStatus"
+          },
+          "address": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {}
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "timezone",
+          "status",
+          "address",
+          "revision",
+          "settings"
+        ]
+      },
+      "AdminSettings": {
+        "type": "object",
+        "properties": {
+          "organization": {
+            "$ref": "#/components/schemas/AdminOrganizationSettings"
+          },
+          "facilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFacilitySettings"
+            }
+          }
+        },
+        "required": [
+          "organization",
+          "facilities"
+        ]
+      },
+      "NavigationArea": {
+        "type": "string",
+        "enum": [
+          "today",
+          "schedule",
+          "leagues",
+          "programs",
+          "teams",
+          "people",
+          "registrations",
+          "arrival",
+          "staff",
+          "finance",
+          "communications",
+          "facilities",
+          "reports",
+          "admin"
+        ]
+      },
+      "MePermittedAction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "facilityIds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "facilityIds"
+        ]
+      },
+      "MeConditionalAction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "self": {
+            "type": "boolean"
+          },
+          "subjectPermission": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "teamRole": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "self",
+          "subjectPermission",
+          "teamRole"
+        ]
+      },
+      "MeNavigationArea": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NavigationArea"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "actionIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "visible",
+          "actionIds"
+        ]
+      },
+      "MeCapability": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/CapabilityId"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "enforcement": {
+            "$ref": "#/components/schemas/CapabilityEnforcement"
+          }
+        },
+        "required": [
+          "id",
+          "enabled",
+          "enforcement"
+        ]
+      },
+      "MePermissions": {
+        "type": "object",
+        "properties": {
+          "evaluatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "principalKind": {
+            "type": "string",
+            "enum": [
+              "customer",
+              "staff",
+              "system"
+            ]
+          },
+          "staffRoles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "front_desk",
+                "league_manager",
+                "program_manager",
+                "scheduler",
+                "finance_operator",
+                "facilities_operator",
+                "general_manager",
+                "system_administrator",
+                "support_operator",
+                "coach",
+                "official"
+              ]
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MePermittedAction"
+            }
+          },
+          "conditionalActions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeConditionalAction"
+            }
+          },
+          "areas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeNavigationArea"
+            }
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeCapability"
+            }
+          }
+        },
+        "required": [
+          "evaluatedAt",
+          "principalKind",
+          "staffRoles",
+          "actions",
+          "conditionalActions",
+          "areas",
+          "capabilities"
+        ]
+      },
+      "AuditActor": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "personId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staffRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actorLabel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "accountId",
+          "personId",
+          "staffRoles",
+          "sessionId",
+          "actorLabel"
+        ]
+      },
+      "AuditRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AuditActor"
+          },
+          "action": {
+            "type": "string"
+          },
+          "targetType": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "beforeRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "afterRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "occurredAt",
+          "actor",
+          "action",
+          "targetType",
+          "targetId",
+          "beforeRevision",
+          "afterRevision",
+          "reason",
+          "correlationId",
+          "operationId",
+          "details"
+        ]
+      },
+      "AuditRecordPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditRecord"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ProviderEventStatus": {
+        "type": "string",
+        "enum": [
+          "received",
+          "processed",
+          "failed",
+          "ignored",
+          "dead"
+        ]
+      },
+      "ProviderEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerEventId": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "signatureVerified": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProviderEventStatus"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "processedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "providerEventId",
+          "eventType",
+          "signatureVerified",
+          "status",
+          "attempts",
+          "lastError",
+          "receivedAt",
+          "processedAt"
+        ]
+      },
+      "ProviderEventPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderEvent"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ProviderGate": {
+        "type": "string",
+        "enum": [
+          "identity",
+          "payments",
+          "messaging",
+          "hosting",
+          "accounting",
+          "hardware",
+          "assistant"
+        ]
+      },
+      "IntegrationScenario": {
+        "type": "string",
+        "enum": [
+          "success",
+          "failure",
+          "timeout_unknown",
+          "duplicate"
+        ]
+      },
+      "IntegrationAdapter": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/ProviderGate"
+          },
+          "port": {
+            "type": "string"
+          },
+          "adapter": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fake",
+                  "local",
+                  "provider"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "kind"
+            ]
+          },
+          "productionAllowed": {
+            "type": "boolean"
+          },
+          "scenarios": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationScenario"
+            }
+          },
+          "reconciliationOwner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "front_desk",
+              "league_manager",
+              "program_manager",
+              "scheduler",
+              "finance_operator",
+              "facilities_operator",
+              "general_manager",
+              "system_administrator",
+              "support_operator",
+              "coach",
+              "official",
+              null
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "gate",
+          "port",
+          "adapter",
+          "productionAllowed",
+          "scenarios",
+          "reconciliationOwner"
+        ]
+      },
+      "IntegrationRegister": {
+        "type": "object",
+        "properties": {
+          "productAndVendor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accountOwner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authorizedAccess": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supportedOperations": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sandboxAvailability": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "documentation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eventBehavior": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rateLimits": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "idempotency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failureHandling": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reconciliationOwner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exitProcedure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "productAndVendor",
+          "accountOwner",
+          "authorizedAccess",
+          "supportedOperations",
+          "sandboxAvailability",
+          "documentation",
+          "eventBehavior",
+          "rateLimits",
+          "idempotency",
+          "failureHandling",
+          "reconciliationOwner",
+          "exitProcedure"
+        ]
+      },
+      "IntegrationGate": {
+        "type": "object",
+        "properties": {
+          "gate": {
+            "$ref": "#/components/schemas/ProviderGate"
+          },
+          "decisionRef": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_decision"
+            ]
+          },
+          "register": {
+            "$ref": "#/components/schemas/IntegrationRegister"
+          },
+          "evidenceLevel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "documented",
+              "tested",
+              "accepted",
+              "live",
+              null
+            ]
+          },
+          "adapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationAdapter"
+            }
+          }
+        },
+        "required": [
+          "gate",
+          "decisionRef",
+          "status",
+          "register",
+          "evidenceLevel",
+          "adapters"
+        ]
+      },
+      "Integrations": {
+        "type": "object",
+        "properties": {
+          "gates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationGate"
+            }
+          }
+        },
+        "required": [
+          "gates"
+        ]
+      },
+      "Capability": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/CapabilityId"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "enforcement": {
+            "$ref": "#/components/schemas/CapabilityEnforcement"
+          },
+          "description": {
+            "type": "string"
+          },
+          "applicabilityReferences": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "relatedDecisions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owningModules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "decisionReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changedByPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "changedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "capability",
+          "enabled",
+          "enforcement",
+          "description",
+          "applicabilityReferences",
+          "relatedDecisions",
+          "owningModules",
+          "decisionReference",
+          "reason",
+          "changedByPersonId",
+          "changedAt",
+          "revision"
+        ]
+      },
+      "CapabilityList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "ChangeCapabilityRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          },
+          "decisionReference": {
+            "$ref": "#/components/schemas/DecisionReference"
+          }
+        },
+        "required": [
+          "reason",
+          "decisionReference"
         ]
       },
       "RegistrationIntent": {
@@ -55737,6 +56709,775 @@
           },
           "422": {
             "description": "Eligibility failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/facilities": {
+      "get": {
+        "summary": "The organization's facilities with their IANA time zones (any signed-in principal; SPK-SCHED-008)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/FacilityStatus"
+              },
+              "minItems": 1
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facilities, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilityList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/facilities/{id}": {
+      "get": {
+        "summary": "One facility of the organization (another organization: NOT_FOUND)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facility",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacilitySummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/settings": {
+      "get": {
+        "summary": "Organization and facility settings with revisions (read only; core.view_settings; changing them is Proposed)",
+        "tags": [
+          "Core"
+        ],
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSettings"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/me/permissions": {
+      "get": {
+        "summary": "The principal's permitted actions, conditional actions, navigation areas and capabilities (SPK-UX-005)",
+        "tags": [
+          "Core"
+        ],
+        "responses": {
+          "200": {
+            "description": "Permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MePermissions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/audit-records": {
+      "get": {
+        "summary": "Audited privileged actions by target, actor, action, operation or correlation (core.view_audit; the read is itself audited, §4.14)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "required": false,
+            "name": "targetType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "targetId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "actorPersonId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "action",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "operationId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "correlationId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit records, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditRecordPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/provider-events": {
+      "get": {
+        "summary": "Provider events received by the inbox, never their payloads (core.view_provider_events, §4.12, §4.14)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "required": false,
+            "name": "provider",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/ProviderEventStatus"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider events, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderEventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/integrations": {
+      "get": {
+        "summary": "Provider-selection gates with their decision references and the registered adapters (core.view_integrations, §5.1, §5.2)",
+        "tags": [
+          "Core"
+        ],
+        "responses": {
+          "200": {
+            "description": "Integration register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integrations"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/admin/capabilities": {
+      "get": {
+        "summary": "The organization's capability switches with their applicability decisions (core.view_capabilities, DEC-016)",
+        "tags": [
+          "Core"
+        ],
+        "responses": {
+          "200": {
+            "description": "Capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/admin/capabilities/{capability}/enable": {
+      "post": {
+        "summary": "Enable a capability for the organization, naming DEC-016 or its own Register E record (core.manage_capabilities, system administrator; audited, kept in history)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/CapabilityId"
+            },
+            "required": true,
+            "name": "capability",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeCapabilityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The capability after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capability"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (details.code NOT_AN_APPLICABILITY_DECISION when the reference cannot enable it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STALE_REVISION, or INVALID_TRANSITION when it is already in that state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/capabilities/{capability}/disable": {
+      "post": {
+        "summary": "Disable a capability for the organization, naming DEC-016 or its own Register E record (core.manage_capabilities, system administrator; audited, kept in history)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/CapabilityId"
+            },
+            "required": true,
+            "name": "capability",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeCapabilityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The capability after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capability"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (details.code NOT_AN_APPLICABILITY_DECISION when the reference cannot enable it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STALE_REVISION, or INVALID_TRANSITION when it is already in that state",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,9 +1,11 @@
 import { newId, type Principal } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
 import { defineActions } from '../authorization/actions';
-import type {
-  RelationshipAuthorityPort,
-  TeamAuthorityPort,
+import {
+  denyAllRelationshipAuthority,
+  denyAllTeamAuthority,
+  type RelationshipAuthorityPort,
+  type TeamAuthorityPort,
 } from '../authorization/authorization.port';
 import { AuthorizationService } from '../authorization/authorization.service';
 import { customerPrincipal, staffPrincipal } from '../../testing/principals';
@@ -44,6 +46,10 @@ function service(
       }
       return grants.some(([a, s, p]) => a === actor && s === subject && p === permission);
     },
+    subjectsWithPermission: async (_org, actor, permission) =>
+      grants
+        .filter(([a, s, p]) => a === actor && s !== actor && p === permission)
+        .map(([, s]) => s),
   };
   const teams: TeamAuthorityPort = {
     hasTeamRole: async (_org, person, team, role) =>
@@ -422,5 +428,76 @@ describe('AuthorizationService (§4.14, SPK-IAM-003)', () => {
         })
       ).allowed,
     ).toBe(false);
+  });
+
+  describe('customerSubjects (K-05, IF-02)', () => {
+    it('SPK-IAM-003: self when the action allows it plus the people the actor holds its permission over', async () => {
+      const parent = customerPrincipal(org);
+      const kid = newId();
+      const other = newId();
+      const svc = service([
+        [parent.personId as string, kid, 'view'],
+        [parent.personId as string, other, 'pay'],
+      ]);
+      expect(await svc.customerSubjects(parent, Actions.viewSchedule)).toEqual([
+        parent.personId,
+        kid,
+      ]);
+      // no allowSelf: only the subjects held through a relationship
+      expect(await svc.customerSubjects(parent, Actions.collect)).toEqual([]);
+      // an action without a subject permission or self lists nobody
+      expect(await svc.customerSubjects(parent, Actions.manageTeam)).toEqual([]);
+    });
+
+    it('SPK-IAM-003: a child never lists pay or collect over themselves', async () => {
+      const kid = customerPrincipal(org);
+      const pay = defineActions({
+        pay: {
+          id: 'test.pay_for_self',
+          description: 'pay',
+          staffRoles: [],
+          allowSelf: true,
+          subjectPermission: 'pay',
+        },
+      }).pay;
+      expect(await service([], [], [kid.personId as string]).customerSubjects(kid, pay)).toEqual(
+        [],
+      );
+      expect(await service().customerSubjects(kid, pay)).toEqual([kid.personId]);
+    });
+
+    it('anonymous, system and personless principals get nothing, and staff roles never contribute', async () => {
+      const svc = service([[newId(), newId(), 'view']]);
+      const anon: Principal = {
+        kind: 'anonymous',
+        organizationId: null,
+        accountId: null,
+        personId: null,
+        staffRoles: [],
+        facilityIds: [],
+        sessionId: null,
+        actorLabel: 'anon',
+      };
+      expect(await svc.customerSubjects(anon, Actions.viewSchedule)).toEqual([]);
+      expect(
+        await svc.customerSubjects(
+          { ...anon, kind: 'system', organizationId: org, actorLabel: 'system' },
+          Actions.viewSchedule,
+        ),
+      ).toEqual([]);
+      const staff = staffPrincipal(org, ['front_desk'], { personId: null });
+      expect(await svc.customerSubjects(staff, Actions.viewSchedule)).toEqual([]);
+      // a staff member with a person record lists their own family, never role-based subjects
+      const coach = staffPrincipal(org, ['front_desk']);
+      expect(await svc.customerSubjects(coach, Actions.collect)).toEqual([]);
+      expect(await svc.customerSubjects(coach, 'test.unknown_action')).toEqual([]);
+    });
+
+    it('with the deny-all port, an allowSelf action lists only the principal', async () => {
+      const svc = new AuthorizationService(denyAllRelationshipAuthority, denyAllTeamAuthority);
+      const parent = customerPrincipal(org);
+      expect(await svc.customerSubjects(parent, Actions.viewSchedule)).toEqual([parent.personId]);
+      expect(await svc.customerSubjects(parent, Actions.collect)).toEqual([]);
+    });
   });
 });

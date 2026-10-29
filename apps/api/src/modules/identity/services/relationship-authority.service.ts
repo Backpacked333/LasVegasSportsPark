@@ -128,6 +128,19 @@ export class RelationshipAuthority implements RelationshipAuthorityPort, Authori
     return row !== undefined;
   }
 
+  /**
+   * RelationshipAuthorityPort.subjectsWithPermission (K-05, IF-01). Declared by the kernel; ID-04
+   * implements it here with `hasPermission`'s effectivity rule. Until then it answers the port's
+   * declared default, [] (customer lists show only the principal's own records).
+   */
+  async subjectsWithPermission(
+    _organizationId: string,
+    _actorPersonId: string,
+    _permission: GrantPermissionValue,
+  ): Promise<string[]> {
+    return [];
+  }
+
   async actorsWithPermission(
     organizationId: string,
     subjectPersonId: string,

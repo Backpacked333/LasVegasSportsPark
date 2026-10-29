@@ -192,6 +192,45 @@ export interface OperationalExceptionsTable {
   updated_at: GeneratedTimestamp;
 }
 
+/** §4.12 periodic job leases (migration 0007, K-06): shared infrastructure, no organization. */
+export interface PeriodicJobLeasesTable {
+  job_name: string;
+  locked_by: string | null;
+  locked_until: NullableTimestamp;
+  last_started_at: NullableTimestamp;
+  last_finished_at: NullableTimestamp;
+  last_succeeded_at: NullableTimestamp;
+  last_error: string | null;
+  consecutive_failures: Generated<number>;
+  run_count: Generated<number>;
+}
+
+/** §1.6 per-organization capability switches (migration 0011, K-12); no row = disabled. */
+export interface OrganizationCapabilitiesTable {
+  organization_id: string;
+  capability: string;
+  enabled: boolean;
+  decision_reference: string;
+  reason: string;
+  changed_by: Json<Record<string, unknown>>;
+  changed_at: Timestamp;
+  revision: Generated<number>;
+}
+
+/** Append-only history of every capability change (migration 0011, forbid_mutation). */
+export interface OrganizationCapabilityChangesTable {
+  id: string;
+  organization_id: string;
+  capability: string;
+  enabled: boolean;
+  decision_reference: string;
+  reason: string;
+  changed_by: Json<Record<string, unknown>>;
+  changed_at: Timestamp;
+  revision: number;
+  correlation_id: string | null;
+}
+
 export interface SchemaMigrationsTable {
   version: string;
   name: string;
@@ -210,5 +249,8 @@ export interface CoreTables {
   event_consumptions: EventConsumptionsTable;
   job_attempts: JobAttemptsTable;
   operational_exceptions: OperationalExceptionsTable;
+  periodic_job_leases: PeriodicJobLeasesTable;
+  organization_capabilities: OrganizationCapabilitiesTable;
+  organization_capability_changes: OrganizationCapabilityChangesTable;
   schema_migrations: SchemaMigrationsTable;
 }

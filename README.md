@@ -59,6 +59,27 @@ curl localhost:3000/v1/health
 Run against a PostgreSQL server by setting `DATABASE_URL`; migrations apply with `pnpm db:migrate`.
 Run the test suite against a PostgreSQL server (true concurrency) with `TEST_DATABASE_URL`.
 
+### Local sign-in (development seed)
+
+`seed:dev` creates synthetic data to sign in with (K-14; the real organization, facilities and
+accounts are pending DEC-001 and DEC-018). It refuses unless `NODE_ENV` is `development` or `test`
+and `AUTH_MODE=local`, and it is idempotent: a second run finds the same records.
+
+```bash
+export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
+pnpm --filter @sportspark/api seed:dev -- --timezone America/Los_Angeles   # add --enable <capability> to switch one on
+pnpm --filter @sportspark/api dev
+curl -X POST localhost:3000/v1/dev/tokens -H 'Content-Type: application/json' \
+  -d '{"accountId":"<an accountId printed by the seed>"}'
+```
+
+It creates the organization `dev`, the facility `dev-facility` (time zone `--timezone`, default
+UTC) and six local accounts: `dev-admin` (system administrator), `dev-desk` (front desk),
+`dev-league` (league manager), `dev-coach` (coach), `dev-official` (official) and `dev-parent`
+(a guardian holding the six permissions over a child). No capability is enabled unless named with
+`--enable`, which records the change with DEC-016 and the reason `local development`. Keep the same
+`AUTH_LOCAL_SECRET` and `PGLITE_DATA_DIR` (or `DATABASE_URL`) for the seed and the API.
+
 ## Working in this repository
 
 Read [CLAUDE.md](CLAUDE.md) for the engineering conventions every change must follow and

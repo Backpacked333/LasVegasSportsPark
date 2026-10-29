@@ -2,7 +2,7 @@
   "name": "@sportspark/api",
   "version": "0.1.0",
   "private": true,
-  "description": "Sportspark operating API — NestJS modular monolith and durable workers",
+  "description": "Sportspark operating API \u2014 NestJS modular monolith and durable workers",
   "main": "./dist/main.js",
   "scripts": {
     "build": "tsc -b",
@@ -11,7 +11,8 @@
     "dev": "tsc -b && node dist/main.js",
     "test": "vitest run",
     "openapi": "tsx scripts/emit-openapi.ts",
-    "permission-matrix": "tsx scripts/emit-permission-matrix.ts"
+    "permission-matrix": "tsx scripts/emit-permission-matrix.ts",
+    "seed:dev": "tsc -b && tsx scripts/seed-dev.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.2.0",

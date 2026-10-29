@@ -1,34 +1,17 @@
-import type { ImportEntityTypeValue } from '@sportspark/contracts';
+import type {
+  AuthorityScopeSource,
+  DeclaredScope,
+  ImportEntityTypeValue,
+  ScopeSourceField,
+} from '@sportspark/contracts';
 
 /**
- * Where a guarded write's authority scope comes from (§5.6, §4.8: scope comes from the
- * authenticated route and the record, never from identifiers a client adds to the body).
- *
- * - `organization`: the command creates a new top-level record that no narrower assignment can
- *   cover yet (a new program, person, household, account or competition).
- * - `unproven` (the default): the command changes an existing record, or names its parent by id,
- *   and the interceptor cannot know the record's facility, program or competition before the
- *   owning module loads it. The write is refused while ANY assignment of the category in effect,
- *   at any scope, names the legacy system — ambiguity refuses rather than duplicates (§4.7
- *   invariant 11). The follow-up is an in-process check by the owning module with the loaded
- *   record's scope (README "Known gaps").
- * - declared sources: the validated field the handler itself uses to decide where the record is
- *   written. Only these fields are ever read; any other body field is ignored.
+ * Where a guarded write's authority scope comes from (§5.6): `organization`, `unproven` (the
+ * default) or the validated fields the handler itself uses. The types are defined once in
+ * packages/contracts (K-11, IF-41), where the kernel's `@RecordAuthority` decorator uses them, and
+ * re-exported here for this module's callers.
  */
-export type ScopeSourceField =
-  | 'params.id'
-  | 'body.facilityId'
-  | 'body.programId'
-  | 'body.competitionId'
-  | 'body.schedule.facilityId';
-
-export interface DeclaredScope {
-  facilityId?: ScopeSourceField;
-  programId?: ScopeSourceField;
-  competitionId?: ScopeSourceField;
-}
-
-export type AuthorityScopeSource = 'organization' | 'unproven' | DeclaredScope;
+export type { AuthorityScopeSource, DeclaredScope, ScopeSourceField };
 
 /**
  * The HTTP write commands of each record category (§5.6 "a synchronized copy does not become an
@@ -242,6 +225,19 @@ export const AUTHORITY_EXEMPT_ROUTES: readonly AuthorityExemptRoute[] = [
     'POST',
     '/recovery/resume',
     'Ends recovery mode after a restore once provider facts are reconciled (§5.8, SPK-AT-028); resolves an operational exception, no record of an authority category.',
+  ),
+  // Kernel capability switches (K-12). The handlers also carry @NoRecordAuthority; these two
+  // entries leave this list when MIG-00 counts the decorators (a route listed and decorated then
+  // fails the classification test).
+  x(
+    'POST',
+    '/admin/capabilities/:capability/enable',
+    'Not a §5.3 record category: changes an organization capability switch (DEC-016).',
+  ),
+  x(
+    'POST',
+    '/admin/capabilities/:capability/disable',
+    'Not a §5.3 record category: changes an organization capability switch (DEC-016).',
   ),
   // identity
   x('POST', '/duplicate-candidates', 'Flags a possible duplicate for review; changes no person.'),
