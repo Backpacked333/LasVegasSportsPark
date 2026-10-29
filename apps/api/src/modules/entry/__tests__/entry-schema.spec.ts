@@ -12,7 +12,7 @@ import {
   createVisitFixture,
 } from '../testing/entry-fixtures';
 import { entryTestApp, expectPgError, TODAY } from './support';
-import { at } from '../../scheduling';
+import { at, createScheduledEvent, EventsService, seedPitchWithHalves } from '../../scheduling';
 
 const RESTRICT = '23001';
 const FOREIGN_KEY = '23503';
@@ -322,6 +322,126 @@ describe('entry schema invariants (migration 0800)', () => {
         .execute(),
       FOREIGN_KEY,
     );
+  });
+
+  it('§4.3 / §4.7 (migration 0803): an event activity always carries its composite-keyed scheduling event; a session release its offering session', async () => {
+    const events = t.app.get(EventsService);
+    const ownPitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+    });
+    const own = await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [ownPitch.pitchId],
+      start: at(TODAY, '15:00'),
+      end: at(TODAY, '16:00'),
+      kind: 'practice',
+      sourceType: 'program',
+    });
+    const other = await seedOrganization(t.db);
+    const foreignPitch = await seedPitchWithHalves(t.db, {
+      organizationId: other.organizationId,
+      facilityId: other.facilityId,
+    });
+    const foreign = await createScheduledEvent(events, {
+      organizationId: other.organizationId,
+      facilityId: other.facilityId,
+      resourceIds: [foreignPitch.pitchId],
+      start: at(TODAY, '15:00'),
+      end: at(TODAY, '16:00'),
+      kind: 'practice',
+      sourceType: 'program',
+    });
+    const eventActivity = (activityId: string, schedulingEventId: string | null) => ({
+      activity_type: 'event' as const,
+      activity_id: activityId,
+      offering_id: null,
+      offering_session_id: null,
+      scheduling_event_id: schedulingEventId,
+    });
+    // A null scheduling_event_id with a random id, or with another organization's event, is
+    // refused for every table (before 0803 the null comparison satisfied the check).
+    for (const activityId of [newId(), foreign.id]) {
+      await expectPgError(
+        t.db
+          .insertInto('attendance_observations')
+          .values(observationRow(eventActivity(activityId, null)))
+          .execute(),
+        CHECK,
+      );
+      await expectPgError(
+        t.db
+          .insertInto('session_checkins')
+          .values(
+            checkinRow({
+              ...eventActivity(activityId, null),
+              status: 'admitted',
+              basis_kind: 'event_commitment',
+              basis_reference: newId(),
+              admitted_at: t.clock.now(),
+            }),
+          )
+          .execute(),
+        CHECK,
+      );
+      await expectPgError(
+        t.db
+          .insertInto('release_records')
+          .values(releaseRow(eventActivity(activityId, null)))
+          .execute(),
+        CHECK,
+      );
+    }
+    // Naming the other organization's event through the key itself is refused by the foreign key.
+    await expectPgError(
+      t.db
+        .insertInto('attendance_observations')
+        .values(observationRow(eventActivity(foreign.id, foreign.id)))
+        .execute(),
+      FOREIGN_KEY,
+    );
+    // A session release without its offering session (a random activity id) is refused too.
+    await expectPgError(
+      t.db
+        .insertInto('release_records')
+        .values(
+          releaseRow({
+            activity_type: 'session',
+            activity_id: newId(),
+            offering_id: offeringId,
+            offering_session_id: null,
+          }),
+        )
+        .execute(),
+      CHECK,
+    );
+    // The rows the services write still pass: the organization's own event with its key, a
+    // session release with its session, and a release with no activity.
+    await t.db
+      .insertInto('attendance_observations')
+      .values(observationRow(eventActivity(own.id, own.id)))
+      .execute();
+    await t.db
+      .insertInto('session_checkins')
+      .values(checkinRow({ ...eventActivity(own.id, own.id), person_id: adult }))
+      .execute();
+    await t.db
+      .insertInto('release_records')
+      .values(releaseRow(eventActivity(own.id, own.id)))
+      .execute();
+    await t.db
+      .insertInto('release_records')
+      .values(
+        releaseRow({
+          activity_type: 'session',
+          activity_id: sessionId,
+          offering_id: offeringId,
+          offering_session_id: sessionId,
+        }),
+      )
+      .execute();
+    await t.db.insertInto('release_records').values(releaseRow()).execute();
   });
 
   it('SPK-ENTRY-007: a child is released only on verified collect authority or an approved outage procedure', async () => {

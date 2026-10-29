@@ -435,6 +435,15 @@ describe('installments (SPK-PAY-006)', () => {
     return quote;
   }
 
+  /** The installment's current revision, as a staff screen reads it just before an edit (§4.9). */
+  async function installmentRevision(planId: string, installmentId: string): Promise<number> {
+    const plan = await t.http.get(`/v1/installment-plans/${planId}`).set(finance.header);
+    const installment = (plan.body.installments as Array<{ id: string; revision: number }>).find(
+      (i) => i.id === installmentId,
+    );
+    return installment?.revision as number;
+  }
+
   it('SPK-PAY-006: a plan records amounts, due dates, explicit authorization, retry policy, notices and outstanding obligations', async () => {
     const quote = await planCheckout(30_000);
     expect(quote).toMatchObject({
@@ -554,6 +563,7 @@ describe('installments (SPK-PAY-006)', () => {
     const extended = await post(t, `/v1/installments/${second.id}/extend`, finance.header, {
       dueAt: '2027-02-10T15:00:00Z',
       reason: 'Payer asked for a week',
+      expectedRevision: failed.body.installments[1].revision,
     });
     expect(extended.body.installments[1]).toMatchObject({
       status: 'scheduled',
@@ -605,6 +615,7 @@ describe('installments (SPK-PAY-006)', () => {
       {
         dueAt: '2027-04-20T15:00:00Z',
         reason: 'Payer asked for three weeks',
+        expectedRevision: await installmentRevision(planId, second?.id as string),
       },
     );
     expect(extended.status).toBe(201);
@@ -622,6 +633,7 @@ describe('installments (SPK-PAY-006)', () => {
     const moved = await post(t, `/v1/installments/${third?.id as string}/extend`, finance.header, {
       dueAt: '2027-05-30T15:00:00Z',
       reason: 'Aligned with the payday',
+      expectedRevision: await installmentRevision(planId, third?.id as string),
     });
     expect(moved.status).toBe(201);
     t.clock.set('2027-04-27T15:00:01Z');
@@ -630,6 +642,69 @@ describe('installments (SPK-PAY-006)', () => {
     t.clock.set('2027-05-27T15:00:01Z');
     await drain(t);
     expect(await notices(third?.id as string)).toEqual(['2027-05-30T15:00:00.000Z']);
+  });
+
+  it('§4.9: an installment extension requires the current revision; a stale extension fails and the newer due date stands', async () => {
+    t.clock.set('2027-06-01T15:00:00Z');
+    const quote = await planCheckout(9_000);
+    const res = await post(t, '/v1/registration-checkouts', payer.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      authorizeFutureInstallments: true,
+    });
+    expect(res.body.status).toBe('completed');
+    const order = await t.http.get(`/v1/orders/${res.body.orderId as string}`).set(payer.header);
+    const planId = order.body.installmentPlanId as string;
+    const plan = await t.http.get(`/v1/installment-plans/${planId}`).set(finance.header);
+    const second = plan.body.installments[1] as {
+      id: string;
+      obligationId: string;
+      revision: number;
+    };
+    const path = `/v1/installments/${second.id}/extend`;
+    // An extension that names no revision is refused outright: the contract requires it.
+    const unversioned = await post(t, path, finance.header, {
+      dueAt: '2027-07-20T15:00:00Z',
+      reason: 'Payer asked',
+    });
+    expect(unversioned.status).toBe(400);
+    expect(unversioned.body.code).toBe('VALIDATION_FAILED');
+    // Operator A extends from the current screen.
+    const first = await post(t, path, finance.header, {
+      dueAt: '2027-07-20T15:00:00Z',
+      reason: 'Payer asked for three weeks',
+      expectedRevision: second.revision,
+    });
+    expect(first.status).toBe(201);
+    expect(first.body.installments[1]).toMatchObject({
+      dueAt: '2027-07-20T15:00:00.000Z',
+      revision: second.revision + 1,
+      extensionCount: 1,
+    });
+    // Operator B, still on the original screen, cannot overwrite A's date.
+    const stale = await post(t, path, finance.header, {
+      dueAt: '2027-07-05T15:00:00Z',
+      reason: 'Payer asked for a few days',
+      expectedRevision: second.revision,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    const installment = await t.db
+      .selectFrom('installments')
+      .select(['due_at', 'extension_count', 'revision'])
+      .where('id', '=', second.id)
+      .executeTakeFirstOrThrow();
+    expect(installment).toEqual({
+      due_at: new Date('2027-07-20T15:00:00Z'),
+      extension_count: 1,
+      revision: second.revision + 1,
+    });
+    const obligation = await t.db
+      .selectFrom('obligations')
+      .select('due_at')
+      .where('id', '=', second.obligationId)
+      .executeTakeFirstOrThrow();
+    expect(obligation.due_at).toEqual(new Date('2027-07-20T15:00:00Z'));
   });
 });
 

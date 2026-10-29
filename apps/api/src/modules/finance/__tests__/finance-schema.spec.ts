@@ -1,5 +1,5 @@
 import { newId } from '@sportspark/contracts';
-import { json, seedOrganization } from '@sportspark/db';
+import { json, pgConstraintName, seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
@@ -301,6 +301,183 @@ describe('finance database guarantees (§4.7 invariants 5, 6, 7; SPK-PAY-004/008
     expect(
       await rejectsWith(createObligationFixture(t, { debtorPersonId: foreigner, amountMinor: 10 })),
     ).toBe(FOREIGN_KEY);
+  });
+
+  it('SPK-PAY-004/005, §4.7 invariant 5: a receipt cannot be allocated again after its own transaction, nor in another currency', async () => {
+    const constraintOf = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+      } catch (error) {
+        return pgConstraintName(error);
+      }
+      throw new Error('expected the database to reject the statement');
+    };
+    const now = t.clock.now();
+    const allocation = (
+      obligationId: string,
+      receiptId: string,
+      amount: number,
+      currency: string,
+    ) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      obligation_id: obligationId,
+      source_kind: 'receipt' as const,
+      receipt_id: receiptId,
+      credit_redemption_id: null,
+      amount_minor: amount,
+      currency,
+      allocated_at: now,
+    });
+    const settle = (obligationId: string, amount: number) => ({
+      table: 'obligations' as const,
+      set: { allocated_minor: amount, status: 'settled' as const, settled_at: now },
+      id: obligationId,
+    });
+
+    // 1. A fully allocated 1,000 USD receipt settles a second 1,000 USD obligation in a later
+    // transaction: the obligation side balances, the receipt side would count the money twice.
+    const { receiptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const second = await createObligationFixture(t, {
+      debtorPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const again = settle(second, 1_000);
+    expect(
+      await constraintOf(
+        t.db.transaction().execute(async (trx) => {
+          await trx
+            .insertInto('payment_allocations')
+            .values(allocation(second, receiptId, 1_000, 'USD'))
+            .execute();
+          await trx.updateTable(again.table).set(again.set).where('id', '=', again.id).execute();
+        }),
+      ),
+    ).toBe('receipts_allocations_consistent');
+    const allocations = await t.db
+      .selectFrom('payment_allocations')
+      .select('obligation_id')
+      .where('receipt_id', '=', receiptId)
+      .execute();
+    expect(allocations).toHaveLength(1);
+
+    // 2. A 500 EUR receipt allocated in its own transaction as 500 USD to a USD obligation: the
+    // amounts match on both sides, only the currency differs.
+    const usd = await createObligationFixture(t, {
+      debtorPersonId: payer.personId,
+      amountMinor: 500,
+    });
+    const attemptId = newId();
+    const journalId = newId();
+    const euroReceipt = newId();
+    const paid = settle(usd, 500);
+    expect(
+      await constraintOf(
+        t.db.transaction().execute(async (trx) => {
+          await trx
+            .insertInto('payment_attempts')
+            .values({
+              id: attemptId,
+              organization_id: t.organizationId,
+              purpose: 'obligation',
+              checkout_id: null,
+              order_id: null,
+              obligation_id: usd,
+              contribution_request_id: null,
+              installment_id: null,
+              payer_person_id: payer.personId,
+              amount_minor: 500,
+              currency: 'EUR',
+              provider: 'fake-payments',
+              payment_method_ref: 'pm_fake_visa',
+              provider_reference: `fp_${attemptId}`,
+              status: 'succeeded',
+              action_required_payload: null,
+              failure_reason: null,
+              processor_fee_minor: 0,
+              evidence_source: 'sync_response',
+              evidence_inbox_event_id: null,
+              evidence_sequence: null,
+              requested_by: ACTOR,
+              requested_by_person_id: null,
+              submitted_at: now,
+              unknown_since: null,
+              resolved_at: now,
+            })
+            .execute();
+          await trx
+            .insertInto('journals')
+            .values({
+              id: journalId,
+              organization_id: t.organizationId,
+              source_type: 'receipt',
+              source_id: euroReceipt,
+              purpose: 'payment_received',
+              description: 'schema test',
+              currency: 'EUR',
+              reversal_of_journal_id: null,
+              posted_at: now,
+              posted_by: ACTOR,
+              correlation_id: null,
+              operation_id: null,
+            })
+            .execute();
+          await trx
+            .insertInto('journal_entries')
+            .values(
+              (
+                [
+                  ['cash_processor', 500, 0],
+                  ['customer_receivable', 0, 500],
+                ] as const
+              ).map(([account, debit, credit], index) => ({
+                id: newId(),
+                organization_id: t.organizationId,
+                journal_id: journalId,
+                line_number: index + 1,
+                account_code: account,
+                debit_minor: debit,
+                credit_minor: credit,
+                currency: 'EUR',
+                person_id: null,
+                order_id: null,
+                obligation_id: null,
+                reversal_of_entry_id: null,
+                memo: null,
+              })),
+            )
+            .execute();
+          await trx
+            .insertInto('receipts')
+            .values({
+              id: euroReceipt,
+              organization_id: t.organizationId,
+              source_kind: 'payment_attempt',
+              payment_attempt_id: attemptId,
+              cash_tender_id: null,
+              payer_person_id: payer.personId,
+              amount_minor: 500,
+              allocated_minor: 500,
+              excess_minor: 0,
+              currency: 'EUR',
+              processor_fee_minor: 0,
+              order_id: null,
+              obligation_id: usd,
+              journal_id: journalId,
+              received_at: now,
+            })
+            .execute();
+          await trx
+            .insertInto('payment_allocations')
+            .values(allocation(usd, euroReceipt, 500, 'USD'))
+            .execute();
+          await trx.updateTable(paid.table).set(paid.set).where('id', '=', paid.id).execute();
+        }),
+      ),
+    ).toBe('receipts_allocations_consistent');
   });
 
   it('PaymentAttemptMachine: terminal states never flip; no second live attempt; card data is refused', async () => {

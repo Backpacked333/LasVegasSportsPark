@@ -344,7 +344,7 @@ describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with 
     return plan.body as {
       retryPolicy: { maxAttempts: number };
       noticePolicy: { daysBefore: number };
-      installments: Array<{ id: string }>;
+      installments: Array<{ id: string; revision: number }>;
     };
   }
 
@@ -367,10 +367,11 @@ describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with 
       noticePolicy: { daysBefore: 7 },
     });
     // POL-016: an extended installment is announced the plan's lead time before its new date.
-    const second = current.installments[1] as { id: string };
+    const second = current.installments[1] as { id: string; revision: number };
     const extended = await post(t, `/v1/installments/${second.id}/extend`, finance.header, {
       dueAt: '2027-02-20T15:00:00Z',
       reason: 'Payer asked',
+      expectedRevision: second.revision,
     });
     expect(extended.status).toBe(201);
     const timers = await t.db

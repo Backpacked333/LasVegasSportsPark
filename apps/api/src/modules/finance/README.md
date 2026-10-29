@@ -77,6 +77,8 @@ carry `revision` and `touch_updated_at`.
   debit or a credit.
 - **SPK-PAY-004:** `allocated <= amount`, a deferred trigger keeps `allocated` equal to the
   allocation rows, allocations only accumulate, a settled obligation is fully allocated; a
+  receipt's allocations always equal its allocated part in its currency (checked on every
+  allocation that names it, migration 0602, so received money is never allocated twice); a
   contribution request can only reference a `team_with_contributions` obligation.
 - **§4.6:** transition guards refuse every change the PaymentAttempt, Refund and Checkout machines
   do not allow (a `failed` attempt never becomes `succeeded`); quotes, orders, obligations,
