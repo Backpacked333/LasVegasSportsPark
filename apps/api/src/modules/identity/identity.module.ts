@@ -6,9 +6,13 @@ import { ClaimsController } from './controllers/claims.controller';
 import { DuplicatesController } from './controllers/duplicates.controller';
 import { HouseholdsController } from './controllers/households.controller';
 import { InvitationsController } from './controllers/invitations.controller';
+import { MeController } from './controllers/me.controller';
 import { PeopleController } from './controllers/people.controller';
 import { RelationshipsController } from './controllers/relationships.controller';
-import { StaffMembershipsController } from './controllers/staff-memberships.controller';
+import {
+  StaffDirectoryController,
+  StaffMembershipsController,
+} from './controllers/staff-memberships.controller';
 import {
   AUTHORITY_LOOKUP_PORT,
   PERSON_DIRECTORY_PORT,
@@ -16,9 +20,11 @@ import {
 } from './identity.ports';
 import { AccessReviewsService } from './services/access-reviews.service';
 import { AccountsService } from './services/accounts.service';
+import { AuthorityReadsService } from './services/authority-reads.service';
 import { ClaimsService } from './services/claims.service';
 import { DuplicatesService } from './services/duplicates.service';
 import { HouseholdsService } from './services/households.service';
+import { IdentityJobs } from './services/identity-jobs';
 import { InvitationsService } from './services/invitations.service';
 import { PeopleService } from './services/people.service';
 import { PrincipalResolver } from './services/principal-resolver.service';
@@ -28,8 +34,9 @@ import { StaffMembershipsService } from './services/staff-memberships.service';
 
 /**
  * IdentityModule (specification §3.1 SPK-IAM-001..007, §4.4 Identity, §4.5, §4.14).
- * Registers the kernel's principal resolver and relationship authority, and exposes ports other
- * modules consume (person directory, authority lookup, staff directory). See README.md.
+ * Registers the kernel's principal resolver and relationship authority (both IMPL tokens through
+ * useExisting), exposes ports other modules consume (person directory IF-09, authority lookup
+ * IF-20/IF-46, staff directory) and its periodic jobs (ID-07, ID-08). See README.md.
  */
 @Module({
   controllers: [
@@ -40,8 +47,10 @@ import { StaffMembershipsService } from './services/staff-memberships.service';
     InvitationsController,
     ClaimsController,
     StaffMembershipsController,
+    StaffDirectoryController,
     AccessReviewsController,
     DuplicatesController,
+    MeController,
   ],
   providers: [
     PeopleService,
@@ -53,6 +62,8 @@ import { StaffMembershipsService } from './services/staff-memberships.service';
     StaffMembershipsService,
     AccessReviewsService,
     DuplicatesService,
+    AuthorityReadsService,
+    IdentityJobs,
     PrincipalResolver,
     RelationshipAuthority,
     { provide: PRINCIPAL_RESOLVER_IMPL, useExisting: PrincipalResolver },
@@ -71,6 +82,7 @@ import { StaffMembershipsService } from './services/staff-memberships.service';
     StaffMembershipsService,
     AccessReviewsService,
     DuplicatesService,
+    AuthorityReadsService,
     PrincipalResolver,
     RelationshipAuthority,
     PRINCIPAL_RESOLVER_IMPL,

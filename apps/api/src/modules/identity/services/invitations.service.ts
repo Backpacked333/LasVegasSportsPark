@@ -1,16 +1,30 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   newId,
+  z,
   type AccessGrant,
   type CreateInvitationInput,
+  type DeclineInvitationInput,
   type Invitation,
+  type InvitationView,
+  type ListInvitationsQueryInput,
+  type ListMyInvitationsQueryInput,
+  type Page,
   type Principal,
   type Relationship,
 } from '@sportspark/contracts';
-import { json, type Db, type GrantPermissionValue } from '@sportspark/db';
+import {
+  json,
+  type Database,
+  type Db,
+  type GrantPermissionValue,
+  type InvitationStatus,
+} from '@sportspark/db';
 import type { InvitationsTable } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type SelectQueryBuilder, type Selectable, type SqlBool } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -29,8 +43,10 @@ import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { InvitationMachine } from '../identity.machines';
 import {
+  displayNamesOf,
   hashToken,
   hoursFromNow,
+  iso,
   newToken,
   normalizeContactValue,
   personColumns,
@@ -56,6 +72,23 @@ type InvitationScope =
 
 /** How the inviter was authorized when the invitation was issued (stored on `invited_by`). */
 type InvitationBasis = 'staff_role' | 'delegated';
+
+/** Which path recorded an expiry (IF-25): the background sweep or a lazy check on a command. */
+export type ExpiryPath = 'sweep' | 'acceptance_attempt';
+
+const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+
+type InvitationRow = Selectable<InvitationsTable>;
+
+/** A pending invitation past its expiry reads as expired before any write (ID-03). */
+export function effectiveInvitationStatus(
+  row: Pick<InvitationRow, 'status' | 'expires_at'>,
+  now: Date,
+): InvitationStatus {
+  return row.status === 'pending' && new Date(row.expires_at).getTime() <= now.getTime()
+    ? 'expired'
+    : row.status;
+}
 
 /**
  * Invitations (SPK-IAM-004). The record keeps the inviting actor, recipient, scope, requested
@@ -267,7 +300,7 @@ export class InvitationsService {
         invitation.status === 'pending' &&
         new Date(invitation.expires_at).getTime() <= now.getTime()
       ) {
-        await this.expire(trx, principal, invitation, correlationId);
+        await this.expire(trx, principal, invitation, correlationId, 'acceptance_attempt');
         return { expired: true as const };
       }
       const next = InvitationMachine.next(invitation.status, 'accept');
@@ -452,17 +485,357 @@ export class InvitationsService {
     });
   }
 
+  /**
+   * POST /v1/invitations/{id}/decline (ID-03, SPK-IAM-004): the recipient declines with the same
+   * proof acceptance needs (the token, and being the recipient person or holding the verified
+   * contact point it was sent to). The row is locked against a concurrent accept or revoke; an
+   * invitation past its expiry is recorded as expired first and the decline answers
+   * INVALID_TRANSITION. A declined invitation can never be accepted (InvitationMachine).
+   */
+  async decline(
+    principal: Principal,
+    id: string,
+    input: DeclineInvitationInput,
+    correlationId: string | null,
+  ): Promise<Invitation> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    const outcome = await runInTransaction(this.uow, async ({ trx }) => {
+      const invitation = await this.load(trx, organizationId, id, { lock: true });
+      if (!invitation || invitation.token_hash !== hashToken(input.token)) {
+        throw errors.protectedNotFound('invitation');
+      }
+      const me = principal.personId;
+      if (!me) {
+        throw errors.accessDenied('Link your account to a person before declining invitations.');
+      }
+      if (invitation.recipient_person_id) {
+        await this.authorization.require(principal, IdentityActions.declineInvitation, {
+          type: 'invitation',
+          id,
+          organizationId,
+          subjectPersonIds: [invitation.recipient_person_id],
+          protected: true,
+        });
+      } else {
+        await this.assertVerifiedContact(
+          trx,
+          organizationId,
+          me,
+          invitation.recipient_contact_kind as 'email' | 'phone',
+          invitation.recipient_contact_value as string,
+        );
+        await this.authorization.require(principal, IdentityActions.declineInvitation, {
+          type: 'invitation',
+          id,
+          organizationId,
+          subjectPersonIds: [me],
+          protected: true,
+        });
+      }
+      const now = this.clock.now();
+      if (
+        effectiveInvitationStatus(invitation, now) === 'expired' &&
+        invitation.status === 'pending'
+      ) {
+        await this.expire(trx, principal, invitation, correlationId, 'acceptance_attempt');
+        return { expired: true as const };
+      }
+      const next = InvitationMachine.next(invitation.status, 'decline');
+      const declined = await trx
+        .updateTable('invitations')
+        .set({
+          status: next,
+          declined_at: now,
+          declined_by_person_id: me,
+          decline_reason: input.reason ?? null,
+          revision: invitation.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', id)
+        .where('revision', '=', invitation.revision)
+        .executeTakeFirst();
+      ensureUpdated(declined.numUpdatedRows, () =>
+        errors.staleRevision(invitation.revision, invitation.revision + 1),
+      );
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: IdentityActions.declineInvitation.id,
+        targetType: 'invitation',
+        targetId: id,
+        beforeRevision: invitation.revision,
+        afterRevision: invitation.revision + 1,
+        reason: input.reason ?? null,
+        correlationId,
+      });
+      await this.outbox.enqueue(trx, IdentityEvents.invitationDeclined, {
+        organizationId,
+        aggregateType: 'invitation',
+        aggregateId: id,
+        payload: { invitationId: id, declinedByPersonId: me },
+        correlationId,
+      });
+      const updated = await this.load(trx, organizationId, id);
+      return { expired: false as const, invitation: toInvitation(updated as InvitationRow) };
+    });
+    if (outcome.expired) throw errors.invalidTransition('Invitation', 'expired', 'decline');
+    return outcome.invitation;
+  }
+
+  /**
+   * GET /v1/me/invitations (ID-03, SPK-IAM-004): `received` lists invitations addressed to me or
+   * to one of my verified contact points; `sent` the ones I issued. Keyset (created_at desc, id
+   * desc); `status` filters on the effective status. The token is never returned.
+   */
+  async listMine(
+    principal: Principal,
+    query: ListMyInvitationsQueryInput,
+  ): Promise<Page<InvitationView>> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    const me = principal.personId;
+    if (!me) return { items: [], nextCursor: null };
+    let base = this.db
+      .selectFrom('invitations')
+      .selectAll()
+      .where('organization_id', '=', organizationId);
+    if ((query.direction ?? 'received') === 'sent') {
+      base = base.where('invited_by_person_id', '=', me);
+    } else {
+      const contacts = await this.verifiedContacts(this.db, organizationId, me);
+      base = base.where((eb) =>
+        eb.or([
+          eb('recipient_person_id', '=', me),
+          ...contacts.map((c) =>
+            eb.and([
+              eb('recipient_contact_kind', '=', c.kind),
+              eb('recipient_contact_value', '=', c.value),
+            ]),
+          ),
+        ]),
+      );
+    }
+    return this.page(organizationId, base, query.status, query.cursor, query.limit);
+  }
+
+  /**
+   * GET /v1/me/invitations/{id} (ID-03, SPK-IAM-004): the recipient (the person, or the holder of
+   * the verified contact point it was sent to) or the inviter reads the sender, the people covered,
+   * the permissions requested and the expiry before accepting; anyone else gets a protected
+   * NOT_FOUND (§4.10).
+   */
+  async getMine(principal: Principal, id: string): Promise<InvitationView> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    const me = principal.personId;
+    const row = await this.db
+      .selectFrom('invitations')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!row || !me) throw errors.protectedNotFound('invitation');
+    let related = row.recipient_person_id === me || row.invited_by_person_id === me;
+    if (!related && row.recipient_contact_kind && row.recipient_contact_value) {
+      const contacts = await this.verifiedContacts(this.db, organizationId, me);
+      related = contacts.some(
+        (c) => c.kind === row.recipient_contact_kind && c.value === row.recipient_contact_value,
+      );
+    }
+    if (!related) throw errors.protectedNotFound('invitation');
+    await this.authorization.require(principal, IdentityActions.acceptInvitation, {
+      type: 'invitation',
+      id,
+      organizationId,
+      subjectPersonIds: [me],
+      protected: true,
+    });
+    const [view] = await this.views(this.db, organizationId, [row]);
+    return view as InvitationView;
+  }
+
+  /**
+   * GET /v1/invitations (ID-03): staff list, optionally of the invitations covering one person
+   * (fixed at issue), with identity.read_invitations. Keyset (created_at desc, id desc).
+   */
+  async listForStaff(
+    principal: Principal,
+    query: ListInvitationsQueryInput,
+  ): Promise<Page<InvitationView>> {
+    const organizationId = principal.organizationId;
+    if (!organizationId) throw errors.authenticationRequired();
+    await this.authorization.require(principal, IdentityActions.readInvitations, {
+      type: 'invitation',
+      organizationId,
+    });
+    let base = this.db
+      .selectFrom('invitations')
+      .selectAll()
+      .where('organization_id', '=', organizationId);
+    if (query.scopePersonId) {
+      const personId = query.scopePersonId;
+      base = base.where(({ exists, selectFrom }) =>
+        exists(
+          selectFrom('invitation_subjects as s')
+            .select('s.invitation_id')
+            .whereRef('s.organization_id', '=', 'invitations.organization_id')
+            .whereRef('s.invitation_id', '=', 'invitations.id')
+            .where('s.person_id', '=', personId),
+        ),
+      );
+    }
+    return this.page(organizationId, base, query.status, query.cursor, query.limit);
+  }
+
+  /**
+   * ID-04: invitations still pending (and not past expiry) that concern the person: covering
+   * them, addressed to them, or issued by them. For staff with identity.read_authority.
+   */
+  async pendingConcerning(
+    db: Db | Trx,
+    organizationId: string,
+    personId: string,
+  ): Promise<InvitationView[]> {
+    const now = this.clock.now();
+    const rows = await db
+      .selectFrom('invitations')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('status', '=', 'pending')
+      .where('expires_at', '>', now)
+      .where((eb) =>
+        eb.or([
+          eb('recipient_person_id', '=', personId),
+          eb('invited_by_person_id', '=', personId),
+          eb.exists(
+            eb
+              .selectFrom('invitation_subjects as s')
+              .select('s.invitation_id')
+              .whereRef('s.organization_id', '=', 'invitations.organization_id')
+              .whereRef('s.invitation_id', '=', 'invitations.id')
+              .where('s.person_id', '=', personId),
+          ),
+        ]),
+      )
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(100)
+      .execute();
+    return this.views(db, organizationId, rows);
+  }
+
   // -------------------------------------------------------------------------------------------
-  private async expire(
+  private async page(
+    organizationId: string,
+    base: SelectQueryBuilder<Database, 'invitations', InvitationRow>,
+    status: InvitationStatus | undefined,
+    cursorValue: string | undefined,
+    limit: number,
+  ): Promise<Page<InvitationView>> {
+    const now = this.clock.now();
+    let query = base;
+    if (status === 'pending') {
+      query = query.where('status', '=', 'pending').where('expires_at', '>', now);
+    } else if (status === 'expired') {
+      query = query.where((eb) =>
+        eb.or([
+          eb('status', '=', 'expired'),
+          eb.and([eb('status', '=', 'pending'), eb('expires_at', '<=', now)]),
+        ]),
+      );
+    } else if (status) {
+      query = query.where('status', '=', status);
+    }
+    const cursor = decodeCursor(cursorValue, ListCursor);
+    if (cursor) {
+      query = query.where(
+        sql<SqlBool>`(invitations.created_at, invitations.id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const rows = await query
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(limit + 1)
+      .execute();
+    const pageRows = rows.slice(0, limit);
+    const last = pageRows[pageRows.length - 1];
+    return {
+      items: await this.views(this.db, organizationId, pageRows),
+      nextCursor:
+        rows.length > limit && last ? encodeCursor({ c: iso(last.created_at), id: last.id }) : null,
+    };
+  }
+
+  /** InvitationView: the invitation plus the inviter's and the covered people's names (ID-03). */
+  private async views(
+    db: Db | Trx,
+    organizationId: string,
+    rows: InvitationRow[],
+  ): Promise<InvitationView[]> {
+    if (rows.length === 0) return [];
+    const subjects = await db
+      .selectFrom('invitation_subjects')
+      .select(['invitation_id', 'person_id'])
+      .where('organization_id', '=', organizationId)
+      .where(
+        'invitation_id',
+        'in',
+        rows.map((r) => r.id),
+      )
+      .orderBy('person_id')
+      .execute();
+    const names = await displayNamesOf(db, organizationId, [
+      ...subjects.map((s) => s.person_id),
+      ...rows.flatMap((r) => (r.invited_by_person_id ? [r.invited_by_person_id] : [])),
+    ]);
+    const now = this.clock.now();
+    return rows.map((row) => ({
+      ...toInvitation(row),
+      inviter: row.invited_by_person_id
+        ? {
+            personId: row.invited_by_person_id,
+            displayName: names.get(row.invited_by_person_id) ?? '',
+          }
+        : null,
+      subjects: subjects
+        .filter((s) => s.invitation_id === row.id)
+        .map((s) => ({ personId: s.person_id, displayName: names.get(s.person_id) ?? '' })),
+      effectiveStatus: effectiveInvitationStatus(row, now),
+    }));
+  }
+
+  private async verifiedContacts(
+    db: Db | Trx,
+    organizationId: string,
+    personId: string,
+  ): Promise<Array<{ kind: 'email' | 'phone'; value: string }>> {
+    return db
+      .selectFrom('contact_points')
+      .select(['kind', 'value'])
+      .where('organization_id', '=', organizationId)
+      .where('person_id', '=', personId)
+      .where('verified_at', 'is not', null)
+      .execute();
+  }
+
+  /**
+   * Records the expiry of a pending invitation (ID-07, IF-25) under the caller's row lock, with
+   * the system-only action identity.expire_invitation and one identity.invitation_expired event:
+   * whichever path holds the lock first (the sweep or a lazy check on accept/decline) records it.
+   */
+  async expire(
     trx: Trx,
     principal: Principal,
-    invitation: Selectable<InvitationsTable>,
+    invitation: InvitationRow,
     correlationId: string | null,
+    via: ExpiryPath,
   ): Promise<void> {
     const next = InvitationMachine.next(invitation.status, 'expire');
     const expired = await trx
       .updateTable('invitations')
       .set({ status: next, revision: invitation.revision + 1 })
+      .where('organization_id', '=', invitation.organization_id)
       .where('id', '=', invitation.id)
       .where('revision', '=', invitation.revision)
       .executeTakeFirst();
@@ -472,13 +845,20 @@ export class InvitationsService {
     await this.audit.record(trx, {
       organizationId: invitation.organization_id,
       actor: principal,
-      action: IdentityActions.acceptInvitation.id,
+      action: IdentityActions.expireInvitation.id,
       targetType: 'invitation',
       targetId: invitation.id,
       beforeRevision: invitation.revision,
       afterRevision: invitation.revision + 1,
       correlationId,
-      details: { outcome: 'expired' },
+      details: { outcome: 'expired', via, expiresAt: iso(invitation.expires_at) },
+    });
+    await this.outbox.enqueue(trx, IdentityEvents.invitationExpired, {
+      organizationId: invitation.organization_id,
+      aggregateType: 'invitation',
+      aggregateId: invitation.id,
+      payload: { invitationId: invitation.id, via },
+      correlationId,
     });
   }
 

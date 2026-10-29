@@ -200,7 +200,7 @@ export class ClaimsService {
       if (!claim) throw errors.protectedNotFound('claim');
       const now = this.clock.now();
       if (claim.status === 'pending' && new Date(claim.expires_at).getTime() <= now.getTime()) {
-        await this.expire(trx, principal, claim, correlationId);
+        await this.expire(trx, principal, claim, correlationId, 'acceptance_attempt');
         return { expired: true as const };
       }
       const next = ClaimMachine.next(claim.status, 'accept');
@@ -512,16 +512,23 @@ export class ClaimsService {
     });
   }
 
-  private async expire(
+  /**
+   * Records the expiry of a pending claim (ID-07, IF-25) under the caller's row lock, with the
+   * system-only action identity.expire_claim and one identity.claim_expired event, whichever path
+   * (the sweep or a lazy check on accept) holds the lock first.
+   */
+  async expire(
     trx: Trx,
     principal: Principal,
     claim: Selectable<ClaimsTable>,
     correlationId: string | null,
+    via: 'sweep' | 'acceptance_attempt',
   ): Promise<void> {
     const next = ClaimMachine.next(claim.status, 'expire');
     const expired = await trx
       .updateTable('claims')
       .set({ status: next, revision: claim.revision + 1 })
+      .where('organization_id', '=', claim.organization_id)
       .where('id', '=', claim.id)
       .where('revision', '=', claim.revision)
       .executeTakeFirst();
@@ -531,13 +538,20 @@ export class ClaimsService {
     await this.audit.record(trx, {
       organizationId: claim.organization_id,
       actor: principal,
-      action: IdentityActions.acceptClaim.id,
+      action: IdentityActions.expireClaim.id,
       targetType: 'claim',
       targetId: claim.id,
       beforeRevision: claim.revision,
       afterRevision: claim.revision + 1,
       correlationId,
-      details: { outcome: 'expired' },
+      details: { outcome: 'expired', via, subjectPersonId: claim.subject_person_id },
+    });
+    await this.outbox.enqueue(trx, IdentityEvents.claimExpired, {
+      organizationId: claim.organization_id,
+      aggregateType: 'claim',
+      aggregateId: claim.id,
+      payload: { claimId: claim.id, via },
+      correlationId,
     });
   }
 

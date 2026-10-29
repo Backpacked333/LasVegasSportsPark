@@ -8,7 +8,8 @@ invitations, claims, staff memberships, disputed-access reviews, duplicate candi
 
 **Migration range:** `packages/db/migrations/0100_identity_core.sql` … `0199` (present: `0100`,
 `0101_identity_invitation_subjects`, `0102_identity_suspension_window`,
-`0103_identity_grant_suspensions`)
+`0103_identity_grant_suspensions`, `0104_identity_invitation_decline`,
+`0105_identity_expiry_indexes`, `0180_identity_org_scoped_kernel_fks`)
 
 **Status: implemented** (verified by `apps/api/src/modules/identity/__tests__` and the unit specs
 next to the code). Statements below are verified unless marked proposed or pending.
@@ -30,7 +31,11 @@ next to the code). Statements below are verified unless marked proposed or pendi
   every call (revocation, review restrictions and the end of a time-bounded relationship apply
   immediately, SPK-IAM-003/005/006). Self: an adult always; a child never for `pay` or `collect`.
 
-Both are registered as `useValue` handles bound in `onModuleInit` (see "Kernel limitations").
+Both IMPL tokens are bound with `useExisting` in `identity.module.ts`. `subjectsWithPermission`
+(K-05, IF-01) answers with `hasPermission`'s effectivity rule, never the actor, through the active
+transaction, so the kernel's customer "my ..." lists (`AuthorizationService.customerSubjects`)
+start from the people a guardian holds a permission over (**Verified**:
+`__tests__/directory-ports.spec.ts` "IF-01: …").
 
 ## Tables (migration 0100)
 
@@ -45,6 +50,8 @@ Both are registered as `useValue` handles bound in `onModuleInit` (see "Kernel l
 | `access_grants.suspended_until` (0102)      | end of a temporary restriction; null until lifted; check: needs a suspension and ends after it starts                                                                                                           |
 | `access_grant_suspensions` (0103)           | one row per review and grant it restricts (window, reason, the decisions that made and ended it); partial unique: one unended row per (grant, review); ended once, never edited or deleted (guard trigger)      |
 | `invitations`                               | inviter (with the authority `basis` used: `staff_role` or `delegated`), recipient (person or contact), scope (person or household), requested + granted permissions, token hash, expiry, acceptance, revocation |
+| `invitations` decline (0104)                | status `declined`; `declined_at` + `declined_by_person_id` (composite FK) set together, `decline_reason` 1..2000 only when declined; indexes for the sent list and the recipient-contact match                  |
+| expiry indexes (0105)                       | pending-expiry indexes on `invitations` and `claims`, and the open restriction-window index on `access_grant_suspensions`, for the periodic jobs                                                                |
 | `invitation_subjects` (0101)                | the people an invitation covers, fixed at issue; composite FKs to the invitation and the person; append-only                                                                                                    |
 | `claims`                                    | self/guardian claim tokens for staff-created participants; acceptance links an account or creates guardianship without a new person                                                                             |
 | `staff_memberships`                         | roles (StaffRole vocabulary check), `facility_ids`, effective window, status active/ended                                                                                                                       |
@@ -79,6 +86,52 @@ and `touch_updated_at`; append-only tables carry `forbid_mutation`.
 | `POST /duplicate-candidates`, `/{id}/merge`, `/{id}/dismiss` | flag: record staff; merge: system_administrator (never a child survivor of an adult); dismiss: GM/sysadmin/support                                                                                                                                                                                                                                                                                                                              |
 | `POST /dev/tokens`                                           | public, exists only with `AUTH_MODE=local` outside production (NOT_FOUND otherwise)                                                                                                                                                                                                                                                                                                                                                             |
 
+### Stage 3 reads and commands (ID-02..ID-08) — verified
+
+| Endpoint                                                              | Who and what                                                                                                                                                                                                                                                            | Test                                                    |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `GET /person-names?ids=` (1..100)                                     | anyone; each id decided with `identity.read_person` as a protected record; people the caller may not view are omitted (never 404); names and `canonicalPersonId` only (SPK-IAM-002/003, §4.10, §4.14)                                                                   | `person-reads.spec.ts`                                  |
+| `GET /people?query&kind&status&cursor`                                | `identity.lookup_person` (Proposed C.2: front_desk, league_manager, program_manager, finance_operator, general_manager, system_administrator, support_operator); name prefix or exact contact; merged only with `status=merged`; keyset; no DOB, contacts or households | `person-reads.spec.ts`                                  |
+| `POST /people/{id}/contact-points/{contactPointId}/make-primary`      | `identity.add_contact_point` (self, `register` holder, support staff); moves the primary flag in one unit of work; person revision checked and bumped; `identity.person_updated`                                                                                        | `contact-points.spec.ts`                                |
+| `POST /people/{id}/contact-points/{contactPointId}/remove`            | same authority; deletes the row; audit keeps kind + masked value; the only verified contact of a person with an active account is refused (`LAST_VERIFIED_CONTACT`, conservative until DEC-018)                                                                         | `contact-points.spec.ts`                                |
+| `GET /me/invitations?direction=received\|sent&status&cursor`          | received: addressed to me or to one of my verified contacts; sent: issued by me; `status` filters the effective status                                                                                                                                                  | `invitation-reads.spec.ts`                              |
+| `GET /me/invitations/{id}`                                            | recipient or inviter (else protected NOT_FOUND): inviter and subject names, permissions, relationship kind, expiry, `effectiveStatus`; never the token                                                                                                                  | `invitation-reads.spec.ts`                              |
+| `POST /invitations/{id}/decline`                                      | the recipient, with the accept proof (token in the body); locked row; expiry recorded first; `identity.invitation_declined`                                                                                                                                             | `invitation-reads.spec.ts`, `identity.machines.spec.ts` |
+| `GET /invitations?scopePersonId&status&cursor`                        | `identity.read_invitations` (front_desk, program_manager, league_manager, support_operator, general_manager, system_administrator)                                                                                                                                      | `invitation-reads.spec.ts`                              |
+| `GET /me/access-grants?direction=held\|over_me`                       | the holder (or the subject): grant id, relationship, names, source, dates, `status` effective/scheduled/suspended/revoked/ended, `underReview`, revision; other adults' grants over a child are not shown (DEC-004 pending)                                             | `authority-reads.spec.ts`                               |
+| `GET /people/{id}/authority`                                          | `identity.read_authority` (same staff set as invitations): relationships, grants, households with member counts, pending invitations, `accountLinked`, claims with masked `recipientHint` (never the token) for SCR-S-20/21                                             | `authority-reads.spec.ts`                               |
+| `GET /me/households`                                                  | members limited to myself and people I hold `view` over; the rest only counted (`otherMemberCount`)                                                                                                                                                                     | `authority-reads.spec.ts`                               |
+| `GET /staff-memberships?personId&role&facilityId&status`, `GET /{id}` | `identity.read_staff_membership` (general_manager, system_administrator); keyset (created_at desc, id desc)                                                                                                                                                             | `staff-reads.spec.ts`                                   |
+| `GET /staff-directory?role&facilityId&query`                          | `identity.read_staff_directory`; memberships in effect at the clock with per-role facility scopes; coach and official roles only with `identity.read_workforce_directory` (scheduler, league_manager, program_manager, general_manager, system_administrator)           | `staff-reads.spec.ts`                                   |
+| `GET /access-reviews?status&ownerRole&subjectPersonId`                | review deciders; default every review not closed; `allowedDecisions` from `allowedReviewDecisions` (AccessReviewMachine; also on `GET /access-reviews/{id}`), `restrictedGrantCount`                                                                                    | `staff-reads.spec.ts`                                   |
+| `GET /duplicate-candidates?status`, `GET /{id}`                       | `identity.read_duplicates`; default `open`; both names and the signals; dates of birth only on the single read                                                                                                                                                          | `staff-reads.spec.ts`                                   |
+
+The new write routes carry `@RecordAuthority` (`person` for the contact-point commands,
+`relationship_evidence` for decline, scope `unproven`), like their siblings in the migration
+module's static list (§5.6, IF-41). Role sets for the new read actions are **Proposed** (permission
+matrix C.2).
+
+### Background jobs (§4.12) — verified
+
+- `identity.expire_invitations_and_claims` (60 s, failure owner `support_operator`, ID-07): pending
+  invitations, then claims, with `expires_at <= now`, one transaction per row
+  (`FOR UPDATE SKIP LOCKED`), `InvitationMachine`/`ClaimMachine` `expire`, revision bump, audit
+  with the system-only actions `identity.expire_invitation` / `identity.expire_claim`, and one
+  `identity.invitation_expired` / `identity.claim_expired` (`via: 'sweep'`). The lazy path on
+  accept or decline records the same facts with `via: 'acceptance_attempt'` and still answers
+  INVALID_TRANSITION; whichever path holds the row lock first records the expiry, once
+  (`identity-jobs.spec.ts`, the race case under PGlite and PostgreSQL). Durations are unchanged
+  (POL-044, pending).
+- `identity.end_elapsed_restrictions` (60 s, failure owner `support_operator`, ID-08): for each
+  review with an elapsed restriction window, one transaction that locks the review (skipped while
+  a decision holds it) and its grants in id order, appends a `lift` decision by the system actor
+  `identity.restriction_window` (note "restriction window ended", `bySystem: true` on reads), ends
+  each suspension at its own `suspended_until`, re-projects the grants, and emits
+  `identity.access_restriction_lifted` with `cause: 'window_ended'` for grants no other review
+  suspends plus `identity.access_review_decided` `lift`. The review's status is unchanged; its
+  revision moves. A manual lift that names `actorPersonId` now ends only that actor's suspensions
+  (fix), and the decision path sets `cause: 'decision'` (`identity-jobs.spec.ts`).
+
 Every consequential POST/PATCH is `@Idempotent()` and validated with the zod contracts in
 `packages/contracts/src/api/identity.ts`. Services choose the staff path only when a staff role
 covers the command (`staffAuthorityApplies`), never on `principal.kind` alone, so a coach who is
@@ -106,14 +159,26 @@ in id order, so a lift racing another review's restriction never clears it
 
 ## Ports (for other modules)
 
-- `PERSON_DIRECTORY_PORT` (`PersonDirectoryPort`): `findPerson`, `resolveCanonicalPersonId`
-  (follows merges).
+- `PERSON_DIRECTORY_PORT` (`PersonDirectoryPort`, IF-09): `findPerson`, `resolveCanonicalPersonId`
+  (follows merges), `displayNames(org, ids, trx?)` (names only, other-organization and unknown ids
+  omitted) and `personIdsResolvingTo(org, id, trx?)` (`[canonical, ...merged into it,
+transitively]`, nearest first; `[]` when unknown), both through `trx ?? currentTransaction() ??
+db`: modules holding immutable facts read a survivor's history with it instead of rewriting rows
+  (SPK-IAM-007). **Verified**: `__tests__/directory-ports.spec.ts`.
+- `PeopleService.createPerson(principal, input, correlationId, { importProvenance })` (alias
+  `create`, IF-40, K-13): only the batch's import principal (`assertImportPrincipal`), `id =
+recordId`, source `import`, create-if-absent (same content: the existing person with no new
+  effects; different: RESOURCE_CONFLICT `IMPORT_CONTENT_MISMATCH`); joins the caller's unit of
+  work; `POST /v1/people` cannot ask for it. **Verified**: `directory-ports.spec.ts`.
 - `AUTHORITY_LOOKUP_PORT` (`AuthorityLookupPort`): `hasPermission`, `actorsWithPermission`
   (communications resolves protected recipients from current permissions, SPK-COMMS-003), and
   `hasPermissionAt(…, asOf)`: whether a permission was effective at a past instant, from the grant
   and relationship windows, revocation and end times and the append-only
   `access_grant_suspensions` history (entry re-checks an offline release at its recorded handover
-  time, SPK-AT-018). Tested in `__tests__/access-reviews.spec.ts`.
+  time, SPK-AT-018). Tested in `__tests__/access-reviews.spec.ts`. `effectiveGrant(…, at)` (ID-09,
+  IF-46, SPK-ENTRY-007): the grant behind a `hasPermission` answer with the same rule evaluated at
+  `at` (latest `effectiveFrom` first), null whenever `hasPermission` would be false and for self
+  authority. **Verified**: `directory-ports.spec.ts`.
 - `STAFF_DIRECTORY_PORT` (`StaffDirectoryPort`): `staffWithRole(org, role, facilityId?)`.
 - Fixtures for downstream tests: `testing/identity-fixtures.ts` (`createOrganizationPeople`,
   `createPersonFixture`, `createAccountFixture`, `createRelationshipFixture`,
@@ -125,11 +190,15 @@ in id order, so a lift racing another review's restriction never clears it
 `identity.person_created`, `identity.person_updated`, `identity.account_linked`,
 `identity.account_relinked`, `identity.relationship_created`, `identity.access_granted`,
 `identity.access_grant_revoked` (communications re-evaluates unsent protected messages),
-`identity.access_restricted`, `identity.access_restriction_lifted`, `identity.invitation_created`,
-`identity.invitation_accepted`, `identity.invitation_revoked`, `identity.claim_issued`,
-`identity.claim_revoked`, `identity.claim_accepted`, `identity.staff_membership_changed`, `identity.access_review_opened`,
-`identity.access_review_decided`, `identity.duplicate_candidate_flagged`,
-`identity.persons_merged` (other modules re-point person references to the survivor).
+`identity.access_restricted`, `identity.access_restriction_lifted` (`cause` `decision` or
+`window_ended`, IF-26; absent means `decision`), `identity.invitation_created`,
+`identity.invitation_accepted`, `identity.invitation_revoked`, `identity.invitation_declined`
+(IF-10, no handler yet), `identity.invitation_expired` and `identity.claim_expired` (IF-25, `via`
+`sweep` or `acceptance_attempt`, once per expiry), `identity.claim_issued`,
+`identity.claim_revoked`, `identity.claim_accepted`, `identity.staff_membership_changed`,
+`identity.access_review_opened`, `identity.access_review_decided`,
+`identity.duplicate_candidate_flagged`, `identity.persons_merged` (consumers never rewrite person
+ids in history; they read through `personIdsResolvingTo`, IF-21).
 
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
@@ -143,7 +212,21 @@ in id order, so a lift racing another review's restriction never clears it
   the creator invited, while the creator holds effective authority; contested guardianship goes
   to an access review.
 - Invitation tokens default to 72 hours, claim tokens to 7 days; raw tokens are returned once to
-  the issuer because no messaging provider is selected (§5.2).
+  the issuer because no messaging provider is selected (§5.2). Expiry durations stay POL-044
+  (pending); the background sweep only records expiry that has already happened.
+- Invitation lifecycle with `declined` (DEC-093, Proposed): pending → accepted | declined | revoked
+  | expired, all terminal. Claims keep pending → accepted | revoked | expired.
+- Contact point removal (DEC-018 pending): the only verified contact point of a person with an
+  active account is never removed.
+- Staff reads (permission matrix C.2, Proposed): the role sets of `identity.lookup_person`,
+  `identity.read_invitations`, `identity.read_authority`, `identity.read_staff_membership`,
+  `identity.read_staff_directory`, `identity.read_workforce_directory` and
+  `identity.read_duplicates`.
+
+## Capability switches (DEC-016)
+
+None. Identity has no Package G capability: every item above applies to every organization and
+none is behind a per-organization switch.
 
 ## Staff logins (SPK-AT-025, §4.14) — verified
 
@@ -176,19 +259,30 @@ and a second approver for staff recovery are **Pending decision** (DEC-018, DEC-
 - Grants an invitee received do not end when the inviter's own grant is revoked or suspended
   (pending DEC-089/DEC-004). A guardian who did not create the child record cannot revoke a
   delegate's pending invitation or an invitee's grant; that needs staff.
-- Pending invitations/claims are expired lazily on an acceptance attempt; no background expiry.
+- Invitations and claims are expired by the background sweep (ID-07); the `effectiveStatus` reads
+  show `expired` before it runs. Restriction windows that elapsed are recorded by
+  `identity.end_elapsed_restrictions` (ID-08); a closed review still never lifts on its own.
+- `GET /me/invitations` matches a recipient contact against the person's verified contact points
+  as they are now; a contact verified later makes an older invitation appear (proposed).
+- Coaches and officials do not search people; they see names only through the activities they are
+  assigned to, which entry and competition read with `displayNames` (ENT-01, CMP-06).
 - Household-scope invitations cover the child members at issue only (`invitation_subjects`); a
   child who leaves the household before acceptance is dropped and reported.
 - Duplicate detection signals are exact name + date of birth and shared verified contact values.
 
-## Kernel limitations worked around here
+## Kernel notes
 
-- The kernel resolves `*_IMPL` tokens through a Proxy that Nest probes during instantiation; only
-  `useValue` providers survive, so this module registers late-bound handles (`identity.module.ts`).
-- `AuthorizationService.require` calls the relationship-authority port without a transaction
-  handle, which deadlocks PGlite inside `UnitOfWork.run`; commands run inside an
-  AsyncLocalStorage transaction context that the port falls back to
-  (`identity.transaction-context.ts`).
-- The kernel's self short-circuit allows a child principal to act on themselves for `pay`/`collect`
-  before consulting the port; modules that own those actions should consult `AuthorityLookupPort`
-  for child subjects until the kernel asks the port for self decisions.
+- The kernel's `UnitOfWork` carries the active transaction in async context
+  (`kernel/database/transaction-context.ts`), so authority checks invoked inside a command read
+  through it; `identity.transaction-context.ts` keeps thin aliases for older call sites.
+- The IMPL tokens are bound with `useExisting` (the earlier `useValue` workaround is gone).
+- Self authority for a permission is decided by the relationship port
+  (`AuthorizationService.decide`), so a child never holds `pay` or `collect` over themselves.
+- Shared files outside this module are left to integration (**Pending**): the migration module's
+  route-classification test (`modules/migration/__tests__/authority.spec.ts`) reads only its
+  static lists on this branch, so it lists the three new write routes (classified here with
+  `@RecordAuthority`, which MIG-00 makes it read, IF-41) as unclassified; `docs/api/openapi.json`
+  and `packages/api-client/src/generated/paths.ts` need `pnpm build && pnpm openapi` and
+  `pnpm api-client:generate` (the clients typecheck against the regenerated client); and
+  `apps/api/src/__tests__/declared-interfaces.spec.ts` still expects
+  `personIdsResolvingTo` to answer its pre-ID-01 default (it now resolves `[]` for an unknown id).
