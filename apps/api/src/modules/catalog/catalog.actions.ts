@@ -107,9 +107,9 @@ export const CatalogActions = defineActions({
   approveFinancialPolicy: {
     id: 'catalog.approve_financial_policy',
     description:
-      'Approve or retire cancellation, refund, discount, overpayment and installment policies',
+      'Approve or retire cancellation, refund, discount, overpayment, installment, booking terms and tax or fee policies',
     staffRoles: ['finance_operator'],
-    requirements: ['SPK-PAY-003', '§4.4', '§6.6'],
+    requirements: ['SPK-PAY-003', 'SPK-COND-003', '§4.4', '§6.6'],
   },
   recordAcknowledgment: {
     id: 'catalog.record_acknowledgment',

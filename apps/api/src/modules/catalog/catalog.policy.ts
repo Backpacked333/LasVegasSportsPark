@@ -1,4 +1,10 @@
-import type { CapacityUnit, PolicyKind } from '@sportspark/contracts';
+import type {
+  CapabilityId,
+  CapacityUnit,
+  EntitlementKind,
+  OfferingKind,
+  PolicyKind,
+} from '@sportspark/contracts';
 import type { ActionDefinition } from '../../kernel';
 import { CatalogActions } from './catalog.actions';
 
@@ -26,7 +32,39 @@ export const POLICY_APPROVAL_ACTION: Record<PolicyKind, ActionDefinition> = {
   discount: CatalogActions.approveFinancialPolicy,
   overpayment: CatalogActions.approveFinancialPolicy,
   installment: CatalogActions.approveFinancialPolicy,
+  // CAT-02: booking terms decide deposits and confirmation (POL-005, POL-040); taxes and fees are
+  // approved charges (DEC-057). Both decide money, so the finance operator approves them.
+  booking_terms: CatalogActions.approveFinancialPolicy,
+  tax_fee: CatalogActions.approveFinancialPolicy,
 };
+
+/**
+ * CAT-02, K-12 (§1.6, §6.5 Package G): the conditional capability an offering kind belongs to.
+ * Creating, copying or publishing an offering of one of these kinds needs the organization's
+ * switch (DEC-016 and the capability's own record: memberships DEC-072, session packages DEC-074,
+ * rentals DEC-076, parties DEC-077, pickup sessions DEC-082). Archiving and closing never do.
+ */
+export const OFFERING_KIND_CAPABILITY: Partial<Record<OfferingKind, CapabilityId>> = {
+  membership: 'memberships',
+  package: 'session_packages',
+  rental: 'rentals',
+  party: 'parties',
+  pickup: 'pickup_sessions',
+};
+
+/**
+ * CAT-02 (SPK-COND-001 to SPK-COND-003): the entitlement definition kind an offering of these
+ * kinds must grant before it can be published (ENTITLEMENT_DEFINITION_REQUIRED).
+ */
+export const REQUIRED_ENTITLEMENT_KIND: Partial<Record<OfferingKind, EntitlementKind>> = {
+  membership: 'membership_benefit',
+  package: 'package_credits',
+  rental: 'rental_resource',
+  party: 'party_package',
+};
+
+/** CAT-02: offering kinds that are booked under approved booking terms (§3.16 rentals, parties). */
+export const BOOKING_OFFERING_KINDS: readonly OfferingKind[] = ['rental', 'party'];
 
 /**
  * SPK-YOUTH-002 "capacity must respect configured group size, space and staffing requirements;
