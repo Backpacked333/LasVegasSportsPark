@@ -5,6 +5,7 @@ import {
   errors,
   newId,
   type PaymentAttempt,
+  type PaymentDetail,
   type PaymentAttemptEvent,
   type PaymentAttemptState,
   type Principal,
@@ -38,10 +39,13 @@ import {
   type ProviderPaymentStatus,
 } from '../finance.ports';
 import {
+  LIVE_ATTEMPT_STATES,
   financeSystem,
   hoursFrom,
+  iso,
   minutesFrom,
   organizationOf,
+  outcomeUnknownDetails,
   toPaymentAttempt,
   type PaymentAttemptRow,
   type Reader,
@@ -49,6 +53,7 @@ import {
 } from '../finance.shared';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
+import { PosSaleFinalizer } from './pos/pos-sale-finalizer.service';
 
 export interface CreateAttemptInput {
   organizationId: string;
@@ -58,6 +63,8 @@ export interface CreateAttemptInput {
   obligationId?: string | null;
   contributionRequestId?: string | null;
   installmentId?: string | null;
+  /** FIN-06: the point-of-sale sale a card tender pays (purpose `pos_sale`). */
+  posSaleId?: string | null;
   payerPersonId: string;
   amountMinor: number;
   currency: string;
@@ -81,6 +88,7 @@ export interface PaymentEvidence {
 export interface EvidenceOutcome {
   attempt: PaymentAttemptRow;
   changed: boolean;
+  /** The receipt of a capture; null otherwise and for point-of-sale card tenders (FIN-06). */
   receipt: ReceiptRow | null;
   overpaymentCreditId: string | null;
   conflict: boolean;
@@ -93,7 +101,7 @@ const EVENT_FOR: Record<ProviderPaymentStatus, PaymentAttemptEvent> = {
   requires_action: 'require_action',
   processing: 'process',
 };
-const LIVE: PaymentAttemptState[] = ['created', 'action_required', 'processing', 'unknown'];
+const LIVE: PaymentAttemptState[] = [...LIVE_ATTEMPT_STATES];
 
 /**
  * Payment attempts (PaymentAttemptMachine, SPK-PAY-007, §4.11 steps 5–7). The attempt is created
@@ -119,6 +127,7 @@ export class PaymentsService {
     private readonly exceptions: OperationalExceptions,
     private readonly facts: MoneyFacts,
     private readonly policy: FinancePolicyResolver,
+    private readonly posSales: PosSaleFinalizer,
   ) {}
 
   get providerName(): string {
@@ -140,8 +149,11 @@ export class PaymentsService {
     return q.executeTakeFirst();
   }
 
-  /** GET /payments/{id}: the payer or finance readers; anyone else learns nothing (§4.10). */
-  async get(principal: Principal, id: string): Promise<PaymentAttempt> {
+  /**
+   * GET /payments/{id}: the payer or finance readers; anyone else learns nothing (§4.10). FIN-02
+   * (SPK-PAY-008, SCR-S-37): with what can still be refunded and the payment's earlier refunds.
+   */
+  async get(principal: Principal, id: string): Promise<PaymentDetail> {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('payment');
@@ -152,10 +164,74 @@ export class PaymentsService {
       subjectPersonIds: [row.payer_person_id],
       protected: true,
     });
+    return this.detail(this.db, row);
+  }
+
+  async detail(db: Reader, row: PaymentAttemptRow): Promise<PaymentDetail> {
+    const refundable = await db
+      .selectFrom('payment_refundables')
+      .select(['captured_minor', 'refunded_minor', 'reserved_minor'])
+      .where('organization_id', '=', row.organization_id)
+      .where('payment_attempt_id', '=', row.id)
+      .executeTakeFirst();
+    const refunds = await db
+      .selectFrom('refund_attempts')
+      .select(['id', 'status', 'amount_minor', 'currency', 'created_at'])
+      .where('organization_id', '=', row.organization_id)
+      .where('payment_attempt_id', '=', row.id)
+      .orderBy('created_at')
+      .orderBy('id')
+      .execute();
+    return {
+      ...toPaymentAttempt(row),
+      refundableMinor: refundable
+        ? Number(refundable.captured_minor) -
+          Number(refundable.refunded_minor) -
+          Number(refundable.reserved_minor)
+        : 0,
+      refunds: refunds.map((r) => ({
+        id: r.id,
+        status: r.status,
+        amountMinor: Number(r.amount_minor),
+        currency: r.currency,
+        requestedAt: iso(r.created_at),
+      })),
+    };
+  }
+
+  /** The view of an attempt as listed (FIN-01/02 lists reuse the GET mapping). */
+  view(row: PaymentAttemptRow): PaymentAttempt {
     return toPaymentAttempt(row);
   }
 
   async createAttemptInTrx(trx: Trx, input: CreateAttemptInput): Promise<PaymentAttemptRow> {
+    // SPK-PAY-007, FIN-01: the attempt already on its way for the same target is named (to its
+    // payer and staff) instead of only refusing; the partial unique indexes stay the guarantee.
+    const live = await this.liveAttempt(trx, input.organizationId, {
+      checkoutId: input.purpose === 'checkout' ? (input.checkoutId ?? undefined) : undefined,
+      installmentId:
+        input.purpose === 'installment' ? (input.installmentId ?? undefined) : undefined,
+      posSaleId: input.purpose === 'pos_sale' ? (input.posSaleId ?? undefined) : undefined,
+      obligationId:
+        input.purpose === 'obligation' || input.purpose === 'contribution'
+          ? (input.obligationId ?? undefined)
+          : undefined,
+      payerPersonId:
+        input.purpose === 'obligation' || input.purpose === 'contribution'
+          ? input.payerPersonId
+          : undefined,
+      purposes:
+        input.purpose === 'obligation' || input.purpose === 'contribution'
+          ? ['obligation', 'contribution']
+          : undefined,
+    });
+    if (live) {
+      throw errors.paymentOutcomeUnknown({
+        code: 'PAYMENT_IN_PROGRESS',
+        message: 'A payment for this is already in progress or awaiting reconciliation.',
+        ...outcomeUnknownDetails(input.actor, live),
+      });
+    }
     const id = newId();
     try {
       await trx
@@ -169,6 +245,7 @@ export class PaymentsService {
           obligation_id: input.obligationId ?? null,
           contribution_request_id: input.contributionRequestId ?? null,
           installment_id: input.installmentId ?? null,
+          pos_sale_id: input.posSaleId ?? null,
           payer_person_id: input.payerPersonId,
           amount_minor: input.amountMinor,
           currency: input.currency,
@@ -213,8 +290,19 @@ export class PaymentsService {
       installmentId?: string;
       obligationId?: string;
       payerPersonId?: string;
+      posSaleId?: string;
+      purposes?: PaymentAttemptPurpose[];
     },
   ): Promise<PaymentAttemptRow | undefined> {
+    if (
+      !target.checkoutId &&
+      !target.installmentId &&
+      !target.obligationId &&
+      !target.payerPersonId &&
+      !target.posSaleId
+    ) {
+      return undefined;
+    }
     let q = db
       .selectFrom('payment_attempts')
       .selectAll()
@@ -224,6 +312,8 @@ export class PaymentsService {
     if (target.installmentId) q = q.where('installment_id', '=', target.installmentId);
     if (target.obligationId) q = q.where('obligation_id', '=', target.obligationId);
     if (target.payerPersonId) q = q.where('payer_person_id', '=', target.payerPersonId);
+    if (target.posSaleId) q = q.where('pos_sale_id', '=', target.posSaleId);
+    if (target.purposes) q = q.where('purpose', 'in', target.purposes);
     return q.orderBy('created_at', 'desc').executeTakeFirst();
   }
 
@@ -571,7 +661,7 @@ export class PaymentsService {
       correlationId,
       details: {
         recordedStatus: attempt.status,
-        receiptId: captured.receipt.id,
+        receiptId: captured.receipt?.id ?? null,
         source: evidence.source,
         inboxEventId: evidence.inboxEventId ?? null,
       },
@@ -618,7 +708,13 @@ export class PaymentsService {
     trx: Trx,
     attempt: PaymentAttemptRow,
     correlationId: string | null,
-  ): Promise<{ receipt: ReceiptRow; overpaymentCreditId: string | null }> {
+  ): Promise<{ receipt: ReceiptRow | null; overpaymentCreditId: string | null }> {
+    if (attempt.purpose === 'pos_sale') {
+      // FIN-06: a sale's card tender pays no obligation (no receipt); its finalizer settles the
+      // tender, records the refundable funds and pays the sale once its tenders cover it.
+      await this.posSales.onCardCaptured(trx, attempt, correlationId);
+      return { receipt: null, overpaymentCreditId: null };
+    }
     const organizationId = attempt.organization_id;
     const actor = financeSystem(organizationId, 'finance.payments');
     let obligationId = attempt.obligation_id;
@@ -789,6 +885,10 @@ export class PaymentsService {
     correlationId: string | null,
   ): Promise<void> {
     const organizationId = attempt.organization_id;
+    if (attempt.purpose === 'pos_sale') {
+      // FIN-06: the tender fails; the sale stays open for another tender.
+      await this.posSales.onCardFailed(trx, attempt, correlationId);
+    }
     if (attempt.purpose === 'checkout' && attempt.checkout_id) {
       // The checkout stays awaiting payment so the payer may retry while the hold lasts.
       await trx

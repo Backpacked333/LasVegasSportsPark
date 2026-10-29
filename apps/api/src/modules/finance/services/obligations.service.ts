@@ -32,10 +32,17 @@ import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity'
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
 import {
+  LIVE_ATTEMPT_STATES,
+  afterKeysetAsc,
+  decodeKeyset,
+  outcomeUnknownDetails,
   iso,
   isoOrNull,
   isStaffLike,
+  keysetAt,
+  keysetPage,
   organizationOf,
+  toLiveAttempt,
   toPaymentAttempt,
   toReceipt,
   type Reader,
@@ -139,6 +146,7 @@ export class ObligationsService {
         paidAt: isoOrNull(r.paid_at),
       }));
     }
+    const live = await this.visibleLiveAttempt(db, principal, obligation);
     return {
       id: obligation.id,
       debtor: {
@@ -155,9 +163,33 @@ export class ObligationsService {
       status: obligation.status,
       totals: await this.facts.obligationTotals(db, obligation),
       contributions,
+      liveAttempt: live ? toLiveAttempt(live) : null,
       revision: obligation.revision,
       createdAt: iso(obligation.created_at),
     };
+  }
+
+  /**
+   * FIN-01 (SPK-PAY-007): the payment on its way toward the obligation that the reader may see,
+   * newest first: staff see any; a customer sees their own, and outside the contributions model
+   * also the debt's own charges (checkout, installment, a household member's payment), since they
+   * share the debt; a contributing player's payment is never shown to anyone else (SPK-PAY-004).
+   */
+  private async visibleLiveAttempt(db: Reader, principal: Principal, obligation: ObligationRow) {
+    let q = db
+      .selectFrom('payment_attempts')
+      .selectAll()
+      .where('organization_id', '=', obligation.organization_id)
+      .where('obligation_id', '=', obligation.id)
+      .where('status', 'in', [...LIVE_ATTEMPT_STATES]);
+    if (!isStaffLike(principal)) {
+      const self = principal.personId;
+      if (obligation.mode === 'team_with_contributions') {
+        if (!self) return undefined;
+        q = q.where('payer_person_id', '=', self);
+      }
+    }
+    return q.orderBy('created_at', 'desc').orderBy('id', 'desc').executeTakeFirst();
   }
 
   async get(principal: Principal, id: string): Promise<Obligation> {
@@ -192,20 +224,25 @@ export class ObligationsService {
         organizationId,
       });
     }
+    // FIN-02 (§4.5): keyset pages in (due_at, id) order; the cursor names the last row, so rows
+    // inserted meanwhile never shift a page.
+    const cursor = decodeKeyset(query.cursor);
     let q = this.db
       .selectFrom('obligations')
       .selectAll()
+      .select(keysetAt('obligations', 'due_at').as('cursor_at'))
       .where('organization_id', '=', organizationId)
       .orderBy('due_at')
       .orderBy('id')
-      .limit(query.limit);
+      .limit(query.limit + 1);
     if (query.debtorPersonId) q = q.where('debtor_person_id', '=', query.debtorPersonId);
     if (query.teamEntryId) q = q.where('debtor_team_entry_id', '=', query.teamEntryId);
     if (query.status) q = q.where('status', '=', query.status);
-    const rows = await q.execute();
+    if (cursor) q = q.where(afterKeysetAsc('obligations', cursor, 'due_at'));
+    const page = keysetPage(await q.execute(), query.limit);
     const items: Obligation[] = [];
-    for (const row of rows) items.push(await this.view(this.db, principal, row));
-    return { items, nextCursor: null };
+    for (const row of page.rows) items.push(await this.view(this.db, principal, row));
+    return { items, nextCursor: page.nextCursor };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -392,7 +429,7 @@ export class ObligationsService {
     });
   }
 
-  private async contributionView(
+  async contributionView(
     db: Reader,
     organizationId: string,
     id: string,
@@ -556,17 +593,14 @@ export class ObligationsService {
       // charging this debt; no second charge while that outcome is pending or unknown.
       const charging = await trx
         .selectFrom('payment_attempts')
-        .select(['id', 'status'])
+        .select(['id', 'status', 'purpose', 'payer_person_id'])
         .where('organization_id', '=', organizationId)
         .where('obligation_id', '=', obligationId)
         .where('purpose', 'in', ['checkout', 'installment'])
         .where('status', 'in', ['created', 'action_required', 'processing', 'unknown'])
         .executeTakeFirst();
       if (charging) {
-        throw errors.paymentOutcomeUnknown({
-          paymentAttemptId: charging.id,
-          status: charging.status,
-        });
+        throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(principal, charging));
       }
       if (!principal.personId) throw errors.accessDenied();
       return this.payments.createAttemptInTrx(trx, {

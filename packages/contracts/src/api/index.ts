@@ -10,6 +10,8 @@ export * from './enrollment-package-g';
 export * from './enrollment';
 export * from './entry';
 export * from './facilities';
+export * from './finance-accounting';
+export * from './finance-pos';
 export * from './finance';
 export * from './identity';
 export * from './migration';

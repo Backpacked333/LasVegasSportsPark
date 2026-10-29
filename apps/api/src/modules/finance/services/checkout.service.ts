@@ -35,12 +35,12 @@ import {
   BASKET_PORT,
   BasketsService,
   ENROLLMENT_PORT,
-  type BasketPort,
   type EnrollmentPort,
 } from '../../enrollment';
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
 import {
+  outcomeUnknownDetails,
   daysFrom,
   iso,
   isoOrNull,
@@ -50,11 +50,16 @@ import {
   toOrder,
   toPaymentAttempt,
   toReceipt,
+  type OrderRow,
   type QuoteLineRow,
   type QuoteRow,
   type Reader,
 } from '../finance.shared';
-import { CheckoutFinalizer, type CheckoutRow } from './checkout-finalizer.service';
+import {
+  CheckoutFinalizer,
+  type CheckoutBasketPort,
+  type CheckoutRow,
+} from './checkout-finalizer.service';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
 import { PaymentsService } from './payments.service';
@@ -83,7 +88,7 @@ export class CheckoutService {
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
-    @Inject(BASKET_PORT) private readonly basketPort: BasketPort,
+    @Inject(BASKET_PORT) private readonly basketPort: CheckoutBasketPort,
     @Inject(ENROLLMENT_PORT) private readonly enrollments: EnrollmentPort,
     @Inject(POLICY_PORT) private readonly policies: PolicyPort,
     @Inject(PRICING_PORT) private readonly pricing: PricingPort,
@@ -190,25 +195,31 @@ export class CheckoutService {
       .executeTakeFirst();
     if (!order) throw errors.protectedNotFound('order');
     await this.requireRead(principal, order, 'order');
-    const lines = await this.db
+    return this.orderView(this.db, order);
+  }
+
+  /** The order with its price and policy basis, obligations and plan (FIN-01 lists reuse it). */
+  async orderView(db: Reader, order: OrderRow): Promise<Order> {
+    const organizationId = order.organization_id;
+    const lines = await db
       .selectFrom('order_lines')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('order_id', '=', id)
+      .where('order_id', '=', order.id)
       .orderBy('sequence')
       .execute();
-    const obligations = await this.db
+    const obligations = await db
       .selectFrom('obligations')
       .select('id')
       .where('organization_id', '=', organizationId)
-      .where('order_id', '=', id)
+      .where('order_id', '=', order.id)
       .orderBy('due_at')
       .execute();
-    const plan = await this.db
+    const plan = await db
       .selectFrom('installment_plans')
       .select('id')
       .where('organization_id', '=', organizationId)
-      .where('order_id', '=', id)
+      .where('order_id', '=', order.id)
       .executeTakeFirst();
     return toOrder(
       order,
@@ -499,13 +510,6 @@ export class CheckoutService {
     const checkoutId = newId();
     // SPK-REG-007 and the hold: enrollment refuses when approval is pending or the hold lapsed.
     await this.basketPort.assertPaymentPermitted(trx, organizationId, basket.id);
-    const started = await this.basketPort.startCheckout(
-      trx,
-      organizationId,
-      basket.id,
-      orderId,
-      actor,
-    );
     const operationId = await this.operations.create(trx, {
       organizationId,
       kind: 'finance.registration_checkout',
@@ -518,6 +522,16 @@ export class CheckoutService {
       // §4.14: the checkout outcome is read as the checkout is (its payer or finance readers).
       readScope: { action: FinanceActions.readCheckout, subjectPersonIds: [quote.payer_person_id] },
     });
+    // FIN-04 (§4.11 step 4, SPK-UX-001, ENR-06): the basket and every pending enrollment record
+    // this checkout's operation, so a pending registration names the checkout it waits for.
+    const started = await this.basketPort.startCheckout(
+      trx,
+      organizationId,
+      basket.id,
+      orderId,
+      actor,
+      operationId,
+    );
     const policyReferences = quote.policy_references;
     await trx
       .insertInto('orders')
@@ -1017,7 +1031,7 @@ export class CheckoutService {
       const live = await this.payments.liveAttempt(trx, organizationId, { checkoutId: id });
       if (live) {
         // SPK-PAY-007: no second charge while an outcome is pending or unknown.
-        throw errors.paymentOutcomeUnknown({ paymentAttemptId: live.id, status: live.status });
+        throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(principal, live));
       }
       const basket = await this.basketPort.getBasket(organizationId, checkout.basket_id, trx);
       if (basket?.holdExpiresAt && new Date(basket.holdExpiresAt) <= this.clock.now()) {
