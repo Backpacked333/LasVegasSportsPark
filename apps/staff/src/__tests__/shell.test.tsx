@@ -144,9 +144,14 @@ describe('session (§4.13)', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(await screen.findByRole('heading', { name: 'Today' })).toBeInTheDocument();
     expect(await app.sessionStore.load()).toMatchObject({ token: 'dev-staff', accountId: account });
-    const todayRequest = app.fake.requests.find((r) => r.route === '/today');
-    expect(todayRequest?.headers.authorization).toBe('Bearer dev-staff');
-    expect(todayRequest?.headers['x-sportspark-client']).toBe('sportspark-staff/0.1.0 (web)');
+    // The Today heading renders before its feed read is sent; wait for the read itself (§4.13).
+    const todayRequest = await waitFor(() => {
+      const request = app.fake.requests.find((r) => r.route === '/today');
+      if (!request) throw new Error('GET /today has not been sent yet');
+      return request;
+    });
+    expect(todayRequest.headers.authorization).toBe('Bearer dev-staff');
+    expect(todayRequest.headers['x-sportspark-client']).toBe('sportspark-staff/0.1.0 (web)');
   });
 
   it('ends the session when the API answers AUTHENTICATION_REQUIRED', async () => {
