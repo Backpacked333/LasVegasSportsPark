@@ -39,6 +39,18 @@ describe('facilities state machines (§4.6)', () => {
     expect(RestrictionMachine.isTerminal('released')).toBe(true);
   });
 
+  it('SPK-FAC-004 (FAC-01): only a restriction that never took effect is withdrawn; released and withdrawn are final', () => {
+    expect(RestrictionMachine.next('proposed', 'withdraw')).toBe('withdrawn');
+    expect(RestrictionMachine.next('approved', 'withdraw')).toBe('withdrawn');
+    expect(RestrictionMachine.can('active', 'withdraw')).toBe(false);
+    expect(RestrictionMachine.can('released', 'withdraw')).toBe(false);
+    expect(RestrictionMachine.isTerminal('withdrawn')).toBe(true);
+    expect(RestrictionMachine.eventsFrom('withdrawn')).toEqual([]);
+    expect(() => RestrictionMachine.next('withdrawn', 'approve')).toThrow(
+      expect.objectContaining({ code: 'INVALID_TRANSITION' }),
+    );
+  });
+
   it('SPK-FAC-001: asset and schedule status requests map to machine events', () => {
     expect(AssetMachine.next('in_service', assetEventFor('restricted'))).toBe('restricted');
     expect(AssetMachine.next('restricted', assetEventFor('in_service'))).toBe('in_service');

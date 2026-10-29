@@ -1,4 +1,4 @@
-import type { Generated } from 'kysely';
+import type { ColumnType, Generated } from 'kysely';
 import type {
   GeneratedJson,
   GeneratedTimestamp,
@@ -104,7 +104,8 @@ export interface InspectionsTable {
   created_at: GeneratedTimestamp;
 }
 
-export type RestrictionStatus = 'proposed' | 'approved' | 'active' | 'released';
+/** `withdrawn` (migration 0903, FAC-01): a proposed or approved restriction that never took effect. */
+export type RestrictionStatus = 'proposed' | 'approved' | 'active' | 'released' | 'withdrawn';
 export interface RestrictionsTable {
   id: string;
   organization_id: string;
@@ -125,6 +126,14 @@ export interface RestrictionsTable {
   released_by: Json<Record<string, unknown>> | null;
   released_at: NullableTimestamp;
   release_reason: string | null;
+  /** Migration 0903 (FAC-01): set exactly when the restriction is withdrawn, with actor and reason. */
+  withdrawn_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  withdrawn_by: ColumnType<
+    Record<string, unknown> | null,
+    string | null | undefined,
+    string | null
+  >;
+  withdrawal_reason: ColumnType<string | null, string | null | undefined, string | null>;
   operation_id: string | null;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;

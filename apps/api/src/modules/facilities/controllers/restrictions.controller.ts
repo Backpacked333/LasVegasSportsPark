@@ -5,12 +5,20 @@ import {
   ListRestrictionsQuery,
   OperatingStatusQuery,
   ReleaseRestrictionBody,
+  WithdrawRestrictionBody,
   z,
   type FacilityOperatingStatus,
   type Principal,
   type Restriction,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { RestrictionsService } from '../services/restrictions.service';
 import { CorrelationId } from './correlation.decorator';
 
@@ -69,6 +77,24 @@ export class RestrictionsController {
     @CorrelationId() correlationId: string,
   ): Promise<Restriction> {
     return this.restrictions.release(principal, params.id, { ...body, correlationId });
+  }
+
+  /**
+   * FAC-01 (SPK-FAC-004): withdraw a proposed restriction, or an approved one with its pending
+   * scheduling closure, before it takes effect. §5.6: like approve and release, the command changes
+   * the future schedule of an area whose authority scope is not known before the record is read.
+   */
+  @Post('maintenance-restrictions/:id/withdraw')
+  @HttpCode(200)
+  @Idempotent()
+  @RecordAuthority('future_schedule', 'unproven')
+  withdraw(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodBody(WithdrawRestrictionBody) body: WithdrawRestrictionBody,
+    @CorrelationId() correlationId: string,
+  ): Promise<Restriction> {
+    return this.restrictions.withdraw(principal, params.id, { ...body, correlationId });
   }
 
   @Get('facilities/:id/operating-status')
