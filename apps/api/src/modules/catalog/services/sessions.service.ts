@@ -2,7 +2,9 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  systemPrincipal,
   type CancelOfferingSessionInput,
+  type DomainEvent,
   type CreateOfferingSessionInput,
   type OfferingSession,
   type Principal,
@@ -17,6 +19,7 @@ import {
   Outbox,
   UnitOfWork,
   type Clock,
+  type Trx,
 } from '../../../kernel';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
@@ -263,6 +266,129 @@ export class SessionsService {
       });
       return toOfferingSession(updated);
     });
+  }
+
+  /**
+   * Sessions linked to scheduling events (any status), read through the caller's executor so an
+   * outbox handler or a closure preview inside a transaction can call it (§4.2: other modules read
+   * catalog sessions only through this service).
+   */
+  async sessionsOfSchedulingEvents(
+    db: Db | Trx,
+    organizationId: string,
+    eventIds: readonly string[],
+  ): Promise<
+    Array<{
+      id: string;
+      offeringId: string;
+      schedulingEventId: string;
+      status: string;
+      scheduledStart: string;
+      scheduledEnd: string;
+    }>
+  > {
+    if (eventIds.length === 0) return [];
+    const rows = await db
+      .selectFrom('offering_sessions')
+      .select([
+        'id',
+        'offering_id',
+        'scheduling_event_id',
+        'status',
+        'scheduled_start',
+        'scheduled_end',
+      ])
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_event_id', 'in', [...new Set(eventIds)])
+      .orderBy('scheduled_start')
+      .orderBy('id')
+      .execute();
+    return rows.map((r) => ({
+      id: r.id,
+      offeringId: r.offering_id,
+      schedulingEventId: r.scheduling_event_id as string,
+      status: r.status,
+      scheduledStart: new Date(r.scheduled_start).toISOString(),
+      scheduledEnd: new Date(r.scheduled_end).toISOString(),
+    }));
+  }
+
+  /**
+   * SPK-AT-009, SPK-SCHED-009, §4.12: scheduling is the authority for the event that reserves a
+   * session's space; when that event is canceled (a closure's `cancel_affected`, a series edit, a
+   * direct cancel) the linked catalog sessions are canceled too, so the catalog, the family
+   * calendar and the enrolled families agree. Runs in the outbox handler's transaction and is
+   * idempotent under replay (an already canceled session is left alone). Makeup or credit for
+   * the canceled session stays a staff decision under DEC-003.
+   */
+  async followSchedulingEvent(
+    trx: Trx,
+    event: DomainEvent<{
+      eventId: string;
+      change: string;
+      reason: string | null;
+      closureId: string | null;
+    }>,
+  ): Promise<number> {
+    if (event.payload.change !== 'canceled') return 0;
+    const organizationId = event.organizationId;
+    const rows = await trx
+      .selectFrom('offering_sessions')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_event_id', '=', event.payload.eventId)
+      .where('status', '=', 'scheduled')
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const actor = systemPrincipal(organizationId, 'catalog.follow_scheduling');
+    const reason = event.payload.reason ?? 'The scheduled activity was canceled.';
+    for (const current of rows) {
+      const next = OfferingSessionMachine.next(current.status, 'cancel');
+      const updated = await trx
+        .updateTable('offering_sessions')
+        .set({
+          status: next,
+          canceled_at: this.clock.now(),
+          cancel_reason: reason,
+          revision: current.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', current.id)
+        .where('revision', '=', current.revision)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      await this.audit.record(trx, {
+        organizationId,
+        actor,
+        action: 'catalog.session_canceled',
+        targetType: 'offering_session',
+        targetId: current.id,
+        beforeRevision: current.revision,
+        afterRevision: updated.revision,
+        reason,
+        correlationId: event.correlationId,
+        details: {
+          schedulingEventId: event.payload.eventId,
+          closureId: event.payload.closureId,
+          sourceEventId: event.id,
+        },
+      });
+      await this.outbox.enqueue(trx, CatalogEvents.sessionCanceled, {
+        organizationId,
+        aggregateType: 'offering',
+        aggregateId: current.offering_id,
+        payload: {
+          sessionId: current.id,
+          offeringId: current.offering_id,
+          sequence: current.sequence,
+          schedulingEventId: current.scheduling_event_id,
+          reason,
+        },
+        correlationId: event.correlationId,
+      });
+    }
+    return rows.length;
   }
 
   /** Same visibility rule as the offering itself (public when published, every state for staff). */

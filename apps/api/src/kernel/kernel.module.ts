@@ -30,6 +30,10 @@ import { EventHandlerRegistry } from './outbox/event-handler.registry';
 import { Outbox } from './outbox/outbox';
 import { OutboxDispatcher } from './outbox/outbox-dispatcher';
 import { BackgroundWorkers } from './workers/background-workers';
+import { ClientCompatibilityGuard } from './http/client-compatibility.guard';
+import { RecoveryController } from './recovery/recovery.controller';
+import { RecoveryChecks, RecoveryMode } from './recovery/recovery-mode.service';
+import { RecoveryGuard } from './recovery/recovery.guard';
 import {
   APP_CONFIG,
   CLOCK,
@@ -120,14 +124,20 @@ export class KernelModule {
       OperationsService,
       IdempotencySweeper,
       BackgroundWorkers,
+      RecoveryChecks,
+      RecoveryMode,
+      // Global guards run in this order: authentication, client compatibility (SPK-AT-027, after
+      // authentication so an unauthenticated old client still gets 401), recovery (SPK-AT-028).
       { provide: APP_GUARD, useClass: AuthGuard },
+      { provide: APP_GUARD, useClass: ClientCompatibilityGuard },
+      { provide: APP_GUARD, useClass: RecoveryGuard },
       { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
       { provide: APP_FILTER, useClass: DomainExceptionFilter },
     ];
     return {
       module: KernelModule,
       providers,
-      controllers: [HealthController, OperationsController],
+      controllers: [HealthController, OperationsController, RecoveryController],
       exports: [
         APP_CONFIG,
         DATABASE,
@@ -147,6 +157,8 @@ export class KernelModule {
         OperationsService,
         IdempotencySweeper,
         BackgroundWorkers,
+        RecoveryChecks,
+        RecoveryMode,
       ],
     };
   }

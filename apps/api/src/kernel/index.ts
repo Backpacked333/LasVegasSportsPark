@@ -30,5 +30,8 @@ export * from './inbox/inbox';
 export * from './exceptions/operational-exceptions.service';
 export * from './operations/operations.service';
 export * from './workers/background-workers';
+export * from './http/client-compatibility.guard';
+export * from './recovery/recovery-mode.service';
+export * from './recovery/recovery.guard';
 export * from './kernel.module';
 export * from './app-setup';

@@ -53,6 +53,8 @@ export const RosterSourceSchema = z.enum([
   'captain',
   'staff',
   'renewal',
+  /** A paid and approved join_team registration (SPK-AT-002). */
+  'registration',
 ]);
 export const TeamInvitationStatusSchema = z
   .enum(['pending', 'accepted', 'declined', 'revoked', 'expired'])

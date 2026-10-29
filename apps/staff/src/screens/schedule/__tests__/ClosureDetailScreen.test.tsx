@@ -49,7 +49,22 @@ const IMPACT = {
     { sourceType: 'fixture', sourceId: 'e1-fixture', eventIds: ['e1'] },
     { sourceType: 'fixture', sourceId: 'e2-fixture', eventIds: ['e2'] },
   ],
-  summary: { games: 2, programs: 0, rentals: 0, other: 0, teams: 4, people: 2, equipment: 0 },
+  // SPK-SCHED-009: customers, financial obligations and unsent messages the closure affects.
+  customers: [{ personId: 'p1', eventIds: ['e1', 'e2'], via: ['commitment' as const] }],
+  obligations: [],
+  messages: [],
+  summary: {
+    games: 2,
+    programs: 0,
+    rentals: 0,
+    other: 0,
+    teams: 4,
+    people: 2,
+    equipment: 0,
+    customers: 1,
+    obligations: 0,
+    messages: 0,
+  },
 };
 const PENDING = closure({ id: 'c1', impact: IMPACT, revision: 2 });
 

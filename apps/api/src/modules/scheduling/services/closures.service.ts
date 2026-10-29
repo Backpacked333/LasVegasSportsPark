@@ -33,11 +33,29 @@ import type {
 import { SchedulingActions } from '../scheduling.actions';
 import { ClosureApplied, ClosureLifted } from '../scheduling.events';
 import { ClosureMachine } from '../scheduling.state-machines';
+import { ClosureImpactContributors } from './closure-impact-contributors';
 import { ClosureLiftGuards } from './closure-lift-guards';
 import { EventWriter } from './event-writer';
 import { organizationOf } from './events.service';
 
 type ClosureRow = Selectable<ClosuresTable> & { start: string; end: string };
+
+/** A preview stored before customers, obligations and messages were identified (SPK-SCHED-009). */
+function withImpactDefaults(impact: ClosureImpact | null): ClosureImpact | null {
+  if (!impact) return null;
+  return {
+    ...impact,
+    customers: impact.customers ?? [],
+    obligations: impact.obligations ?? [],
+    messages: impact.messages ?? [],
+    summary: {
+      ...impact.summary,
+      customers: impact.summary.customers ?? 0,
+      obligations: impact.summary.obligations ?? 0,
+      messages: impact.summary.messages ?? 0,
+    },
+  };
+}
 
 const PROGRAM_KINDS = new Set(['session', 'practice', 'pickup']);
 const RENTAL_KINDS = new Set(['rental', 'party']);
@@ -60,6 +78,7 @@ export class ClosuresService implements ClosurePort {
     private readonly exceptions: OperationalExceptions,
     private readonly writer: EventWriter,
     private readonly liftGuards: ClosureLiftGuards,
+    private readonly impactContributors: ClosureImpactContributors,
   ) {}
 
   async previewImpact(principal: Principal, input: PreviewClosureInput): Promise<ClosureImpact> {
@@ -475,6 +494,34 @@ export class ClosuresService implements ClosurePort {
     summary.teams = teams.size;
     summary.people = people.size;
     summary.equipment = equipment.size;
+    // SPK-SCHED-009, SPK-AT-009: customers, financial obligations and messages come from the
+    // modules that own them; committed persons are customers of the event too.
+    const contributed = await this.impactContributors.collect(
+      db,
+      organizationId,
+      affectedEvents.map((e) => ({
+        eventId: e.eventId,
+        kind: e.kind,
+        scheduledStart: e.scheduledStart,
+        sourceType: e.sourceType,
+        sourceId: e.sourceId,
+        commitments: e.commitments,
+      })),
+    );
+    const customers = new Map(contributed.customers.map((c) => [c.personId, c]));
+    for (const e of affectedEvents) {
+      for (const c of e.commitments.filter((x) => x.partyType === 'person')) {
+        const entry = customers.get(c.partyId) ?? { personId: c.partyId, eventIds: [], via: [] };
+        customers.set(c.partyId, {
+          personId: c.partyId,
+          eventIds: [...new Set([...entry.eventIds, e.eventId])].sort(),
+          via: [...new Set([...entry.via, 'commitment' as const])].sort(),
+        });
+      }
+    }
+    const customerList = [...customers.values()].sort((a, b) =>
+      a.personId.localeCompare(b.personId),
+    );
     const sources = new Map<string, { sourceType: string; sourceId: string; eventIds: string[] }>();
     for (const event of events) {
       if (!event.source_type || !event.source_id) continue;
@@ -494,7 +541,15 @@ export class ClosuresService implements ClosurePort {
       },
       affectedEvents,
       sourceRecords: [...sources.values()],
-      summary,
+      customers: customerList,
+      obligations: contributed.obligations,
+      messages: contributed.messages,
+      summary: {
+        ...summary,
+        customers: customerList.length,
+        obligations: contributed.obligations.length,
+        messages: contributed.messages.length,
+      },
     };
   }
 
@@ -525,7 +580,7 @@ export class ClosuresService implements ClosurePort {
       reason: row.reason,
       source: row.source,
       status: row.status,
-      impact: (row.impact as ClosureImpact | null) ?? null,
+      impact: withImpactDefaults(row.impact as ClosureImpact | null),
       resolution: (row.resolution as Closure['resolution']) ?? null,
       appliedAt: row.applied_at ? new Date(row.applied_at).toISOString() : null,
       liftedAt: row.lifted_at ? new Date(row.lifted_at).toISOString() : null,

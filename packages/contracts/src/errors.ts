@@ -25,6 +25,12 @@ export const ErrorCodes = {
   REFUND_PENDING: { httpStatus: 409, nextAction: 'await_refund_resolution' },
   INTEGRATION_UNAVAILABLE: { httpStatus: 503, nextAction: 'retry_later' },
   RATE_LIMITED: { httpStatus: 429, nextAction: 'retry_later' },
+  /**
+   * SPK-AT-027, §4.13: the calling app build is below the minimum supported version for its
+   * platform (`details.minimumVersion`). Added as proposed by DEC-092; the minimum versions
+   * themselves are DEC-061 (pending).
+   */
+  CLIENT_UPDATE_REQUIRED: { httpStatus: 426, nextAction: 'update_app' },
   INTERNAL_ERROR: { httpStatus: 500, nextAction: 'retry_or_contact_support' },
 } as const;
 

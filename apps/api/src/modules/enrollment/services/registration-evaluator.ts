@@ -20,14 +20,24 @@ import {
   type PolicyPort,
   type PricingPort,
 } from '../../catalog';
-import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
+import {
+  ELIGIBILITY_PORT,
+  TEAM_ENTRY_QUERY_PORT,
+  type EligibilityPort,
+  type TeamEntryQueryPort,
+} from '../../competition';
 import {
   PERSON_DIRECTORY_PORT,
   type PersonDirectoryPort,
   type PersonSummary,
 } from '../../identity';
 import { ENROLLMENT_POLICY, requiresApproval, type EnrollmentPolicy } from '../enrollment.policy';
-import { evaluateRegistrationEligibility } from '../eligibility/registration-eligibility';
+import {
+  evaluateRegistrationEligibility,
+  type EligibilityInput,
+} from '../eligibility/registration-eligibility';
+
+type EligibilityInputTeam = EligibilityInput['teamEligibility'];
 
 export interface EvaluationContext {
   snapshot: OfferingSnapshot;
@@ -58,6 +68,7 @@ export class RegistrationEvaluator {
     @Inject(PRICING_PORT) private readonly pricing: PricingPort,
     @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
     @Inject(TEAM_ENTRY_QUERY_PORT) private readonly teamEntries: TeamEntryQueryPort,
+    @Inject(ELIGIBILITY_PORT) private readonly teamEligibility: EligibilityPort,
     @Inject(ENROLLMENT_POLICY) private readonly policy: EnrollmentPolicy,
   ) {}
 
@@ -107,10 +118,25 @@ export class RegistrationEvaluator {
       }
     }
     let teamEntry: { id: string; status: string } | null | undefined;
+    let teamEligibility: EligibilityInputTeam = null;
     if (ctx.intent === 'join_team') {
       teamEntry = ctx.teamEntryId
         ? await this.teamEntries.findTeamEntry(organizationId, ctx.teamEntryId, trx)
         : null;
+      if (teamEntry && ['applied', 'approved'].includes(teamEntry.status)) {
+        // SPK-AT-002, SPK-CAP-004: the competition rules decide whether this person may join this
+        // entry (the same evaluation its roster commands run), before any quote or payment.
+        // Reasons reach the registrant, so they are restricted (codes and limits only).
+        const evaluation = await this.teamEligibility.evaluatePlayer(
+          organizationId,
+          teamEntry.id,
+          person.id,
+          at,
+          { membershipStatus: 'active', actorIsStaff: false, restricted: true },
+          trx,
+        );
+        teamEligibility = { reasons: evaluation.reasons };
+      }
     }
     const result = evaluateRegistrationEligibility({
       intent: ctx.intent,
@@ -135,6 +161,7 @@ export class RegistrationEvaluator {
         dateOfBirth: person.dateOfBirth,
       },
       teamEntry,
+      teamEligibility,
       session:
         ctx.session === undefined
           ? undefined

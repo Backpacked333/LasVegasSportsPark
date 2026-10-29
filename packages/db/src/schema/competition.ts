@@ -139,7 +139,14 @@ export interface TeamRolesTable {
 export type RosterMembershipStatus =
   'invited' | 'requested' | 'active' | 'removed' | 'guest' | 'substitute';
 export type RosterPlayingStatus = 'active' | 'guest' | 'substitute';
-export type RosterSource = 'invitation' | 'join_request' | 'captain' | 'staff' | 'renewal';
+export type RosterSource =
+  | 'invitation'
+  | 'join_request'
+  | 'captain'
+  | 'staff'
+  | 'renewal'
+  /** A paid and approved join_team registration (SPK-AT-002, migration 0453). */
+  | 'registration';
 export interface RosterMembershipsTable {
   id: string;
   organization_id: string;

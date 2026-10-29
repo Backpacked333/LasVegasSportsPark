@@ -159,6 +159,16 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
 - Closure application either cancels affected published events (notices carry the closure id) or
   leaves them for staff resolution as an operational exception in the `scheduler` queue.
 
+### Closure impact contributors (SPK-SCHED-009, SPK-AT-009) — verified
+
+`ClosureImpactContributors` (exported) lets the modules that own participation, money and messages
+complete a closure preview: `impact.customers` (enrollment: participants of the catalog sessions
+linked to the affected events; competition: rostered players of committed teams; committed persons),
+`impact.obligations` (orders those enrollments were paid through) and `impact.messages` (unsent
+notices about the events), with counts in `impact.summary`. Contributors read through the preview's
+executor. **Verified**: `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`. Any financial
+adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009).
+
 ## Known gaps / pending decisions
 
 - Required rest minutes (team/person 60, equipment 0) and the availability step are proposed

@@ -13,6 +13,7 @@ import {
   CLOCK,
   DATABASE,
   Outbox,
+  RecoveryMode,
   UnitOfWork,
   assertExpectedRevision,
   type Clock,
@@ -56,6 +57,7 @@ export class InstallmentsService {
     private readonly outbox: Outbox,
     private readonly facts: MoneyFacts,
     private readonly payments: PaymentsService,
+    private readonly recovery: RecoveryMode,
   ) {}
 
   async planView(db: Reader, plan: InstallmentPlanRow): Promise<InstallmentPlan> {
@@ -436,7 +438,16 @@ export class InstallmentsService {
       .limit(limit)
       .execute();
     let collected = 0;
+    const recovering = new Map<string, boolean>();
     for (const row of rows) {
+      // §5.8, SPK-AT-028: on restored state a due installment may already have been charged after
+      // the backup; no new charge (a new idempotency key) starts until recovery is resumed.
+      let paused = recovering.get(row.organization_id);
+      if (paused === undefined) {
+        paused = await this.recovery.isActive(row.organization_id);
+        recovering.set(row.organization_id, paused);
+      }
+      if (paused) continue;
       try {
         await this.collectInternal(
           financeSystem(row.organization_id, 'finance.installments'),

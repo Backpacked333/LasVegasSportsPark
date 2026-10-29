@@ -3,6 +3,7 @@ import {
   errors,
   hasStaffRole,
   newId,
+  systemPrincipal,
   type AcceptTeamInvitationInput,
   type ChangeRosterInput,
   type CreateJoinRequestInput,
@@ -802,6 +803,60 @@ export class RosterService implements RosterPort {
   // -------------------------------------------------------------------------------------------
   // RosterPort
   // -------------------------------------------------------------------------------------------
+  /**
+   * SPK-AT-002, SPK-REG-007, §4.11 step 8: a paid and approved `join_team` registration places the
+   * player on the roster, in the confirming transaction (`trx`, enrollment's confirmation inside
+   * finance's finalization), so the confirmed enrollment and the roster membership commit
+   * together. The competition rules are evaluated again at this instant (`addMember`); a refusal
+   * (eligibility changed, roster full, entry no longer taking players) throws and the caller's
+   * finalization records it as fulfillment that needs recovery, never a silent success. Idempotent:
+   * a person already on the roster keeps that membership.
+   */
+  async addRegisteredMember(
+    trx: Trx,
+    input: {
+      organizationId: string;
+      teamEntryId: string;
+      personId: string;
+      enrollmentId: string;
+      correlationId: string | null;
+    },
+  ): Promise<{ membershipId: string; created: boolean }> {
+    const { organizationId, teamEntryId, personId } = input;
+    const context = await loadEntryContext(trx, organizationId, teamEntryId, { forUpdate: true });
+    if (!context) throw errors.notFound('team_entry', teamEntryId);
+    if (context.season.status === 'completed' || context.season.status === 'archived') {
+      throw errors.invalidTransition('Season', context.season.status, 'add_registered_member');
+    }
+    const open = await openRosterRow(trx, organizationId, teamEntryId, personId);
+    if (open && statusAt(open) !== null) return { membershipId: open.id, created: false };
+    this.assertEntryTakesPlayers(context, 'add_registered_member');
+    const member = await this.addMember(
+      trx,
+      systemPrincipal(organizationId, 'competition.registration'),
+      context,
+      {
+        personId,
+        status: 'active',
+        effectiveFrom: this.clock.now(),
+        jerseyNumber: null,
+        source: 'registration',
+        // the same evaluation the registration ran before payment (SPK-AT-002)
+        actorIsStaff: false,
+        correlationId: input.correlationId,
+        enrollmentId: input.enrollmentId,
+      },
+    );
+    await trx
+      .updateTable('team_entries')
+      .set({ revision: context.entry.revision + 1 })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', teamEntryId)
+      .where('revision', '=', context.entry.revision)
+      .execute();
+    return { membershipId: member.id, created: true };
+  }
+
   async effectiveRoster(
     organizationId: string,
     teamEntryId: string,
@@ -853,6 +908,8 @@ export class RosterService implements RosterPort {
       correlationId: string | null;
       /** A league-staff correction dated before now (see changeRoster). */
       correction?: RetroactiveCorrection | null;
+      /** The paid registration this membership fulfils (source `registration`, SPK-AT-002). */
+      enrollmentId?: string | null;
     },
   ): Promise<RosterMember> {
     const organizationId = context.entry.organization_id;
@@ -935,6 +992,7 @@ export class RosterService implements RosterPort {
         effectiveFrom: input.effectiveFrom.toISOString(),
         source: input.source,
         reasonCodes: evaluation.reasons.map((r) => r.code),
+        ...(input.enrollmentId ? { enrollmentId: input.enrollmentId } : {}),
         ...correctionDetails(input.correction),
       },
     });

@@ -520,6 +520,34 @@ export const ClosureImpactSchema = z
     sourceRecords: z.array(
       z.object({ sourceType: z.string(), sourceId: z.uuid(), eventIds: z.array(z.uuid()) }),
     ),
+    /**
+     * SPK-SCHED-009 customers: participants of the affected events, from the modules that own the
+     * participation (enrollment: enrolled or booked participants of a linked catalog session;
+     * competition: rostered players of a committed team; scheduling: committed persons). Ids only.
+     */
+    customers: z.array(
+      z.object({
+        personId: z.uuid(),
+        eventIds: z.array(z.uuid()),
+        via: z.array(z.enum(['commitment', 'enrollment', 'booking', 'roster'])),
+      }),
+    ),
+    /**
+     * SPK-SCHED-009 financial obligations the affected participation was paid or is payable
+     * through (identified only; any adjustment is a policy-governed staff resolution, DEC-003).
+     */
+    obligations: z.array(
+      z.object({ type: z.string(), id: z.string(), eventIds: z.array(z.uuid()) }),
+    ),
+    /** SPK-SCHED-009 messages: notices about an affected event not yet sent, which the change may supersede. */
+    messages: z.array(
+      z.object({
+        notificationId: z.uuid(),
+        eventId: z.uuid(),
+        kind: z.string(),
+        status: z.string(),
+      }),
+    ),
     summary: z.object({
       games: z.number().int(),
       programs: z.number().int(),
@@ -528,6 +556,9 @@ export const ClosureImpactSchema = z
       teams: z.number().int(),
       people: z.number().int(),
       equipment: z.number().int(),
+      customers: z.number().int(),
+      obligations: z.number().int(),
+      messages: z.number().int(),
     }),
   })
   .openapi('ClosureImpact');
