@@ -33,14 +33,14 @@ export function reportingTestApp(
   options: {
     clockStart?: string;
     imports?: NonNullable<Parameters<typeof createTestApp>[0]>['imports'];
-    providers?: NonNullable<Parameters<typeof createTestApp>[0]>['providers'];
+    configure?: NonNullable<Parameters<typeof createTestApp>[0]>['configure'];
     /** Replaces TEST_REPORTING_SETTINGS (pass `{}` for an unconfigured module). */
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<TestApp> {
   return createTestApp({
     imports: [ReportingModule, ...(options.imports ?? [])],
-    providers: options.providers,
+    configure: options.configure,
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
     env: options.env ?? TEST_REPORTING_SETTINGS,

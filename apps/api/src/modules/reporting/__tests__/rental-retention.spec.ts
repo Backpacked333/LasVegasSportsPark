@@ -1,16 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Trx } from '../../../kernel';
 import type { TestApp } from '../../../testing';
-import { BOOKING_QUERY_IMPL, type BookingOfPeriod, type BookingQueryPort } from '../../enrollment';
+import { BOOKING_QUERY_PORT, type BookingOfPeriod, type BookingQueryPort } from '../../enrollment';
 import { createPersonFixture } from '../../identity';
 import { get, reportingTestApp, staff, valueOf, type Actor } from './support';
 
 type FakeBooking = BookingOfPeriod & { facilityId: string };
 
 /**
- * A deterministic stand-in for the enrollment module's booking reads (BOOKING_QUERY_IMPL, IF-36),
- * registered the way ENR-13 registers its implementation. It answers exactly the port's contract
- * (first occurrence in [from, to), facility, kinds) and records each call with its transaction.
+ * A deterministic stand-in for the enrollment module's booking reads (BOOKING_QUERY_PORT, IF-36),
+ * put in place of the port whether or not ENR-13 has registered its implementation. It answers
+ * exactly the port's contract (first occurrence in [from, to), facility, kinds) and records each
+ * call with its transaction.
  */
 class FakeBookingQuery implements BookingQueryPort {
   bookings: FakeBooking[] = [];
@@ -73,7 +74,9 @@ describe('rental customer retention (SPK-REPORT-005, REP-02; IF-36)', () => {
     get(t, '/v1/reports/retention', manager, { cohort: 'rental_customers', ...query });
 
   beforeAll(async () => {
-    t = await reportingTestApp({ providers: [{ provide: BOOKING_QUERY_IMPL, useValue: fake }] });
+    t = await reportingTestApp({
+      configure: (builder) => builder.overrideProvider(BOOKING_QUERY_PORT).useValue(fake),
+    });
     manager = await staff(t, ['league_manager']);
   });
   afterAll(async () => {
