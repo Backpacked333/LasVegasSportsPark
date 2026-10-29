@@ -10,13 +10,15 @@ import type {
 } from './core';
 
 /**
- * Catalog module tables (migration 0200, specification §3.2 SPK-CAT-001..004, §3.15
+ * Catalog module tables (migrations 0200 to 0207, specification §3.2 SPK-CAT-001..004, §3.15
  * SPK-PAY-001..003, §4.4 Catalog + Policies). `date` columns are read through a `::text` cast by
  * the module so both drivers return `YYYY-MM-DD`.
  */
 export type CatalogDate = ColumnType<string, string, string>;
 
 export type ProgramStatus = 'draft' | 'active' | 'archived';
+/** CAT-03 (migration 0206): staff-created or written by the migration import of one batch. */
+export type ProgramSource = 'staff' | 'import';
 export interface ProgramsTable {
   id: string;
   organization_id: string;
@@ -26,6 +28,7 @@ export interface ProgramsTable {
   format: string | null;
   age_band: GeneratedJson<Record<string, unknown>>;
   status: Generated<ProgramStatus>;
+  source: Generated<ProgramSource>;
   created_by: Json<Record<string, unknown>>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
@@ -42,7 +45,9 @@ export type PolicyKind =
   | 'approval'
   | 'form'
   | 'overpayment'
-  | 'installment';
+  | 'installment'
+  | 'booking_terms'
+  | 'tax_fee';
 export type PolicyApprovalStatus = 'draft' | 'approved' | 'retired';
 export interface PolicyVersionsTable {
   id: string;
@@ -112,7 +117,8 @@ export type EntitlementKind =
   | 'camp_group_place'
   | 'rental_resource'
   | 'package_credits'
-  | 'membership_benefit';
+  | 'membership_benefit'
+  | 'party_package';
 export type EquivalenceScope = 'offering' | 'program' | 'program_period' | 'session' | 'none';
 export type EntitlementDefinitionStatus = 'active' | 'archived';
 export interface EntitlementDefinitionsTable {
@@ -142,7 +148,8 @@ export type OfferingKind =
   | 'private_coaching'
   | 'rental'
   | 'package'
-  | 'membership';
+  | 'membership'
+  | 'party';
 export type PublicationState =
   'draft' | 'published' | 'registration_open' | 'registration_paused' | 'closed' | 'archived';
 export interface OfferingsTable {
@@ -172,6 +179,8 @@ export interface OfferingsTable {
   closed_at: NullableTimestamp;
   archived_at: NullableTimestamp;
   copied_from_offering_id: string | null;
+  /** CAT-02 (migration 0205): the booking_terms policy family of a rental or party offering. */
+  booking_terms_key: Generated<string | null>;
   created_by: Json<Record<string, unknown>>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;

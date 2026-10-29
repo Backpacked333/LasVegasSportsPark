@@ -18,7 +18,16 @@ import { Instant } from '../time';
 export const ProgramStatusSchema = z.enum(['draft', 'active', 'archived']).openapi('ProgramStatus');
 export type ProgramStatus = z.infer<typeof ProgramStatusSchema>;
 
-/** SPK-CAT-002 offering kinds (rentals, packages and memberships are conditional capabilities, §3.16). */
+/** CAT-03 (§5.3, §5.4): who created the program; only the migration import writes `import`. */
+export const ProgramSourceSchema = z.enum(['staff', 'import']).openapi('ProgramSource');
+export type ProgramSource = z.infer<typeof ProgramSourceSchema>;
+
+/**
+ * SPK-CAT-002 offering kinds. Rentals, parties, packages, memberships and pickup sessions are
+ * conditional capabilities (§3.16, §6.5 Package G): creating, copying or publishing one needs the
+ * organization's capability switch (DEC-016; CAT-02). Each party package is its own `party`
+ * offering grouped under a program.
+ */
 export const OfferingKindSchema = z
   .enum([
     'season',
@@ -32,6 +41,7 @@ export const OfferingKindSchema = z
     'rental',
     'package',
     'membership',
+    'party',
   ])
   .openapi('OfferingKind');
 export type OfferingKind = z.infer<typeof OfferingKindSchema>;
@@ -75,6 +85,7 @@ export const EntitlementKindSchema = z
     'rental_resource',
     'package_credits',
     'membership_benefit',
+    'party_package',
   ])
   .openapi('EntitlementKind');
 export type EntitlementKind = z.infer<typeof EntitlementKindSchema>;
@@ -96,6 +107,8 @@ export const PolicyKindSchema = z
     'form',
     'overpayment',
     'installment',
+    'booking_terms',
+    'tax_fee',
   ])
   .openapi('PolicyKind');
 export type PolicyKind = z.infer<typeof PolicyKindSchema>;
@@ -221,6 +234,8 @@ export const ProgramSchema = z
     format: z.string().nullable(),
     ageBand: AgeBandSchema,
     status: ProgramStatusSchema,
+    /** CAT-03: `import` when the migration import created it (program reads are staff-only). */
+    source: ProgramSourceSchema,
     revision: Revision,
     createdAt: Instant,
     updatedAt: Instant,
@@ -255,6 +270,162 @@ export const ListProgramsQuery = PageRequestSchema.extend({
   activityType: z.string().trim().min(1).max(100).optional(),
 });
 export type ListProgramsQuery = z.infer<typeof ListProgramsQuery>;
+
+// ---------------------------------------------------------------------------------------------
+// Typed entitlement scopes (CAT-02; §3.16, SPK-COND-001 to SPK-COND-003)
+//
+// Every key is required and nothing has a default: a definition states each effect explicitly
+// (POL-038, POL-039, POL-040 hold the values; the catalog invents none). The catalog validates the
+// scope of these kinds on create and update, and migration 0205 makes the database refuse a row
+// that omits a required key. Other kinds keep a free-form scope.
+// ---------------------------------------------------------------------------------------------
+
+/** Workforce role and qualification identifiers are lower-case slugs (mirrors workforce). */
+const StaffingSlug = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]{0,63}$/, 'must be a lower-case slug (letters, digits, underscore)');
+
+const offeringOrProgramIds = () =>
+  z
+    .strictObject({
+      offeringIds: z.array(z.uuid()).max(100).optional(),
+      programIds: z.array(z.uuid()).max(100).optional(),
+    })
+    .refine((v) => (v.offeringIds?.length ?? 0) > 0 || (v.programIds?.length ?? 0) > 0, {
+      message: 'name at least one offering or program',
+    });
+
+/** Which offerings or programs a membership benefit or package credit applies to (one non-empty). */
+export const EntitlementAppliesToSchema = offeringOrProgramIds().openapi('EntitlementAppliesTo');
+export type EntitlementAppliesTo = z.infer<typeof EntitlementAppliesToSchema>;
+
+/** SPK-COND-001: how many sessions a membership includes, per period (no default period). */
+export const IncludedSessionsLimitSchema = z
+  .strictObject({
+    count: z.number().int().min(1).max(10_000),
+    period: z.enum(['week', 'month', 'membership_term']),
+    /** ISO weekday the week starts on (1 = Monday … 7 = Sunday); required for `week` only. */
+    weekStartsOn: z.number().int().min(1).max(7).optional(),
+  })
+  .refine((v) => (v.period === 'week') === (v.weekStartsOn !== undefined), {
+    message: 'weekStartsOn is required for a weekly limit and only for it',
+    path: ['weekStartsOn'],
+  })
+  .openapi('IncludedSessionsLimit');
+
+/**
+ * SPK-COND-001 "membership must not automatically imply unlimited attendance unless its specific
+ * entitlement says so": the attendance effect is always stated, and `unlimited` only when chosen.
+ */
+export const MembershipAttendanceSchema = z
+  .discriminatedUnion('mode', [
+    z.strictObject({ mode: z.literal('none') }),
+    z.strictObject({
+      mode: z.literal('included_sessions'),
+      appliesTo: EntitlementAppliesToSchema,
+      limit: IncludedSessionsLimitSchema,
+    }),
+    z.strictObject({ mode: z.literal('unlimited'), appliesTo: EntitlementAppliesToSchema }),
+  ])
+  .openapi('MembershipAttendance');
+
+export const MembershipTermSchema = z
+  .discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('offering_dates') }),
+    z.strictObject({
+      kind: z.literal('from_confirmation'),
+      lengthDays: z.number().int().min(1).max(3660),
+    }),
+  ])
+  .openapi('MembershipTerm');
+
+export const MembershipBenefitScopeSchema = z
+  .strictObject({
+    attendance: MembershipAttendanceSchema,
+    term: MembershipTermSchema,
+    /** Days before the term ends that the renewal notice goes out; null sends none (POL-038). */
+    renewal: z.strictObject({ noticeLeadDays: z.number().int().min(1).max(365).nullable() }),
+  })
+  .openapi('MembershipBenefitScope');
+export type MembershipBenefitScope = z.infer<typeof MembershipBenefitScopeSchema>;
+
+/** SPK-COND-002: a package states its expiry choice; `none` is a choice, never a default. */
+export const PackageCreditsExpirySchema = z
+  .discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('none') }),
+    z.strictObject({
+      kind: z.literal('days_after_issue'),
+      days: z.number().int().min(1).max(3650),
+    }),
+    z.strictObject({ kind: z.literal('fixed_date'), date: CatalogDateOnly }),
+  ])
+  .openapi('PackageCreditsExpiry');
+
+export const PackageCreditsScopeSchema = z
+  .strictObject({
+    credits: z.number().int().min(1).max(1000),
+    appliesTo: EntitlementAppliesToSchema,
+    expiry: PackageCreditsExpirySchema,
+  })
+  .openapi('PackageCreditsScope');
+export type PackageCreditsScope = z.infer<typeof PackageCreditsScopeSchema>;
+
+/** SPK-COND-003: `count` of the listed scheduling resources are reserved together. */
+export const ScopeResourceRequirementSchema = z
+  .strictObject({
+    resourceIds: z.array(z.uuid()).min(1).max(50),
+    count: z.number().int().min(1).max(50),
+  })
+  .refine((v) => new Set(v.resourceIds).size === v.resourceIds.length, {
+    message: 'each resource may appear once',
+    path: ['resourceIds'],
+  })
+  .refine((v) => v.count <= v.resourceIds.length, {
+    message: 'count cannot exceed the number of listed resources',
+    path: ['count'],
+  })
+  .openapi('ScopeResourceRequirement');
+
+/** SPK-COND-003: mandatory staff a booking reserves with its resources (workforce roles). */
+export const ScopeStaffingRequirementSchema = z
+  .strictObject({
+    kind: z.enum(['supervisor', 'organizer']),
+    role: StaffingSlug,
+    count: z.number().int().min(1).max(100),
+    qualifications: z.array(StaffingSlug).max(20),
+  })
+  .openapi('ScopeStaffingRequirement');
+
+/** SPK-COND-003: a party package; the staffing list may be empty but is always stated. */
+export const PartyPackageScopeSchema = z
+  .strictObject({
+    durationMinutes: z.number().int().min(1).max(1440),
+    guestLimit: z.number().int().min(1).max(10_000),
+    resources: ScopeResourceRequirementSchema,
+    staffing: z.array(ScopeStaffingRequirementSchema).max(20),
+    /** Facilities assets reserved with the party (may be empty). */
+    equipmentAssetIds: z.array(z.uuid()).max(100),
+  })
+  .openapi('PartyPackageScope');
+export type PartyPackageScope = z.infer<typeof PartyPackageScopeSchema>;
+
+/** SPK-COND-003: a rental names the resources it reserves and its staffing (may be empty). */
+export const RentalResourceScopeSchema = z
+  .strictObject({
+    resources: ScopeResourceRequirementSchema,
+    staffing: z.array(ScopeStaffingRequirementSchema).max(20),
+  })
+  .openapi('RentalResourceScope');
+export type RentalResourceScope = z.infer<typeof RentalResourceScopeSchema>;
+
+/** The entitlement kinds whose scope is typed, and the schema each must satisfy (CAT-02). */
+export const ENTITLEMENT_SCOPE_SCHEMAS = {
+  membership_benefit: MembershipBenefitScopeSchema,
+  package_credits: PackageCreditsScopeSchema,
+  party_package: PartyPackageScopeSchema,
+  rental_resource: RentalResourceScopeSchema,
+} as const satisfies Partial<Record<EntitlementKind, z.ZodType>>;
+export type TypedEntitlementKind = keyof typeof ENTITLEMENT_SCOPE_SCHEMAS;
 
 // ---------------------------------------------------------------------------------------------
 // Entitlement definitions
@@ -351,6 +522,71 @@ export const ListPolicyVersionsQuery = PageRequestSchema.extend({
   approvalStatus: PolicyApprovalStatusSchema.optional(),
 });
 export type ListPolicyVersionsQuery = z.infer<typeof ListPolicyVersionsQuery>;
+
+/**
+ * CAT-02: content of a `booking_terms` version (rental and party offerings; POL-040, POL-005).
+ * Approved by the finance operator because it decides money. The deposit is the first installment
+ * of the named approved installment policy; null charges in full at checkout. Absent setup or
+ * cleanup minutes fall back to the reserved resources' own buffers.
+ */
+export const BookingTermsContentSchema = z
+  .strictObject({
+    confirmationMode: z.enum(['instant', 'request']),
+    installmentPolicyKey: PolicyKey.nullable(),
+    setupMinutes: z.number().int().min(0).max(1440).optional(),
+    cleanupMinutes: z.number().int().min(0).max(1440).optional(),
+    accessConditions: z.string().trim().min(1).max(4000).nullable(),
+    hostResponsibilities: z.string().trim().min(1).max(4000).nullable(),
+  })
+  .openapi('BookingTermsContent');
+export type BookingTermsContent = z.infer<typeof BookingTermsContentSchema>;
+
+/**
+ * CAT-02: content of a `tax_fee` version (DEC-057 approved taxes, DEC-007 rounding): a rate in
+ * basis points, or a fixed amount with its currency, exactly one of them. No rate is assumed.
+ */
+export const TaxFeeContentSchema = z
+  .strictObject({
+    code: z.string().trim().min(1).max(50),
+    label: z.string().trim().min(1).max(200),
+    kind: z.enum(['tax', 'fee']),
+    rateBasisPoints: z.number().int().min(0).max(100_000).optional(),
+    amountMinor: z.number().int().min(0).safe().optional(),
+    currency: CurrencyCode.optional(),
+    rounding: z.enum(['half_up', 'half_even', 'down']),
+  })
+  .refine(
+    (v) =>
+      v.rateBasisPoints !== undefined
+        ? v.amountMinor === undefined && v.currency === undefined
+        : v.amountMinor !== undefined && v.currency !== undefined,
+    {
+      message: 'provide exactly one of rateBasisPoints or amountMinor with its currency',
+      path: ['rateBasisPoints'],
+    },
+  )
+  .openapi('TaxFeeContent');
+export type TaxFeeContent = z.infer<typeof TaxFeeContentSchema>;
+
+/** Eligibility content may require an active membership in these offerings or programs (ENR-12). */
+export const MembershipRequirementSchema = offeringOrProgramIds().openapi('MembershipRequirement');
+
+/** Cancellation content may return a redeemed package credit until this many minutes before start (ENR-11). */
+export const PackageCreditReturnSchema = z
+  .strictObject({ untilMinutesBeforeStart: z.number().int().min(0).max(525_600) })
+  .openapi('PackageCreditReturn');
+
+/**
+ * Content rules per policy kind (CAT-02), checked when a version is drafted. Booking terms and
+ * taxes or fees are closed shapes; eligibility and cancellation content stays open and only its
+ * Package G keys are checked when present. Other kinds keep free-form content.
+ */
+export const POLICY_CONTENT_SCHEMAS = {
+  booking_terms: BookingTermsContentSchema,
+  tax_fee: TaxFeeContentSchema,
+  eligibility: z.looseObject({ membershipRequired: MembershipRequirementSchema.optional() }),
+  cancellation: z.looseObject({ packageCreditReturn: PackageCreditReturnSchema.optional() }),
+} as const satisfies Partial<Record<PolicyKind, z.ZodType>>;
 
 export const ApprovalSchema = z
   .object({
@@ -463,12 +699,25 @@ export const PublicPriceSchema = z
 // Offerings
 // ---------------------------------------------------------------------------------------------
 
+/** The facility an offering takes place at, with the zone its local times are shown in (SPK-SCHED-008). */
+export const OfferingFacilitySchema = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    /** IANA time zone (SPK-SCHED-008). */
+    timezone: z.string(),
+  })
+  .openapi('OfferingFacility');
+export type OfferingFacility = z.infer<typeof OfferingFacilitySchema>;
+
 /** Child-safe discovery view (§4.14): no people, no staffing internals, no provenance. */
 export const PublicOfferingSchema = z
   .object({
     id: z.uuid(),
     programId: z.uuid(),
     facilityId: z.uuid(),
+    /** SPK-SCHED-008: the facility and its IANA time zone (K-04 facility directory). */
+    facility: OfferingFacilitySchema,
     name: z.string(),
     description: z.string().nullable(),
     kind: OfferingKindSchema,
@@ -487,6 +736,11 @@ export const PublicOfferingSchema = z
     cancellationPolicyVersionId: z.uuid().nullable(),
     requiredFormPolicyVersionIds: z.array(z.uuid()),
     entitlementDefinitionId: z.uuid().nullable(),
+    /**
+     * CAT-02: the approved booking terms version of a rental or party offering effective now
+     * (readable by any principal of the organization); null for other kinds or when none is.
+     */
+    bookingTermsPolicyVersionId: z.uuid().nullable(),
   })
   .openapi('PublicOffering');
 export type PublicOffering = z.infer<typeof PublicOfferingSchema>;
@@ -499,6 +753,8 @@ export const OfferingStaffDetailsSchema = z
     capacityUnits: z.array(CapacityUnitSchema),
     responsibleManagerPersonId: z.uuid().nullable(),
     copiedFromOfferingId: z.uuid().nullable(),
+    /** CAT-02: the booking_terms policy family of a rental or party offering. */
+    bookingTermsKey: z.string().nullable(),
     publishedAt: Instant.nullable(),
     registrationOpenedAt: Instant.nullable(),
     closedAt: Instant.nullable(),
@@ -514,6 +770,15 @@ export const OfferingSchema = PublicOfferingSchema.extend({
   staff: OfferingStaffDetailsSchema.nullable(),
 }).openapi('Offering');
 export type Offering = z.infer<typeof OfferingSchema>;
+
+/**
+ * CAT-01: one row of `GET /offerings`: the child-safe public view, with `staff` details present
+ * only in the staff view (`view=staff` for holders of catalog.manage_offerings).
+ */
+export const OfferingListItemSchema = PublicOfferingSchema.extend({
+  staff: OfferingStaffDetailsSchema.optional(),
+}).openapi('OfferingListItem');
+export type OfferingListItem = z.infer<typeof OfferingListItemSchema>;
 
 const OfferingFields = {
   name: Name,
@@ -534,6 +799,8 @@ const OfferingFields = {
   requiredFormPolicyVersionIds: z.array(z.uuid()).max(20).default([]),
   cancellationPolicyVersionId: z.uuid().optional(),
   responsibleManagerPersonId: z.uuid().optional(),
+  /** CAT-02: rental and party offerings only; the approved version is resolved when read. */
+  bookingTermsKey: PolicyKey.optional(),
 };
 
 const datesOrdered = (v: {
@@ -572,6 +839,7 @@ export const UpdateOfferingBody = withCommandMeta({
   requiredFormPolicyVersionIds: z.array(z.uuid()).max(20).optional(),
   cancellationPolicyVersionId: z.uuid().nullable().optional(),
   responsibleManagerPersonId: z.uuid().nullable().optional(),
+  bookingTermsKey: PolicyKey.nullable().optional(),
 })
   .extend({ expectedRevision: Revision })
   .refine(datesOrdered, {
@@ -608,14 +876,43 @@ export const PublicationProblemSchema = z
   .openapi('PublicationProblem');
 export type PublicationProblem = z.infer<typeof PublicationProblemSchema>;
 
+/**
+ * CAT-01 (SPK-CAT-004): the dry run of publication. `problems` are what publish would report
+ * (configuration, plus `capability_disabled` when the organization has not enabled the kind);
+ * `publishable` is also false when the offering's state does not allow publication. Nothing is
+ * written.
+ */
+export const PublicationCheckSchema = z
+  .object({
+    offeringId: z.uuid(),
+    publicationState: PublicationStateSchema,
+    revision: Revision,
+    publishable: z.boolean(),
+    problems: z.array(PublicationProblemSchema),
+  })
+  .openapi('PublicationCheck');
+export type PublicationCheck = z.infer<typeof PublicationCheckSchema>;
+
 export const ListPublicOfferingsQuery = PageRequestSchema.extend({
   /** Organization slug; required for anonymous discovery, must match the principal's organization otherwise. */
   organization: z.string().trim().min(1).max(200).optional(),
   facilityId: z.uuid().optional(),
   kind: OfferingKindSchema.optional(),
   programId: z.uuid().optional(),
+  /** Exact format (for example `7v7`). */
+  format: z.string().trim().min(1).max(100).optional(),
   /** Only offerings ending on or after this date (defaults to all). */
   from: CatalogDateOnly.optional(),
+  /** Only offerings starting on or before this date (defaults to all). */
+  to: CatalogDateOnly.optional(),
+  /**
+   * `staff`: holders of catalog.manage_offerings get staff rows in every publication state,
+   * narrowed to their facilities; anyone else gets the public view. Default `public`.
+   */
+  view: z.enum(['public', 'staff']).default('public'),
+}).refine((v) => v.from === undefined || v.to === undefined || v.from <= v.to, {
+  message: 'from must not be after to',
+  path: ['to'],
 });
 export type ListPublicOfferingsQuery = z.infer<typeof ListPublicOfferingsQuery>;
 
@@ -666,12 +963,56 @@ export const CancelOfferingSessionBody = withCommandMeta({})
   .openapi('CancelOfferingSessionRequest');
 export type CancelOfferingSessionInput = z.infer<typeof CancelOfferingSessionBody>;
 
+/** CAT-01: the longest window `GET /sessions` lists at once. */
+export const FACILITY_SESSIONS_MAX_DAYS = 31;
+
+/**
+ * CAT-01: the sessions at one facility overlapping [from, to) (at most 31 days), for desks that
+ * build an attendance ActivityRef (offeringId + sessionId). Staff with catalog.read_catalog at the
+ * facility only.
+ */
+export const ListFacilitySessionsQuery = PageRequestSchema.extend({
+  facilityId: z.uuid(),
+  from: Instant,
+  to: Instant,
+  status: OfferingSessionStatusSchema.optional(),
+})
+  .refine((v) => new Date(v.from) < new Date(v.to), {
+    message: 'from must be before to',
+    path: ['to'],
+  })
+  .refine(
+    (v) =>
+      new Date(v.to).getTime() - new Date(v.from).getTime() <=
+      FACILITY_SESSIONS_MAX_DAYS * 86_400_000,
+    { message: `the window is at most ${FACILITY_SESSIONS_MAX_DAYS} days`, path: ['to'] },
+  );
+export type ListFacilitySessionsQuery = z.infer<typeof ListFacilitySessionsQuery>;
+
+/** One session in a facility's day, with what an attendance desk needs (SPK-SCHED-008 zone). */
+export const FacilitySessionSchema = z
+  .object({
+    sessionId: z.uuid(),
+    offeringId: z.uuid(),
+    offeringName: z.string(),
+    sequence: z.number().int(),
+    title: z.string().nullable(),
+    scheduledStart: Instant,
+    scheduledEnd: Instant,
+    status: OfferingSessionStatusSchema,
+    facilityId: z.uuid(),
+    /** IANA time zone of the facility (SPK-SCHED-008). */
+    timezone: z.string(),
+  })
+  .openapi('FacilitySession');
+export type FacilitySession = z.infer<typeof FacilitySessionSchema>;
+
 // ---------------------------------------------------------------------------------------------
 // Discounts (SPK-PAY-003)
 // ---------------------------------------------------------------------------------------------
 export const DiscountEligibilityRulesSchema = z
   .object({
-    offeringKinds: z.array(OfferingKindSchema).max(11).optional(),
+    offeringKinds: z.array(OfferingKindSchema).max(12).optional(),
     offeringIds: z.array(z.uuid()).max(100).optional(),
     programIds: z.array(z.uuid()).max(100).optional(),
     /** Sibling / multi-line discounts: the basket must contain at least this many eligible lines. */
@@ -1049,10 +1390,16 @@ command(
 );
 query(
   '/offerings',
-  'Public discovery of published offerings (child-safe fields only)',
+  'Discover offerings: published offerings with child-safe fields only; with view=staff, holders of catalog.manage_offerings get every state with staff details in their facilities (SPK-CAT-001, SPK-SCHED-008)',
   ListPublicOfferingsQuery,
-  pageSchema(PublicOfferingSchema),
+  pageSchema(OfferingListItemSchema),
   { public: true },
+);
+query(
+  '/offerings/{id}/publication-check',
+  'Check whether an offering could be published and list what is missing, without publishing or recording anything (SPK-CAT-004)',
+  null,
+  PublicationCheckSchema,
 );
 query(
   '/offerings/{id}',
@@ -1140,6 +1487,12 @@ query(
   {
     public: true,
   },
+);
+query(
+  '/sessions',
+  'List the sessions at a facility overlapping a window of at most 31 days, with the facility time zone (staff; SPK-SCHED-008)',
+  ListFacilitySessionsQuery,
+  pageSchema(FacilitySessionSchema),
 );
 command(
   'post',
