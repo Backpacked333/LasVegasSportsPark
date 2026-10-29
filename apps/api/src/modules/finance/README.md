@@ -3,7 +3,9 @@
 **Owns:** quotes and quote lines, orders and order lines, obligations, contribution requests,
 payment attempts, receipts, refundable funds and refund attempts, credits and their redemption
 history, the journal subledger (journals and journal entries), payment allocations, installment
-plans and installments, cash and external tenders, settlement reconciliations, checkouts
+plans and installments, cash and external tenders, settlement reconciliations, checkouts; behind
+capability switches (Package G): point-of-sale products, registers, register sessions, sales,
+lines, tenders and returns; accounting mappings and export batches
 
 **Specification:** §3.15 (SPK-PAY-001..012), §4.4 Finance (Quote, Order, OrderLine, Obligation,
 PaymentAttempt, RefundAttempt, Credit) and Accounting support (Journal, JournalEntry,
@@ -13,21 +15,25 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 (`POST /v1/registration-quotes`, `POST /v1/registration-checkouts`, `POST /v1/payments/{id}/refunds`),
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
-**Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses `0600`,
-`0601` and `0680`)
+**Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
+`0600`–`0608` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
 `OFFERING_LOOKUP_PORT`), competition (`TEAM_ENTRY_QUERY_PORT` for team obligations and
 contribution requests; team roles through the kernel), enrollment (`BASKET_PORT`,
-`ENROLLMENT_PORT`, and its exported `BasketsService.hold` command for §4.11 step 3). It never
-writes another module's tables (§4.2); composite foreign keys reference their rows read-only.
+`ENROLLMENT_PORT`, and its exported `BasketsService.hold` command for §4.11 step 3),
+communications (`NotificationsService.composeAndQueueIn` for finance notices, FIN-05). It
+registers `FINANCIAL_STANDING_IMPL` (entry's `FinancialStandingPort`, FIN-03) and never writes
+another module's tables (§4.2); composite foreign keys reference their rows read-only.
 
 **Status: implemented** — verified by `apps/api/src/modules/finance/__tests__` (PGlite and
 `TEST_DATABASE_URL` PostgreSQL) and the unit specs next to the code
 (`pricing/quote-calculator.spec.ts`, `ledger/ledger.service.spec.ts`,
-`providers/fake-payment.provider.spec.ts`). Statements below are verified unless marked proposed
-or pending.
+`providers/fake-payment.provider.spec.ts`, `providers/fake-accounting.provider.spec.ts`,
+`services/pos/pos-charges.spec.ts`, `services/customer-scope.spec.ts`). Statements below are
+verified unless marked proposed or pending. Stage-3 work items FIN-01..FIN-07 are summarized in
+[Stage 3 (FIN-01..FIN-07)](#stage-3-fin-01fin-07).
 
 ## Tables (migration `0600_finance_core.sql`, indexes added in `0601`)
 
@@ -259,6 +265,181 @@ taxes and fees rounded half up per line (DEC-007).
   `apps/api/src/__tests__/journeys/spk-at-028.spec.ts`. A provider feed that recreates post-backup
   facts is **Pending decision** (DEC-019).
 
+## Stage 3 (FIN-01..FIN-07)
+
+Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-of-sale.spec.ts`,
+`accounting-export.spec.ts`, `services/pos/pos-charges.spec.ts` and
+`services/customer-scope.spec.ts` (PGlite and `TEST_DATABASE_URL` PostgreSQL) unless marked
+**Proposed** or **Pending decision**.
+
+### Customer and staff money reads (FIN-01, FIN-02) — verified
+
+| Method | Path                                                                       | Who                                                                                            |
+| ------ | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| GET    | `/me/orders`, `/me/registration-checkouts`, `/me/payments`, `/me/receipts` | the caller as payer: themselves and every person they hold `pay` over (customerSubjects, K-05) |
+| GET    | `/me/contribution-requests`                                                | the requested player (customerSubjects of `finance.pay_contribution`)                          |
+| GET    | `/orders`, `/payments`, `/refunds`                                         | finance readers only (`finance.read_checkout` staff roles); a customer gets `ACCESS_DENIED`    |
+| GET    | `/payments/{id}`                                                           | as before; now `PaymentDetail`: the attempt plus `refundableMinor` and its earlier `refunds`   |
+| GET    | `/obligations`, `/credits`                                                 | as before; now keyset-paged with a stable cursor (`nextCursor`)                                |
+
+- Every list is keyset-paged (`created_at desc, id desc`; obligations `due_at asc, id asc`), so
+  a row inserted between pages is neither repeated nor skipped. Payer ids are expanded with
+  identity's `personIdsResolvingTo` (ID-01), so a merged duplicate's history shows under the
+  survivor without rewriting a financial row. `/me/registration-checkouts` covers checkouts the
+  caller pays or started, and shows `recovery_required` ones (SPK-PAY-007, §4.11).
+- `GET /obligations/{id}` carries `liveAttempt` (`id`, `status` `created`/`action_required`/
+  `processing`/`unknown`, amount, currency, `unknownSince`, `createdAt`) or `null`: staff see any
+  live charge; a customer sees the one they started (contributions model) or any live charge of a
+  debt they may pay, so the payer is told not to pay again (SPK-PAY-007).
+- `PAYMENT_OUTCOME_UNKNOWN` carries `details { attemptId, paymentAttemptId, purpose, status }` for
+  the attempt's payer and staff, and only `{ purpose, status }` for anyone else (§4.10). Starting a
+  second charge while one is live is refused with it (`code: PAYMENT_IN_PROGRESS`).
+- Wording (mobile registration review, the API wins): `created` and `processing` answer
+  `nextAction` `await_payment_confirmation` ("Payment processing"); only `action_required` asks
+  the payer to act (`complete_payment_action`, "Payment needs your action"); `unknown` answers
+  `await_reconciliation`. The `PaymentAttemptStatus` schema description states this mapping.
+  **Pending:** `docs/package-a/journeys.md` §3 still groups `created` with `action_required`
+  under "Payment needs your action"; the correction is outside this module's files and is left
+  to the documentation refresh.
+- `CashTendersService.listForPersons` (IF-08, without evidence) for other modules' reads; the
+  fake payment adapter is listed in the integration register as `finance.payment_provider`
+  (gate `payments`, production not allowed).
+- Migration `0606_finance_customer_read_indexes.sql`: payer indexes on checkouts, payment
+  attempts and receipts; `(requested_person_id, status)` on contribution requests; created-at
+  indexes for the staff lists.
+
+### Financial standing, checkout operation, notices (FIN-03, FIN-04, FIN-05) — verified
+
+- `FinancialStandingService` is registered as entry's `FINANCIAL_STANDING_IMPL` (IF-39): the
+  open obligations due by the arrival time that the person owes, is responsible payer of, or that
+  belong to an order registering them as participant; `outstanding` names the earliest-due one and
+  whether it is `related` to the activity's offering; a failed read is `unknown`, never a guess.
+  Whether a balance blocks arrival is entry's decision (POL-017 / DEC-056 **Pending decision**:
+  informational by default). `ParticipationStandingService` (competition's
+  `FINANCIAL_CONDITIONS_IMPL`) reads through the same service.
+- The checkout passes its operation id to enrollment's `BASKET_PORT.startCheckout`,
+  `finishCheckout` and `failConfirmation` (IF-30), so an enrollment names the checkout operation
+  (SPK-UX-001). Verified at the port boundary; the enrollment side (ENR-06) is merged separately.
+- Finance notices through communications' `NotificationsService.composeAndQueueIn` in the
+  handler's transaction: contribution requested (to the requested player), payment failed (to the
+  payer; not for POS or installment attempts), installment failed and installment due. Each is
+  keyed by its source event, so a replay queues nothing new. Kind `payment_attention`; the wording
+  is not a policy value (communication policy DEC-012 **Pending decision**).
+
+### Point of sale (FIN-06) — verified, behind capability `point_of_sale`
+
+Enabled per organization by its capability switch (default off), naming its applicability
+decision: DEC-079 "Point of sale" within DEC-016 "Conditional capability applicability", both
+**Pending decision**. Disabled: creating or changing products, creating registers, opening a
+session, starting a sale, adding a line or a tender are refused (`ACCESS_DENIED`,
+`details.code: CAPABILITY_DISABLED`); retiring, closing a session, voids, returns and reads are
+never gated (DEC-016).
+
+| Method   | Path                                                                                                             | Who (action)                                                                    |
+| -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| POST/GET | `/pos-products`, PATCH `/pos-products/{id}`, POST `/pos-products/{id}/retire`                                    | finance operator, GM (`finance.manage_pos_products`); read `finance.read_pos`   |
+| POST/GET | `/pos-registers`, POST `/pos-registers/{id}/retire`                                                              | finance operator, GM (`finance.manage_pos_registers`) within facility scope     |
+| POST/GET | `/pos-registers/{id}/sessions`, GET `/pos-register-sessions/{id}`, POST `/pos-register-sessions/{id}/close`      | front desk, finance operator (`finance.operate_register`) within facility scope |
+| POST/GET | `/pos-sales`, `/pos-sales/{id}`, POST `/pos-sales/{id}/lines`, `/pos-sales/{id}/tenders`, `/pos-sales/{id}/void` | `finance.operate_register`; read `finance.read_pos`                             |
+| POST     | `/pos-sales/{id}/returns`                                                                                        | finance operator, GM (`finance.approve_pos_return`)                             |
+| GET      | `/pos-sales/{id}/receipt`, `/me/pos-receipts`                                                                    | facility staff, or the customer the sale names (`finance.read_pos_receipt`)     |
+
+- Reads: finance operator, GM, system administrator and support operator hold
+  `finance.read_pos` / `finance.read_pos_receipt`; the front desk reads the sales, sessions,
+  products and receipts at its facility through `finance.operate_register`
+  (`services/pos/pos-access.ts`), so it holds no finance-area read and `GET /v1/me/permissions`
+  shows it no finance area while POS is off (SPK-UX-005). Whether a desk running a register sees
+  a finance area once POS is enabled follows the kernel's **Proposed** navigation mapping.
+- Migration `0607_finance_point_of_sale.sql`: `pos_products` (merchandise, concession or
+  service; SKU unique per organization; never a registration, SPK-PAY-012), `pos_product_charges`
+  (the approved `tax_fee` policy keys of a product), `pos_registers`, `pos_register_sessions` (one
+  open per register; facility-local business date; counted cash and variance once closed),
+  `pos_sales`, `pos_sale_lines` and `pos_returns` (append-only), `pos_tenders`; payment attempts
+  gain purpose `pos_sale`, refundable funds can name a POS card tender, and the ledger gains
+  `pos_revenue`, `taxes_payable` and `fees_payable`.
+- Database guarantees: a sale's total is subtotal plus charges and is recomputed by the line
+  trigger only while the sale is open; tenders never exceed the total and attach only to an open
+  sale; a card tender names its payment attempt, an external one its evidence (SPK-PAY-012); a
+  return never exceeds a line's sold quantity or the paid amount (constraint trigger, two
+  concurrent returns cannot both pass, also under PostgreSQL); a cash return names an open drawer
+  session; machine guards refuse every transition the `PosSale`, `PosTender`, `PosRegisterSession`
+  machines (`finance.state-machines.ts`) do not allow.
+- Taxes and fees come only from approved catalog `tax_fee` policy versions (CAT-02, DEC-057):
+  a product key with no approved, effective version refuses the line
+  (`CHARGE_POLICY_NOT_APPROVED`; malformed content `CHARGE_POLICY_INVALID`; another currency
+  `CHARGE_POLICY_CURRENCY_MISMATCH`), and each line snapshots the version id. **Proposed** reading of the
+  content (pending DEC-057): a rate in basis points applied once per line to its base and rounded
+  as the version says, or a fixed amount per unit; the charge is added on top of the price.
+- Tenders: cash (into the open session's drawer), external with evidence, or card through
+  `PaymentsService` (§4.11: unit of work, provider call outside it, outcome recorded; an unknown
+  outcome stays `pending`). A sale is `paid` when settled tenders cover the total; it posts
+  `cash_on_hand` (cash and external tenders) and `cash_processor` (card tenders, less processor
+  fees) against `pos_revenue`, `taxes_payable` and `fees_payable`. A void
+  is only for an open sale without card tenders (`SALE_HAS_CARD_TENDER`).
+- Returns post a reversing journal; returned amounts are split per unit by largest remainder, so
+  returning every unit returns exactly what was paid (SPK-PAY-010); a card return reserves and
+  executes a provider refund against the card tender (SPK-PAY-008); a cash return pays out of an
+  open drawer session.
+- Closing a session computes expected cash (float plus settled cash of the session's sales minus
+  cash returns) and records the variance; a non-zero variance raises
+  `finance.pos_register_variance` for the finance operator (POL-018 **Pending decision** for any
+  tolerance; none is assumed).
+- Events `finance.pos_sale_changed`, `finance.pos_register_session_closed` (IF-49).
+
+### Accounting export (FIN-07) — verified, behind capability `accounting`
+
+Enabled per organization by its capability switch (default off), naming DEC-081 "Accounting
+integrations" within DEC-016, both **Pending decision**; the connection itself is DEC-022
+(**Pending decision**). Disabled: proposing or approving a mapping, preparing or submitting a
+batch are refused (`CAPABILITY_DISABLED`); retiring a mapping, canceling a prepared batch, reads,
+outcome recording and reconciliation are never gated.
+
+| Method   | Path                                                                                                 | Who (action)                                                                              |
+| -------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| POST/GET | `/accounting-mappings`, POST `/accounting-mappings/{id}/approve`, `/accounting-mappings/{id}/retire` | propose/retire: finance operator; approve: finance operator or GM other than the proposer |
+| POST/GET | `/accounting-export-batches`, GET `/{id}`, POST `/{id}/submit`, `/{id}/cancel`                       | finance operator (`finance.export_accounting`); read `finance.read_accounting`            |
+
+- Migration `0608_finance_accounting_export.sql`: `accounting_mappings` (four eyes enforced by
+  the database: the approver is not the proposer; one approved mapping per ledger account),
+  `accounting_export_batches` (status machine guard, idempotency key unique per organization,
+  `sha256:` checksum of the exported lines), `accounting_export_lines` (one side per line; a
+  journal entry has at most one live export line; lines never change except leaving the live set
+  when their batch is rejected or canceled).
+- No default mapping exists: a batch is prepared only when every account of its entries has an
+  approved mapping, else `ACCOUNTING_MAPPING_REQUIRED` naming the accounts (SPK-PAY-011, DEC-022).
+  Corrections are later journals exported in a later batch; an exported batch never changes
+  (SPK-PAY-010).
+- Submission follows §4.11 (unit of work 1 records `submitted`, the connection is called outside a
+  transaction with the batch's idempotency key, unit of work 2 records accepted, rejected or
+  unknown). The periodic job `finance.reconcile_accounting_exports` (every 60 s, failure owner
+  finance operator) asks about `unknown` batches and `submitted` ones older than
+  `FINANCE_ACCOUNTING_SUBMIT_STALE_SECONDS` (technical setting, default 300) and resubmits with
+  the same key when the connection has no record. Exceptions:
+  `finance.accounting_export_unknown`, `_rejected`, `_conflict`.
+- `ACCOUNTING_EXPORT_PORT` has only `FakeAccountingProvider` (success, rejection, timeout/unknown,
+  duplicate submission), refused in production; registered as integration
+  `finance.accounting_export` (gate `accounting`). Events `finance.accounting_mapping_changed`,
+  `finance.accounting_batch_changed` (IF-37).
+
+### Stage-3 gaps and dependencies
+
+- Tests use doubles (`__tests__/stage3-doubles.ts`) for port members other work items implement:
+  identity's `personIdsResolvingTo` (ID-01) and `subjectsWithPermission` (ID-09), and catalog's
+  `tax_fee` policy kind (CAT-02). Each double answers only while the real member is still
+  declared but not implemented, so the tests exercise the real implementation once those merge.
+  In production code, `personIdsOf` (`services/customer-scope.ts`) answers the person's own id
+  while `personIdsResolvingTo` is still declared but not implemented, so the `/me` lists and the
+  arrival standing read the person's own records (as before merges were resolvable) instead of
+  failing; once ID-01 is merged a survivor also sees the records of the people merged into it.
+- A POS card tender needs a sale customer (`CARD_TENDER_NEEDS_CUSTOMER`): a payment attempt always
+  has a payer; anonymous card sales depend on the processor (DEC-019 **Pending decision**). A
+  zero-total sale cannot be paid. Refunding a cash or external POS tender is a drawer payout or an
+  external fact, not a provider refund.
+- The accounting export sends journal entries as booked; revenue recognition, payroll and
+  account-level summaries are not exported (DEC-022, DEC-052 **Pending decision**).
+- `docs/api/openapi.json` and the generated API client are regenerated at integration (outside
+  this module's files), so their parity tests stay stale until then.
+
 ## Known gaps
 
 - Disputes and chargebacks are not modelled: the fake provider reports none and the dispute flow
@@ -272,7 +453,8 @@ taxes and fees rounded half up per line (DEC-007).
   full amount (the same as abort).
 - `written_off` obligations, credit revocation and the accounting of credit expiry (breakage) have
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
-- Revenue recognition (deferred → earned) and the accounting export are not implemented (DEC-022).
+- Revenue recognition (deferred → earned) is not implemented (DEC-022); the accounting export
+  (FIN-07) exports journal entries as booked, behind the `accounting` capability.
 - Refunds go through the provider only; refunding a cash tender is not supported. Returning an
   overpayment by refund (instead of approving the held credit) has no dedicated command.
 - Finalization is all-or-nothing per checkout: one refused line sends the whole checkout to
@@ -284,7 +466,7 @@ taxes and fees rounded half up per line (DEC-007).
   DEC-056), so it is never a pass or a block until the policy is approved.
 - The money side of transfers and cancellations is answered (consequence) but not executed
   automatically (no automatic refund, credit or charge from enrollment's commands).
-- List endpoints return one page (`nextCursor: null`).
+- Point of sale and accounting export: see [Stage 3](#stage-3-fin-01fin-07) for their own gaps.
 
 ## Kernel limitations worked around here
 
