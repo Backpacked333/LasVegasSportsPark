@@ -5,7 +5,11 @@ import { afterAll, beforeAll, describe, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createOfferingFixture, createOfferingSessionFixture } from '../../catalog';
 import { createEnrollmentFixture } from '../../enrollment';
-import { createPersonFixture, createStaffMemberFixture } from '../../identity';
+import {
+  createPersonFixture,
+  createRelationshipFixture,
+  createStaffMemberFixture,
+} from '../../identity';
 import {
   createAttendanceObservationFixture,
   createPassFixture,
@@ -30,12 +34,20 @@ describe('entry schema invariants (migration 0800)', () => {
   let adult: string;
   let offeringId: string;
   let sessionId: string;
+  /** The collect grant a verified release names (migration 0804, ENT-02). */
+  let collectGrantId: string;
   const session = () => ({ type: 'session' as const, offeringId, sessionId });
 
   beforeAll(async () => {
     t = await entryTestApp();
     child = await createPersonFixture(t, { kind: 'child' });
     adult = await createPersonFixture(t, { kind: 'adult' });
+    const relationship = await createRelationshipFixture(t, {
+      actorPersonId: adult,
+      subjectPersonId: child,
+      permissions: ['view', 'collect'],
+    });
+    collectGrantId = relationship.grantIds.collect as string;
     const manager = await createStaffMemberFixture(t, { roles: ['program_manager'] });
     offeringId = (await createOfferingFixture(t, { responsibleManagerPersonId: manager.personId }))
       .offeringId;
@@ -76,7 +88,18 @@ describe('entry schema invariants (migration 0800)', () => {
     ...overrides,
   });
 
-  const releaseRow = (overrides: Record<string, unknown> = {}) => ({
+  const releaseRow = (overrides: Record<string, unknown> = {}) => {
+    const row = releaseBase(overrides);
+    // A verified release names its grant (0804); other outcomes never do.
+    return 'authority_grant_id' in overrides
+      ? row
+      : {
+          ...row,
+          authority_grant_id: row.verification_outcome === 'verified' ? collectGrantId : null,
+        };
+  };
+
+  const releaseBase = (overrides: Record<string, unknown> = {}) => ({
     id: newId(),
     organization_id: t.organizationId,
     facility_id: t.facilityId,
@@ -508,6 +531,61 @@ describe('entry schema invariants (migration 0800)', () => {
         .execute(),
       RESTRICT,
     );
+  });
+
+  it('ENT-02 / SPK-ENTRY-007 (migration 0804): a verified release names its grant, only a verified one does, and never another organization’s', async () => {
+    // A verified online release without the grant it relied on is refused.
+    await expectPgError(
+      t.db
+        .insertInto('release_records')
+        .values(releaseRow({ authority_grant_id: null }))
+        .execute(),
+      CHECK,
+    );
+    // A denial never names a grant.
+    await expectPgError(
+      t.db
+        .insertInto('release_records')
+        .values(
+          releaseRow({
+            verification_outcome: 'denied',
+            authority_basis: null,
+            outcome: 'not_released',
+            released_at: null,
+            collector_permissions: [],
+            denial_reason: 'No collect',
+            authority_grant_id: collectGrantId,
+          }),
+        )
+        .execute(),
+      CHECK,
+    );
+    // A grant of another organization (or none at all) cannot be named.
+    const other = await seedOrganization(t.db);
+    const foreignAdult = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: other.organizationId,
+    });
+    const foreignChild = await createPersonFixture(t, {
+      kind: 'child',
+      organizationId: other.organizationId,
+    });
+    const foreign = await createRelationshipFixture(t, {
+      actorPersonId: foreignAdult,
+      subjectPersonId: foreignChild,
+      permissions: ['collect'],
+      organizationId: other.organizationId,
+    });
+    for (const grant of [foreign.grantIds.collect, newId()]) {
+      await expectPgError(
+        t.db
+          .insertInto('release_records')
+          .values(releaseRow({ authority_grant_id: grant }))
+          .execute(),
+        FOREIGN_KEY,
+      );
+    }
+    await t.db.insertInto('release_records').values(releaseRow()).execute();
   });
 
   it('a departure that names a release follows a release that released that child', async () => {

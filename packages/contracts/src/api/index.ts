@@ -7,6 +7,7 @@ export * from './competition-matches';
 export * from './competition';
 export * from './core';
 export * from './enrollment';
+export * from './entry-hardware';
 export * from './entry';
 export * from './facilities';
 export * from './finance';

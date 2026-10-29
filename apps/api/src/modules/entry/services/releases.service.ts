@@ -2,6 +2,9 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  type CollectorCheck,
+  type CollectorCheckBody,
+  type CollectorRestriction,
   type Principal,
   type RecordedRelease,
   type RecordReleaseBody,
@@ -36,6 +39,7 @@ import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
 import {
   audienceOf,
+  hashPassReference,
   organizationOf,
   toCustomerRelease,
   toDeparture,
@@ -58,6 +62,8 @@ export interface ReleaseFacts {
   verificationMethod: 'online_relationship_check' | 'manual_outage_procedure';
   verificationOutcome: ReleaseVerificationOutcome;
   collectorPermissions: GrantPermissionValue[];
+  /** ENT-02: the grant a verified online check relied on (IF-46); null otherwise. */
+  authorityGrantId?: string | null;
   authorityCheckedAt: Date;
   denialReason: string | null;
   restrictionNotes: string | null;
@@ -173,7 +179,24 @@ export class ReleasesService {
         collectorPersonId,
         body.childPersonId,
       );
-      const verified = collectorPersonId !== null && permissions.includes('collect');
+      // ENT-02, IF-46: the grant behind `collect` right now, under the same effectivity rule; a
+      // release is verified only when that grant exists, and it is recorded as the evidence.
+      const grant =
+        collectorPersonId !== null && permissions.includes('collect')
+          ? await this.authority.effectiveGrant(
+              organizationId,
+              collectorPersonId,
+              body.childPersonId,
+              'collect',
+              now,
+              trx,
+            )
+          : null;
+      const verified = grant !== null;
+      if (!verified && permissions.includes('collect')) {
+        // Authority changed between the two reads: never assert it (SPK-ENTRY-007).
+        permissions.splice(permissions.indexOf('collect'), 1);
+      }
       const releaseId = newId();
       let verificationOutcome: ReleaseVerificationOutcome;
       let outcome: ReleaseOutcomeValue;
@@ -218,6 +241,7 @@ export class ReleasesService {
           verificationMethod: 'online_relationship_check',
           verificationOutcome,
           collectorPermissions: permissions,
+          authorityGrantId: grant?.grantId ?? null,
           authorityCheckedAt: now,
           denialReason,
           restrictionNotes: body.restrictionNotes ?? null,
@@ -241,11 +265,108 @@ export class ReleasesService {
         authority === 'assigned'
           ? {
               ...recorded,
+              authorityGrantId: null,
               collectorPermissions: recorded.collectorPermissions.filter((p) => p === 'collect'),
               denialReason: release.denial_reason ? denialReasonFor(collectorPersonId, []) : null,
             }
           : recorded;
       return { release: response, departure: departure ? toDeparture(departure) : null };
+    });
+  }
+
+  /**
+   * POST /v1/releases/collector-checks (ENT-02, SPK-ENTRY-007, SPK-ENTRY-003, SPK-COND-004,
+   * SCR-W-09). Before a supervised release, the assigned coach (entry.record_assigned_release with
+   * an accepted assignment, StaffScope) or the pickup desk (entry.record_release) identifies the
+   * collecting adult by their pass. Read-only and not idempotent: nothing is recorded, not even an
+   * audit row, and POST /v1/releases re-checks authority when the release is recorded.
+   *
+   * The collector is named only when the pass is active, its holder (a person, resolved through
+   * merges) holds `collect` over the participant now (AUTHORITY_LOOKUP_PORT) and the participant
+   * takes part in the activity. Every other case answers the same `mayCollect: false` with no
+   * collector: an unknown or revoked pass, a household pass, a holder without `collect`, a
+   * participant outside the activity. Holding a pass, or having been let in by a device, never
+   * establishes pickup authority (SPK-COND-004).
+   */
+  async collectorCheck(principal: Principal, body: CollectorCheckBody): Promise<CollectorCheck> {
+    const organizationId = organizationOf(principal);
+    const activity = await this.resolver.resolve(organizationId, body.activity);
+    await this.scope.requireForActivity(
+      principal,
+      EntryActions.recordRelease,
+      EntryActions.recordAssignedRelease,
+      activity,
+    );
+    const checkedAt = this.clock.now();
+    return this.uow.run(async ({ trx }) => {
+      const restrictions: CollectorRestriction[] = [
+        {
+          code: 'authority_rechecked_at_release',
+          message: 'Pickup authority is checked again when the release is recorded.',
+        },
+      ];
+      const nobody: CollectorCheck = {
+        mayCollect: false,
+        collector: null,
+        checkedAt: checkedAt.toISOString(),
+        restrictions,
+      };
+      const participant = await this.people.findPerson(
+        organizationId,
+        body.participantPersonId,
+        trx,
+      );
+      if (!participant || participant.status !== 'active') return nobody;
+      if (!(await this.takesPart(trx, organizationId, participant.id, activity))) return nobody;
+      // The participant is on the activity the caller may release from: its facts are theirs.
+      if (participant.kind !== 'child') {
+        restrictions.push({
+          code: 'not_a_child',
+          message: 'Supervised release applies to a child; this participant is not one.',
+        });
+      }
+      const visit = await this.visits.openVisit(
+        trx,
+        organizationId,
+        activity.facilityId,
+        participant.id,
+      );
+      if (!visit) {
+        restrictions.push({
+          code: 'participant_not_on_site',
+          message: 'No open arrival is recorded for this participant at the facility.',
+        });
+      }
+      const pass = await trx
+        .selectFrom('passes')
+        .select(['status', 'holder_kind', 'holder_person_id'])
+        .where('organization_id', '=', organizationId)
+        .where('reference_hash', '=', hashPassReference(body.passReference))
+        .executeTakeFirst();
+      if (!pass || pass.status !== 'active' || !pass.holder_person_id) return nobody;
+      const holderId = await this.people.resolveCanonicalPersonId(
+        organizationId,
+        pass.holder_person_id,
+        trx,
+      );
+      const holder = await this.people.findPerson(organizationId, holderId, trx);
+      if (!holder || holder.status !== 'active' || holder.id === participant.id) return nobody;
+      const mayCollect = await this.authority.hasPermission(
+        organizationId,
+        holder.id,
+        participant.id,
+        'collect',
+        trx,
+      );
+      if (!mayCollect) return nobody;
+      const names = await this.people.displayNames(organizationId, [holder.id], trx);
+      const name = names.get(holder.id);
+      return {
+        mayCollect: true,
+        collector: { personId: holder.id, displayName: name?.displayName ?? '' },
+        checkedAt: checkedAt.toISOString(),
+        restrictions,
+      };
     });
   }
 
@@ -425,6 +546,8 @@ export class ReleasesService {
         verification_outcome: facts.verificationOutcome,
         authority_basis:
           facts.verificationOutcome === 'verified' ? 'relationship_permission:collect' : null,
+        authority_grant_id:
+          facts.verificationOutcome === 'verified' ? (facts.authorityGrantId ?? null) : null,
         authority_checked_at: facts.authorityCheckedAt,
         collector_permissions: facts.collectorPermissions,
         denial_reason: facts.denialReason,

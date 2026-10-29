@@ -61,6 +61,8 @@ export interface NewVisit {
   clientObservationId?: string | null;
   syncBatchId?: string | null;
   accessEventRef?: string | null;
+  /** ENT-05: the registered access device of an `access_control` arrival. */
+  accessDeviceId?: string | null;
 }
 
 export interface NewDeparture {
@@ -231,7 +233,6 @@ export class VisitsService {
       facilityId: query.facilityId,
     });
     const facility = await this.resolver.facility(organizationId, query.facilityId);
-    const window = localDayWindow(facility.timezone, this.clock.now(), query.date);
     const cursor = decodeCursor(query.cursor, VisitCursor);
     let q = this.uow
       .reader()
@@ -239,11 +240,21 @@ export class VisitsService {
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('facility_id', '=', query.facilityId)
-      .where('arrived_at', '>=', window.start)
-      .where('arrived_at', '<', window.end)
       .orderBy('arrived_at')
       .orderBy('id')
       .limit(query.limit + 1);
+    // A facility day, unless a person's whole history at the facility is asked for.
+    if (query.date !== undefined || query.personId === undefined) {
+      const window = localDayWindow(facility.timezone, this.clock.now(), query.date);
+      q = q.where('arrived_at', '>=', window.start).where('arrived_at', '<', window.end);
+    }
+    if (query.personId) {
+      // ENT-04, SPK-IAM-007: the survivor's visits include those recorded under the people merged
+      // into them (rows keep their original person id); a merged id reads only its own rows.
+      const resolving = await this.people.personIdsResolvingTo(organizationId, query.personId);
+      const personIds = resolving[0] === query.personId ? resolving : [query.personId];
+      q = q.where('person_id', 'in', personIds);
+    }
     if (query.status) q = q.where('status', '=', query.status);
     if (cursor) {
       q = q.where(
@@ -377,6 +388,7 @@ export class VisitsService {
         client_observation_id: input.clientObservationId ?? null,
         sync_batch_id: input.syncBatchId ?? null,
         access_event_ref: input.accessEventRef ?? null,
+        access_device_id: input.accessDeviceId ?? null,
         departed_at: null,
         voided_at: null,
         void_reason: null,

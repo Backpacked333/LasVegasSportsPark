@@ -4,6 +4,14 @@ export * from './entry.events';
 export * from './entry.ports';
 export * from './entry.policy';
 export * from './entry.state-machines';
+export * from './entry.settings';
+export {
+  DEVICE_COMMAND_UNDELIVERED,
+  DEVICE_OFFLINE,
+  DELIVER_DEVICE_COMMANDS_JOB,
+  DETECT_DEVICE_OUTAGES_JOB,
+  UNREGISTERED_ACCESS_DEVICE,
+} from './access-hardware.shared';
 export {
   attended,
   statesConflict,
@@ -26,4 +34,6 @@ export { AttendanceService } from './services/attendance.service';
 export { ReleasesService, denialReasonFor } from './services/releases.service';
 export { OfflineSyncService } from './services/offline-sync.service';
 export { OccupancyService } from './services/occupancy.service';
+export { AccessDevicesService } from './services/access-devices.service';
+export { MERGED_DUPLICATE_PASS } from './services/entry-follow-ups.service';
 export * from './testing/entry-fixtures';

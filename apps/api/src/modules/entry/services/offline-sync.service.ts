@@ -3,6 +3,7 @@ import {
   DomainError,
   errors,
   newId,
+  systemPrincipal,
   type OfflineItem,
   type OfflineItemResult,
   type OfflineSyncBatch,
@@ -379,6 +380,43 @@ export class OfflineSyncService {
   }
 
   /**
+   * GET /v1/offline-sync/{id} (ENT-01, §4.15, SPK-UX-008): the stored batch with every item's
+   * outcome, for the principal who submitted it (while they may still synchronize at that
+   * facility) and for desk readers of the facility (entry.read_offline_batch). Anyone else, and
+   * another organization's id, reads NOT_FOUND. A read re-applies nothing (`replayed: false`).
+   */
+  async get(principal: Principal, id: string): Promise<OfflineSyncBatch> {
+    const organizationId = organizationOf(principal);
+    const row = await this.uow
+      .reader()
+      .selectFrom('offline_sync_batches')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!row) throw errors.protectedNotFound('offline_sync_batch');
+    const target = {
+      type: 'offline_sync_batch',
+      id,
+      organizationId,
+      facilityId: row.facility_id,
+    };
+    const submitter =
+      principal.personId !== null &&
+      row.submitted_by_person_id === principal.personId &&
+      (await this.authorization.decide(principal, EntryActions.syncOffline, target)).allowed;
+    if (!submitter) {
+      const reader = await this.authorization.decide(
+        principal,
+        EntryActions.readOfflineBatch,
+        target,
+      );
+      if (!reader.allowed) throw errors.protectedNotFound('offline_sync_batch');
+    }
+    return toBatch(row, false);
+  }
+
+  /**
    * §4.15 / §4.7 invariant 12 / SPK-ENTRY-007: a device queues a release (or a departure) because
    * staff saw the child leave while offline. When the server cannot record it as a verified
    * release — no approved procedure, outside the device's scope or authority, a collector who
@@ -618,7 +656,8 @@ export class OfflineSyncService {
    *       child who must leave through a release is never closed this way: the visit stays open
    *       and a critical `entry.offline_release_unrecorded` asks the pickup queue to confirm
    *       where the child is (SPK-ENTRY-007, §4.7 invariant 12).
-   * The review exception stays open for staff to close.
+   * When (b) closes the visit, its review exception is resolved (ENT-03); the release path (a)
+   * raised none.
    */
   private async closeFromEarlierSync(
     trx: Trx,
@@ -676,9 +715,12 @@ export class OfflineSyncService {
       .where(sql<string>`details->>'personId'`, '=', personId)
       .execute();
     const candidates = held
-      .map((row) => row.details as Partial<UnmatchedDepartureDetails>)
+      .map((row) => ({
+        ...(row.details as Partial<UnmatchedDepartureDetails>),
+        exceptionId: row.id,
+      }))
       .filter(
-        (d): d is UnmatchedDepartureDetails =>
+        (d): d is UnmatchedDepartureDetails & { exceptionId: string } =>
           d.personId === personId &&
           typeof d.observedAt === 'string' &&
           typeof d.deviceId === 'string' &&
@@ -735,6 +777,18 @@ export class OfflineSyncService {
           syncBatchId: pending.batchId,
         },
         ctx.correlationId,
+      );
+      // ENT-03: the gap the exception reported is closed by this arrival; resolve it (system).
+      await this.exceptions.transition(
+        trx,
+        systemPrincipal(ctx.organizationId, 'entry.offline_sync'),
+        pending.exceptionId,
+        'resolved',
+        {
+          reason: 'The arrival synchronized and the held departure closed its visit.',
+          resolution: { visitId: visit.id, closedBy: 'arrival_synchronized' },
+          ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+        },
       );
       return 'closed_by_earlier_synced_departure';
     }

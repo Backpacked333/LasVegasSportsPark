@@ -6,6 +6,7 @@ import {
   type ArrivalIssue,
   type AttendanceObservation,
   type Departure,
+  type MyPass,
   type ObservedState,
   type OccupancySnapshot,
   type OfflineItemResult,
@@ -231,6 +232,24 @@ export function toPass(row: PassRow): Pass {
   };
 }
 
+/**
+ * A pass as its holder reads it (ENT-01, §4.14): never the reference (only its hash is stored, so
+ * it cannot be shown again); the staff revocation reason only to a staff audience.
+ */
+export function toMyPass(row: PassRow, audience: ReadAudience): MyPass {
+  return {
+    id: row.id,
+    holderKind: row.holder_kind,
+    holderPersonId: row.holder_person_id,
+    status: row.status,
+    issuedAt: iso(row.issued_at),
+    revokedAt: isoOrNull(row.revoked_at),
+    revokedReason: audience === 'staff' ? row.revoked_reason : null,
+    referenceAvailable: false,
+    revision: row.revision,
+  };
+}
+
 export function toVisit(row: VisitRow): Visit {
   return {
     id: row.id,
@@ -242,6 +261,7 @@ export function toVisit(row: VisitRow): Visit {
     arrivedAt: iso(row.arrived_at),
     passId: row.pass_id,
     source: row.source,
+    accessDeviceId: row.access_device_id,
     status: row.status,
     departedAt: isoOrNull(row.departed_at),
     voidedAt: isoOrNull(row.voided_at),
@@ -340,6 +360,7 @@ export function toRelease(row: ReleaseRow): ReleaseRecord {
     verificationMethod: row.verification_method,
     verificationOutcome: row.verification_outcome,
     authorityBasis: row.authority_basis,
+    authorityGrantId: row.authority_grant_id,
     authorityCheckedAt: iso(row.authority_checked_at),
     collectorPermissions: [...row.collector_permissions],
     denialReason: row.denial_reason,
@@ -367,6 +388,7 @@ export function toRelease(row: ReleaseRow): ReleaseRecord {
 export function toCustomerRelease(row: ReleaseRow): ReleaseRecord {
   return {
     ...toRelease(row),
+    authorityGrantId: null,
     collectorPermissions: [],
     denialReason: null,
     restrictionNotes: null,
