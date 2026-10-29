@@ -31,9 +31,19 @@ export const CheckoutStatusSchema = z
   ])
   .openapi('CheckoutStatus');
 export type CheckoutStatus = z.infer<typeof CheckoutStatusSchema>;
+/**
+ * FIN-01 wording (the API is authoritative; docs/package-a/journeys.md section 3 follows it):
+ * `created` and `processing` mean the payment is on its way and the payer waits
+ * (`await_payment_confirmation`); only `action_required` asks the payer to act
+ * (`complete_payment_action`); `unknown` means the outcome is not known yet and the payer must not
+ * pay again until it is reconciled (`await_reconciliation`, SPK-PAY-007).
+ */
 export const PaymentAttemptStatusSchema = z
   .enum(['created', 'action_required', 'processing', 'succeeded', 'failed', 'canceled', 'unknown'])
-  .openapi('PaymentAttemptStatus');
+  .openapi('PaymentAttemptStatus', {
+    description:
+      'created and processing: the payment is on its way, the payer waits (nextAction await_payment_confirmation). action_required: the provider asks the payer to act (complete_payment_action); no other status asks the payer anything. unknown: the outcome is not known yet; do not pay again until it is reconciled (await_reconciliation, SPK-PAY-007). succeeded, failed and canceled are final.',
+  });
 export type PaymentAttemptStatus = z.infer<typeof PaymentAttemptStatusSchema>;
 export const RefundStatusSchema = z
   .enum(['requested', 'processing', 'succeeded', 'failed', 'canceled', 'unknown'])
@@ -61,6 +71,10 @@ export const LedgerAccountSchema = z
     'refunds',
     'cash_on_hand',
     'overpayment_liability',
+    // FIN-06: point-of-sale revenue and the approved taxes and fees collected on sales (DEC-057).
+    'pos_revenue',
+    'taxes_payable',
+    'fees_payable',
   ])
   .openapi('LedgerAccount');
 export type LedgerAccount = z.infer<typeof LedgerAccountSchema>;
@@ -236,10 +250,15 @@ export type CreateQuoteInput = z.infer<typeof CreateQuoteBody>;
 // Payment attempts, receipts and checkouts (§4.11)
 // ---------------------------------------------------------------------------------------------
 
+export const PaymentAttemptPurposeSchema = z
+  .enum(['checkout', 'obligation', 'contribution', 'installment', 'pos_sale'])
+  .openapi('PaymentAttemptPurpose');
+export type PaymentAttemptPurposeValue = z.infer<typeof PaymentAttemptPurposeSchema>;
+
 export const PaymentAttemptSchema = z
   .object({
     id: z.uuid(),
-    purpose: z.enum(['checkout', 'obligation', 'contribution', 'installment']),
+    purpose: PaymentAttemptPurposeSchema,
     status: PaymentAttemptStatusSchema,
     amountMinor: z.number().int(),
     currency: CurrencyCode,
@@ -255,6 +274,8 @@ export const PaymentAttemptSchema = z
     obligationId: z.uuid().nullable(),
     contributionRequestId: z.uuid().nullable(),
     installmentId: z.uuid().nullable(),
+    /** FIN-06: the point-of-sale sale a card tender pays. */
+    posSaleId: z.uuid().nullable(),
     unknownSince: Instant.nullable(),
     resolvedAt: Instant.nullable(),
     createdAt: Instant,
@@ -262,6 +283,45 @@ export const PaymentAttemptSchema = z
   })
   .openapi('PaymentAttempt');
 export type PaymentAttempt = z.infer<typeof PaymentAttemptSchema>;
+
+/**
+ * FIN-01 (SPK-PAY-007, §4.7 invariant 5): the payment still on its way for a record (an obligation
+ * or a checkout), so the payer is told to wait or not to pay again instead of finding out from a
+ * refused second payment.
+ */
+export const LiveAttemptSchema = z
+  .object({
+    id: z.uuid(),
+    status: z.enum(['created', 'action_required', 'processing', 'unknown']),
+    amountMinor: z.number().int(),
+    currency: CurrencyCode,
+    unknownSince: Instant.nullable(),
+    createdAt: Instant,
+  })
+  .openapi('LiveAttempt');
+export type LiveAttempt = z.infer<typeof LiveAttemptSchema>;
+
+/** FIN-02 (SPK-PAY-008): an earlier refund of a payment, as listed on the payment. */
+export const PaymentRefundSummarySchema = z
+  .object({
+    id: z.uuid(),
+    status: z.enum(['requested', 'processing', 'succeeded', 'failed', 'canceled', 'unknown']),
+    amountMinor: z.number().int(),
+    currency: CurrencyCode,
+    requestedAt: Instant,
+  })
+  .openapi('PaymentRefundSummary');
+export type PaymentRefundSummary = z.infer<typeof PaymentRefundSummarySchema>;
+
+/**
+ * GET /v1/payments/{id} (FIN-02, SPK-PAY-008, SCR-S-37): the attempt with what can still be
+ * refunded (captured minus refunded minus reserved; 0 when nothing was captured) and its refunds.
+ */
+export const PaymentDetailSchema = PaymentAttemptSchema.extend({
+  refundableMinor: z.number().int(),
+  refunds: z.array(PaymentRefundSummarySchema),
+}).openapi('PaymentDetail');
+export type PaymentDetail = z.infer<typeof PaymentDetailSchema>;
 
 export const ReceiptSchema = z
   .object({
@@ -472,6 +532,13 @@ export const ObligationSchema = z
     totals: ObligationTotalsSchema,
     /** Present for team obligations with contributions (captain and staff views). */
     contributions: z.array(ContributionSummarySchema).nullable(),
+    /**
+     * FIN-01 (SPK-PAY-007): a payment toward this obligation that is still on its way or whose
+     * outcome is unknown, as far as the reader may see it (their own payment; any for staff and,
+     * outside the contributions model, for the household that owes it). `unknown`: do not pay
+     * again until it is reconciled.
+     */
+    liveAttempt: LiveAttemptSchema.nullable(),
     revision: Revision,
     createdAt: Instant,
   })
@@ -675,6 +742,72 @@ export type ApproveCreditInput = z.infer<typeof ApproveCreditBody>;
 
 export const ListCreditsQuery = PageRequestSchema.extend({ ownerPersonId: z.uuid() });
 export type ListCreditsQuery = z.infer<typeof ListCreditsQuery>;
+
+// ---------------------------------------------------------------------------------------------
+// Customer and staff money lists (FIN-01, FIN-02; §4.5 scoped, paginated keyset queries, newest
+// first). Customer lists cover the people the caller pays for (K-05 customerSubjects) and every
+// person merged into them (ID-01 personIdsResolvingTo); staff lists are finance readers only.
+// ---------------------------------------------------------------------------------------------
+
+const OrderPaymentStatusSchema = z.enum(['awaiting_payment', 'paid', 'canceled']);
+const OrderFulfillmentStatusSchema = z.enum([
+  'pending',
+  'fulfilled',
+  'recovery_required',
+  'compensated',
+  'canceled',
+]);
+
+export const ListMyOrdersQuery = PageRequestSchema.extend({
+  paymentStatus: OrderPaymentStatusSchema.optional(),
+  fulfillmentStatus: OrderFulfillmentStatusSchema.optional(),
+});
+export type ListMyOrdersQuery = z.infer<typeof ListMyOrdersQuery>;
+
+export const ListMyCheckoutsQuery = PageRequestSchema.extend({
+  status: CheckoutStatusSchema.optional(),
+});
+export type ListMyCheckoutsQuery = z.infer<typeof ListMyCheckoutsQuery>;
+
+export const ListMyPaymentsQuery = PageRequestSchema.extend({
+  status: PaymentAttemptStatusSchema.optional(),
+  purpose: PaymentAttemptPurposeSchema.optional(),
+});
+export type ListMyPaymentsQuery = z.infer<typeof ListMyPaymentsQuery>;
+
+export const ListMyReceiptsQuery = PageRequestSchema;
+export type ListMyReceiptsQuery = z.infer<typeof ListMyReceiptsQuery>;
+
+export const ListMyContributionRequestsQuery = PageRequestSchema.extend({
+  status: z.enum(['requested', 'paid', 'canceled']).optional(),
+});
+export type ListMyContributionRequestsQuery = z.infer<typeof ListMyContributionRequestsQuery>;
+
+export const ListOrdersQuery = PageRequestSchema.extend({
+  payerPersonId: z.uuid().optional(),
+  paymentStatus: OrderPaymentStatusSchema.optional(),
+  fulfillmentStatus: OrderFulfillmentStatusSchema.optional(),
+  /** Orders created at or after this instant. */
+  from: Instant.optional(),
+  /** Orders created before this instant. */
+  to: Instant.optional(),
+});
+export type ListOrdersQuery = z.infer<typeof ListOrdersQuery>;
+
+export const ListPaymentsQuery = PageRequestSchema.extend({
+  status: PaymentAttemptStatusSchema.optional(),
+  purpose: PaymentAttemptPurposeSchema.optional(),
+  payerPersonId: z.uuid().optional(),
+  orderId: z.uuid().optional(),
+  obligationId: z.uuid().optional(),
+});
+export type ListPaymentsQuery = z.infer<typeof ListPaymentsQuery>;
+
+export const ListRefundsQuery = PageRequestSchema.extend({
+  paymentAttemptId: z.uuid().optional(),
+  status: RefundStatusSchema.optional(),
+});
+export type ListRefundsQuery = z.infer<typeof ListRefundsQuery>;
 
 // ---------------------------------------------------------------------------------------------
 // Installments (SPK-PAY-006)
@@ -1020,7 +1153,60 @@ command(
   CheckoutSchema,
 );
 query('/orders/{id}', 'Read an order with its price and policy basis', null, OrderSchema);
-query('/payments/{id}', 'Read a payment attempt', null, PaymentAttemptSchema);
+query(
+  '/payments/{id}',
+  'Read a payment attempt with its refundable amount and earlier refunds (SPK-PAY-008)',
+  null,
+  PaymentDetailSchema,
+);
+query(
+  '/orders',
+  'List orders (finance readers; SPK-PAY-011)',
+  ListOrdersQuery,
+  pageSchema(OrderSchema),
+);
+query(
+  '/payments',
+  'List payment attempts by state, purpose, payer, order or obligation (finance readers; SPK-PAY-007)',
+  ListPaymentsQuery,
+  pageSchema(PaymentAttemptSchema),
+);
+query(
+  '/refunds',
+  'List refunds by payment or state (finance readers; SPK-PAY-008)',
+  ListRefundsQuery,
+  pageSchema(RefundSchema),
+);
+query(
+  '/me/orders',
+  'My orders: the orders of the people I pay for (SPK-PAY-002)',
+  ListMyOrdersQuery,
+  pageSchema(OrderSchema),
+);
+query(
+  '/me/registration-checkouts',
+  'My registration checkouts, including one that needs recovery (SPK-PAY-007, §4.11)',
+  ListMyCheckoutsQuery,
+  pageSchema(CheckoutSchema),
+);
+query(
+  '/me/payments',
+  'My payment attempts and their states (SPK-PAY-007)',
+  ListMyPaymentsQuery,
+  pageSchema(PaymentAttemptSchema),
+);
+query(
+  '/me/receipts',
+  'My receipts: money received from the people I pay for (SPK-PAY-005)',
+  ListMyReceiptsQuery,
+  pageSchema(ReceiptSchema),
+);
+query(
+  '/me/contribution-requests',
+  'Contribution requests addressed to me or to the people I pay for (SPK-PAY-004)',
+  ListMyContributionRequestsQuery,
+  pageSchema(ContributionRequestSchema),
+);
 command(
   '/payments/{id}/refunds',
   'Reserve and request a refund (SPK-PAY-008)',

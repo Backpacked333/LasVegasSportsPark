@@ -273,7 +273,8 @@ export interface CheckoutsTable {
   updated_at: GeneratedTimestamp;
 }
 
-export type PaymentAttemptPurpose = 'checkout' | 'obligation' | 'contribution' | 'installment';
+export type PaymentAttemptPurpose =
+  'checkout' | 'obligation' | 'contribution' | 'installment' | 'pos_sale';
 export type PaymentAttemptStatusValue =
   'created' | 'action_required' | 'processing' | 'succeeded' | 'failed' | 'canceled' | 'unknown';
 export type EvidenceSource = 'sync_response' | 'webhook' | 'reconciliation';
@@ -286,6 +287,8 @@ export interface PaymentAttemptsTable {
   obligation_id: string | null;
   contribution_request_id: string | null;
   installment_id: string | null;
+  /** FIN-06 (migration 0607): the point-of-sale sale a card tender pays. */
+  pos_sale_id: string | null;
   payer_person_id: string;
   amount_minor: MinorUnits;
   currency: string;
@@ -339,7 +342,11 @@ export type LedgerAccountCode =
   | 'processor_fees'
   | 'refunds'
   | 'cash_on_hand'
-  | 'overpayment_liability';
+  | 'overpayment_liability'
+  // FIN-06 (migration 0607): point-of-sale revenue, approved taxes and fees (DEC-057).
+  | 'pos_revenue'
+  | 'taxes_payable'
+  | 'fees_payable';
 export interface JournalsTable {
   id: string;
   organization_id: string;
@@ -395,7 +402,10 @@ export interface ReceiptsTable {
 export interface PaymentRefundablesTable {
   payment_attempt_id: string;
   organization_id: string;
-  receipt_id: string;
+  /** The receipt of a captured payment; null for a point-of-sale card tender (0607). */
+  receipt_id: string | null;
+  /** FIN-06: the point-of-sale card tender whose capture this is (exactly one of the two). */
+  pos_tender_id: string | null;
   currency: string;
   captured_minor: MinorUnits;
   refunded_minor: GeneratedMinor;

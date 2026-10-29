@@ -4,13 +4,23 @@ import {
   CompensateCheckoutBody,
   CreateCheckoutBody,
   CreateQuoteBody,
+  ListMyCheckoutsQuery,
+  ListMyContributionRequestsQuery,
+  ListMyOrdersQuery,
+  ListMyPaymentsQuery,
+  ListMyReceiptsQuery,
+  ListOrdersQuery,
   RecoverCheckoutBody,
   RetryCheckoutPaymentBody,
   z,
   type Checkout,
+  type ContributionRequest,
   type Order,
+  type Page,
+  type PaymentAttempt,
   type Principal,
   type Quote,
+  type Receipt,
 } from '@sportspark/contracts';
 import {
   CurrentPrincipal,
@@ -18,10 +28,12 @@ import {
   RefusedDuringRecovery,
   ZodBody,
   ZodParams,
+  ZodQuery,
 } from '../../../kernel';
 import { CorrelationId, organizationOf } from '../finance.shared';
 import { CheckoutFinalizer } from '../services/checkout-finalizer.service';
 import { CheckoutService } from '../services/checkout.service';
+import { MoneyReadsService } from '../services/money-reads.service';
 import { QuotesService } from '../services/quotes.service';
 
 const IdParams = z.object({ id: z.uuid() });
@@ -129,7 +141,19 @@ export class CheckoutsController {
 @RefusedDuringRecovery()
 @Controller('orders')
 export class OrdersController {
-  constructor(private readonly checkouts: CheckoutService) {}
+  constructor(
+    private readonly checkouts: CheckoutService,
+    private readonly reads: MoneyReadsService,
+  ) {}
+
+  /** FIN-02 (SPK-PAY-011): finance readers list orders; customers use GET /v1/me/orders. */
+  @Get()
+  list(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListOrdersQuery) query: z.infer<typeof ListOrdersQuery>,
+  ): Promise<Page<Order>> {
+    return this.reads.listOrders(principal, query);
+  }
 
   @Get(':id')
   get(
@@ -137,5 +161,56 @@ export class OrdersController {
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
   ): Promise<Order> {
     return this.checkouts.getOrder(principal, params.id);
+  }
+}
+
+/**
+ * A person's own money lists (FIN-01; SPK-PAY-004, SPK-PAY-005, SPK-PAY-007): an interrupted
+ * payment, a checkout in recovery or a contribution asked of a player is found again from the
+ * server, never from ids kept on the device.
+ */
+@Controller('me')
+export class MeMoneyController {
+  constructor(private readonly reads: MoneyReadsService) {}
+
+  @Get('orders')
+  orders(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListMyOrdersQuery) query: z.infer<typeof ListMyOrdersQuery>,
+  ): Promise<Page<Order>> {
+    return this.reads.myOrders(principal, query);
+  }
+
+  @Get('registration-checkouts')
+  checkouts(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListMyCheckoutsQuery) query: z.infer<typeof ListMyCheckoutsQuery>,
+  ): Promise<Page<Checkout>> {
+    return this.reads.myCheckouts(principal, query);
+  }
+
+  @Get('payments')
+  payments(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListMyPaymentsQuery) query: z.infer<typeof ListMyPaymentsQuery>,
+  ): Promise<Page<PaymentAttempt>> {
+    return this.reads.myPayments(principal, query);
+  }
+
+  @Get('receipts')
+  receipts(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListMyReceiptsQuery) query: z.infer<typeof ListMyReceiptsQuery>,
+  ): Promise<Page<Receipt>> {
+    return this.reads.myReceipts(principal, query);
+  }
+
+  @Get('contribution-requests')
+  contributionRequests(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListMyContributionRequestsQuery)
+    query: z.infer<typeof ListMyContributionRequestsQuery>,
+  ): Promise<Page<ContributionRequest>> {
+    return this.reads.myContributionRequests(principal, query);
   }
 }

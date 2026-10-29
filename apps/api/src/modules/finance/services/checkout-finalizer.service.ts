@@ -37,6 +37,7 @@ import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
 import type { CompensationMethod } from '../finance.policy';
 import {
+  outcomeUnknownDetails,
   financeSystem,
   minutesFrom,
   organizationOf,
@@ -49,6 +50,41 @@ import { MoneyFacts } from './money-facts.service';
 import { RefundsService } from './refunds.service';
 
 export type CheckoutRow = Selectable<CheckoutsTable>;
+
+/**
+ * FIN-04 (§4.11 step 4, SPK-UX-001): the basket and enrollment entry points take the checkout's
+ * operation id as a trailing argument (ENR-06), recorded as the enrollments' last operation. The
+ * overloads keep compiling against the earlier port shape, which ignores the argument.
+ */
+export type CheckoutBasketPort = BasketPort & {
+  startCheckout(
+    trx: Trx,
+    organizationId: string,
+    basketId: string,
+    orderRef: string,
+    actor: Principal,
+    operationId?: string | null,
+  ): ReturnType<BasketPort['startCheckout']>;
+  finishCheckout(
+    trx: Trx,
+    organizationId: string,
+    basketId: string,
+    outcome: 'fulfilled' | 'partially_fulfilled' | 'abandoned',
+    actor: Principal,
+    operationId?: string | null,
+  ): ReturnType<BasketPort['finishCheckout']>;
+};
+export type CheckoutEnrollmentPort = EnrollmentPort & {
+  failConfirmation(
+    trx: Trx,
+    organizationId: string,
+    enrollmentId: string,
+    reason: string,
+    actor: Principal,
+    correlationId?: string | null,
+    operationId?: string | null,
+  ): ReturnType<EnrollmentPort['failConfirmation']>;
+};
 
 /** Failures that will not go away by retrying: the place or the entitlement is gone (SPK-AT-006). */
 const DEFINITIVE = new Set(['CAPACITY_UNAVAILABLE', 'DUPLICATE_ENTITLEMENT', 'INVALID_TRANSITION']);
@@ -69,8 +105,8 @@ export class CheckoutFinalizer {
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
-    @Inject(ENROLLMENT_PORT) private readonly enrollments: EnrollmentPort,
-    @Inject(BASKET_PORT) private readonly baskets: BasketPort,
+    @Inject(ENROLLMENT_PORT) private readonly enrollments: CheckoutEnrollmentPort,
+    @Inject(BASKET_PORT) private readonly baskets: CheckoutBasketPort,
     @Inject(PRICING_PORT) private readonly pricing: PricingPort,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
@@ -177,7 +213,14 @@ export class CheckoutFinalizer {
         operationId: checkout.operation_id,
       });
     }
-    await this.baskets.finishCheckout(trx, organizationId, checkout.basket_id, 'fulfilled', actor);
+    await this.baskets.finishCheckout(
+      trx,
+      organizationId,
+      checkout.basket_id,
+      'fulfilled',
+      actor,
+      checkout.operation_id,
+    );
     const now = this.clock.now();
     await trx
       .updateTable('orders')
@@ -505,6 +548,7 @@ export class CheckoutFinalizer {
           'checkout_compensated',
           actor,
           correlationId,
+          checkout.operation_id,
         );
       }
     }
@@ -525,7 +569,14 @@ export class CheckoutFinalizer {
       actor,
       correlationId,
     );
-    await this.baskets.finishCheckout(trx, organizationId, checkout.basket_id, 'abandoned', actor);
+    await this.baskets.finishCheckout(
+      trx,
+      organizationId,
+      checkout.basket_id,
+      'abandoned',
+      actor,
+      checkout.operation_id,
+    );
     const now = this.clock.now();
     await trx
       .updateTable('orders')
@@ -897,10 +948,7 @@ export class CheckoutFinalizer {
       // lossy failover can roll back while the provider keeps the charge, so only provider
       // evidence resolves it (the stranded-attempt sweep in PaymentsService.reconcileStale looks
       // it up by its idempotency key and cancels it on "no record"), never an assumption here.
-      throw errors.paymentOutcomeUnknown({
-        paymentAttemptId: pending.id,
-        status: pending.status,
-      });
+      throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(actor, pending));
     }
     const order = await trx
       .selectFrom('orders')
@@ -954,7 +1002,14 @@ export class CheckoutFinalizer {
         correlationId,
       });
     }
-    await this.baskets.finishCheckout(trx, organizationId, checkout.basket_id, 'abandoned', actor);
+    await this.baskets.finishCheckout(
+      trx,
+      organizationId,
+      checkout.basket_id,
+      'abandoned',
+      actor,
+      checkout.operation_id,
+    );
     await trx
       .updateTable('checkouts')
       .set({

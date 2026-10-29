@@ -1,7 +1,10 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   systemPrincipal,
+  z,
   type AppliedCharge,
   type AppliedCredit,
   type CashTender,
@@ -11,6 +14,7 @@ import {
   type Installment,
   type InstallmentPlan,
   type LinePolicyReferences,
+  type LiveAttempt,
   type Order,
   type PaymentAttempt,
   type Principal,
@@ -40,7 +44,7 @@ import type {
   RefundAttemptsTable,
   SettlementReconciliationsTable,
 } from '@sportspark/db';
-import { sql, type Selectable } from 'kysely';
+import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
 import type { RequestWithContext, Trx } from '../../kernel';
 
 export type Reader = Db | Trx;
@@ -189,6 +193,7 @@ export function toPaymentAttempt(row: PaymentAttemptRow): PaymentAttempt {
     obligationId: row.obligation_id,
     contributionRequestId: row.contribution_request_id,
     installmentId: row.installment_id,
+    posSaleId: row.pos_sale_id ?? null,
     unknownSince: isoOrNull(row.unknown_since),
     resolvedAt: isoOrNull(row.resolved_at),
     createdAt: iso(row.created_at),
@@ -407,5 +412,95 @@ export function toSettlement(row: SettlementRow): SettlementReconciliation {
     breakdown: row.breakdown,
     externalReference: row.external_reference,
     performedAt: iso(row.performed_at),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Live attempts and PAYMENT_OUTCOME_UNKNOWN (FIN-01, SPK-PAY-007)
+// ---------------------------------------------------------------------------------------------
+
+export const LIVE_ATTEMPT_STATES = ['created', 'action_required', 'processing', 'unknown'] as const;
+
+export function toLiveAttempt(row: PaymentAttemptRow): LiveAttempt {
+  return {
+    id: row.id,
+    status: row.status as LiveAttempt['status'],
+    amountMinor: row.amount_minor,
+    currency: row.currency,
+    unknownSince: isoOrNull(row.unknown_since),
+    createdAt: iso(row.created_at),
+  };
+}
+
+/**
+ * The details of a PAYMENT_OUTCOME_UNKNOWN refusal (FIN-01): the attempt's payer and staff learn
+ * which attempt is in the way (`attemptId`, with the earlier `paymentAttemptId` kept for
+ * existing clients) and its purpose; anyone else learns only that a payment is on its way, never
+ * another payer's attempt (§4.10).
+ */
+export function outcomeUnknownDetails(
+  principal: Principal,
+  attempt: Pick<PaymentAttemptRow, 'id' | 'purpose' | 'status' | 'payer_person_id'>,
+): Record<string, unknown> {
+  const visible =
+    isStaffLike(principal) ||
+    (principal.personId !== null && principal.personId === attempt.payer_person_id);
+  return visible
+    ? {
+        attemptId: attempt.id,
+        paymentAttemptId: attempt.id,
+        purpose: attempt.purpose,
+        status: attempt.status,
+      }
+    : { purpose: attempt.purpose, status: attempt.status };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Keyset pages (§4.5, FIN-01/02). The cursor carries the ordering column as the database's own
+// text so microseconds survive the round trip, and the id as the tie-breaker; a malformed cursor
+// reads as the first page.
+// ---------------------------------------------------------------------------------------------
+
+const KeysetCursor = z.object({ at: z.string().min(1).max(64), id: z.uuid() });
+export type Keyset = z.infer<typeof KeysetCursor>;
+
+export function decodeKeyset(cursor: string | undefined): Keyset | null {
+  return decodeCursor(cursor, KeysetCursor);
+}
+
+/** `<table>.<column>::text`, selected as `cursor_at` beside the row. */
+export function keysetAt(table: string, column = 'created_at'): RawBuilder<string> {
+  return sql<string>`${sql.ref(`${table}.${column}`)}::text`;
+}
+
+/** Rows strictly after the cursor in (`column` desc, id desc) order. */
+export function afterKeysetDesc(
+  table: string,
+  cursor: Keyset,
+  column = 'created_at',
+): RawBuilder<SqlBool> {
+  return sql<SqlBool>`(${sql.ref(`${table}.${column}`)}, ${sql.ref(`${table}.id`)}) < (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+}
+
+/** Rows strictly after the cursor in (`column` asc, id asc) order. */
+export function afterKeysetAsc(
+  table: string,
+  cursor: Keyset,
+  column = 'created_at',
+): RawBuilder<SqlBool> {
+  return sql<SqlBool>`(${sql.ref(`${table}.${column}`)}, ${sql.ref(`${table}.id`)}) > (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+}
+
+/** Splits a `limit + 1` read into the page and its next cursor. */
+export function keysetPage<R extends { id: string; cursor_at: string }>(
+  rows: readonly R[],
+  limit: number,
+): { rows: R[]; nextCursor: string | null } {
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    nextCursor:
+      rows.length > limit && last ? encodeCursor({ at: last.cursor_at, id: last.id }) : null,
   };
 }

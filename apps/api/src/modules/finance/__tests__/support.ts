@@ -1,8 +1,14 @@
-import { newId, type CapacityUnit, type ChargeLine, type StaffRole } from '@sportspark/contracts';
+import {
+  newId,
+  type CapabilityId,
+  type CapacityUnit,
+  type ChargeLine,
+  type StaffRole,
+} from '@sportspark/contracts';
 import { pgErrorCode } from '@sportspark/db';
 import type { TestingModuleBuilder } from '@nestjs/testing';
 import { Inbox, OutboxDispatcher } from '../../../kernel';
-import { createTestApp, type TestApp } from '../../../testing';
+import { createTestApp, type TestApp, type TestAppOptions } from '../../../testing';
 import {
   createAcknowledgmentFixture,
   createOfferingFixture,
@@ -24,6 +30,9 @@ import {
   FAKE_PAYMENTS_SIGNATURE_HEADER,
   FakePaymentProvider,
 } from '../providers/fake-payment.provider';
+import { withStage3Doubles } from './stage3-doubles';
+
+type TestAppImports = NonNullable<TestAppOptions['imports']>;
 
 /** Shared helpers for the finance API tests (not a spec file). */
 
@@ -36,13 +45,23 @@ export function financeTestApp(
   options: {
     clockStart?: string;
     configure?: (b: TestingModuleBuilder) => TestingModuleBuilder;
+    imports?: TestAppImports;
+    capabilities?: readonly CapabilityId[];
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<TestApp> {
   return createTestApp({
-    imports: [FinanceModule],
+    imports: [FinanceModule, ...(options.imports ?? [])],
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
-    configure: options.configure,
+    capabilities: options.capabilities,
+    env: options.env,
+    // Stage-3 port members other work items implement (ID-01, ID-09, CAT-02) answer through their
+    // declared contract until those land (stage3-doubles.ts).
+    configure: (b) => {
+      const doubled = withStage3Doubles(b);
+      return options.configure ? options.configure(doubled) : doubled;
+    },
   });
 }
 

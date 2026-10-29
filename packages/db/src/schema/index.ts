@@ -7,6 +7,8 @@ import type { CompetitionTables } from './competition';
 import type { EnrollmentTables } from './enrollment';
 import type { EntryTables } from './entry';
 import type { FacilitiesTables } from './facilities';
+import type { FinanceAccountingTables } from './finance-accounting';
+import type { FinancePosTables } from './finance-pos';
 import type { FinanceTables } from './finance';
 import type { IdentityTables } from './identity';
 import type { MigrationTables } from './migration';
@@ -24,6 +26,8 @@ export * from './competition';
 export * from './enrollment';
 export * from './entry';
 export * from './facilities';
+export * from './finance-accounting';
+export * from './finance-pos';
 export * from './finance';
 export * from './identity';
 export * from './migration';
@@ -47,6 +51,8 @@ export interface Database
     EnrollmentTables,
     EntryTables,
     FacilitiesTables,
+    FinanceAccountingTables,
+    FinancePosTables,
     FinanceTables,
     IdentityTables,
     MigrationTables,

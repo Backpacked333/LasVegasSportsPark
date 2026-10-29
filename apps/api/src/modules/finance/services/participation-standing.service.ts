@@ -6,6 +6,7 @@ import type {
   FinancialConditionsPort,
   FixtureConditionContext,
 } from '../../competition';
+import { FinancialStandingService } from './financial-standing.service';
 
 /** Same shape as entry's FinancialStanding (entry consumes this service; §4.2 order). */
 export type ParticipationStanding =
@@ -27,13 +28,16 @@ export type ParticipationStanding =
  *   competition's FINANCIAL_CONDITIONS_IMPL: no open obligation of a competing team entry is
  *   satisfied; an open one is reported `unknown`, never a block and never a pass, because whether
  *   an open team balance affects play is pending POL-017 / DEC-056.
- * - Arrival standing (SPK-ENTRY-004), consumed by entry: due, open obligations of the participant,
- *   `related` when one belongs to the activity's offering (an order line of the participant). Entry
- *   decides what an unrelated balance does (informational by default, DEC-056).
+ * - Arrival standing (SPK-ENTRY-004): delegated to FinancialStandingService, which finance
+ *   registers as entry's FINANCIAL_STANDING_IMPL (FIN-03). Entry decides what a balance does
+ *   (informational by default, DEC-056).
  */
 @Injectable()
 export class ParticipationStandingService implements FinancialConditionsPort {
-  constructor(@Inject(DATABASE) private readonly db: Db) {}
+  constructor(
+    @Inject(DATABASE) private readonly db: Db,
+    private readonly standing: FinancialStandingService,
+  ) {}
 
   async fixtureConditions(
     organizationId: string,
@@ -88,53 +92,16 @@ export class ParticipationStandingService implements FinancialConditionsPort {
     return findings;
   }
 
+  /**
+   * Arrival standing (SPK-ENTRY-004): the same answer as FINANCIAL_STANDING_IMPL (FIN-03), for
+   * callers that resolve this service directly.
+   */
   async standingOf(
     organizationId: string,
     personId: string,
     context: { offeringId: string | null; at: Date },
     trx?: Trx,
   ): Promise<ParticipationStanding> {
-    const db = trx ?? executorFor(this.db);
-    const due = await db
-      .selectFrom('obligations')
-      .select(['id', 'order_id', 'amount_minor', 'allocated_minor', 'currency'])
-      .where('organization_id', '=', organizationId)
-      .where('debtor_kind', '=', 'person')
-      .where('debtor_person_id', '=', personId)
-      .where('status', '=', 'open')
-      .where('due_at', '<=', context.at)
-      .orderBy('due_at')
-      .orderBy('id')
-      .execute();
-    if (due.length === 0) return { status: 'clear' };
-    let relatedIds = new Set<string>();
-    const orderIds = [...new Set(due.map((o) => o.order_id).filter((id): id is string => !!id))];
-    if (context.offeringId && orderIds.length > 0) {
-      const lines = await db
-        .selectFrom('order_lines')
-        .select('order_id')
-        .where('organization_id', '=', organizationId)
-        .where('order_id', 'in', orderIds)
-        .where('participant_person_id', '=', personId)
-        .where('offering_id', '=', context.offeringId)
-        .execute();
-      const relatedOrders = new Set(lines.map((l) => l.order_id));
-      relatedIds = new Set(
-        due.filter((o) => o.order_id && relatedOrders.has(o.order_id)).map((o) => o.id),
-      );
-    }
-    const related = relatedIds.size > 0;
-    const counted = related ? due.filter((o) => relatedIds.has(o.id)) : due;
-    const currency = (counted[0] as (typeof due)[number]).currency;
-    const amountMinor = counted
-      .filter((o) => o.currency === currency)
-      .reduce((sum, o) => sum + Number(o.amount_minor) - Number(o.allocated_minor), 0);
-    return {
-      status: 'outstanding',
-      related,
-      amountMinor,
-      currency,
-      reference: (counted[0] as (typeof due)[number]).id,
-    };
+    return this.standing.standingOf(organizationId, personId, context, trx);
   }
 }
