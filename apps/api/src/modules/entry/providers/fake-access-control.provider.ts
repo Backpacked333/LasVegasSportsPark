@@ -1,6 +1,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import type { AccessControlEventBody, VisitorCategory } from '@sportspark/contracts';
+import type {
+  AccessControlEventBody,
+  DeviceCommandReceiptEventBody,
+  DeviceHeartbeatEventBody,
+  VisitorCategory,
+} from '@sportspark/contracts';
 import type {
   AccessDeviceCommand,
   AccessDeviceCommandResult,
@@ -16,6 +21,10 @@ import type {
  *   - `unknown`: the device lost contact before it knew the outcome (timeout/unknown);
  *   - duplicates: posting the same event body twice (the inbox records it once).
  * Event ids are deterministic (device + counter) unless given, so tests can assert on them.
+ *
+ * ENT-05 (IF-38): it is also the AccessDevicePort adapter (`sendCommand`, scripted per call), and
+ * produces the device's own signals for the inbox: `device.heartbeat` and `device.command_receipt`
+ * (a receipt settles a command once; posting it again is the duplicate scenario).
  */
 export const FAKE_ACCESS_CONTROL_PROVIDER = 'fake-access-control';
 /** Test-only shared secret; a real provider's secret would arrive through the environment. */
@@ -84,6 +93,40 @@ export class FakeAccessControlProvider implements AccessDevicePort {
 
   unknown(input: FakeAccessEventInput): { body: AccessControlEventBody; signature: string } {
     return this.event('access.unknown', input);
+  }
+
+  /** IF-38 `device.heartbeat`: the device is alive at `at`. */
+  heartbeat(input: { organizationId: string; deviceRef: string; at: string; eventId?: string }): {
+    body: DeviceHeartbeatEventBody;
+    signature: string;
+  } {
+    this.counter += 1;
+    const body: DeviceHeartbeatEventBody = {
+      id: input.eventId ?? `${input.deviceRef}-device.heartbeat-${this.counter}`,
+      type: 'device.heartbeat',
+      data: { organizationId: input.organizationId, deviceRef: input.deviceRef, at: input.at },
+    };
+    return { body, signature: FakeAccessControlProvider.sign(body) };
+  }
+
+  /** IF-38 `device.command_receipt`: the device's own answer about a command it received. */
+  commandReceipt(input: {
+    organizationId: string;
+    commandId: string;
+    outcome: 'delivered' | 'failed';
+    eventId?: string;
+  }): { body: DeviceCommandReceiptEventBody; signature: string } {
+    this.counter += 1;
+    const body: DeviceCommandReceiptEventBody = {
+      id: input.eventId ?? `${input.commandId}-device.command_receipt-${this.counter}`,
+      type: 'device.command_receipt',
+      data: {
+        organizationId: input.organizationId,
+        commandId: input.commandId,
+        outcome: input.outcome,
+      },
+    };
+    return { body, signature: FakeAccessControlProvider.sign(body) };
   }
 
   private event(

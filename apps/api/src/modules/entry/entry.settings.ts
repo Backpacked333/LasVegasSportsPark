@@ -1,0 +1,20 @@
+import { z } from '@sportspark/contracts';
+import { defineModuleSettings, technicalSetting, type ModuleSettingsOf } from '../../kernel';
+
+/**
+ * Entry module settings (K-15, IF-43): environment variables `ENTRY_<KEY>`, validated at boot (a
+ * malformed value refuses to start). Only technical values live here; entry policy values (roster
+ * age, balance blocking, outage procedures) stay in `entry.policy.ts` with their pending decisions,
+ * and a device's heartbeat timeout is device configuration without a default.
+ *
+ * - DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS (ENT-05): after this many undelivered attempts of one
+ *   device command, one `entry.device_command_undelivered` exception asks the facilities operator
+ *   to look at the device (technical default 3); delivery keeps retrying.
+ */
+export const EntrySettings = defineModuleSettings('entry', {
+  DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS: technicalSetting(
+    z.coerce.number().int().min(1).max(100),
+    3,
+  ),
+});
+export type EntrySettingsValue = ModuleSettingsOf<typeof EntrySettings>;

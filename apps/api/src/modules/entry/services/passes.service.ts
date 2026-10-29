@@ -4,6 +4,7 @@ import {
   newId,
   type IssuedPass,
   type IssuePassBody,
+  type MyPass,
   type Pass,
   type PassScan,
   type Principal,
@@ -38,10 +39,12 @@ import {
 import { EntryActions } from '../entry.actions';
 import { EntryEvents } from '../entry.events';
 import {
+  audienceOf,
   hashPassReference,
   localDayWindow,
   newPassReference,
   organizationOf,
+  toMyPass,
   toPass,
   type PassRow,
 } from '../entry.shared';
@@ -203,6 +206,42 @@ export class PassesService {
   }
 
   /**
+   * GET /v1/me/passes (ENT-01, SPK-ENTRY-002, SCR-C-05): the person passes the caller holds,
+   * newest first, including passes issued to people merged into them (ENT-04, SPK-IAM-007: the
+   * pass keeps its original holder id). The reference is never returned: only its hash is stored,
+   * so a holder who lost it revokes the pass and issues a new one. A revocation by staff shows as
+   * `revoked` with its time; the staff reason is withheld from customers (§4.14). Household passes
+   * are staff-managed and not listed (a customer learns nothing about the household).
+   */
+  async mine(principal: Principal): Promise<MyPass[]> {
+    const organizationId = organizationOf(principal);
+    const personId = principal.personId;
+    if (!personId) return [];
+    const decision = await this.authorization.decide(principal, EntryActions.readPass, {
+      type: 'pass',
+      organizationId,
+      subjectPersonIds: [personId],
+      protected: true,
+    });
+    if (!decision.allowed) return [];
+    const resolving = await this.directory.personIdsResolvingTo(organizationId, personId);
+    // Only the canonical person reads the passes of people merged into them.
+    const holders = resolving[0] === personId ? resolving : [personId];
+    const rows = await this.uow
+      .reader()
+      .selectFrom('passes')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('holder_kind', '=', 'person')
+      .where('holder_person_id', 'in', holders)
+      .orderBy('issued_at', 'desc')
+      .orderBy('id', 'desc')
+      .execute();
+    const audience = audienceOf(decision.basis);
+    return rows.map((row) => toMyPass(row, audience));
+  }
+
+  /**
    * SPK-ENTRY-002/003: opens the selection flow. Authorization comes first, so a caller without the
    * desk role learns nothing about whether a reference exists. Nothing is written except the audit
    * record of the scan.
@@ -236,7 +275,11 @@ export class PassesService {
     }
     const now = this.clock.now();
     const window = localDayWindow(facility.timezone, now);
-    const candidates = await this.candidates(db, organizationId, pass);
+    // ENT-04, SPK-IAM-007: a pass issued to a person later merged opens the surviving person.
+    const holderPersonId = pass.holder_person_id
+      ? await this.directory.resolveCanonicalPersonId(organizationId, pass.holder_person_id)
+      : null;
+    const candidates = await this.candidates(db, organizationId, pass, holderPersonId);
     const personIds = candidates.map((c) => c.personId);
     const participations = await this.enrollments.participationsOf(organizationId, personIds, {
       from: window.start,
@@ -258,7 +301,7 @@ export class PassesService {
     const live = personIds.length
       ? await db
           .selectFrom('session_checkins')
-          .select(['id', 'person_id', 'activity_id', 'status'])
+          .select(['id', 'person_id', 'activity_id', 'status', 'revision'])
           .where('organization_id', '=', organizationId)
           .where('person_id', 'in', personIds)
           .where('status', 'in', ['held', 'admitted'])
@@ -283,7 +326,9 @@ export class PassesService {
       const seen = new Set<string>();
       const checkinOf = (activityId: string) => {
         const c = live.find((l) => l.person_id === person.id && l.activity_id === activityId);
-        return c ? { id: c.id, status: c.status as 'held' | 'admitted' } : null;
+        return c
+          ? { id: c.id, status: c.status as 'held' | 'admitted', revision: c.revision }
+          : null;
       };
       for (const booking of participation?.sessionBookings ?? []) {
         const sessions = await sessionsOf(booking.offeringId);
@@ -316,13 +361,8 @@ export class PassesService {
       activities.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart));
       const visit = open.find((v) => v.person_id === person.id);
       const holderMayCollect =
-        pass.holder_person_id && candidate.relation === 'dependent' && person.kind === 'child'
-          ? await this.authority.hasPermission(
-              organizationId,
-              pass.holder_person_id,
-              person.id,
-              'collect',
-            )
+        holderPersonId && candidate.relation === 'dependent' && person.kind === 'child'
+          ? await this.authority.hasPermission(organizationId, holderPersonId, person.id, 'collect')
           : null;
       people.push({
         personId: person.id,
@@ -360,7 +400,12 @@ export class PassesService {
   }
 
   /** The people a pass opens: the household members, or the holder and the people they may view. */
-  private async candidates(db: Db | Trx, organizationId: string, pass: PassRow) {
+  private async candidates(
+    db: Db | Trx,
+    organizationId: string,
+    pass: PassRow,
+    holderPersonId: string | null,
+  ) {
     const out: ScanCandidate[] = [];
     if (pass.holder_household_id) {
       const household = await this.households.detail(db, organizationId, pass.holder_household_id);
@@ -372,7 +417,7 @@ export class PassesService {
       }
       return out;
     }
-    const holder = pass.holder_person_id;
+    const holder = holderPersonId;
     if (!holder) return out;
     const person = await this.directory.findPerson(organizationId, holder);
     if (person?.status === 'active') out.push({ personId: holder, relation: 'holder' });

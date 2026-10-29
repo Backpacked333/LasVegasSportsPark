@@ -109,6 +109,28 @@ export const PassSchema = z
   .openapi('Pass');
 export type Pass = z.infer<typeof PassSchema>;
 
+/**
+ * A pass as its holder reads it (ENT-01, SPK-ENTRY-002, SCR-C-05, §4.14): the state and the dates,
+ * never the reference. Only the reference's hash is stored, so it cannot be shown again
+ * (`referenceAvailable` is always false): a holder who lost it revokes the pass and issues a new
+ * one. The staff revocation reason is withheld from customers (null).
+ */
+export const MyPassSchema = z
+  .object({
+    id: z.uuid(),
+    holderKind: z.enum(['person', 'household']),
+    holderPersonId: z.uuid().nullable(),
+    status: z.enum(['active', 'revoked']),
+    issuedAt: Instant,
+    revokedAt: Instant.nullable(),
+    revokedReason: z.string().nullable(),
+    referenceAvailable: z.literal(false),
+    /** For POST /v1/passes/{id}/revoke (expectedRevision). */
+    revision: Revision,
+  })
+  .openapi('MyPass');
+export type MyPass = z.infer<typeof MyPassSchema>;
+
 /** The opaque reference is returned once, at issue; only its hash is stored. */
 export const IssuedPassSchema = z
   .object({ pass: PassSchema, reference: z.string() })
@@ -141,7 +163,10 @@ export const ScanActivitySchema = z
       id: z.uuid(),
       status: z.string(),
     }),
-    checkin: z.object({ id: z.uuid(), status: z.enum(['held', 'admitted']) }).nullable(),
+    /** The live check-in, with its revision so a held one can be re-checked directly (ENT-01). */
+    checkin: z
+      .object({ id: z.uuid(), status: z.enum(['held', 'admitted']), revision: Revision })
+      .nullable(),
   })
   .openapi('ScanActivity');
 export type ScanActivity = z.infer<typeof ScanActivitySchema>;
@@ -228,6 +253,8 @@ export const VisitSchema = z
     arrivedAt: Instant,
     passId: z.uuid().nullable(),
     source: z.enum(['desk', 'offline_sync', 'access_control']),
+    /** ENT-05: the registered access device an `access_control` arrival came through, if any. */
+    accessDeviceId: z.uuid().nullable(),
     status: z.enum(['on_site', 'departed', 'voided']),
     departedAt: Instant.nullable(),
     voidedAt: Instant.nullable(),
@@ -248,10 +275,16 @@ export const VoidVisitBody = withCommandMeta({})
   .openapi('VoidVisitRequest');
 export type VoidVisitBody = z.infer<typeof VoidVisitBody>;
 
+/**
+ * Visits of a facility day (`date`, default today in the facility's zone). With `personId` and no
+ * `date`, the person's whole visit history at the facility; a person's visits include those
+ * recorded under people merged into them (ENT-04, SPK-IAM-007: rows keep their original person id).
+ */
 export const ListVisitsQuery = PageRequestSchema.extend({
   facilityId: z.uuid(),
   status: z.enum(['on_site', 'departed', 'voided']).optional(),
   date: DateOnly.optional(),
+  personId: z.uuid().optional(),
 });
 export type ListVisitsQuery = z.infer<typeof ListVisitsQuery>;
 
@@ -365,6 +398,11 @@ export const CorrectAttendanceObservationBody = withCommandMeta({
   .openapi('CorrectAttendanceObservationRequest');
 export type CorrectAttendanceObservationBody = z.infer<typeof CorrectAttendanceObservationBody>;
 
+/**
+ * Attendance of an activity. With `personId`, that person's attendance, including observations
+ * recorded under people merged into them (ENT-04, SPK-IAM-007), summarized under the person asked
+ * about; history items keep the person id they were recorded under.
+ */
 export const AttendanceQuery = z.object({
   activityType: z.enum(['session', 'event']),
   activityId: z.uuid(),
@@ -381,6 +419,13 @@ export type AttendanceHistoryItem = z.infer<typeof AttendanceHistoryItemSchema>;
 export const PersonAttendanceSchema = z
   .object({
     personId: z.uuid(),
+    /**
+     * The participant's name (ENT-01, SPK-UX-002, SPK-UX-007), read from identity after the
+     * attendance read is authorized; null only when identity no longer knows the person.
+     */
+    givenName: z.string().nullable(),
+    familyName: z.string().nullable(),
+    displayName: z.string().nullable(),
     /** The single current state, or null when nothing is recorded or the current heads conflict. */
     effectiveState: ObservedStateSchema.nullable(),
     status: z.enum(['recorded', 'conflict']),
@@ -474,6 +519,11 @@ export const ReleaseRecordSchema = z
     verificationMethod: z.enum(['online_relationship_check', 'manual_outage_procedure']),
     verificationOutcome: z.enum(['verified', 'denied', 'escalated', 'manual_outage_procedure']),
     authorityBasis: z.literal('relationship_permission:collect').nullable(),
+    /**
+     * ENT-02, SPK-ENTRY-007: the identity access grant the verified online check relied on (staff
+     * readers only; null for customers, assigned coaches and releases before migration 0804).
+     */
+    authorityGrantId: z.uuid().nullable(),
     authorityCheckedAt: Instant,
     /** Permissions the collector holds over the child right now (evidence; only `collect` authorizes). */
     collectorPermissions: z.array(z.string()),
@@ -497,6 +547,44 @@ export const RecordedReleaseSchema = z
   .object({ release: ReleaseRecordSchema, departure: DepartureSchema.nullable() })
   .openapi('RecordedRelease');
 export type RecordedRelease = z.infer<typeof RecordedReleaseSchema>;
+
+/**
+ * ENT-02, SPK-ENTRY-007, SCR-W-09: before a supervised release, an assigned coach (or the pickup
+ * desk) identifies the collecting adult by their pass. The reference travels in the body, never
+ * the URL. Read-only: nothing is recorded, and the release itself re-checks authority.
+ */
+export const CollectorCheckBody = z
+  .object({
+    activity: ActivityRefSchema,
+    participantPersonId: z.uuid(),
+    passReference: z.string().trim().min(16).max(200),
+  })
+  .openapi('CollectorCheckRequest');
+export type CollectorCheckBody = z.infer<typeof CollectorCheckBody>;
+
+export const CollectorRestrictionSchema = z
+  .object({
+    code: z.enum(['authority_rechecked_at_release', 'participant_not_on_site', 'not_a_child']),
+    message: z.string(),
+  })
+  .openapi('CollectorRestriction');
+export type CollectorRestriction = z.infer<typeof CollectorRestrictionSchema>;
+
+/**
+ * `mayCollect` is true only when the pass is active, its holder holds `collect` over the
+ * participant now and the participant takes part in the activity; only then is the collector
+ * named. Every other answer is the same `mayCollect: false` with no collector, so the check reveals
+ * nothing about the pass or its holder (§4.10, §4.14).
+ */
+export const CollectorCheckSchema = z
+  .object({
+    mayCollect: z.boolean(),
+    collector: z.object({ personId: z.uuid(), displayName: z.string() }).nullable(),
+    checkedAt: Instant,
+    restrictions: z.array(CollectorRestrictionSchema),
+  })
+  .openapi('CollectorCheck');
+export type CollectorCheck = z.infer<typeof CollectorCheckSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Offline synchronization (§4.15, SPK-AT-018)
@@ -741,6 +829,12 @@ command(
   IssuedPassSchema,
 );
 command('/passes/{id}/revoke', 'Revoke a pass', RevokePassBody, PassSchema, 200);
+query(
+  '/me/passes',
+  'The passes I hold; the reference is never shown again after issue (SPK-ENTRY-002, SCR-C-05)',
+  null,
+  z.array(MyPassSchema),
+);
 command(
   '/passes/scan',
   "Scan a pass: resolve the people and today's sessions for selection; records nobody as present (SPK-ENTRY-003)",
@@ -809,11 +903,25 @@ command(
   RecordReleaseBody,
   RecordedReleaseSchema,
 );
+command(
+  '/releases/collector-checks',
+  'Identify the collecting adult by pass before a supervised release; read-only, records nothing (SPK-ENTRY-007)',
+  CollectorCheckBody,
+  CollectorCheckSchema,
+  200,
+  false,
+);
 query('/releases/{id}', 'Read a release record', null, ReleaseRecordSchema);
 command(
   '/offline-sync',
   'Synchronize queued offline observations once; conflicts preserved for review (§4.15)',
   OfflineSyncBody,
+  OfflineSyncBatchSchema,
+);
+query(
+  '/offline-sync/{id}',
+  'Read a synchronized offline batch with its per-item outcomes (its submitter or desk readers; §4.15)',
+  null,
   OfflineSyncBatchSchema,
 );
 query(
@@ -828,20 +936,3 @@ command(
   TakeOccupancySnapshotBody,
   OccupancySnapshotSchema,
 );
-openApiRegistry.registerPath({
-  method: 'post',
-  path: '/webhooks/access-control/{provider}',
-  summary:
-    'Access hardware event (signed); recorded as a visit only, never attendance or pickup (SPK-COND-004)',
-  tags: [TAG],
-  security: [],
-  request: {
-    params: z.object({ provider: z.string() }),
-    body: { content: { 'application/json': { schema: AccessControlEventBody } } },
-  },
-  responses: {
-    202: ok('Recorded in the inbox', z.object({ inboxEventId: z.uuid(), duplicate: z.boolean() })),
-    401: err('Signature invalid'),
-    404: err('Unknown provider'),
-  },
-});

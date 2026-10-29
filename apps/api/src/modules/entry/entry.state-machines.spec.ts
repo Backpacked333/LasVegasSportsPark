@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_ENTRY_POLICY, policyForFacility } from './entry.policy';
-import { PassMachine, SessionCheckinMachine, VisitMachine } from './entry.state-machines';
+import {
+  AccessDeviceMachine,
+  AccessPolicyMachine,
+  DeviceCommandMachine,
+  PassMachine,
+  SessionCheckinMachine,
+  VisitMachine,
+} from './entry.state-machines';
 
 describe('entry lifecycles (§4.6: every command defines its allowed source state)', () => {
   it('PassMachine: active → revoked, and revoked is final', () => {
@@ -25,6 +32,33 @@ describe('entry lifecycles (§4.6: every command defines its allowed source stat
     expect(SessionCheckinMachine.can('admitted', 'reevaluate')).toBe(false);
     expect(SessionCheckinMachine.can('admitted', 'admit')).toBe(false);
     expect(SessionCheckinMachine.eventsFrom('withdrawn')).toEqual([]);
+  });
+
+  it('ENT-05 AccessDeviceMachine: active → retired, final', () => {
+    expect(AccessDeviceMachine.next('active', 'retire')).toBe('retired');
+    expect(AccessDeviceMachine.can('retired', 'retire')).toBe(false);
+  });
+
+  it('ENT-05 AccessPolicyMachine: a draft is approved or withdrawn; an active policy only retires', () => {
+    expect(AccessPolicyMachine.next('draft', 'approve')).toBe('active');
+    expect(AccessPolicyMachine.next('draft', 'withdraw')).toBe('retired');
+    expect(AccessPolicyMachine.next('active', 'retire')).toBe('retired');
+    expect(AccessPolicyMachine.can('active', 'approve')).toBe(false);
+    expect(AccessPolicyMachine.can('draft', 'retire')).toBe(false);
+    expect(AccessPolicyMachine.eventsFrom('retired')).toEqual([]);
+  });
+
+  it('ENT-05 DeviceCommandMachine: failed and unknown retry, a receipt settles pending or unknown, delivered is final', () => {
+    expect(DeviceCommandMachine.next('pending', 'deliver')).toBe('delivered');
+    expect(DeviceCommandMachine.next('pending', 'fail')).toBe('failed');
+    expect(DeviceCommandMachine.next('pending', 'lose')).toBe('unknown');
+    expect(DeviceCommandMachine.next('unknown', 'deliver')).toBe('delivered');
+    expect(DeviceCommandMachine.next('unknown', 'retry')).toBe('pending');
+    expect(DeviceCommandMachine.next('failed', 'retry')).toBe('pending');
+    expect(DeviceCommandMachine.can('failed', 'deliver')).toBe(false);
+    expect(DeviceCommandMachine.next('failed', 'supersede')).toBe('superseded');
+    expect(DeviceCommandMachine.eventsFrom('delivered')).toEqual([]);
+    expect(DeviceCommandMachine.eventsFrom('superseded')).toEqual([]);
   });
 });
 

@@ -48,3 +48,56 @@ export const SessionCheckinMachine = defineStateMachine<SessionCheckinState, Ses
     withdrawn: {},
   },
 });
+
+// ---------------------------------------------------------------------------------------------
+// Access hardware (ENT-05, migration 0805: `access_devices_guard`, `access_policies_guard`,
+// `device_commands_guard` refuse the same transitions)
+// ---------------------------------------------------------------------------------------------
+
+export type AccessDeviceState = 'active' | 'retired';
+export type AccessDeviceEvent = 'retire';
+export const AccessDeviceMachine = defineStateMachine<AccessDeviceState, AccessDeviceEvent>({
+  name: 'AccessDevice',
+  initial: 'active',
+  states: ['active', 'retired'],
+  terminal: ['retired'],
+  transitions: { active: { retire: 'retired' }, retired: {} },
+});
+
+/** A draft is approved (by someone other than its author) or withdrawn; an active one retires. */
+export type AccessPolicyState = 'draft' | 'active' | 'retired';
+export type AccessPolicyEvent = 'approve' | 'withdraw' | 'retire';
+export const AccessPolicyMachine = defineStateMachine<AccessPolicyState, AccessPolicyEvent>({
+  name: 'AccessPolicy',
+  initial: 'draft',
+  states: ['draft', 'active', 'retired'],
+  terminal: ['retired'],
+  transitions: {
+    draft: { approve: 'active', withdraw: 'retired' },
+    active: { retire: 'retired' },
+    retired: {},
+  },
+});
+
+/**
+ * A device command is delivered, refused (`failed`) or lost (`unknown`: no answer, the device may
+ * have applied it); failed and unknown commands are retried, and the device's receipt settles a
+ * pending or unknown one. `supersede` (engineering addition to the ENT-05 plan) retires an
+ * undelivered policy synchronization once a newer one is queued for the same device, so a retried
+ * older sync never overwrites the newer policy.
+ */
+export type DeviceCommandState = 'pending' | 'delivered' | 'failed' | 'unknown' | 'superseded';
+export type DeviceCommandEvent = 'deliver' | 'fail' | 'lose' | 'retry' | 'supersede';
+export const DeviceCommandMachine = defineStateMachine<DeviceCommandState, DeviceCommandEvent>({
+  name: 'DeviceCommand',
+  initial: 'pending',
+  states: ['pending', 'delivered', 'failed', 'unknown', 'superseded'],
+  terminal: ['delivered', 'superseded'],
+  transitions: {
+    pending: { deliver: 'delivered', fail: 'failed', lose: 'unknown', supersede: 'superseded' },
+    unknown: { deliver: 'delivered', fail: 'failed', retry: 'pending', supersede: 'superseded' },
+    failed: { retry: 'pending', supersede: 'superseded' },
+    delivered: {},
+    superseded: {},
+  },
+});

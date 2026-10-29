@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post } from '@nestjs/common';
 import {
-  AccessControlEventBody,
+  AccessControlWebhookBody,
   AttendanceQuery,
+  CollectorCheckBody,
   CorrectAttendanceObservationBody,
   errors,
   OccupancyQuery,
@@ -11,6 +12,7 @@ import {
   TakeOccupancySnapshotBody,
   z,
   type ActivityAttendance,
+  type CollectorCheck,
   type Occupancy,
   type OccupancySnapshot,
   type OfflineSyncBatch,
@@ -26,6 +28,7 @@ import {
   DATABASE,
   Idempotent,
   Inbox,
+  NoRecordAuthority,
   Public,
   ZodBody,
   ZodParams,
@@ -96,6 +99,21 @@ export class ReleasesController {
     return this.releases.record(principal, body, correlationId);
   }
 
+  /**
+   * ENT-02 (SPK-ENTRY-007, SCR-W-09): identify the collecting adult by pass before a release. A
+   * read-only check that records nothing, so it takes no idempotency key; the pass reference
+   * travels in the body, never the URL.
+   */
+  @Post('collector-checks')
+  @HttpCode(200)
+  @NoRecordAuthority('A read-only check; records nothing')
+  collectorCheck(
+    @CurrentPrincipal() principal: Principal,
+    @ZodBody(CollectorCheckBody) body: CollectorCheckBody,
+  ): Promise<CollectorCheck> {
+    return this.releases.collectorCheck(principal, body);
+  }
+
   @Get(':id')
   get(
     @CurrentPrincipal() principal: Principal,
@@ -118,6 +136,15 @@ export class OfflineSyncController {
     @CorrelationId() correlationId: string,
   ): Promise<OfflineSyncBatch> {
     return this.sync.sync(principal, body, correlationId);
+  }
+
+  /** ENT-01: a stored batch and its per-item outcomes (submitter or desk readers). */
+  @Get(':id')
+  get(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<OfflineSyncBatch> {
+    return this.sync.get(principal, params.id);
   }
 }
 
@@ -147,7 +174,7 @@ export class OccupancyController {
   }
 }
 
-const accessEventPipe = new ZodValidationPipe(AccessControlEventBody);
+const accessEventPipe = new ZodValidationPipe(AccessControlWebhookBody);
 
 /**
  * Access hardware webhooks (§4.11 pattern, SPK-COND-004): authenticate the event, record it
@@ -180,7 +207,8 @@ export class AccessControlWebhooksController {
     if (!FakeAccessControlProvider.verify(raw, signature)) {
       throw errors.authenticationRequired('The webhook signature is invalid.');
     }
-    const body: AccessControlEventBody = accessEventPipe.transform(raw);
+    // An access event, a device heartbeat or a command receipt (ENT-05, IF-38).
+    const body: AccessControlWebhookBody = accessEventPipe.transform(raw);
     const organization = await this.db
       .selectFrom('organizations')
       .select('id')

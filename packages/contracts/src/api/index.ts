@@ -8,6 +8,7 @@ export * from './competition';
 export * from './core';
 export * from './enrollment-package-g';
 export * from './enrollment';
+export * from './entry-hardware';
 export * from './entry';
 export * from './facilities';
 export * from './finance-accounting';

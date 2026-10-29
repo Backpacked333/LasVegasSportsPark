@@ -79,6 +79,8 @@ export interface VisitsTable {
   client_observation_id: string | null;
   sync_batch_id: string | null;
   access_event_ref: string | null;
+  /** ENT-05 (migration 0805): the registered access device of an `access_control` arrival. */
+  access_device_id: ColumnType<string | null, string | null | undefined, string | null>;
   status: Generated<VisitStatus>;
   departed_at: NullableTimestamp;
   voided_at: NullableTimestamp;
@@ -177,6 +179,8 @@ export interface ReleaseRecordsTable {
   verification_method: ReleaseVerificationMethod;
   verification_outcome: ReleaseVerificationOutcome;
   authority_basis: 'relationship_permission:collect' | null;
+  /** ENT-02 (migration 0804): the identity grant a verified online check relied on. */
+  authority_grant_id: ColumnType<string | null, string | null | undefined, string | null>;
   authority_checked_at: Timestamp;
   collector_permissions: TextArray;
   denial_reason: string | null;
@@ -238,6 +242,82 @@ export interface OccupancySnapshotsTable {
   created_at: GeneratedTimestamp;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Access hardware (ENT-05, migration 0805; §3.16 Access hardware, SPK-COND-004)
+// ---------------------------------------------------------------------------------------------
+
+export type AccessDeviceKindValue = 'door' | 'turnstile' | 'gate' | 'scanner';
+export type AccessDeviceStatus = 'active' | 'retired';
+export type AccessDeviceHealth = 'online' | 'offline' | 'unknown';
+export interface AccessDevicesTable {
+  id: string;
+  organization_id: string;
+  facility_id: string;
+  kind: AccessDeviceKindValue;
+  name: string;
+  provider_device_ref: string;
+  status: Generated<AccessDeviceStatus>;
+  health: Generated<AccessDeviceHealth>;
+  /** Device configuration with no default (null: outages are not detected). */
+  heartbeat_timeout_seconds: number | null;
+  last_heartbeat_at: NullableTimestamp;
+  registered_at: Timestamp;
+  registered_by: Json<Record<string, unknown>>;
+  registered_by_person_id: string | null;
+  retired_at: NullableTimestamp;
+  retired_reason: string | null;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+export type AccessPolicyStatus = 'draft' | 'active' | 'retired';
+export interface AccessPoliciesTable {
+  id: string;
+  organization_id: string;
+  device_id: string;
+  facility_id: string;
+  allowed_holder_kinds: TextArray<'person' | 'household'>;
+  allowed_pass_statuses: TextArray<'active'>;
+  schedule: Json<unknown[]>;
+  status: Generated<AccessPolicyStatus>;
+  authored_by: Json<Record<string, unknown>>;
+  authored_by_person_id: string;
+  approved_by: Json<Record<string, unknown>> | null;
+  approved_by_person_id: string | null;
+  approved_at: NullableTimestamp;
+  retired_at: NullableTimestamp;
+  retired_reason: string | null;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+export type DeviceCommandKind = 'revoke_credential' | 'sync_policy';
+export type DeviceCommandStatusValue =
+  'pending' | 'delivered' | 'failed' | 'unknown' | 'superseded';
+export interface DeviceCommandsTable {
+  id: string;
+  organization_id: string;
+  device_id: string;
+  kind: DeviceCommandKind;
+  pass_id: string | null;
+  policy_id: string | null;
+  /** The policy as sent (sync_policy); null on a sync_policy means deny-all. */
+  policy_snapshot: Json<Record<string, unknown>> | null;
+  status: Generated<DeviceCommandStatusValue>;
+  attempts: Generated<number>;
+  last_error: string | null;
+  last_attempt_at: NullableTimestamp;
+  delivered_at: NullableTimestamp;
+  settled_by: 'adapter' | 'receipt' | null;
+  escalation_exception_id: string | null;
+  requested_by: Json<Record<string, unknown>>;
+  revision: Generated<number>;
+  created_at: Timestamp;
+  updated_at: GeneratedTimestamp;
+}
+
 export interface EntryTables {
   passes: PassesTable;
   offline_sync_batches: OfflineSyncBatchesTable;
@@ -247,4 +327,7 @@ export interface EntryTables {
   release_records: ReleaseRecordsTable;
   departures: DeparturesTable;
   occupancy_snapshots: OccupancySnapshotsTable;
+  access_devices: AccessDevicesTable;
+  access_policies: AccessPoliciesTable;
+  device_commands: DeviceCommandsTable;
 }
