@@ -6,9 +6,11 @@
  * Acknowledge, resolve and close are offered only where the API lists them for the viewer; each
  * sends the exception's expected revision and an idempotency key per intent; resolve and close
  * need a note. Closing never marks the underlying payment, booking or delivery resolved: the
- * affected record's own state is read from its owning module beside the exception (payment
- * attempt, checkout, maintenance task) and a record in recovery says so. Offline the screen is
- * read-only. A protected NOT_FOUND is shown as not available.
+ * affected record's own state is read from its owning module beside the exception (every record
+ * type with a single-record read, `AffectedRecordState.tsx`) and a record in recovery says so.
+ * Times are in the exception's facility zone (`GET /v1/facilities`, SPK-SCHED-008). The audit
+ * history of the exception (`GET /v1/audit-records`) is offered to viewers who may read the audit
+ * log. Offline the screen is read-only. A protected NOT_FOUND is shown as not available.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -34,6 +36,7 @@ import {
 } from './exception-actions';
 import { EXCEPTIONS_KEY, EXCEPTION_KEY, SEVERITY_BADGE, TODAY_KEY } from './TodayScreen';
 import { AffectedRecordState } from './AffectedRecordState';
+import { AuditHistory } from './AuditHistory';
 import { useFacilityDirectory } from './useFacilityDirectory';
 
 type OperationalException = Schema<'OperationalException'>;
@@ -256,6 +259,7 @@ function ExceptionView({ exception }: { exception: OperationalException }) {
           ))}
         </ol>
       </section>
+      <AuditHistory targetType="operational_exception" targetId={exception.id} zone={zone} />
     </>
   );
 }

@@ -12,17 +12,34 @@
  *   (the owning module's command, its target and input) is shown in full; approve, reject (with a
  *   reason) and apply are separate commands with the expected revision and an idempotency key, and
  *   the API decides who may do each (SPK-AUTO-004).
+ * - Per organization the capability switch `assistant` (DEC-016, starts off; GET /v1/me/permissions)
+ *   decides whether new questions, approvals and applies are accepted: while it is off the panel
+ *   says "Assistant turned off" above the recommendations already proposed, which stay readable and
+ *   can still be rejected; Ask, Approve and Apply are not offered (the API answers ACCESS_DENIED
+ *   CAPABILITY_DISABLED, shown as the same turned-off state, if one is sent anyway).
+ * - An apply whose outcome is unknown (its operation `recovery_required`) is never applied again;
+ *   a viewer whose role holds `automation.settle_apply` records the reconciled outcome
+ *   (`POST /v1/recommendations/{id}/settle-apply`: applied or not applied, the evidence in the
+ *   owning module's records and a reason, with the expected revision). Settlements are listed
+ *   with who recorded them. Settling is never gated by the capability (AUT-03).
  */
-import { ApiError, apiQueryKey, type ApiResponse, type Schema } from '@sportspark/api-client';
+import {
+  ApiError,
+  CAPABILITY_PRESENTATION,
+  apiQueryKey,
+  type ApiResponse,
+  type Schema,
+} from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useOperation } from '../../api/useOperation';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError, CommandSuccess } from '../../ui/CommandFeedback';
-import { Facts, TextAreaField } from '../../ui/FormFields';
+import { Facts, RadioGroup, TextAreaField } from '../../ui/FormFields';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { RecordRef } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
@@ -33,6 +50,12 @@ type AssistantRequest = Schema<'AssistantRequest'>;
 type Recommendation = Schema<'Recommendation'>;
 type Evidence = Schema<'AssistantEvidence'>;
 type MissingEvidence = Schema<'AssistantMissingEvidence'>;
+type Settlement = Recommendation['apply']['settlements'][number];
+
+/** The organization's capability switch for the assistant (AUT-02, DEC-016). */
+export const ASSISTANT_CAPABILITY = 'assistant' as const;
+/** Recording the reconciled outcome of an unknown apply (AUT-03). */
+export const SETTLE_APPLY_ACTION = 'automation.settle_apply';
 
 export const ASSISTANT_POLL_MS = 2_000;
 const RECOMMENDATIONS_KEY = ['api', '/recommendations'] as const;
@@ -120,8 +143,136 @@ function formatValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function RecommendationCard({ recommendation: rec }: { recommendation: Recommendation }) {
+const SETTLEMENT_OUTCOMES = [
+  { value: 'applied', label: 'applied: the owning module’s records show the change took effect' },
+  {
+    value: 'not_applied',
+    label: 'not_applied: the change did not take effect (it may be applied again)',
+  },
+] as const;
+
+function SettlementList({ settlements }: { settlements: readonly Settlement[] }) {
+  if (settlements.length === 0) return null;
+  return (
+    <section aria-label="Reconciled outcomes">
+      <h5>Reconciled outcomes</h5>
+      <ol className="list">
+        {settlements.map((s) => (
+          <li key={s.id}>
+            <div className="row-text">
+              <span className="row-title">Outcome: {s.outcome}</span>
+              <span className="caption">
+                {s.settledBy.actorLabel} at {formatDateTime(s.settledAt)} · operation{' '}
+                {s.applyOperationId}
+              </span>
+              <span>Evidence: {s.evidence}</span>
+              <span>Reason: {s.reason}</span>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+/**
+ * AUT-03: record the reconciled outcome of an apply whose outcome was unknown, from the owning
+ * module's records. Never re-runs the command; the expected revision guards a concurrent change.
+ */
+function SettleApplyForm({ recommendation: rec }: { recommendation: Recommendation }) {
   const { online } = useApp();
+  const queryClient = useQueryClient();
+  const [outcome, setOutcome] = useState('');
+  const [evidence, setEvidence] = useState('');
+  const [reason, setReason] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [success, setSuccess] = useState<string | null>(null);
+  const invalidate = [RECOMMENDATIONS_KEY, RECOMMENDATION_KEY, REQUEST_KEY];
+  const settle = useApiCommand('post', '/recommendations/{id}/settle-apply', { invalidate });
+  const reload = () => {
+    settle.reset();
+    void Promise.all(invalidate.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+  };
+  const submit = () => {
+    setSuccess(null);
+    const problems: Record<string, string> = {};
+    if (!outcome) problems['outcome'] = 'Choose what the owning module’s records show.';
+    if (!evidence.trim()) {
+      problems['evidence'] = 'Name the record that shows the outcome, for example a refund state.';
+    }
+    if (!reason.trim()) problems['reason'] = 'Write why this outcome is recorded now.';
+    setErrors(problems);
+    if (Object.keys(problems).length > 0) return;
+    void settle
+      .submit({
+        path: { id: rec.id },
+        body: {
+          expectedRevision: rec.revision,
+          outcome: outcome as 'applied' | 'not_applied',
+          evidence: evidence.trim(),
+          reason: reason.trim(),
+        },
+      })
+      .then((r) =>
+        setSuccess(`Outcome recorded. Recommendation ${r.status}; apply ${r.apply.state}.`),
+      )
+      .catch(() => undefined);
+  };
+  return (
+    <form
+      noValidate
+      className="form"
+      aria-label={`Record the reconciled outcome: ${rec.title}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
+      <RadioGroup
+        legend="What the owning module’s records show"
+        name={`settle-outcome-${rec.id}`}
+        required
+        value={outcome}
+        onChange={setOutcome}
+        error={errors['outcome']}
+        options={SETTLEMENT_OUTCOMES}
+      />
+      <TextAreaField
+        label="Evidence"
+        required
+        hint="The record and its state in the owning module, for example the refund reference and its state."
+        value={evidence}
+        onChange={setEvidence}
+        error={errors['evidence']}
+        maxLength={2000}
+      />
+      <TextAreaField
+        label="Reason"
+        required
+        value={reason}
+        onChange={setReason}
+        error={errors['reason']}
+        maxLength={2000}
+      />
+      <Button type="submit" busy={settle.isProcessing} disabled={!online}>
+        Record outcome
+      </Button>
+      <CommandSuccess message={success} />
+      <CommandError error={settle.error} onRetry={submit} onReload={reload} />
+    </form>
+  );
+}
+
+function RecommendationCard({
+  recommendation: rec,
+  assistantOn,
+}: {
+  recommendation: Recommendation;
+  /** The organization's `assistant` switch; undefined until GET /v1/me/permissions answers. */
+  assistantOn: boolean | undefined;
+}) {
+  const { online } = useApp();
+  const permissions = usePermissions();
   const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
@@ -182,7 +333,14 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
       .then((r) => setSuccess(`Apply ${r.apply.state}.`))
       .catch(() => undefined);
   const canReview = shown.status === 'proposed';
+  const canSettle =
+    applyUnknown &&
+    permissions.isPermitted(
+      SETTLE_APPLY_ACTION,
+      shown.command?.target.facilityId ?? shown.facilityId,
+    ) === true;
   const canApply =
+    assistantOn === true &&
     !applyUnknown &&
     shown.status === 'approved' &&
     shown.consequential &&
@@ -249,6 +407,7 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
             The owning module&apos;s records are being checked. Do not apply this again.
             {shown.apply.lastError ? ` (${shown.apply.lastError.code})` : ''}
           </p>
+          {canSettle ? <SettleApplyForm recommendation={shown} /> : null}
         </div>
       ) : shown.apply.lastError ? (
         <p className="error-text">
@@ -261,6 +420,7 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
         </p>
       ) : null}
       {operation.data ? <p className="caption">Operation status: {operation.data.status}</p> : null}
+      <SettlementList settlements={shown.apply.settlements} />
       {canReview ? (
         <>
           <TextAreaField
@@ -272,14 +432,16 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
             maxLength={2000}
           />
           <div className="actions-row">
-            <Button
-              busy={approve.isProcessing}
-              disabled={!online || busy}
-              aria-label={`Approve recommendation: ${shown.title}`}
-              onClick={doApprove}
-            >
-              Approve
-            </Button>
+            {assistantOn === true ? (
+              <Button
+                busy={approve.isProcessing}
+                disabled={!online || busy}
+                aria-label={`Approve recommendation: ${shown.title}`}
+                onClick={doApprove}
+              >
+                Approve
+              </Button>
+            ) : null}
             <Button
               variant="secondary"
               busy={reject.isProcessing}
@@ -291,6 +453,12 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
             </Button>
           </div>
         </>
+      ) : null}
+      {assistantOn === false && (canReview || shown.status === 'approved') ? (
+        <p className="caption">
+          Approving and applying are turned off while the assistant is turned off; rejecting stays
+          available.
+        </p>
       ) : null}
       {canApply ? (
         <div className="actions-row">
@@ -315,7 +483,13 @@ function RecommendationCard({ recommendation: rec }: { recommendation: Recommend
   );
 }
 
-function AssistantAnswer({ initial }: { initial: AssistantRequest }) {
+function AssistantAnswer({
+  initial,
+  assistantOn,
+}: {
+  initial: AssistantRequest;
+  assistantOn: boolean | undefined;
+}) {
   const now = useNow();
   const queryClient = useQueryClient();
   const params = { path: { id: initial.id } };
@@ -358,7 +532,7 @@ function AssistantAnswer({ initial }: { initial: AssistantRequest }) {
           <h4>Proposals for review</h4>
           <ul className="list" aria-label="Proposals from this answer">
             {answer.recommendations.map((r) => (
-              <RecommendationCard key={r.id} recommendation={r} />
+              <RecommendationCard key={r.id} recommendation={r} assistantOn={assistantOn} />
             ))}
           </ul>
         </>
@@ -367,7 +541,13 @@ function AssistantAnswer({ initial }: { initial: AssistantRequest }) {
   );
 }
 
-function AskForm({ facilityId }: { facilityId: string | null }) {
+function AskForm({
+  facilityId,
+  assistantOn,
+}: {
+  facilityId: string | null;
+  assistantOn: boolean | undefined;
+}) {
   const { online } = useApp();
   const [prompt, setPrompt] = useState('');
   const [promptError, setPromptError] = useState<string | null>(null);
@@ -414,13 +594,33 @@ function AskForm({ facilityId }: { facilityId: string | null }) {
         </Button>
       </form>
       <CommandError error={ask.error} onRetry={submit} />
-      {ask.data ? <AssistantAnswer key={ask.data.id} initial={ask.data} /> : null}
+      {ask.data ? (
+        <AssistantAnswer key={ask.data.id} initial={ask.data} assistantOn={assistantOn} />
+      ) : null}
     </>
+  );
+}
+
+/** "Assistant turned off" for the organization's switch, above what stays available. */
+function AssistantSwitchedOff() {
+  const presentation = CAPABILITY_PRESENTATION[ASSISTANT_CAPABILITY];
+  return (
+    <div data-testid="assistant-capability-off">
+      <StateView
+        variant="turned-off"
+        subject={presentation.label}
+        decisions={presentation.decisions}
+        owner={presentation.owner}
+        stillAvailable="Recommendations already proposed stay listed and can still be rejected; an apply whose outcome is unknown can still be reconciled."
+      />
+    </div>
   );
 }
 
 export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
   const { online } = useApp();
+  const permissions = usePermissions();
+  const assistantOn = permissions.isCapabilityEnabled(ASSISTANT_CAPABILITY);
   // Read by status (the API filters), so newer applied or rejected ones never push the ones
   // still waiting out of the page; a page that has more says so (never a false "none").
   const proposed = useApiQuery({
@@ -467,14 +667,20 @@ export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
     const more = proposed.data.nextCursor !== null || approved.data.nextCursor !== null;
     body = (
       <>
-        <AskForm facilityId={facilityId} />
+        {assistantOn === true ? (
+          <AskForm facilityId={facilityId} assistantOn={assistantOn} />
+        ) : assistantOn === false ? (
+          <AssistantSwitchedOff />
+        ) : (
+          <StateView variant="loading" label="whether the assistant is turned on" />
+        )}
         <h4>Awaiting review</h4>
         {open.length === 0 && !more ? (
           <p>No recommendations are waiting for review.</p>
         ) : (
           <ul className="list" aria-label="Recommendations awaiting review">
             {open.map((r) => (
-              <RecommendationCard key={r.id} recommendation={r} />
+              <RecommendationCard key={r.id} recommendation={r} assistantOn={assistantOn} />
             ))}
           </ul>
         )}

@@ -10,10 +10,10 @@
  * - per facility, only current and upcoming activities (`GET /v1/events` from now to the end of the
  *   facility-local day, times in the facility's timezone, SPK-SCHED-008) and field status
  *   (`GET /v1/facilities/{id}/operating-status`);
+ * - per facility, expected arrivals for the facility-local day from the reporting module's
+ *   `GET /v1/reports/expected-arrivals` (counts only, never names; `ExpectedArrivals.tsx`);
  * - sources the viewer may not read are listed as not available, never hidden or inferred;
  * - the optional assistant panel (SCR-S-50), which the rest of Today never depends on.
- *
- * Expected arrivals have no read in the API yet and are shown as not available.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -31,6 +31,7 @@ import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { formatDateTime, formatMinutes, formatTimeRange } from '../../ui/time';
 import '../../ui/form-fields.css';
 import { AssistantPanel } from './AssistantPanel';
+import { ExpectedArrivals } from './ExpectedArrivals';
 import {
   EXCEPTION_STATUS_TONE,
   RECOVERY_CATEGORIES,
@@ -387,14 +388,13 @@ function FacilityToday({ facility, now }: { facility: TodayFacility; now: Date }
       </p>
       <ActivitiesSection facility={facility} now={now} />
       <FieldStatusSection facility={facility} />
-      <section aria-label="Expected arrivals">
-        <h4>Expected arrivals</h4>
-        <StateView
-          variant="unavailable"
-          title="Not available yet"
-          description="The API does not publish expected arrivals yet. Arrival and attendance shows recorded arrivals."
-        />
-      </section>
+      <ExpectedArrivals
+        facilityId={facility.facilityId}
+        facilityName={facility.name}
+        timezone={facility.timezone}
+        localDate={facility.localDate}
+        now={now}
+      />
     </section>
   );
 }
