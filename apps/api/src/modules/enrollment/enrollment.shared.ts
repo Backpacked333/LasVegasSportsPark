@@ -1,7 +1,10 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import {
+  decodeCursor,
+  encodeCursor,
   errors,
   systemPrincipal,
+  z,
   type Application,
   type Basket,
   type BasketLine,
@@ -39,7 +42,7 @@ import type {
   WaitlistEntriesTable,
   WaitlistOffersTable,
 } from '@sportspark/db';
-import { sql, type Selectable } from 'kysely';
+import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
 import {
   snapshotActor,
   type ActionDefinition,
@@ -191,6 +194,43 @@ export function redactWaitlistEntry(
   return { ...entry, payerPersonId: null };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Keyset pages (§4.5, ENR-01/02): newest first on (created_at desc, id desc). The cursor carries
+// created_at as the database's own text so microseconds survive the round trip.
+// ---------------------------------------------------------------------------------------------
+
+const CreatedCursor = z.object({ at: z.string().min(1).max(64), id: z.uuid() });
+export type CreatedKeyset = z.infer<typeof CreatedCursor>;
+
+/** The decoded cursor, or null (absent or malformed: the first page). */
+export function decodeCreatedCursor(cursor: string | undefined): CreatedKeyset | null {
+  return decodeCursor(cursor, CreatedCursor);
+}
+
+/** `created_at::text` of `table`, selected as `cursor_at` beside the row. */
+export function cursorAt(table: string): RawBuilder<string> {
+  return sql<string>`${sql.ref(`${table}.created_at`)}::text`;
+}
+
+/** Rows strictly after the cursor in (created_at desc, id desc) order. */
+export function beforeCursor(table: string, cursor: CreatedKeyset): RawBuilder<SqlBool> {
+  return sql<SqlBool>`(${sql.ref(`${table}.created_at`)}, ${sql.ref(`${table}.id`)}) < (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+}
+
+/** Splits a `limit + 1` read into the page and its next cursor. */
+export function keysetPage<R extends { id: string; cursor_at: string }>(
+  rows: readonly R[],
+  limit: number,
+): { rows: R[]; nextCursor: string | null } {
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    nextCursor:
+      rows.length > limit && last ? encodeCursor({ at: last.cursor_at, id: last.id }) : null,
+  };
+}
+
 export const iso = (value: Date | string): string => new Date(value).toISOString();
 export const isoOrNull = (value: Date | string | null | undefined): string | null =>
   value === null || value === undefined ? null : iso(value);
@@ -233,6 +273,7 @@ export function toPolicyReferences(value: Record<string, unknown>): PolicyRefere
       ? (value['requiredFormPolicyVersionIds'] as string[])
       : [],
     approvalPolicyVersionId: (value['approvalPolicyVersionId'] as string | null) ?? null,
+    bookingTermsPolicyVersionId: (value['bookingTermsPolicyVersionId'] as string | null) ?? null,
   };
 }
 
@@ -351,6 +392,9 @@ export function toEnrollment(row: Selectable<EnrollmentsTable>): Enrollment {
     transferredFromEnrollmentId: row.transferred_from_enrollment_id,
     transferConsequence: emptyToNull<FinancialConsequence>(row.transfer_consequence),
     completedAt: isoOrNull(row.completed_at),
+    // ENR-02: HTTP views enrich these (EnrollmentViews); ports return the bare record.
+    offering: null,
+    pendingReason: null,
     revision: row.revision,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
@@ -455,6 +499,7 @@ export function toPlacementRequest(row: Selectable<PlacementRequestsTable>): Pla
     proposedAt: isoOrNull(row.proposed_at),
     proposalReasons: row.proposal_reasons as PlacementReason[],
     assignedTeamEntryId: row.assigned_team_entry_id,
+    assignedTeamName: null,
     assignedAt: isoOrNull(row.assigned_at),
     decidedByPersonId: row.decided_by_person_id,
     decisionReasons: row.decision_reasons as PlacementReason[],
@@ -479,6 +524,10 @@ export function toSessionBooking(row: Selectable<SessionBookingsTable>): Session
     poolId: row.pool_id,
     holdId: row.hold_id,
     makeupEntitlementId: row.makeup_entitlement_id,
+    entitlementBasis: row.entitlement_basis,
+    packageEntitlementId: row.package_entitlement_id,
+    membershipEnrollmentId: row.membership_enrollment_id,
+    creditDisposition: row.credit_disposition,
     scheduledStart: iso(row.scheduled_start),
     scheduledEnd: iso(row.scheduled_end),
     bookedBy: toActor(row.booked_by),

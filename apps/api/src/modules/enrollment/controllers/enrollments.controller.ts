@@ -4,6 +4,7 @@ import {
   CompleteEnrollmentBody,
   ListEnrollmentsQuery,
   TransferEnrollmentBody,
+  TransferPreviewQuery,
   z,
   type CancellationPreview,
   type Enrollment,
@@ -44,6 +45,16 @@ export class EnrollmentsController {
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
   ): Promise<CancellationPreview> {
     return this.enrollments.cancellationPreview(principal, params.id);
+  }
+
+  /** ENR-03 (SPK-REG-010): the read-only preview, against the target offering as it is now. */
+  @Get(':id/transfer-preview')
+  transferPreview(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodQuery(TransferPreviewQuery) query: TransferPreviewQuery,
+  ): Promise<TransferPreview> {
+    return this.enrollments.transferPreview(principal, params.id, query.targetOfferingId);
   }
 
   @Post(':id/cancel')

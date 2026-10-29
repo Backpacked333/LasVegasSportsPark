@@ -7,6 +7,7 @@ import {
   type DeclineWaitlistOfferInput,
   type JoinWaitlistInput,
   type ListWaitlistQuery,
+  type OfferWaitlistEntryInput,
   type OfferingSession,
   type Principal,
   type RemoveWaitlistEntryInput,
@@ -594,7 +595,6 @@ export class WaitlistService implements WaitlistPort {
       .forUpdate()
       .execute();
     const made: WaitlistOffer[] = [];
-    const policy = this.evaluator.configuration;
     const system = enrollmentSystem(organizationId, 'enrollment.offer_waitlist');
     let snapshot: OfferingSnapshot | undefined;
     const snapshotOf = async () =>
@@ -612,86 +612,13 @@ export class WaitlistService implements WaitlistPort {
       const required = await this.requiredPools(trx, organizationId, entry);
       if (required.length === 0) continue;
       if (required.some((p) => p.capacity - p.committed - p.held < 1)) break;
-      const now = this.clock.now();
-      const offerId = newId();
-      const expiresAt = minutesFrom(now, policy.waitlistOfferHours * 60);
       try {
-        const offer = await withSavepoint(trx, `offer_${made.length}`, async () => {
-          const holds = await this.capacity.acquireHolds(trx, organizationId, {
-            pools: required.map((p) => ({ poolId: p.id, quantity: 1 })),
-            ownerKind: 'waitlist_offer',
-            ownerId: offerId,
-            actor: system,
-            expiresAt,
-            correlationId,
-          });
-          const primary = holds.find((h) => h.poolId === entry.pool_id) ?? holds[0];
-          if (!primary) throw errors.internal('offer without a hold');
-          await trx
-            .insertInto('waitlist_offers')
-            .values({
-              id: offerId,
-              organization_id: organizationId,
-              waitlist_entry_id: entry.id,
-              pool_id: entry.pool_id,
-              hold_id: primary.id,
-              quantity: 1,
-              offered_at: now,
-              expires_at: expiresAt,
-              status: 'offered',
-              accepted_at: null,
-              accepted_basket_id: null,
-              accepted_enrollment_id: null,
-              accepted_session_booking_id: null,
-              declined_at: null,
-              expired_at: null,
-            })
-            .execute();
-          await trx
-            .updateTable('waitlist_entries')
-            .set((eb) => ({
-              status: 'offered',
-              offer_count: eb('offer_count', '+', 1),
-              revision: eb('revision', '+', 1),
-            }))
-            .where('organization_id', '=', organizationId)
-            .where('id', '=', entry.id)
-            .where('status', '=', 'waiting')
-            .execute();
-          const row = await this.loadOffer(trx, organizationId, offerId);
-          if (!row) throw errors.internal('waitlist offer vanished');
-          return row;
-        });
-        await this.audit.record(trx, {
-          organizationId,
-          actor: system,
-          action: 'enrollment.make_waitlist_offer',
-          targetType: 'waitlist_offer',
-          targetId: offerId,
-          afterRevision: 1,
-          correlationId,
-          details: {
-            waitlistEntryId: entry.id,
-            poolId: entry.pool_id,
-            expiresAt: expiresAt.toISOString(),
-          },
-        });
-        await this.outbox.enqueue(trx, EnrollmentEvents.waitlistOfferMade, {
-          organizationId,
-          aggregateType: 'waitlist_offer',
-          aggregateId: offerId,
-          correlationId,
-          payload: {
-            organizationId,
-            offerId,
-            waitlistEntryId: entry.id,
-            poolId: entry.pool_id,
-            holdId: offer.hold_id,
-            participantPersonId: entry.participant_person_id,
-            expiresAt: expiresAt.toISOString(),
-          },
-        });
-        made.push(toWaitlistOffer(offer));
+        made.push(
+          await this.makeOffer(trx, organizationId, entry, required, system, correlationId, {
+            savepoint: `offer_${made.length}`,
+            reason: null,
+          }),
+        );
       } catch (error) {
         // Another constraint filled up concurrently: stop here, keeping the queue order.
         if (DomainError.is(error) && error.code === 'CAPACITY_UNAVAILABLE') break;
@@ -699,6 +626,197 @@ export class WaitlistService implements WaitlistPort {
       }
     }
     return made;
+  }
+
+  /**
+   * One offer (SPK-REG-008): holds on every pool the entry needs, under the pool locks its caller
+   * took in id order, so the capacity constraints stay the guarantee (§4.7 invariant 3); the expiry
+   * comes from the waitlist policy (DEC-006). CAPACITY_UNAVAILABLE writes nothing.
+   */
+  private async makeOffer(
+    trx: Trx,
+    organizationId: string,
+    entry: WaitlistEntryRow,
+    required: readonly PoolRow[],
+    actor: Principal,
+    correlationId: string | null,
+    options: { savepoint: string; reason: string | null },
+  ): Promise<WaitlistOffer> {
+    const now = this.clock.now();
+    const offerId = newId();
+    const expiresAt = minutesFrom(now, this.evaluator.configuration.waitlistOfferHours * 60);
+    const offer = await withSavepoint(trx, options.savepoint, async () => {
+      const holds = await this.capacity.acquireHolds(trx, organizationId, {
+        pools: required.map((p) => ({ poolId: p.id, quantity: 1 })),
+        ownerKind: 'waitlist_offer',
+        ownerId: offerId,
+        actor,
+        expiresAt,
+        correlationId,
+      });
+      const primary = holds.find((h) => h.poolId === entry.pool_id) ?? holds[0];
+      if (!primary) throw errors.internal('offer without a hold');
+      await trx
+        .insertInto('waitlist_offers')
+        .values({
+          id: offerId,
+          organization_id: organizationId,
+          waitlist_entry_id: entry.id,
+          pool_id: entry.pool_id,
+          hold_id: primary.id,
+          quantity: 1,
+          offered_at: now,
+          expires_at: expiresAt,
+          status: 'offered',
+          accepted_at: null,
+          accepted_basket_id: null,
+          accepted_enrollment_id: null,
+          accepted_session_booking_id: null,
+          declined_at: null,
+          expired_at: null,
+        })
+        .execute();
+      await trx
+        .updateTable('waitlist_entries')
+        .set((eb) => ({
+          status: 'offered',
+          offer_count: eb('offer_count', '+', 1),
+          revision: eb('revision', '+', 1),
+        }))
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', entry.id)
+        .where('status', '=', 'waiting')
+        .execute();
+      const row = await this.loadOffer(trx, organizationId, offerId);
+      if (!row) throw errors.internal('waitlist offer vanished');
+      return row;
+    });
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: 'enrollment.make_waitlist_offer',
+      targetType: 'waitlist_offer',
+      targetId: offerId,
+      afterRevision: 1,
+      reason: options.reason,
+      correlationId,
+      details: {
+        waitlistEntryId: entry.id,
+        poolId: entry.pool_id,
+        expiresAt: expiresAt.toISOString(),
+        issuedBy: actor.kind === 'system' ? 'capacity_released' : 'staff',
+      },
+    });
+    // IF-18: staff and handler offers emit the same fact (ENR-09 composes its notice).
+    await this.outbox.enqueue(trx, EnrollmentEvents.waitlistOfferMade, {
+      organizationId,
+      aggregateType: 'waitlist_offer',
+      aggregateId: offerId,
+      correlationId,
+      payload: {
+        organizationId,
+        offerId,
+        waitlistEntryId: entry.id,
+        poolId: entry.pool_id,
+        holdId: offer.hold_id,
+        participantPersonId: entry.participant_person_id,
+        expiresAt: expiresAt.toISOString(),
+      },
+    });
+    return toWaitlistOffer(offer);
+  }
+
+  /**
+   * ENR-04 (SPK-REG-008, §4.7 invariant 3, §4.9): staff offer the place to the entry the queue
+   * would offer next — the same order and skips as offer generation (an entry whose participant
+   * already holds the place is passed over), under the same pool locks, holds and expiry. A later
+   * entry is refused (VALIDATION_FAILED `NOT_NEXT_IN_QUEUE`), and with no free place the capacity
+   * constraint answers CAPACITY_UNAVAILABLE. Audited; the offer event is the handler's.
+   */
+  async offerNext(
+    principal: Principal,
+    id: string,
+    input: OfferWaitlistEntryInput,
+    correlationId: string | null,
+  ): Promise<WaitlistEntry> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const before = await this.loadEntry(trx, organizationId, id);
+      if (!before) throw errors.protectedNotFound('waitlist_entry');
+      await this.authorization.require(principal, EnrollmentActions.manageWaitlist, {
+        type: 'waitlist_entry',
+        id,
+        organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, before.offering_id, trx),
+        subjectPersonIds: [before.participant_person_id],
+        protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readWaitlist, {
+          type: 'waitlist_entry',
+          id,
+          organizationId,
+          subjectPersonIds: [before.participant_person_id],
+        }),
+      });
+      // Pools first in id order (as holds and offer generation take them), then the entries.
+      await trx
+        .selectFrom('capacity_pools')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('offering_id', '=', before.offering_id)
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+      const entry = await this.loadEntry(trx, organizationId, id, true);
+      if (!entry) throw errors.protectedNotFound('waitlist_entry');
+      assertExpectedRevision(input.expectedRevision, entry.revision);
+      if (entry.status !== 'waiting') {
+        throw errors.invalidTransition('WaitlistEntry', entry.status, 'offer');
+      }
+      const queue = await this.waitingQuery(
+        trx,
+        organizationId,
+        entry.offering_id,
+        entry.session_id,
+      )
+        .forUpdate()
+        .execute();
+      let snapshot: OfferingSnapshot | undefined;
+      const snapshotOf = async () =>
+        (snapshot ??= await this.evaluator.snapshot(trx, organizationId, entry.offering_id));
+      let next: { entry: WaitlistEntryRow; required: PoolRow[] } | null = null;
+      for (const candidate of queue) {
+        if (await this.entitlementOf(trx, organizationId, candidate, snapshotOf)) continue;
+        const required = await this.requiredPools(trx, organizationId, candidate);
+        if (required.length === 0) continue;
+        next = { entry: candidate, required };
+        break;
+      }
+      if (!next || next.entry.id !== entry.id) {
+        throw errors.validation('Another waiting entry is offered the next place first.', {
+          code: 'NOT_NEXT_IN_QUEUE',
+          waitlistEntryId: entry.id,
+          nextWaitlistEntryId: next?.entry.id ?? null,
+        });
+      }
+      const full = next.required.find((p) => p.capacity - p.committed - p.held < 1);
+      if (full) {
+        throw errors.capacityUnavailable('No place is free to offer.', {
+          poolId: full.id,
+          unit: full.unit,
+          constraintKind: full.constraint_kind,
+          available: 0,
+        });
+      }
+      await this.makeOffer(trx, organizationId, entry, next.required, principal, correlationId, {
+        savepoint: 'staff_offer',
+        reason: input.reason,
+      });
+      const updated = await this.loadEntry(trx, organizationId, id);
+      return redactWaitlistEntry(
+        principal,
+        await this.view(trx, organizationId, updated!),
+        entry.requested_by_person_id,
+      );
+    });
   }
 
   /**

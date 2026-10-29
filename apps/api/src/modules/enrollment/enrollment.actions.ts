@@ -255,4 +255,127 @@ export const EnrollmentActions = defineActions({
     subjectPermission: 'view',
     requirements: ['SPK-YOUTH-007'],
   },
+
+  // -------------------------------------------------------------------------------------------
+  // Package G (§3.16; DEC-016). An action that creates a new commitment of a conditional
+  // capability names it; reads, cancellations, reversals and suspensions never do. Rental and
+  // party commands check `rentals` or `parties` by the offering's kind in their unit of work.
+  // -------------------------------------------------------------------------------------------
+  readPackageEntitlement: {
+    id: 'enrollment.read_package_entitlement',
+    description: 'Read session packages and their redemption history (ENR-11)',
+    staffRoles: READERS,
+    allowSelf: true,
+    subjectPermission: 'view',
+    requirements: ['SPK-COND-002'],
+  },
+  reversePackageRedemption: {
+    id: 'enrollment.reverse_package_redemption',
+    description:
+      'Reverse a package redemption so its credit is returned (staff correction, never gated)',
+    staffRoles: ['program_manager', 'front_desk', 'general_manager'],
+    requirements: ['SPK-COND-002', 'SPK-AT-020'],
+  },
+  manageMembershipSuspension: {
+    id: 'enrollment.manage_membership_suspension',
+    description: 'Suspend a membership for a period, or end its suspension (ENR-12, never gated)',
+    staffRoles: ['program_manager', 'front_desk', 'general_manager'],
+    requirements: ['SPK-COND-001'],
+  },
+  renewMembership: {
+    id: 'enrollment.renew_membership',
+    description: 'Add the renewal of a membership to a basket (charged only at checkout)',
+    staffRoles: REGISTRATION_STAFF,
+    allowSelf: true,
+    subjectPermission: 'register',
+    capability: 'memberships',
+    requirements: ['SPK-COND-001'],
+  },
+  requestBooking: {
+    id: 'enrollment.request_booking',
+    description:
+      'Request or book a rental or party with its space, equipment and staff (capability rentals or parties by kind)',
+    staffRoles: ['front_desk', 'program_manager', 'scheduler', 'general_manager'],
+    allowSelf: true,
+    requirements: ['SPK-COND-003', 'SPK-REG-001'],
+  },
+  decideBooking: {
+    id: 'enrollment.decide_booking',
+    description:
+      'Approve or decline a requested rental or party (approval mode; approval checks the capability)',
+    staffRoles: ['program_manager', 'scheduler', 'general_manager'],
+    requirements: ['SPK-COND-003', 'SPK-REG-007'],
+  },
+  readBooking: {
+    id: 'enrollment.read_booking',
+    description: 'Read rentals and parties (the booker, or staff in facility scope)',
+    staffRoles: READERS,
+    allowSelf: true,
+    requirements: ['SPK-COND-003'],
+  },
+  manageAssessmentTemplate: {
+    id: 'enrollment.manage_assessment_template',
+    description: 'Draft and approve youth assessment templates (ENR-14)',
+    staffRoles: ['program_manager'],
+    capability: 'youth_progression',
+    requirements: ['SPK-YOUTH-005'],
+  },
+  retireAssessmentTemplate: {
+    id: 'enrollment.retire_assessment_template',
+    description: 'Retire a youth assessment template (never gated)',
+    staffRoles: ['program_manager'],
+    requirements: ['SPK-YOUTH-005'],
+  },
+  authorAssessment: {
+    id: 'enrollment.author_assessment',
+    description:
+      'Draft, edit and submit youth assessments (program managers, or a coach accepted on the offering)',
+    staffRoles: ['program_manager', 'coach'],
+    capability: 'youth_progression',
+    requirements: ['SPK-YOUTH-005'],
+  },
+  withdrawAssessment: {
+    id: 'enrollment.withdraw_assessment',
+    description: 'Withdraw a draft or returned youth assessment (never gated)',
+    staffRoles: ['program_manager', 'coach'],
+    requirements: ['SPK-YOUTH-005'],
+  },
+  reviewAssessment: {
+    id: 'enrollment.review_assessment',
+    description:
+      'Approve or return a submitted youth assessment (a program manager other than its author)',
+    staffRoles: ['program_manager'],
+    capability: 'youth_progression',
+    requirements: ['SPK-YOUTH-005'],
+  },
+  readAssessments: {
+    id: 'enrollment.read_assessments',
+    description:
+      "Read a participant's youth assessments (program managers in facility scope, coaches of their offerings)",
+    staffRoles: ['program_manager', 'coach'],
+    requirements: ['SPK-YOUTH-005'],
+  },
+  recommendProgression: {
+    id: 'enrollment.recommend_progression',
+    description:
+      'Draft and share a progression recommendation (program managers, or a coach accepted on the from-offering)',
+    staffRoles: ['program_manager', 'coach'],
+    capability: 'youth_progression',
+    requirements: ['SPK-YOUTH-006'],
+  },
+  withdrawRecommendation: {
+    id: 'enrollment.withdraw_recommendation',
+    description: 'Withdraw a progression recommendation (never gated)',
+    staffRoles: ['program_manager', 'coach'],
+    requirements: ['SPK-YOUTH-006'],
+  },
+  readYouthFeedback: {
+    id: 'enrollment.read_youth_feedback',
+    description:
+      'Read published assessments and shared recommendations of the participants one may view',
+    staffRoles: [],
+    allowSelf: true,
+    subjectPermission: 'view',
+    requirements: ['SPK-YOUTH-005', 'SPK-YOUTH-006', 'SPK-COMMS-002'],
+  },
 });

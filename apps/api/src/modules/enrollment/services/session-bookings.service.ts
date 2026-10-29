@@ -26,6 +26,7 @@ import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  CapabilityService,
   DATABASE,
   Outbox,
   UnitOfWork,
@@ -34,7 +35,11 @@ import {
   type Trx,
 } from '../../../kernel';
 import type { OfferingSnapshot } from '../../catalog';
-import type { PersonSummary } from '../../identity';
+import {
+  PERSON_DIRECTORY_PORT,
+  type PersonDirectoryPort,
+  type PersonSummary,
+} from '../../identity';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
@@ -53,6 +58,12 @@ import { CapacityService, type HoldRow } from './capacity.service';
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { EnrollmentFacilityScope } from './facility-scope';
+import { MembershipsService, type MembershipUse } from './memberships.service';
+import {
+  PackageEntitlementsService,
+  type CreditDisposition,
+  type PackageEntitlementRow,
+} from './package-entitlements.service';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
 
 export type SessionBookingRow = Selectable<SessionBookingsTable>;
@@ -70,6 +81,10 @@ export interface CreateBookingInTrx {
   /** Makeups are never money (SPK-YOUTH-004): no price, confirmed at once. */
   free?: boolean;
   makeupEntitlementId?: string | null;
+  /** ENR-11, ENR-12: a booking a package credit or a membership pays for. */
+  basis?:
+    | { kind: 'package'; packageEntitlementId: string }
+    | { kind: 'membership'; membershipEnrollmentId: string; periodKey: string | null };
   correlationId: string | null;
 }
 
@@ -95,6 +110,10 @@ export class SessionBookingsService {
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
     private readonly scope: EnrollmentFacilityScope,
+    private readonly capabilities: CapabilityService,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
+    private readonly packages: PackageEntitlementsService,
+    private readonly memberships: MembershipsService,
   ) {}
 
   async load(
@@ -136,32 +155,110 @@ export class SessionBookingsService {
         subjectPersonIds: [person.id],
       });
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
-      if (snapshot.offering.kind !== 'pickup') {
+      const basis = input.packageEntitlementId
+        ? 'package'
+        : input.membershipEnrollmentId
+          ? 'membership'
+          : 'purchase';
+      if (basis === 'purchase' && snapshot.offering.kind !== 'pickup') {
         throw errors.validation(
           'Session bookings are for pickup sessions; trials and makeups have their own commands.',
           { path: 'offeringId' },
         );
       }
+      // ENR-10, ENR-11, ENR-12 (DEC-016): a new booking paid by a package or a membership needs
+      // that switch, and any new pickup booking needs pickup_sessions (DEC-082); cancellation,
+      // expiry and payment outcomes never check them.
+      if (basis === 'package') {
+        await this.capabilities.require(organizationId, 'session_packages', trx);
+      }
+      if (basis === 'membership') {
+        await this.capabilities.require(organizationId, 'memberships', trx);
+      }
+      if (snapshot.offering.kind === 'pickup') {
+        await this.capabilities.require(organizationId, 'pickup_sessions', trx);
+      }
+      const participantIds = await this.persons.personIdsResolvingTo(
+        organizationId,
+        person.id,
+        trx,
+      );
+      const ids = participantIds.length > 0 ? participantIds : [person.id];
+      let entitlement: PackageEntitlementRow | null = null;
+      let membershipUse: MembershipUse | null = null;
+      if (input.packageEntitlementId) {
+        entitlement = await this.packages.lockForRedemption(
+          trx,
+          organizationId,
+          input.packageEntitlementId,
+          ids,
+          snapshot,
+        );
+      }
+      if (input.membershipEnrollmentId) {
+        membershipUse = await this.memberships.lockForBooking(
+          trx,
+          organizationId,
+          input.membershipEnrollmentId,
+          ids,
+          snapshot,
+          session,
+        );
+      }
       const evaluation = await this.evaluator.evaluate(trx, organizationId, {
         snapshot,
         person,
-        intent: 'pickup',
+        intent: snapshot.offering.kind === 'pickup' ? 'pickup' : 'makeup',
         session,
       });
+      if (basis !== 'purchase') {
+        // The package or membership already decided which offerings it covers; the remaining
+        // checks (registration open, age, forms, session status) still apply.
+        evaluation.result.reasons = evaluation.result.reasons.filter(
+          (r) => r.code !== 'intent_offering_mismatch',
+        );
+        evaluation.result.eligible = evaluation.result.reasons.every(
+          (r) => r.severity === 'warning' || r.severity === 'info',
+        );
+      }
       this.assertBookable(evaluation.result, person.id);
       const row = await this.createInTrx(trx, organizationId, {
-        kind: 'pickup',
+        kind: snapshot.offering.kind === 'pickup' ? 'pickup' : 'session',
         snapshot,
         session,
         person,
         evaluation,
-        // §4.7 (1), SPK-REG-009: a customer books as their own payer; staff may name one.
+        // §4.7 (1), SPK-REG-009: a customer books as their own payer; staff may name one. A
+        // package or membership booking is already paid for.
         payerPersonId:
-          resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
-          (isStaffLike(principal) ? null : principal.personId),
+          basis !== 'purchase'
+            ? null
+            : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+              (isStaffLike(principal) ? null : principal.personId)),
         actor: principal,
+        free: basis !== 'purchase',
+        basis: entitlement
+          ? { kind: 'package', packageEntitlementId: entitlement.id }
+          : membershipUse
+            ? {
+                kind: 'membership',
+                membershipEnrollmentId: membershipUse.membership.id,
+                periodKey: membershipUse.periodKey,
+              }
+            : undefined,
         correlationId,
       });
+      if (entitlement) {
+        await this.packages.recordRedemption(
+          trx,
+          organizationId,
+          entitlement,
+          row,
+          principal,
+          correlationId,
+        );
+      }
+      if (membershipUse) await this.memberships.consume(trx, organizationId, membershipUse);
       return redactSessionBooking(principal, toSessionBooking(row));
     });
   }
@@ -280,6 +377,14 @@ export class SessionBookingsService {
           pool_id: primary?.pool_id ?? null,
           hold_id: primary?.id ?? null,
           makeup_entitlement_id: input.makeupEntitlementId ?? null,
+          entitlement_basis: input.makeupEntitlementId
+            ? 'makeup'
+            : (input.basis?.kind ?? 'purchase'),
+          package_entitlement_id:
+            input.basis?.kind === 'package' ? input.basis.packageEntitlementId : null,
+          membership_enrollment_id:
+            input.basis?.kind === 'membership' ? input.basis.membershipEnrollmentId : null,
+          membership_period_key: input.basis?.kind === 'membership' ? input.basis.periodKey : null,
           scheduled_start: input.session.scheduledStart,
           scheduled_end: input.session.scheduledEnd,
           booked_by: json(actorSnapshot(input.actor)),
@@ -541,9 +646,29 @@ export class SessionBookingsService {
         await this.capacity.releaseHoldRow(trx, organizationId, hold.id, reason, correlationId);
       }
     }
+    // ENR-11, ENR-12: what happens to the package credit or membership session (POL-007, POL-039).
+    let disposition: CreditDisposition | null = null;
+    if (row.entitlement_basis === 'package') {
+      disposition = await this.packages.onBookingCanceled(
+        trx,
+        organizationId,
+        row,
+        actor,
+        reason,
+        correlationId,
+      );
+    } else if (row.entitlement_basis === 'membership') {
+      disposition = await this.memberships.onBookingCanceled(trx, organizationId, row);
+    }
     await trx
       .updateTable('session_bookings')
-      .set({ status, canceled_at: now, cancel_reason: reason, revision: row.revision + 1 })
+      .set({
+        status,
+        canceled_at: now,
+        cancel_reason: reason,
+        credit_disposition: disposition,
+        revision: row.revision + 1,
+      })
       .where('organization_id', '=', organizationId)
       .where('id', '=', row.id)
       .where('revision', '=', row.revision)
@@ -596,7 +721,12 @@ export class SessionBookingsService {
       afterRevision: row.revision + 1,
       reason,
       correlationId,
-      details: { previousStatus: row.status, kind: row.kind },
+      details: {
+        previousStatus: row.status,
+        kind: row.kind,
+        entitlementBasis: row.entitlement_basis,
+        creditDisposition: disposition,
+      },
     });
     await this.outbox.enqueue(trx, EnrollmentEvents.sessionBookingChanged, {
       organizationId,

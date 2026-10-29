@@ -1,4 +1,9 @@
-import type { OfferingKind, PolicyVersion, RegistrationIntent } from '@sportspark/contracts';
+import type {
+  CapabilityId,
+  OfferingKind,
+  PolicyVersion,
+  RegistrationIntent,
+} from '@sportspark/contracts';
 
 /**
  * Enrollment policy defaults. They implement the mechanisms the specification requires with the
@@ -52,8 +57,14 @@ export const SESSION_INTENT_COMMANDS: Partial<Record<RegistrationIntent, string>
   pickup: 'POST /v1/session-bookings',
 };
 
-/** Offering kinds each registration intent may target (SPK-REG-001 × SPK-CAT-002). */
-export const INTENT_OFFERING_KINDS: Record<RegistrationIntent, readonly OfferingKind[]> = {
+/**
+ * An offering kind an intent may target. `party` is the catalog's party package kind (CAT-02,
+ * §3.16); it is named here so the intent map is complete whichever catalog vocabulary is merged.
+ */
+export type IntentOfferingKind = OfferingKind | 'party';
+
+/** Offering kinds each registration intent may target (SPK-REG-001 × SPK-CAT-002, ENR-10). */
+export const INTENT_OFFERING_KINDS: Record<RegistrationIntent, readonly IntentOfferingKind[]> = {
   individual_league: ['season', 'term'],
   join_team: ['season'],
   create_team_entry: ['season'],
@@ -62,9 +73,17 @@ export const INTENT_OFFERING_KINDS: Record<RegistrationIntent, readonly Offering
   makeup: ['makeup', 'session', 'term', 'camp'],
   pickup: ['pickup'],
   rental_request: ['rental'],
+  membership: ['membership'],
+  package_purchase: ['package'],
+  party_request: ['party'],
 };
 
-/** Capacity units an offering-level hold for the intent must acquire (SPK-REG-005). */
+/**
+ * Capacity units an offering-level hold for the intent must acquire (SPK-REG-005). A membership
+ * or package purchase holds a seat only when its offering configures a seats pool; a party
+ * request holds the offering's rental resource pool when configured (its space is reserved by
+ * scheduling, ENR-13).
+ */
 export const INTENT_CAPACITY_UNITS: Record<
   RegistrationIntent,
   readonly ('seats' | 'camp_group_places' | 'team_entries' | 'roster_places' | 'rental_resources')[]
@@ -74,11 +93,36 @@ export const INTENT_CAPACITY_UNITS: Record<
   join_team: ['roster_places'],
   create_team_entry: ['team_entries'],
   rental_request: ['rental_resources'],
+  membership: ['seats'],
+  package_purchase: ['seats'],
+  party_request: ['rental_resources'],
   // session-scoped intents hold session pools, never offering pools
   trial: [],
   makeup: [],
   pickup: [],
 };
+
+/**
+ * ENR-10 (DEC-016; DEC-072, DEC-074, DEC-076, DEC-077): the capability switch a new commitment of
+ * the intent needs. Adding the line, holding it and starting its checkout re-check it, so
+ * disabling a capability stops new sales of offerings already published; releasing, cancelling,
+ * expiring and recording payment outcomes never check it.
+ */
+export const INTENT_CAPABILITIES: Partial<Record<RegistrationIntent, CapabilityId>> = {
+  membership: 'memberships',
+  package_purchase: 'session_packages',
+  rental_request: 'rentals',
+  party_request: 'parties',
+};
+
+/** ENR-10 (SPK-COND-003): intents that exist only with their reservation (POST /bookings). */
+export const BOOKING_INTENTS: readonly RegistrationIntent[] = ['rental_request', 'party_request'];
+
+/** ENR-10: intents whose line is exactly one entitlement. */
+export const SINGLE_ENTITLEMENT_INTENTS: readonly RegistrationIntent[] = [
+  'membership',
+  'package_purchase',
+];
 
 export interface ApprovalRuleContent {
   intents?: RegistrationIntent[];

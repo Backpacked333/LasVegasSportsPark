@@ -240,6 +240,45 @@ export class CapacityService implements CapacityPort {
     );
   }
 
+  /**
+   * ENR-03: the offering-level pools an intent would hold, without writing anything: the existing
+   * pools, plus the ones the catalog limits would create at commitment (`id` null, nothing held).
+   */
+  async previewPoolsForIntent(
+    db: Reader,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    intent: RegistrationIntent,
+  ): Promise<
+    Array<
+      Pick<PoolRow, 'unit' | 'constraint_kind' | 'capacity' | 'committed' | 'held'> & {
+        id: string | null;
+      }
+    >
+  > {
+    const existing = this.poolsForIntent(
+      await this.poolRowsForOffering(db, organizationId, snapshot.offering.id),
+      intent,
+    );
+    const units: readonly string[] = INTENT_CAPACITY_UNITS[intent];
+    const virtual = this.offeringPoolSpecs(
+      snapshot.capacityUnits.filter((u) => u.unit !== 'session_seats' && units.includes(u.unit)),
+    )
+      .filter(
+        (spec) =>
+          !existing.some((p) => p.unit === spec.unit && p.constraint_kind === spec.constraintKind),
+      )
+      .map((spec) => ({
+        id: null,
+        unit: spec.unit,
+        constraint_kind: spec.constraintKind,
+        capacity: spec.capacity,
+        committed: 0,
+        held: 0,
+      }));
+    return [...existing, ...virtual];
+  }
+
   // -------------------------------------------------------------------------------------------
   // Pool creation and sizing
   // -------------------------------------------------------------------------------------------
@@ -329,6 +368,39 @@ export class CapacityService implements CapacityPort {
           .orderBy('id')
           .execute()
       : rows;
+  }
+
+  /**
+   * ENR-13: the one-place pool of a rental or party booking (scope `rental`, the booking id). The
+   * booking's basket line holds it like any other line, so the server-owned hold expiry
+   * (SPK-REG-006, POL-004) releases an unpaid booking; the physical guarantee is the scheduling
+   * reservation of its events, not this pool.
+   */
+  async ensureBookingPool(
+    trx: Trx,
+    organizationId: string,
+    input: { offeringId: string; bookingId: string; actor: Principal },
+  ): Promise<PoolRow> {
+    await this.insertPool(trx, organizationId, {
+      offeringId: input.offeringId,
+      scopeType: 'rental',
+      scopeId: input.bookingId,
+      unit: 'rental_resources',
+      constraintKind: 'space',
+      capacity: 1,
+      participantsPerStaff: null,
+      staffCount: null,
+      actor: input.actor,
+    });
+    const row = await trx
+      .selectFrom('capacity_pools')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('scope_type', '=', 'rental')
+      .where('scope_id', '=', input.bookingId)
+      .executeTakeFirst();
+    if (!row) throw errors.internal('booking pool vanished');
+    return row;
   }
 
   private offeringPoolSpecs(units: readonly CapacityUnit[]): Array<{

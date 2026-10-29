@@ -7,7 +7,13 @@ import {
   type Principal,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
-import { AuthorizationService, CLOCK, DATABASE, type Clock } from '../../../kernel';
+import {
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  FacilityDirectory,
+  type Clock,
+} from '../../../kernel';
 import { OFFERING_LOOKUP_PORT, type OfferingLookupPort } from '../../catalog';
 import { RelationshipAuthority } from '../../identity';
 import { EnrollmentActions } from '../enrollment.actions';
@@ -36,6 +42,7 @@ export class FamilyCalendarService {
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
     @Inject(OFFERING_LOOKUP_PORT) private readonly offerings: OfferingLookupPort,
+    private readonly facilities: FacilityDirectory,
   ) {}
 
   async get(principal: Principal, query: FamilyCalendarQuery): Promise<FamilyCalendar> {
@@ -114,6 +121,8 @@ export class FamilyCalendarService {
           start: start.toISOString(),
           end: end.toISOString(),
           status: enrollment.status,
+          facilityId: null,
+          timezone: null,
         });
       }
     }
@@ -142,10 +151,22 @@ export class FamilyCalendarService {
           start: new Date(booking.scheduled_start).toISOString(),
           end: new Date(booking.scheduled_end).toISOString(),
           status: booking.status,
+          facilityId: null,
+          timezone: null,
         });
       }
     }
 
+    // ENR-02 (SPK-SCHED-008): each item carries its facility and the zone its times are local to.
+    const facilityOf = await this.offerings.facilitiesOfOfferings(organizationId, [
+      ...new Set(items.map((i) => i.offeringId)),
+    ]);
+    const zones = await this.facilities.describe(organizationId, [...new Set(facilityOf.values())]);
+    for (const item of items) {
+      const facilityId = facilityOf.get(item.offeringId) ?? null;
+      item.facilityId = facilityId;
+      item.timezone = facilityId ? (zones.get(facilityId)?.timezone ?? null) : null;
+    }
     items.sort((a, b) => a.start.localeCompare(b.start) || a.id.localeCompare(b.id));
     return {
       from: from.toISOString(),

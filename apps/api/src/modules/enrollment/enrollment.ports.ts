@@ -78,7 +78,10 @@ export interface EnrollmentPort {
     enrollmentId: string,
     options: ConfirmEnrollmentOptions,
   ): Promise<Enrollment>;
-  /** Cancels a pending enrollment and releases its capacity (payment failed or compensation). */
+  /**
+   * Cancels a pending enrollment and releases its capacity (payment failed or compensation).
+   * `operationId` (ENR-06) names the finance operation on the enrollment in the same statement.
+   */
   failConfirmation(
     trx: Trx,
     organizationId: string,
@@ -86,6 +89,7 @@ export interface EnrollmentPort {
     reason: string,
     actor: Principal,
     correlationId?: string | null,
+    operationId?: string | null,
   ): Promise<Enrollment>;
   confirmSessionBooking(
     trx: Trx,
@@ -121,22 +125,30 @@ export interface CapacityPort {
 
 export interface BasketPort {
   getBasket(organizationId: string, basketId: string, trx?: Trx): Promise<Basket | null>;
-  /** Finance started a checkout: the basket keeps its pending enrollments until finance resolves them. */
+  /**
+   * Finance started a checkout: the basket keeps its pending enrollments until finance resolves
+   * them. `operationId` (ENR-06, §4.11 step 4, SPK-UX-001) is recorded as the basket's and every
+   * pending enrollment's last operation, so a pending registration names its checkout. Optional:
+   * a caller that does not pass it keeps the earlier behaviour.
+   */
   startCheckout(
     trx: Trx,
     organizationId: string,
     basketId: string,
     orderRef: string,
     actor: Principal,
+    operationId?: string | null,
   ): Promise<Basket>;
   /** SPK-REG-007: throws RESOURCE_CONFLICT (details.code APPROVAL_PENDING) while a line awaits review. */
   assertPaymentPermitted(trx: Trx, organizationId: string, basketId: string): Promise<Basket>;
+  /** `operationId` (ENR-06): recorded on the basket and on each enrollment it cancels. */
   finishCheckout(
     trx: Trx,
     organizationId: string,
     basketId: string,
     outcome: 'fulfilled' | 'partially_fulfilled' | 'abandoned',
     actor: Principal,
+    operationId?: string | null,
   ): Promise<Basket>;
 }
 
