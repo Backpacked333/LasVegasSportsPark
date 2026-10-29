@@ -27,6 +27,7 @@ import { WorkforceActions } from '../workforce.actions';
 import { WorkforceEvents } from '../workforce.events';
 import { AvailabilityMachine } from '../workforce.state-machines';
 import { organizationOf, toAvailability, type AvailabilityRow } from '../workforce.shared';
+import { MergedPersons } from './merged-persons';
 
 /**
  * Availability windows (SPK-STAFF-001). A person states when they can or cannot work; staff
@@ -43,6 +44,7 @@ export class AvailabilityService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly merged: MergedPersons,
   ) {}
 
   async create(
@@ -131,11 +133,13 @@ export class AvailabilityService {
       subjectPersonIds: [personId],
       protected: true,
     });
+    // WRK-05, SPK-IAM-007: a survivor's statements include those recorded for people merged into it.
+    const personIds = await this.merged.resolving(this.db, organizationId, personId);
     let q = this.db
       .selectFrom('availability')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('person_id', '=', personId)
+      .where('person_id', 'in', personIds)
       .orderBy('starts_at')
       .orderBy('id');
     if (!query.includeWithdrawn) q = q.where('status', '=', 'active');
@@ -207,11 +211,13 @@ export class AvailabilityService {
     start: Date,
     end: Date,
   ): Promise<AvailabilityRow[]> {
+    // WRK-05, SPK-IAM-007: statements of everyone identity resolves to the same person count.
+    const personIds = await this.merged.resolving(db, organizationId, personId);
     return db
       .selectFrom('availability')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('person_id', '=', personId)
+      .where('person_id', 'in', personIds)
       .where('status', '=', 'active')
       .where('starts_at', '<', end)
       .where('ends_at', '>', start)

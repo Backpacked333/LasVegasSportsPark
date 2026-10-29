@@ -131,6 +131,10 @@ export class RequirementsService {
         facilityId: current.facility_id,
       });
       assertExpectedRevision(body.expectedRevision, current.revision);
+      // WRK-02: a retired requirement is final (the database refuses the update as well).
+      if (current.retired_at) {
+        throw errors.invalidTransition('AssignmentRequirement', 'retired', 'update');
+      }
       await trx
         .updateTable('assignment_requirements')
         .set({
@@ -254,6 +258,7 @@ export class RequirementsService {
         role: row.role,
         requiredCount: row.required_count,
         mustBeAccepted: row.must_be_accepted,
+        retiredAt: null,
       },
     });
   }

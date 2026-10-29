@@ -1,8 +1,9 @@
 import { Inject, Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry, lazyPort } from '../../kernel';
+import { EventHandlerRegistry, lazyPort, MODULE_SETTINGS, moduleSettings } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
+import { CommunicationsModule } from '../communications';
 import {
   ASSIGNMENT_CHECK_IMPL,
   CompetitionEvents,
@@ -10,7 +11,7 @@ import {
   READINESS_CHECK_REGISTRY,
   type ReadinessCheckRegistry,
 } from '../competition';
-import { IdentityModule } from '../identity';
+import { IdentityEvents, IdentityModule } from '../identity';
 import {
   ConflictDetector,
   EventChanged,
@@ -30,25 +31,38 @@ import {
   WORKFORCE_STAFFING_PORT,
   type WorkforceStaffingPort,
 } from './ports';
+import { AssignmentNotices } from './services/assignment-notices';
 import { AssignmentsService } from './services/assignments.service';
 import { AvailabilityService } from './services/availability.service';
 import { CommitmentChecker } from './services/commitment-checker';
 import { CoverageService } from './services/coverage.service';
 import { FeesService } from './services/fees.service';
+import { MergedPersons } from './services/merged-persons';
+import { PersonMergeFollowUp } from './services/person-merge-follow-up';
 import { QualificationsService } from './services/qualifications.service';
 import { ReplacementsService } from './services/replacements.service';
 import { RequirementsService } from './services/requirements.service';
+import { StaffingService } from './services/staffing.service';
 import { TargetResolver } from './services/target-resolver';
 import { TemporaryAccessService } from './services/temporary-access.service';
 import { WorkspaceService } from './services/workspace.service';
+import { WorkforceEvents } from './workforce.events';
 import {
-  DEFAULT_WORKFORCE_POLICY,
   REQUIRED_OFFICIALS_CHECK,
   WORKFORCE_POLICY,
+  workforcePolicyFromSettings,
 } from './workforce.policy';
+import { WorkforceSettings, type WorkforceSettingsValue } from './workforce.settings';
 
 const providers: Provider[] = [
-  { provide: WORKFORCE_POLICY, useValue: DEFAULT_WORKFORCE_POLICY },
+  // WRK-06 (DEC-011 / POL-033 pending): policy values are module settings with no default.
+  moduleSettings(WorkforceSettings.module),
+  {
+    provide: WORKFORCE_POLICY,
+    inject: [MODULE_SETTINGS(WorkforceSettings.module)],
+    useFactory: (settings: WorkforceSettingsValue) => workforcePolicyFromSettings(settings),
+  },
+  MergedPersons,
   // Scheduling's exported, dependency-free conflict detector: workforce reads scheduling's person
   // commitments only through scheduling's own code (§4.2).
   ConflictDetector,
@@ -63,10 +77,14 @@ const providers: Provider[] = [
   ReplacementsService,
   FeesService,
   WorkspaceService,
+  StaffingService,
+  AssignmentNotices,
+  PersonMergeFollowUp,
   // Competition resolves these lazily by token (results by accepted officials, SPK-STAFF-005).
   { provide: ASSIGNMENT_CHECK_IMPL, useExisting: CoverageService },
   { provide: ASSIGNMENT_COVERAGE_PORT, useExisting: CoverageService },
-  // IF-32: declared by stage 3; WRK-02 registers WORKFORCE_STAFFING_IMPL.
+  // IF-32 (WRK-02): booking staffing, resolved lazily by enrollment through the port.
+  { provide: WORKFORCE_STAFFING_IMPL, useExisting: StaffingService },
   {
     provide: WORKFORCE_STAFFING_PORT,
     inject: [ModuleRef],
@@ -88,9 +106,22 @@ const providers: Provider[] = [
  * fixture, event and session changes through outbox handlers. It never writes identity,
  * scheduling, competition or catalog tables (§4.2): time-bounded access goes through identity's
  * StaffMembershipsService.
+ *
+ * Stage 3: provides WORKFORCE_STAFFING_PORT (IF-32, WRK-02) for enrollment's booking events and
+ * ASSIGNMENT_COVERAGE_PORT.isAcceptedOnOffering (IF-34, WRK-03); composes its own assignment
+ * notices through communications' NotificationsService (IF-22, WRK-04); follows
+ * identity.persons_merged (IF-21, WRK-05); reads its policy from module settings with no
+ * defaults (IF-43, WRK-06).
  */
 @Module({
-  imports: [IdentityModule, SchedulingModule, CompetitionModule, CatalogModule],
+  // Communications does not import workforce (IF-22), so workforce composes its own notices.
+  imports: [
+    IdentityModule,
+    SchedulingModule,
+    CompetitionModule,
+    CatalogModule,
+    CommunicationsModule,
+  ],
   providers,
   controllers: [
     AvailabilityController,
@@ -123,6 +154,8 @@ export class WorkforceModule implements OnModuleInit {
     private readonly assignments: AssignmentsService,
     private readonly checker: CommitmentChecker,
     private readonly partySources: PartyCommitmentSources,
+    private readonly notices: AssignmentNotices,
+    private readonly mergeFollowUp: PersonMergeFollowUp,
   ) {}
 
   onModuleInit(): void {
@@ -162,6 +195,24 @@ export class WorkforceModule implements OnModuleInit {
         await this.assignments.onSessionCanceled(event, ctx);
       },
       { failureOwner: 'program_manager' },
+    );
+    // WRK-04, SPK-COMMS-002 (assignment_offer), IF-22: this module's own notices to assignees.
+    this.registry.on<EventPayload<typeof WorkforceEvents.assignmentChanged>>(
+      WorkforceEvents.assignmentChanged.type,
+      'workforce.assignment_offer_notice',
+      async (event, ctx) => {
+        await this.notices.onAssignmentChanged(event, ctx);
+      },
+      { failureOwner: 'scheduler' },
+    );
+    // WRK-05, SPK-IAM-007, IF-21: a merge never rewrites workforce rows; overlaps are escalated.
+    this.registry.on<EventPayload<typeof IdentityEvents.personsMerged>>(
+      IdentityEvents.personsMerged.type,
+      'workforce.follow_person_merge',
+      async (event, ctx) => {
+        await this.mergeFollowUp.onPersonsMerged(event, ctx);
+      },
+      { failureOwner: 'scheduler' },
     );
   }
 }

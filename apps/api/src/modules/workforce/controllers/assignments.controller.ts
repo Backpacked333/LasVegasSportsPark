@@ -13,6 +13,7 @@ import {
   type Principal,
   type ReplacementList,
   type ReplacementOutcome,
+  type StaffAssignment,
 } from '@sportspark/contracts';
 import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
 import { AssignmentsService } from '../services/assignments.service';
@@ -47,7 +48,7 @@ export class AssignmentsController {
   list(
     @CurrentPrincipal() principal: Principal,
     @ZodQuery(ListAssignmentsQuery) query: ListAssignmentsQuery,
-  ): Promise<Page<Assignment>> {
+  ): Promise<Page<StaffAssignment>> {
     return this.assignments.list(principal, query);
   }
 
