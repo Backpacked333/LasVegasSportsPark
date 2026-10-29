@@ -270,9 +270,12 @@ export class PreventiveSchedulesService {
         .where('organization_id', '=', organizationId)
         .where('preventive_schedule_id', '=', scheduleId)
         .execute();
+      // A withdrawn occurrence (FAC-01) was decided against: it is never materialized again.
       const done = new Set(
         existing
-          .filter((e) => e.status === 'active' || e.status === 'released')
+          .filter(
+            (e) => e.status === 'active' || e.status === 'released' || e.status === 'withdrawn',
+          )
           .map((e) => e.occurrence_index as number),
       );
       const resumable = new Map(

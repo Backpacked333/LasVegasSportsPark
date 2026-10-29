@@ -520,4 +520,50 @@ describe('assets, maintenance tasks and inspections (SPK-FAC-001/002/004, SPK-UX
       .set(auth);
     expect(overdueList.body.items.map((i: { id: string }) => i.id)).toEqual([reported.id]);
   });
+
+  it('IF-06 (FAC-01): list flags read ?overdue=false and ?includeRetired=false as false and refuse other values', async () => {
+    const all = await t.http
+      .get('/v1/maintenance-tasks')
+      .query({ facilityId: facility, limit: 200 })
+      .set(auth);
+    const overdue = await t.http
+      .get('/v1/maintenance-tasks')
+      .query({ facilityId: facility, limit: 200, overdue: 'true' })
+      .set(auth);
+    const notFiltered = await t.http
+      .get('/v1/maintenance-tasks')
+      .query({ facilityId: facility, limit: 200, overdue: 'false' })
+      .set(auth);
+    expect(overdue.body.items.length).toBeGreaterThan(0);
+    expect(overdue.body.items.length).toBeLessThan(all.body.items.length);
+    // false is not a filter: the same items as without the flag (z.coerce.boolean read it as true)
+    expect(notFiltered.body.items.map((i: { id: string }) => i.id)).toEqual(
+      all.body.items.map((i: { id: string }) => i.id),
+    );
+    for (const value of ['yes', '1', 'TRUE']) {
+      const refused = await t.http
+        .get('/v1/maintenance-tasks')
+        .query({ facilityId: facility, overdue: value })
+        .set(auth);
+      expect(refused.status, value).toBe(400);
+      expect(refused.body.code).toBe('VALIDATION_FAILED');
+    }
+    const assets = (includeRetired?: string) =>
+      t.http
+        .get('/v1/assets')
+        .query(
+          includeRetired === undefined
+            ? { facilityId: facility }
+            : { facilityId: facility, includeRetired },
+        )
+        .set(auth);
+    const statuses = async (includeRetired?: string) =>
+      ((await assets(includeRetired)).body as Array<{ status: string }>).map((a) => a.status);
+    expect(await statuses('true')).toContain('retired');
+    expect(await statuses('false')).not.toContain('retired');
+    expect(await statuses('false')).toEqual(await statuses());
+    const refused = await assets('no');
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe('VALIDATION_FAILED');
+  });
 });

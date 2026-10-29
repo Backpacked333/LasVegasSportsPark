@@ -25,7 +25,7 @@ import { seedAsset } from '../testing/facilities-fixtures';
  * Integrity invariants proven at the database (CLAUDE.md "Integrity that matters is enforced in
  * the database"): rows are inserted through Kysely, bypassing the services.
  */
-describe('facilities schema invariants (migrations 0900-0902)', () => {
+describe('facilities schema invariants (migrations 0900-0903)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -497,6 +497,112 @@ describe('facilities schema invariants (migrations 0900-0902)', () => {
     ).rejects.toSatisfy(isUniqueViolation);
     await db.updateTable('assets').set({ status: 'retired' }).where('id', '=', assetId).execute();
     await seedAsset(db, { organizationId: org, facilityId: facility, identifier: 'TURF-N' });
+  });
+
+  it('the database rejects a withdrawn restriction without withdrawal facts (FAC-01, migration 0903)', async () => {
+    const withdrawal = {
+      status: 'withdrawn',
+      withdrawn_at: new Date(),
+      withdrawn_by: json({ kind: 'staff', actorLabel: 'operator' }),
+      withdrawal_reason: 'no longer needed',
+    };
+    // withdrawn exactly when it has a withdrawal instant, with who and why
+    await expect(insertRestriction({ status: 'withdrawn' })).rejects.toSatisfy(isCheckViolation);
+    await expect(insertRestriction({ ...withdrawal, withdrawn_by: null })).rejects.toSatisfy(
+      isCheckViolation,
+    );
+    await expect(insertRestriction({ ...withdrawal, withdrawal_reason: null })).rejects.toSatisfy(
+      isCheckViolation,
+    );
+    await expect(insertRestriction({ ...withdrawal, withdrawal_reason: '' })).rejects.toSatisfy(
+      isCheckViolation,
+    );
+    await expect(
+      insertRestriction({ ...withdrawal, withdrawal_reason: 'x'.repeat(2001) }),
+    ).rejects.toSatisfy(isCheckViolation);
+    await expect(
+      insertRestriction({ withdrawn_at: new Date(), withdrawal_reason: 'still proposed' }),
+    ).rejects.toSatisfy(isCheckViolation);
+    // a withdrawn restriction never took effect
+    await expect(
+      insertRestriction({ ...withdrawal, affected_conflict_unit_ids: [pitch.units.north] }),
+    ).rejects.toSatisfy(isCheckViolation);
+    // proposed carries no approval; approved, active and released always do (0900 split in 0903)
+    await expect(
+      insertRestriction({ approved_by: json({ kind: 'staff' }), approved_at: new Date() }),
+    ).rejects.toSatisfy(isCheckViolation);
+    await expect(insertRestriction({ status: 'approved' })).rejects.toSatisfy(isCheckViolation);
+    // withdrawn from proposed (no approval) and from approved (approval kept) are both facts
+    const fromProposed = await insertRestriction(withdrawal);
+    const fromApproved = await insertRestriction({
+      ...withdrawal,
+      approved_by: json({ kind: 'staff' }),
+      approved_at: new Date(),
+    });
+    expect(fromProposed).not.toBe(fromApproved);
+  });
+
+  it('released and withdrawn restrictions are final: the database refuses to rewrite them (FAC-01, migration 0903)', async () => {
+    const restrictViolation = (error: unknown) =>
+      (error as { code?: string } | null)?.code === '23001';
+    const taskId = await insertTask();
+    const withdrawn = await insertRestriction({
+      task_id: taskId,
+      status: 'withdrawn',
+      withdrawn_at: new Date(),
+      withdrawn_by: json({ kind: 'staff' }),
+      withdrawal_reason: 'not needed',
+    });
+    // a withdrawn restriction no longer occupies the task's one open restriction
+    const open = await insertRestriction({ task_id: taskId });
+    await expect(insertRestriction({ task_id: taskId })).rejects.toSatisfy(isUniqueViolation);
+    await expect(
+      db
+        .updateTable('restrictions')
+        .set({
+          status: 'proposed',
+          withdrawn_at: null,
+          withdrawn_by: null,
+          withdrawal_reason: null,
+        })
+        .where('id', '=', withdrawn)
+        .execute(),
+    ).rejects.toSatisfy(restrictViolation);
+    await expect(
+      db
+        .updateTable('restrictions')
+        .set({ withdrawal_reason: 'rewritten' })
+        .where('id', '=', withdrawn)
+        .execute(),
+    ).rejects.toSatisfy(restrictViolation);
+    const closureId = await appliedClosure();
+    const released = await insertRestriction({
+      status: 'released',
+      approved_by: json({ kind: 'staff' }),
+      approved_at: new Date(),
+      scheduling_closure_id: closureId,
+      released_at: new Date(),
+      released_by: json({ kind: 'staff' }),
+      release_reason: 'inspection passed',
+    });
+    await expect(
+      db
+        .updateTable('restrictions')
+        .set({ reason: 'rewritten' })
+        .where('id', '=', released)
+        .execute(),
+    ).rejects.toSatisfy(restrictViolation);
+    // an update that changes nothing is not a rewrite; open restrictions still change
+    await db
+      .updateTable('restrictions')
+      .set((eb) => ({ reason: eb.ref('reason') }))
+      .where('id', '=', released)
+      .execute();
+    await db
+      .updateTable('restrictions')
+      .set({ reason: 'clarified' })
+      .where('id', '=', open)
+      .execute();
   });
 
   it('inspections are append-only observations (corrections are new rows)', async () => {

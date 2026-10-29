@@ -8,7 +8,7 @@ import type {
 
 /**
  * Facilities lifecycles (§4.6 "each command must define allowed source state"). The database check
- * constraints in migration 0900 list exactly these states.
+ * constraints in migrations 0900 and 0903 (restriction `withdrawn`) list exactly these states.
  */
 
 export type MaintenanceTaskEvent =
@@ -51,21 +51,24 @@ export const MaintenanceTaskMachine = defineStateMachine<
   },
 });
 
-export type RestrictionEvent = 'approve' | 'activate' | 'release';
+export type RestrictionEvent = 'approve' | 'activate' | 'release' | 'withdraw';
 /**
  * proposed → approved (authority recorded) → active (scheduling closure applied, availability
  * affected: SPK-FAC-003) → released (authorized return to service lifted the closure: SPK-FAC-004).
+ * A proposed or approved restriction that never took effect may be withdrawn (FAC-01, migration
+ * 0903): its pending closure is withdrawn with it. An active one is released, never withdrawn.
  */
 export const RestrictionMachine = defineStateMachine<RestrictionStatus, RestrictionEvent>({
   name: 'Restriction',
   initial: 'proposed',
-  states: ['proposed', 'approved', 'active', 'released'],
-  terminal: ['released'],
+  states: ['proposed', 'approved', 'active', 'released', 'withdrawn'],
+  terminal: ['released', 'withdrawn'],
   transitions: {
-    proposed: { approve: 'approved' },
-    approved: { activate: 'active' },
+    proposed: { approve: 'approved', withdraw: 'withdrawn' },
+    approved: { activate: 'active', withdraw: 'withdrawn' },
     active: { release: 'released' },
     released: {},
+    withdrawn: {},
   },
 });
 
