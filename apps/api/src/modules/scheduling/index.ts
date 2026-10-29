@@ -10,8 +10,9 @@ export * from './services/closures.service';
 export * from './services/closure-lift-guards';
 export * from './services/closure-impact-contributors';
 export * from './services/event-series.service';
+export { EventImportService, IMPORT_SOURCE_TYPE } from './services/event-import.service';
 export * from './services/schedule-drafts.service';
-export { EventWriter } from './services/event-writer';
+export { BOOKING_SOURCE_TYPE, EventWriter } from './services/event-writer';
 export {
   ConflictDetector,
   type ProposedEvent,

@@ -49,7 +49,7 @@ import { SchedulingActions } from '../scheduling.actions';
 import { SchedulePublished, type EventChangeKind } from '../scheduling.events';
 import { EventMachine, ScheduleDraftMachine } from '../scheduling.state-machines';
 import { EventWriter, sameResourceSet, type EventRow, type FacilityRow } from './event-writer';
-import { organizationOf } from './events.service';
+import { organizationOf } from './organization';
 
 type DraftRow = Selectable<ScheduleDraftsTable>;
 type ChangeRow = Selectable<DraftChangesTable>;

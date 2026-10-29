@@ -63,7 +63,11 @@ export interface CancelEventInput {
   correlationId?: string | null;
 }
 
-/** SCH-02, IF-31: a weekly series created through the port (bookings, recurring rentals). */
+/**
+ * SCH-02, IF-31: a weekly series created through the port (bookings, recurring rentals). At most
+ * 52 occurrences (`count <= 52`, or an `until` producing no more); `sourceType 'enrollment.booking'`
+ * is for kinds `rental` and `party`.
+ */
 export interface CreateEventSeriesInput {
   kind: EventKind;
   title: string;
@@ -124,8 +128,11 @@ export interface EventSchedulingPort {
     input: CancelEventSeriesInput,
   ): Promise<{ canceledEventIds: string[] }>;
   /**
-   * SCH-04, IF-31/IF-40: create-if-absent draft for the migration import principal only
-   * (`assertImportPrincipal`); different content is IMPORT_SCHEDULE_CONFLICT.
+   * SCH-04, IF-31/IF-40: create-if-absent draft (`id = recordId`, `source_type 'import'`,
+   * `source_id = batchId`) for the migration import principal only (`assertImportPrincipal`); the
+   * same record with different content is RESOURCE_CONFLICT `IMPORT_CONTENT_MISMATCH`, and an
+   * event that conflicts with the current schedule is RESOURCE_CONFLICT `IMPORT_SCHEDULE_CONFLICT`
+   * with nothing written. Never calls RECORD_AUTHORITY_PORT.
    */
   importEvent(principal: Principal, input: ImportEventInput): Promise<Event>;
 }

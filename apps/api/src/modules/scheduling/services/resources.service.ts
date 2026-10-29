@@ -36,7 +36,7 @@ import {
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
 import { SchedulingActions } from '../scheduling.actions';
 import { EventWriter } from './event-writer';
-import { organizationOf } from './events.service';
+import { organizationOf } from './organization';
 
 type ResourceRow = Selectable<ResourcesTable>;
 type ConfigurationRow = Selectable<ResourceConfigurationsTable>;

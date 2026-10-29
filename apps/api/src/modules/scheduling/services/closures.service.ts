@@ -18,7 +18,6 @@ import {
   OperationalExceptions,
   Outbox,
   UnitOfWork,
-  declaredNotImplemented,
   executorFor,
   type Clock,
   type Trx,
@@ -33,12 +32,12 @@ import type {
   WithdrawClosureInput,
 } from '../ports';
 import { SchedulingActions } from '../scheduling.actions';
-import { ClosureApplied, ClosureLifted } from '../scheduling.events';
+import { ClosureApplied, ClosureLifted, ClosureWithdrawn } from '../scheduling.events';
 import { ClosureMachine } from '../scheduling.state-machines';
 import { ClosureImpactContributors } from './closure-impact-contributors';
 import { ClosureLiftGuards } from './closure-lift-guards';
 import { EventWriter } from './event-writer';
-import { organizationOf } from './events.service';
+import { organizationOf } from './organization';
 
 type ClosureRow = Selectable<ClosuresTable> & { start: string; end: string };
 
@@ -83,8 +82,17 @@ export class ClosuresService implements ClosurePort {
     private readonly impactContributors: ClosureImpactContributors,
   ) {}
 
+  /**
+   * SPK-SCHED-009 (SCH-01 `GET /v1/closure-impact`): the impact a closure of this area and
+   * interval would have — affected events with their owning records and parties, and the
+   * customers, obligations and messages the owning modules contribute — computed without creating
+   * anything.
+   */
   async previewImpact(principal: Principal, input: PreviewClosureInput): Promise<ClosureImpact> {
     const organizationId = organizationOf(principal);
+    if (!(new Date(input.interval.start).getTime() < new Date(input.interval.end).getTime())) {
+      throw errors.validation('start must be before end.');
+    }
     await this.authorization.require(principal, SchedulingActions.manageClosures, {
       type: 'closure',
       organizationId,
@@ -281,13 +289,89 @@ export class ClosuresService implements ClosurePort {
     });
   }
 
-  /** ClosurePort.withdrawClosure (IF-11): declared by stage 3; SCH-01 implements it. */
+  /**
+   * SCH-01, IF-11 (SPK-FAC-003, §4.6 ClosureMachine `withdraw`): a pending closure that is no
+   * longer needed is withdrawn before it ever applies, so it never affected availability and can
+   * never be applied afterwards (migration 0302 checks and terminal guard). An active closure is
+   * INVALID_TRANSITION: it is lifted, not withdrawn. Joins the caller's unit of work.
+   *
+   * Through CLOSURE_PORT any source is withdrawn (facilities withdraws the closure of a withdrawn
+   * restriction). `refuseRestrictionOwned` (the HTTP route) refuses a `maintenance` closure with
+   * RESOURCE_CONFLICT `OWNED_BY_RESTRICTION`: its restriction is withdrawn instead (§4.2).
+   */
   async withdrawClosure(
-    _principal: Principal,
-    _closureId: string,
-    _input: WithdrawClosureInput,
+    principal: Principal,
+    closureId: string,
+    input: WithdrawClosureInput,
+    options: { refuseRestrictionOwned?: boolean } = {},
   ): Promise<Closure> {
-    return declaredNotImplemented('ClosurePort.withdrawClosure', 'SCH-01');
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const closure = await this.load(trx, organizationId, closureId, true);
+      if (!closure) throw errors.notFound('closure', closureId);
+      await this.authorization.require(principal, SchedulingActions.manageClosures, {
+        type: 'closure',
+        id: closureId,
+        organizationId,
+        facilityId: closure.facility_id,
+      });
+      assertExpectedRevision(input.expectedRevision, closure.revision);
+      const next = ClosureMachine.next(closure.status, 'withdraw');
+      if (options.refuseRestrictionOwned && closure.source === 'maintenance') {
+        throw errors.resourceConflict(
+          'This closure belongs to a maintenance restriction; withdraw the restriction instead.',
+          { code: 'OWNED_BY_RESTRICTION', closureId },
+        );
+      }
+      const updated = await trx
+        .updateTable('closures')
+        .set({
+          status: next,
+          withdrawn_at: this.clock.now(),
+          withdrawn_by: json(this.writer.snapshotActor(principal)),
+          withdrawal_reason: input.reason,
+          revision: closure.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', closureId)
+        .where('revision', '=', closure.revision)
+        .returning('id')
+        .executeTakeFirst();
+      if (!updated) {
+        const current = await this.load(trx, organizationId, closureId);
+        throw errors.staleRevision(closure.revision, current?.revision ?? closure.revision);
+      }
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: 'scheduling.closure_withdrawn',
+        targetType: 'closure',
+        targetId: closureId,
+        beforeRevision: closure.revision,
+        afterRevision: closure.revision + 1,
+        reason: input.reason,
+        correlationId: input.correlationId ?? null,
+        details: { source: closure.source },
+      });
+      await this.outbox.enqueue(trx, ClosureWithdrawn, {
+        organizationId,
+        aggregateType: 'closure',
+        aggregateId: closureId,
+        correlationId: input.correlationId ?? null,
+        payload: {
+          closureId,
+          facilityId: closure.facility_id,
+          resourceId: closure.resource_id,
+          interval: {
+            start: new Date(closure.start).toISOString(),
+            end: new Date(closure.end).toISOString(),
+          },
+          source: closure.source,
+          reason: input.reason,
+        },
+      });
+      return this.view((await this.load(trx, organizationId, closureId)) as ClosureRow);
+    });
   }
 
   async liftClosure(
@@ -595,6 +679,8 @@ export class ClosuresService implements ClosurePort {
       resolution: (row.resolution as Closure['resolution']) ?? null,
       appliedAt: row.applied_at ? new Date(row.applied_at).toISOString() : null,
       liftedAt: row.lifted_at ? new Date(row.lifted_at).toISOString() : null,
+      withdrawnAt: row.withdrawn_at ? new Date(row.withdrawn_at).toISOString() : null,
+      withdrawalReason: row.withdrawal_reason,
       revision: row.revision,
       createdAt: new Date(row.created_at).toISOString(),
       updatedAt: new Date(row.updated_at).toISOString(),
