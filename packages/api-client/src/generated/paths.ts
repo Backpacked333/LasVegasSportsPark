@@ -52496,6 +52496,8 @@ export type components = {
             reason: string;
         };
         DeclineInvitationRequest: {
+            expectedRevision?: number;
+            policyReferences?: string[];
             reason?: string;
             token: string;
         };

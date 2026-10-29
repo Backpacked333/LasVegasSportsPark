@@ -202,6 +202,13 @@ describe('fixtures and availability (§4.4 Matches, SPK-FIX-005, SPK-CAP-003, §
       .where('status', '=', 'failed')
       .executeTakeFirstOrThrow();
     expect(operation.error).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    // The refusal names the fixture it left unscheduled and the failed operation, so the caller
+    // schedules this fixture elsewhere instead of creating a second one.
+    expect(res.body.details).toMatchObject({
+      fixtureId: row.id,
+      operationId: operation.id,
+      fixtureStatus: 'unscheduled',
+    });
     const readable = await t.http.get(`/v1/operations/${operation.id}`).set(leagueManager.header);
     expect(readable.status).toBe(200);
     expect(readable.body.status).toBe('failed');

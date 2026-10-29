@@ -486,7 +486,27 @@ export class FixturesService implements FixturePort {
           details: { step: plan.step, outcome: 'failed', code: error.code },
         });
       });
-      return { failure: error };
+      // §4.9, §4.12: the fixture and its failed operation are committed, so the refusal names
+      // them; otherwise a caller told only "conflict" could not find the unscheduled fixture and
+      // would create a second one instead of scheduling this one elsewhere.
+      const base =
+        error.details !== null && typeof error.details === 'object' && !Array.isArray(error.details)
+          ? (error.details as Record<string, unknown>)
+          : error.details === undefined
+            ? {}
+            : { reason: error.details };
+      return {
+        failure: new DomainError(error.code, error.message, {
+          nextAction: error.nextAction,
+          details: {
+            ...base,
+            fixtureId: fixture.id,
+            operationId,
+            fixtureStatus: fixture.status,
+          },
+          cause: error,
+        }),
+      };
     }
     const scheduledNow = event !== null && event.status === 'published';
     const result = await this.uow.run(async ({ trx }): Promise<FixtureCommandResult> => {
