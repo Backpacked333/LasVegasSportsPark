@@ -1,5 +1,6 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { UnitOfWork } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
   authHeaderForPerson,
@@ -515,6 +516,14 @@ describe('SPK-AT-017 / invariant 10: revoked authority and unsent protected noti
       );
     }
     await revokeViaApi(before.grantId);
+    // Run the dispatch-time re-check (SPK-COMMS-003) first, as the delivery_requested handler does.
+    // Left to dispatchOutbox, the delivery requests and the grant revocation carry the same
+    // fixed-clock instant, so PostgreSQL may process the revocation first; its re-evaluation would
+    // then revoke these still-queued recipients as `authority_revoked_while_queued` instead.
+    const uow = t.app.get(UnitOfWork);
+    for (const id of ids) {
+      await uow.run(({ trx }) => notifications.dispatch(trx, org, id, null));
+    }
     await dispatchOutbox(t.app);
     // revoked after dispatch, while the email is still unsent
     const after = await createParentAndChild();
