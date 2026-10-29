@@ -12,6 +12,11 @@ export {
   fakeFeeFor,
   type FakeRefundOutcome,
 } from './providers/fake-payment.provider';
+export {
+  FAKE_ACCOUNTING_PROVIDER,
+  FakeAccountingProvider,
+  type FakeAccountingOutcome,
+} from './providers/fake-accounting.provider';
 export { computeQuote, applyCharges, roundHalfUp } from './pricing/quote-calculator';
 export { LedgerService, balancedLines, type PostingLine } from './ledger/ledger.service';
 export { FinancePolicyResolver } from './services/finance-policy.resolver';

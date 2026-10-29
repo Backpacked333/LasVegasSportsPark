@@ -306,6 +306,64 @@ export const EnrollmentEvents = {
   ),
 };
 
+/**
+ * Package G enrollment facts (ENR-10, IF-36), declared by stage 3 and emitted by ENR-11 to ENR-14.
+ * Payloads carry identifiers and states only (§4.14).
+ */
+export const BookingKindSchema = z.enum(['rental', 'party']);
+export const BookingStatusSchema = z.enum([
+  'requested',
+  'held',
+  'awaiting_staff',
+  'confirmed',
+  'declined',
+  'canceled',
+  'expired',
+  'completed',
+]);
+export const BookingOutstandingSchema = z.enum(['approval', 'payment', 'staffing']);
+
+export const EnrollmentPackageGEvents = {
+  bookingChanged: defineEvent(
+    'enrollment.booking_changed',
+    z.object({
+      bookingId: z.uuid(),
+      kind: BookingKindSchema,
+      status: BookingStatusSchema,
+      /** What still stands between the booking and confirmed. */
+      outstanding: z.array(BookingOutstandingSchema),
+      revision: z.number().int().min(1),
+    }),
+  ),
+  packageEntitlementChanged: defineEvent(
+    'enrollment.package_entitlement_changed',
+    z.object({
+      entitlementId: z.uuid(),
+      participantPersonId: z.uuid(),
+      change: z.enum(['issued', 'redeemed', 'reversed', 'expired', 'revoked']),
+      remainingCredits: z.number().int().min(0),
+      sessionBookingId: z.uuid().nullable(),
+    }),
+  ),
+  membershipChanged: defineEvent(
+    'enrollment.membership_changed',
+    z.object({
+      enrollmentId: z.uuid(),
+      participantPersonId: z.uuid(),
+      change: z.enum(['started', 'suspended', 'resumed', 'canceled', 'ended', 'renewed']),
+      effectiveAt: z.iso.datetime({ offset: true }),
+    }),
+  ),
+  assessmentPublished: defineEvent(
+    'enrollment.assessment_published',
+    z.object({ assessmentId: z.uuid(), participantPersonId: z.uuid() }),
+  ),
+  recommendationShared: defineEvent(
+    'enrollment.recommendation_shared',
+    z.object({ recommendationId: z.uuid(), participantPersonId: z.uuid() }),
+  ),
+};
+
 export const HoldExpiryDue = EnrollmentEvents.holdExpiryDue;
 export const CapacityReleased = EnrollmentEvents.capacityReleased;
 export const EnrollmentConfirmed = EnrollmentEvents.enrollmentConfirmed;

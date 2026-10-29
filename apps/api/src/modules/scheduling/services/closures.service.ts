@@ -18,6 +18,7 @@ import {
   OperationalExceptions,
   Outbox,
   UnitOfWork,
+  declaredNotImplemented,
   executorFor,
   type Clock,
   type Trx,
@@ -29,6 +30,7 @@ import type {
   CreateClosureInput,
   LiftClosureInput,
   PreviewClosureInput,
+  WithdrawClosureInput,
 } from '../ports';
 import { SchedulingActions } from '../scheduling.actions';
 import { ClosureApplied, ClosureLifted } from '../scheduling.events';
@@ -277,6 +279,15 @@ export class ClosuresService implements ClosurePort {
       });
       return this.view((await this.load(trx, organizationId, closureId)) as ClosureRow);
     });
+  }
+
+  /** ClosurePort.withdrawClosure (IF-11): declared by stage 3; SCH-01 implements it. */
+  async withdrawClosure(
+    _principal: Principal,
+    _closureId: string,
+    _input: WithdrawClosureInput,
+  ): Promise<Closure> {
+    return declaredNotImplemented('ClosurePort.withdrawClosure', 'SCH-01');
   }
 
   async liftClosure(

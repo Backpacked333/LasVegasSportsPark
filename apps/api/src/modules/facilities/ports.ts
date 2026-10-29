@@ -1,4 +1,6 @@
 import type {
+  AssetKind,
+  AssetStatus,
   EvidenceReference,
   FacilityOperatingStatus,
   MaintenanceSeverity,
@@ -6,6 +8,7 @@ import type {
   Principal,
   Restriction,
 } from '@sportspark/contracts';
+import type { Trx } from '../../kernel';
 
 /**
  * Ports other modules call (README "Ports"). Every method takes the acting principal and
@@ -47,3 +50,35 @@ export interface OperatingStatusPort {
   ): Promise<Restriction[]>;
 }
 export const OPERATING_STATUS_PORT = Symbol('OPERATING_STATUS_PORT');
+
+/** One asset as a booking sees it (FAC-02, IF-33). */
+export interface AssetDirectoryEntry {
+  id: string;
+  facilityId: string;
+  kind: AssetKind;
+  name: string;
+  status: AssetStatus;
+  /** In service and named by no active restriction at the instant. */
+  usable: boolean;
+}
+
+/**
+ * Asset directory for booking equipment (FAC-02, IF-33): reads through the passed or active
+ * transaction; unknown or other-organization ids are omitted, so a booking naming an omitted or
+ * unusable asset is refused. Facilities registers ASSET_DIRECTORY_IMPL; until then every asset
+ * reads as unknown (the conservative default: no equipment can be booked).
+ */
+export interface AssetDirectoryPort {
+  describe(
+    organizationId: string,
+    assetIds: readonly string[],
+    trx?: Trx,
+  ): Promise<Map<string, AssetDirectoryEntry>>;
+}
+export const ASSET_DIRECTORY_PORT = Symbol('ASSET_DIRECTORY_PORT');
+export const ASSET_DIRECTORY_IMPL = Symbol('ASSET_DIRECTORY_IMPL');
+
+/** The declared default: no asset is known. */
+export const noAssetDirectory: AssetDirectoryPort = {
+  describe: async () => new Map(),
+};

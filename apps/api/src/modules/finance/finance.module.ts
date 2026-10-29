@@ -40,13 +40,16 @@ import {
 } from './finance.events';
 import { DEFAULT_FINANCE_POLICY, FINANCE_POLICY_CONFIG } from './finance.policy';
 import {
+  ACCOUNTING_EXPORT_PORT,
   PAYMENT_PROVIDER_PORT,
   RECORD_AUTHORITY_IMPL,
   RECORD_AUTHORITY_PORT,
+  type AccountingExportPort,
   type PaymentProviderPort,
   type RecordAuthorityPort,
 } from './finance.ports';
 import { LedgerService } from './ledger/ledger.service';
+import { FakeAccountingProvider } from './providers/fake-accounting.provider';
 import { FAKE_PAYMENTS_PROVIDER, FakePaymentProvider } from './providers/fake-payment.provider';
 import { CashTendersService } from './services/cash-tenders.service';
 import { CheckoutFinalizer } from './services/checkout-finalizer.service';
@@ -109,6 +112,21 @@ const providers: Provider[] = [
   // Provider-selection gate (§5.2, DEC-019): only the deterministic fake exists; it is refused in
   // production so no real money is ever "taken" by a fake.
   FakePaymentProvider,
+  // IF-37 (declared by stage 3; FIN-07 uses it): the accounting connection is not selected
+  // (DEC-022); only the deterministic fake exists, refused in production like the payment fake.
+  FakeAccountingProvider,
+  {
+    provide: ACCOUNTING_EXPORT_PORT,
+    inject: [APP_CONFIG, FakeAccountingProvider],
+    useFactory: (config: AppConfig, fake: FakeAccountingProvider): AccountingExportPort => {
+      if (config.NODE_ENV === 'production') {
+        throw new Error(
+          'No accounting connection is selected (specification §5.2, DEC-022): implement the adapter behind AccountingExportPort before production.',
+        );
+      }
+      return fake;
+    },
+  },
   {
     provide: PAYMENT_PROVIDER_PORT,
     inject: [APP_CONFIG, FakePaymentProvider],
@@ -172,6 +190,8 @@ const providers: Provider[] = [
   exports: [
     PAYMENT_PROVIDER_PORT,
     FakePaymentProvider,
+    ACCOUNTING_EXPORT_PORT,
+    FakeAccountingProvider,
     FINANCE_POLICY_CONFIG,
     LedgerService,
     FinancePolicyResolver,

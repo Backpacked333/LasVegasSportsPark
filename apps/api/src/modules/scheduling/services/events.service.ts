@@ -18,14 +18,19 @@ import {
   AuditWriter,
   AuthorizationService,
   UnitOfWork,
+  declaredNotImplemented,
   executorFor,
 } from '../../../kernel';
 import { DATABASE } from '../../../kernel/tokens';
 import type {
   AvailabilityPort,
   CancelEventInput,
+  CancelEventSeriesInput,
   CreateEventInput,
+  CreateEventSeriesInput,
   EventSchedulingPort,
+  EventSeriesCreated,
+  ImportEventInput,
   FindAvailableSlotsInput,
   MoveEventInput,
   ReservationQuery,
@@ -280,6 +285,28 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
       }
       return this.writer.view(canceled);
     });
+  }
+
+  /** EventSchedulingPort.createEventSeries (IF-31): declared by stage 3; SCH-02 implements it. */
+  async createEventSeries(
+    _principal: Principal,
+    _input: CreateEventSeriesInput,
+  ): Promise<EventSeriesCreated> {
+    return declaredNotImplemented('EventSchedulingPort.createEventSeries', 'SCH-02');
+  }
+
+  /** EventSchedulingPort.cancelEventSeries (IF-31): declared by stage 3; SCH-02 implements it. */
+  async cancelEventSeries(
+    _principal: Principal,
+    _seriesId: string,
+    _input: CancelEventSeriesInput,
+  ): Promise<{ canceledEventIds: string[] }> {
+    return declaredNotImplemented('EventSchedulingPort.cancelEventSeries', 'SCH-02');
+  }
+
+  /** EventSchedulingPort.importEvent (IF-31, IF-40): declared by stage 3; SCH-04 implements it. */
+  async importEvent(_principal: Principal, _input: ImportEventInput): Promise<Event> {
+    return declaredNotImplemented('EventSchedulingPort.importEvent', 'SCH-04');
   }
 
   /** Staff in scope, a committed participant (self) or a guardian with view permission; otherwise not found (§4.10). */

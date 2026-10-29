@@ -14,6 +14,7 @@ import {
   type TeamEntry,
   type TeamEntryCreated,
   type TeamEntryWorkspace,
+  type TeamRoleValue,
   type WithdrawTeamEntryInput,
 } from '@sportspark/contracts';
 import {
@@ -35,6 +36,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  declaredNotImplemented,
   snapshotActor,
   executorFor,
   type Clock,
@@ -1064,6 +1066,26 @@ export class TeamEntriesService implements TeamEntryQueryPort {
   // -------------------------------------------------------------------------------------------
   // TeamEntryQueryPort
   // -------------------------------------------------------------------------------------------
+  /** IF-15: declared by stage 3; CMP-01 implements it. */
+  async seasonForOffering(
+    _organizationId: string,
+    _offeringId: string,
+    _trx?: Trx,
+  ): Promise<{ seasonId: string; competitionId: string } | null> {
+    return declaredNotImplemented('TeamEntryQueryPort.seasonForOffering', 'CMP-01');
+  }
+
+  /** IF-15: declared by stage 3; CMP-01 implements it. */
+  async roleHolders(
+    _organizationId: string,
+    _teamEntryId: string,
+    _roles: readonly TeamRoleValue[],
+    _at: Date,
+    _trx?: Trx,
+  ): Promise<Array<{ personId: string; role: TeamRoleValue }>> {
+    return declaredNotImplemented('TeamEntryQueryPort.roleHolders', 'CMP-01');
+  }
+
   async findTeamEntry(
     organizationId: string,
     teamEntryId: string,

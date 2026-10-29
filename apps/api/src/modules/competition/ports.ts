@@ -55,6 +55,26 @@ export interface TeamEntryQueryPort {
     at: Date,
     trx?: Trx,
   ): Promise<PersonEntryMembership[]>;
+  /**
+   * CMP-01, IF-15: the season whose registration offering is `offeringId`, or null (the caller then
+   * has no season: seasonId null).
+   */
+  seasonForOffering(
+    organizationId: string,
+    offeringId: string,
+    trx?: Trx,
+  ): Promise<{ seasonId: string; competitionId: string } | null>;
+  /**
+   * CMP-01, IF-15: the people holding any of `roles` on the entry at `at`, with or without a roster
+   * row ([] means roster-only audiences).
+   */
+  roleHolders(
+    organizationId: string,
+    teamEntryId: string,
+    roles: readonly TeamRoleValue[],
+    at: Date,
+    trx?: Trx,
+  ): Promise<Array<{ personId: string; role: TeamRoleValue }>>;
 }
 export const TEAM_ENTRY_QUERY_PORT = Symbol('TEAM_ENTRY_QUERY_PORT');
 

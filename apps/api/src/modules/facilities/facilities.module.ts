@@ -1,6 +1,7 @@
 import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry } from '../../kernel';
+import { EventHandlerRegistry, lazyPort } from '../../kernel';
 import { IdentityModule } from '../identity';
 import { ClosureLiftGuards, ClosureLifted, SchedulingModule } from '../scheduling';
 import { AssetsController } from './controllers/assets.controller';
@@ -9,7 +10,14 @@ import { PreventiveSchedulesController } from './controllers/preventive-schedule
 import { RestrictionsController } from './controllers/restrictions.controller';
 import { MaintenanceTaskDueReached } from './facilities.events';
 import { DEFAULT_FACILITIES_POLICY, FACILITIES_POLICY } from './facilities.policy';
-import { MAINTENANCE_REPORT_PORT, OPERATING_STATUS_PORT } from './ports';
+import {
+  ASSET_DIRECTORY_IMPL,
+  ASSET_DIRECTORY_PORT,
+  MAINTENANCE_REPORT_PORT,
+  noAssetDirectory,
+  OPERATING_STATUS_PORT,
+  type AssetDirectoryPort,
+} from './ports';
 import { AssetsService } from './services/assets.service';
 import { FacilitiesReader } from './services/facilities-reader';
 import { MaintenanceTasksService } from './services/maintenance-tasks.service';
@@ -25,6 +33,18 @@ const providers: Provider[] = [
   PreventiveSchedulesService,
   { provide: MAINTENANCE_REPORT_PORT, useExisting: MaintenanceTasksService },
   { provide: OPERATING_STATUS_PORT, useExisting: RestrictionsService },
+  // IF-33: declared by stage 3; FAC-02 registers ASSET_DIRECTORY_IMPL (until then: no asset known).
+  {
+    provide: ASSET_DIRECTORY_PORT,
+    inject: [ModuleRef],
+    useFactory: (moduleRef: ModuleRef): AssetDirectoryPort =>
+      lazyPort(
+        moduleRef,
+        ASSET_DIRECTORY_IMPL,
+        noAssetDirectory,
+        'no ASSET_DIRECTORY_IMPL registered: every asset reads as unknown (FAC-02)',
+      ),
+  },
 ];
 
 /**
@@ -50,6 +70,7 @@ const providers: Provider[] = [
     PreventiveSchedulesService,
     MAINTENANCE_REPORT_PORT,
     OPERATING_STATUS_PORT,
+    ASSET_DIRECTORY_PORT,
     FACILITIES_POLICY,
   ],
 })

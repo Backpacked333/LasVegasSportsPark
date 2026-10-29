@@ -181,6 +181,21 @@ export const CompetitionEvents = {
       reason: z.string().nullable(),
     }),
   ),
+  /**
+   * CMP-14, IF-45 (SPK-CAP-001): a captain or league staff asked the entry's players without an
+   * answer for their availability; each request id is one notice per recipient (communications).
+   */
+  availabilityRequested: defineEvent(
+    'competition.availability_requested',
+    z.object({
+      requestId: z.uuid(),
+      fixtureId: z.uuid(),
+      teamEntryId: z.uuid(),
+      recipientPersonIds: z.array(z.uuid()),
+      scheduledStart: z.string(),
+      facilityId: z.uuid().nullable(),
+    }),
+  ),
   /** RSVP recorded. RSVP is neither attendance nor eligibility (SPK-CAP-003). */
   availabilityResponded: defineEvent(
     'competition.availability_responded',

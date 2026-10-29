@@ -4,11 +4,12 @@ import type { Db } from '@sportspark/db';
 import {
   CLOCK,
   DATABASE,
+  declaredNotImplemented,
   type Clock,
   type RelationshipAuthorityPort,
   type Trx,
 } from '../../../kernel';
-import type { AuthorityLookupPort } from '../identity.ports';
+import type { AuthorityLookupPort, EffectiveGrant } from '../identity.ports';
 import { currentTransaction } from '../identity.transaction-context';
 
 /** Permissions a child never holds over themselves, whatever their account (SPK-IAM-003, SPK-ENTRY-007). */
@@ -139,6 +140,18 @@ export class RelationshipAuthority implements RelationshipAuthorityPort, Authori
     _permission: GrantPermissionValue,
   ): Promise<string[]> {
     return [];
+  }
+
+  /** IF-46: declared by stage 3; ID-09 implements it with hasPermission's effectivity rule. */
+  async effectiveGrant(
+    _organizationId: string,
+    _actorPersonId: string,
+    _subjectPersonId: string,
+    _permission: GrantPermissionValue,
+    _at: Date,
+    _trx?: Trx,
+  ): Promise<EffectiveGrant | null> {
+    return declaredNotImplemented('AuthorityLookupPort.effectiveGrant', 'ID-09');
   }
 
   async actorsWithPermission(

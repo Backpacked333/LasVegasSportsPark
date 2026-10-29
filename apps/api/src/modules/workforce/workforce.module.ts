@@ -1,6 +1,7 @@
 import { Inject, Module, type OnModuleInit, type Provider } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry } from '../../kernel';
+import { EventHandlerRegistry, lazyPort } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
 import {
   ASSIGNMENT_CHECK_IMPL,
@@ -22,7 +23,13 @@ import { FeesController } from './controllers/fees.controller';
 import { QualificationsController } from './controllers/qualifications.controller';
 import { RequirementsController } from './controllers/requirements.controller';
 import { WorkspaceController } from './controllers/workspace.controller';
-import { ASSIGNMENT_COVERAGE_PORT } from './ports';
+import {
+  ASSIGNMENT_COVERAGE_PORT,
+  unavailableWorkforceStaffing,
+  WORKFORCE_STAFFING_IMPL,
+  WORKFORCE_STAFFING_PORT,
+  type WorkforceStaffingPort,
+} from './ports';
 import { AssignmentsService } from './services/assignments.service';
 import { AvailabilityService } from './services/availability.service';
 import { CommitmentChecker } from './services/commitment-checker';
@@ -59,6 +66,18 @@ const providers: Provider[] = [
   // Competition resolves these lazily by token (results by accepted officials, SPK-STAFF-005).
   { provide: ASSIGNMENT_CHECK_IMPL, useExisting: CoverageService },
   { provide: ASSIGNMENT_COVERAGE_PORT, useExisting: CoverageService },
+  // IF-32: declared by stage 3; WRK-02 registers WORKFORCE_STAFFING_IMPL.
+  {
+    provide: WORKFORCE_STAFFING_PORT,
+    inject: [ModuleRef],
+    useFactory: (moduleRef: ModuleRef): WorkforceStaffingPort =>
+      lazyPort(
+        moduleRef,
+        WORKFORCE_STAFFING_IMPL,
+        unavailableWorkforceStaffing,
+        'no WORKFORCE_STAFFING_IMPL registered: booking staffing cannot be declared (WRK-02)',
+      ),
+  },
 ];
 
 /**
@@ -93,6 +112,7 @@ const providers: Provider[] = [
     WORKFORCE_POLICY,
     ASSIGNMENT_CHECK_IMPL,
     ASSIGNMENT_COVERAGE_PORT,
+    WORKFORCE_STAFFING_PORT,
   ],
 })
 export class WorkforceModule implements OnModuleInit {

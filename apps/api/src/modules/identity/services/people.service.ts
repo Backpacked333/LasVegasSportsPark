@@ -18,6 +18,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  declaredNotImplemented,
   snapshotActor,
   executorFor,
   type Clock,
@@ -26,7 +27,7 @@ import {
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
-import type { PersonDirectoryPort, PersonSummary } from '../identity.ports';
+import type { PersonDirectoryPort, PersonDisplayName, PersonSummary } from '../identity.ports';
 import {
   assertKindMatchesDateOfBirth,
   normalizeContactValue,
@@ -290,6 +291,24 @@ export class PeopleService implements PersonDirectoryPort {
 
   // -------------------------------------------------------------------------------------------
   // PersonDirectoryPort
+  /** IF-09: declared by stage 3; ID-01 implements it. */
+  async displayNames(
+    _organizationId: string,
+    _personIds: readonly string[],
+    _trx?: Trx,
+  ): Promise<Map<string, PersonDisplayName>> {
+    return declaredNotImplemented('PersonDirectoryPort.displayNames', 'ID-01');
+  }
+
+  /** IF-09: declared by stage 3; ID-01 implements it. */
+  async personIdsResolvingTo(
+    _organizationId: string,
+    _personId: string,
+    _trx?: Trx,
+  ): Promise<string[]> {
+    return declaredNotImplemented('PersonDirectoryPort.personIdsResolvingTo', 'ID-01');
+  }
+
   // -------------------------------------------------------------------------------------------
   async findPerson(
     organizationId: string,

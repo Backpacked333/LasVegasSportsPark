@@ -22,11 +22,45 @@ export interface PersonSummary {
   canonicalPersonId: string;
 }
 
+/** A person's name only (ID-01, IF-09): never date of birth, contacts or household (§4.14). */
+export interface PersonDisplayName {
+  personId: string;
+  givenName: string;
+  familyName: string;
+  displayName: string;
+  kind: PersonKind;
+}
+
 export interface PersonDirectoryPort {
   /** Returns the person in the organization or null (never throws for cross-organization ids). */
   findPerson(organizationId: string, personId: string, trx?: Trx): Promise<PersonSummary | null>;
   /** Follows person_merges so a module holding an old id reaches the surviving record. */
   resolveCanonicalPersonId(organizationId: string, personId: string, trx?: Trx): Promise<string>;
+  /**
+   * Names of the given people (ID-01, IF-09), keyed by person id; other-organization and unknown
+   * ids are omitted. Reads through `trx ?? currentTransaction() ?? db`. Callers authorize their
+   * context first: this is a lookup, not an authorization.
+   */
+  displayNames(
+    organizationId: string,
+    personIds: readonly string[],
+    trx?: Trx,
+  ): Promise<Map<string, PersonDisplayName>>;
+  /**
+   * `[canonical, ...every person merged into it, transitively]` for `personId` (ID-01, IF-09,
+   * SPK-IAM-007): modules holding immutable facts read a survivor's history with it instead of
+   * rewriting rows. [] for an unknown or other-organization id.
+   */
+  personIdsResolvingTo(organizationId: string, personId: string, trx?: Trx): Promise<string[]>;
+}
+
+/** The grant behind an authority answer (ID-09, IF-46). */
+export interface EffectiveGrant {
+  grantId: string;
+  relationshipId: string;
+  source: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
 }
 
 export interface AuthorityLookupPort {
@@ -60,6 +94,19 @@ export interface AuthorityLookupPort {
     permission: GrantPermissionValue,
     trx?: Trx,
   ): Promise<string[]>;
+  /**
+   * The grant that makes `hasPermission` true at `at` (ID-09, IF-46), with the same effectivity
+   * rule (unrevoked, unsuspended, effective at `at`, active relationship); the one with the latest
+   * effectiveFrom when several apply; null whenever `hasPermission` would answer false.
+   */
+  effectiveGrant(
+    organizationId: string,
+    actorPersonId: string,
+    subjectPersonId: string,
+    permission: GrantPermissionValue,
+    at: Date,
+    trx?: Trx,
+  ): Promise<EffectiveGrant | null>;
 }
 
 export interface StaffDirectoryPort {

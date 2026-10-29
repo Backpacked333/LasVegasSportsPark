@@ -11,6 +11,7 @@ import {
   OperationalExceptions,
   Outbox,
   UnitOfWork,
+  declaredNotImplemented,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -145,6 +146,17 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
         uncoveredSlots,
       };
     });
+  }
+
+  /** IF-34: declared by stage 3; WRK-03 implements it. */
+  async isAcceptedOnOffering(
+    _organizationId: string,
+    _offeringId: string,
+    _personId: string,
+    _kind: AssignmentKind,
+    _trx?: Trx,
+  ): Promise<boolean> {
+    return declaredNotImplemented('AssignmentCoveragePort.isAcceptedOnOffering', 'WRK-03');
   }
 
   async acceptedAssignees(

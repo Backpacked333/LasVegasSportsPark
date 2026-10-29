@@ -1,6 +1,6 @@
 import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { Inbox, lazyPort } from '../../kernel';
+import { APP_CONFIG, Inbox, lazyPort, type AppConfig } from '../../kernel';
 import { CatalogModule } from '../catalog';
 import { CompetitionModule } from '../competition';
 import { EnrollmentModule } from '../enrollment';
@@ -23,10 +23,12 @@ import {
 } from './controllers/arrival.controller';
 import { DEFAULT_ENTRY_POLICY, ENTRY_POLICY } from './entry.policy';
 import {
+  ACCESS_DEVICE_PORT,
   ATTENDANCE_PORT,
   FINANCIAL_STANDING_IMPL,
   FINANCIAL_STANDING_PORT,
   unknownFinancialStanding,
+  type AccessDevicePort,
   type FinancialStandingPort,
 } from './entry.ports';
 import {
@@ -72,6 +74,20 @@ const providers: Provider[] = [
   },
   // Provider-selection gate (§5.2, DEC-023): the deterministic fake is the only hardware adapter.
   FakeAccessControlProvider,
+  // IF-38 (declared by stage 3; ENT-05 uses it): device commands go to the fake, refused in
+  // production like every fake adapter.
+  {
+    provide: ACCESS_DEVICE_PORT,
+    inject: [APP_CONFIG, FakeAccessControlProvider],
+    useFactory: (config: AppConfig, fake: FakeAccessControlProvider): AccessDevicePort => {
+      if (config.NODE_ENV === 'production') {
+        throw new Error(
+          'No access hardware is selected (specification §5.2, DEC-023): implement the adapter behind AccessDevicePort before production.',
+        );
+      }
+      return fake;
+    },
+  },
   ActivityResolver,
   ArrivalChecks,
   StaffScope,
@@ -120,6 +136,7 @@ const providers: Provider[] = [
     ENTRY_POLICY,
     FINANCIAL_STANDING_PORT,
     ATTENDANCE_PORT,
+    ACCESS_DEVICE_PORT,
     FakeAccessControlProvider,
     VisitsService,
     PassesService,

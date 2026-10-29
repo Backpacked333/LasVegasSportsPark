@@ -24,12 +24,16 @@ import {
 import { DEFAULT_ENROLLMENT_POLICY, ENROLLMENT_POLICY } from './enrollment.policy';
 import {
   BASKET_PORT,
+  BOOKING_QUERY_IMPL,
+  BOOKING_QUERY_PORT,
   CAPACITY_PORT,
   ENROLLMENT_PORT,
   FINANCE_POLICY_IMPL,
   FINANCE_POLICY_PORT,
   WAITLIST_PORT,
+  noBookings,
   noFinancialConsequence,
+  type BookingQueryPort,
   type FinancePolicyPort,
 } from './enrollment.ports';
 import { enrollmentSystem } from './enrollment.shared';
@@ -64,6 +68,13 @@ const providers: Provider[] = [
         noFinancialConsequence,
         'no FINANCE_POLICY_IMPL registered: transfers and cancellations carry no financial consequence',
       ),
+  },
+  // IF-36: declared by stage 3; ENR-13 registers BOOKING_QUERY_IMPL (until then: no bookings).
+  {
+    provide: BOOKING_QUERY_PORT,
+    inject: [ModuleRef],
+    useFactory: (moduleRef: ModuleRef): BookingQueryPort =>
+      lazyPort<BookingQueryPort>(moduleRef, BOOKING_QUERY_IMPL, noBookings, null),
   },
   RegistrationEvaluator,
   CatalogSessions,
@@ -133,6 +144,7 @@ const providers: Provider[] = [
     CAPACITY_PORT,
     BASKET_PORT,
     WAITLIST_PORT,
+    BOOKING_QUERY_PORT,
   ],
 })
 export class EnrollmentModule implements OnModuleInit {

@@ -34,6 +34,12 @@ export interface OfferingSnapshot {
   requiredForms: PolicyVersion[];
   /** Whether registration intents are accepted right now (publication state and window). */
   registrationOpen: boolean;
+  /**
+   * CAT-02, IF-23: the approved booking terms of a rental or party offering effective at the
+   * instant (policy kind `booking_terms`, added by CAT-02); null otherwise, and a booking without
+   * terms is refused with BOOKING_TERMS_REQUIRED. Typed entitlement scopes also come with CAT-02.
+   */
+  bookingTerms: PolicyVersion | null;
 }
 
 export interface OfferingLookupPort {

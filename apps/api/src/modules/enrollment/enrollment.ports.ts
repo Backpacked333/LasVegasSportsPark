@@ -8,8 +8,10 @@ import type {
   SessionBooking,
   WaitlistEntry,
   WaitlistOffer,
+  z,
 } from '@sportspark/contracts';
 import type { Trx } from '../../kernel';
+import type { BookingKindSchema, BookingStatusSchema } from './enrollment.events';
 
 /**
  * Ports other modules consume (README "Ports"). Finance's checkout coordinator (§4.11) reads the
@@ -205,4 +207,39 @@ export const noFinancialConsequence: FinancePolicyPort = {
     explanation: 'No finance policy is registered: no refund or credit applies.',
     policyVersionId: null,
   }),
+};
+
+/** One booking in a period (ENR-10, IF-36), for reporting. */
+export interface BookingOfPeriod {
+  bookingId: string;
+  kind: z.infer<typeof BookingKindSchema>;
+  bookerPersonId: string;
+  status: z.infer<typeof BookingStatusSchema>;
+  /** ISO instant of the first occurrence. */
+  firstStart: string;
+  offeringId: string;
+}
+
+/**
+ * Bookings (rentals and parties) whose first occurrence lies in [from, to) (ENR-10, IF-36).
+ * Enrollment registers BOOKING_QUERY_IMPL (ENR-13); until then there are no bookings ([]).
+ */
+export interface BookingQueryPort {
+  bookingsOfPeriod(
+    organizationId: string,
+    query: {
+      facilityId?: string;
+      from: string;
+      to: string;
+      kinds?: ReadonlyArray<BookingOfPeriod['kind']>;
+    },
+    trx?: Trx,
+  ): Promise<BookingOfPeriod[]>;
+}
+export const BOOKING_QUERY_PORT = Symbol('BOOKING_QUERY_PORT');
+export const BOOKING_QUERY_IMPL = Symbol('BOOKING_QUERY_IMPL');
+
+/** The declared default: no bookings. */
+export const noBookings: BookingQueryPort = {
+  bookingsOfPeriod: async () => [],
 };

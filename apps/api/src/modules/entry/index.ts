@@ -17,6 +17,7 @@ export {
   FAKE_ACCESS_CONTROL_PROVIDER,
   FAKE_ACCESS_CONTROL_SIGNATURE_HEADER,
   FakeAccessControlProvider,
+  type FakeDeviceCommandOutcome,
 } from './providers/fake-access-control.provider';
 export { VisitsService } from './services/visits.service';
 export { PassesService } from './services/passes.service';

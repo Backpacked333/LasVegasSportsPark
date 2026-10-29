@@ -5,6 +5,7 @@ export * from './database/database.provider';
 export * from './database/unit-of-work';
 export * from './database/transaction-context';
 export * from './lazy-port';
+export * from './declared-interface';
 export * from './database/revision';
 export * from './auth/identity-provider.port';
 export * from './auth/local-jwt.identity-provider';

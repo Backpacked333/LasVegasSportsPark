@@ -1001,6 +1001,8 @@ export class OfferingsService implements OfferingLookupPort {
       eligibilityPolicy,
       cancellationPolicy,
       requiredForms,
+      // IF-23: declared by stage 3; CAT-02 resolves the approved booking terms (until then none).
+      bookingTerms: null,
       registrationOpen:
         row.publication_state === 'registration_open' &&
         opens !== null &&
