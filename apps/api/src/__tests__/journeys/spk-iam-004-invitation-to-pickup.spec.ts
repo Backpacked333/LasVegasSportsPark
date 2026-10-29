@@ -9,7 +9,7 @@ import { createEnrollmentFixture } from '../../modules/enrollment';
 import { createRelationshipFixture } from '../../modules/identity';
 import { at } from '../../modules/scheduling';
 import { createAssignmentFixture } from '../../modules/workforce';
-import { adult, get, journeyApp, ok, post, staff, together, type Actor } from './support';
+import { adult, get, journeyApp, ok, post, staff, together } from './support';
 
 /** Saturday 2027-01-16, 09:00 in Los Angeles (the test facility's zone). */
 const CLOCK_START = '2027-01-16T17:00:00Z';
@@ -176,8 +176,8 @@ describe('SPK-IAM-004: a parent invites a sitter who may then collect (assembled
         verificationOutcome: 'denied',
         outcome: 'not_released',
       });
-      const sitterView: Actor = sitter;
-      expect((await get(t, `/v1/people/${kid}`, sitterView.header)).status).toBe(200);
+      // Only collect was revoked: the sitter still views the child.
+      expect((await get(t, `/v1/people/${kid}`, sitter.header)).status).toBe(200);
     } finally {
       await t.close();
     }

@@ -1,4 +1,5 @@
 import type { ImportEntityTypeValue, StagedRow } from '@sportspark/contracts';
+import { sql } from 'kysely';
 import { describe, expect, it } from 'vitest';
 import type { TestApp } from '../../testing';
 import { createCompetitionFixture, createRuleSetFixture } from '../../modules/competition';
@@ -137,14 +138,10 @@ describe('SPK-AT-024: a level-4 snapshot imported twice (assembled application)'
         await drain(t);
         return applied.outcomeCounts;
       };
-      const count = async (table: Parameters<TestApp['db']['selectFrom']>[0]) =>
+      const count = async (table: string) =>
         Number(
-          (
-            await t.db
-              .selectFrom(table)
-              .select((eb) => eb.fn.countAll<number>().as('n'))
-              .executeTakeFirstOrThrow()
-          ).n,
+          (await sql<{ n: string }>`select count(*) as n from ${sql.table(table)}`.execute(t.db))
+            .rows[0]!.n,
         );
       const tables = [
         'persons',
