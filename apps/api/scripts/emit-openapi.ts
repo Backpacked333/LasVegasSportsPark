@@ -1,9 +1,9 @@
+import 'reflect-metadata';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { buildOpenApiDocument } from '@sportspark/contracts';
+import { emitOpenApiDocument } from '../src/openapi-document';
 
-const version = process.env['APP_VERSION'] ?? '0.1.0';
-const document = buildOpenApiDocument(version);
+const document = emitOpenApiDocument();
 const target = path.resolve(__dirname, '..', '..', '..', 'docs', 'api', 'openapi.json');
 mkdirSync(path.dirname(target), { recursive: true });
 writeFileSync(target, `${JSON.stringify(document, null, 2)}\n`);

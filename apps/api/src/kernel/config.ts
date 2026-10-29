@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { z } from '@sportspark/contracts';
+import { CLIENT_APPS, CLIENT_PLATFORMS, z } from '@sportspark/contracts';
 
 /**
  * The `AUTH_LOCAL_SECRET` value once published in `.env.example`. Anyone can read it, so a host
@@ -72,6 +72,18 @@ export const ConfigSchema = z
      * resumed is not re-entered when the process restarts with the same reference.
      */
     RECOVERY_RESTORE_REFERENCE: z.string().trim().min(1).max(200).optional(),
+    /**
+     * Browser origins allowed to call the API cross-origin (K-03), as a comma-separated list of
+     * exact origins (`https://staff.example.org`). Unset: CORS is off (same-origin hosting). Which
+     * origins serve the staff dashboard is DEC-021 (hosting, pending); production refuses `*` and
+     * plain `http` origins.
+     */
+    CORS_ALLOWED_ORIGINS: z
+      .string()
+      .optional()
+      .transform((value, ctx) => parseOrigins(value, ctx)),
+    /** How long a browser may cache a CORS preflight answer (technical value). */
+    CORS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(600),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {
@@ -98,6 +110,17 @@ export const ConfigSchema = z
         });
       }
     }
+    if (cfg.NODE_ENV === 'production') {
+      for (const origin of cfg.CORS_ALLOWED_ORIGINS ?? []) {
+        if (origin === '*' || origin.startsWith('http://')) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CORS_ALLOWED_ORIGINS'],
+            message: `CORS_ALLOWED_ORIGINS may not contain "${origin}" in production (only exact https origins)`,
+          });
+        }
+      }
+    }
     if (cfg.NODE_ENV === 'production' && !cfg.DATABASE_URL) {
       ctx.addIssue({
         code: 'custom',
@@ -110,8 +133,7 @@ export const ConfigSchema = z
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
 
-export const CLIENT_APPS = ['mobile', 'staff'] as const;
-export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
+export { CLIENT_APPS, CLIENT_PLATFORMS };
 /** `<app>-<platform>` → minimum supported version (DEC-061 pending; empty by default). */
 export type ClientMinimums = Readonly<Record<string, string>>;
 
@@ -140,6 +162,29 @@ function parseClientMinimums(value: string, ctx: z.RefinementCtx): ClientMinimum
     out[`${app}-${platform}`] = version;
   }
   return out;
+}
+
+const ORIGIN = /^https?:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?$/;
+
+/** `https://a.example,https://b.example` → exact origins; `*` is kept so production can refuse it. */
+function parseOrigins(
+  value: string | undefined,
+  ctx: z.RefinementCtx,
+): readonly string[] | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const origins = value
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  for (const origin of origins) {
+    if (origin !== '*' && !ORIGIN.test(origin)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `CORS_ALLOWED_ORIGINS entry "${origin}" must be an exact origin such as https://staff.example.org (scheme, host, optional port; no path)`,
+      });
+    }
+  }
+  return origins;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {

@@ -648,10 +648,9 @@ function Assets({ facility }: { facility: FacilityContext }) {
 
 function recurrenceText(s: Schema<'PreventiveSchedule'>): string {
   const r = s.recurrence;
+  const interval = r.interval ?? 1;
   const every =
-    r.interval > 1
-      ? `every ${r.interval} ${r.frequency === 'daily' ? 'days' : 'weeks'}`
-      : r.frequency;
+    interval > 1 ? `every ${interval} ${r.frequency === 'daily' ? 'days' : 'weeks'}` : r.frequency;
   const days = r.byWeekday?.length
     ? ` on ${r.byWeekday.map((d) => WEEKDAY_LABEL[d] ?? d).join(', ')}`
     : '';

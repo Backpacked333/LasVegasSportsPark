@@ -111,7 +111,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   if (options.configure) builder = options.configure(builder);
   const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication({ logger: ['error'] });
-  configureApp(app);
+  configureApp(app, config);
   await app.init();
 
   const tokenFor = async (principal: Principal): Promise<string> => {

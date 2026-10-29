@@ -53,6 +53,9 @@ export const PRINCIPAL_RESOLVER_IMPL = Symbol('PRINCIPAL_RESOLVER_IMPL');
 export const RELATIONSHIP_AUTHORITY_IMPL = Symbol('RELATIONSHIP_AUTHORITY_IMPL');
 export const TEAM_AUTHORITY_IMPL = Symbol('TEAM_AUTHORITY_IMPL');
 
+/** The kernel's own controllers (route facts read them without building the module, K-02). */
+export const KERNEL_CONTROLLERS = [HealthController, OperationsController, RecoveryController];
+
 export interface KernelModuleOptions {
   config?: AppConfig;
   /** Pre-opened database (tests). When omitted the kernel opens one from configuration. */
@@ -137,7 +140,7 @@ export class KernelModule {
     return {
       module: KernelModule,
       providers,
-      controllers: [HealthController, OperationsController, RecoveryController],
+      controllers: KERNEL_CONTROLLERS,
       exports: [
         APP_CONFIG,
         DATABASE,

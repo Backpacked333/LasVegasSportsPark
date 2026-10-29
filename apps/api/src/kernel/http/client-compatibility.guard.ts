@@ -6,55 +6,29 @@ import {
   type ExecutionContext,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { DomainError, errors } from '@sportspark/contracts';
+import {
+  CLIENT_INFO_HEADER,
+  compareVersions,
+  DomainError,
+  errors,
+  parseClientIdentity,
+} from '@sportspark/contracts';
 import type { AppConfig } from '../config';
 import { APP_CONFIG } from '../tokens';
 import type { RequestWithContext } from './request-context';
 
 /**
- * The client identification header (SPK-AT-027, §4.13), as the generated API client already sends
- * it (`packages/api-client/src/client-info.ts`): `sportspark-<app>/<version> (<platform>)`, for
- * example `sportspark-mobile/1.2.0 (ios)`. It carries no device or user data.
+ * The client identification header (SPK-AT-027, §4.13) and its reading are defined once in
+ * `packages/contracts/src/commands.ts` (K-03): `sportspark-<app>/<version> (<platform>)`, for
+ * example `sportspark-mobile/1.2.0 (ios)`. Re-exported here for the kernel's callers.
  */
-export const CLIENT_INFO_HEADER = 'x-sportspark-client';
-
-const CLIENT_INFO = /^sportspark-(mobile|staff)\/([0-9A-Za-z.+-]+) \((ios|android|web)\)$/;
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+export { CLIENT_INFO_HEADER, compareVersions, parseClientIdentity };
+export type { ClientIdentity } from '@sportspark/contracts';
 
 export const ANY_CLIENT_VERSION_KEY = 'sportspark:any-client-version';
 
 /** Marks a route every client build may call (liveness and readiness, SPK-AT-027 step 2). */
 export const AnyClientVersion = () => SetMetadata(ANY_CLIENT_VERSION_KEY, true);
-
-export interface ClientIdentity {
-  app: 'mobile' | 'staff';
-  platform: 'ios' | 'android' | 'web';
-  version: string;
-}
-
-export function parseClientIdentity(value: string): ClientIdentity | null {
-  const match = CLIENT_INFO.exec(value.trim());
-  if (!match || !SEMVER.test(match[2] as string)) return null;
-  return {
-    app: match[1] as ClientIdentity['app'],
-    version: match[2] as string,
-    platform: match[3] as ClientIdentity['platform'],
-  };
-}
-
-/** Semantic-version order: numeric major.minor.patch, a pre-release sorts before its release. */
-export function compareVersions(a: string, b: string): number {
-  const pa = SEMVER.exec(a);
-  const pb = SEMVER.exec(b);
-  if (!pa || !pb) throw new Error(`not a semantic version: ${!pa ? a : b}`);
-  for (let i = 1; i <= 3; i += 1) {
-    const diff = Number(pa[i]) - Number(pb[i]);
-    if (diff !== 0) return diff;
-  }
-  if (pa[4] && !pb[4]) return -1;
-  if (!pa[4] && pb[4]) return 1;
-  return 0;
-}
 
 /**
  * Client compatibility gate (SPK-AT-027 "Old mobile app contacts updated API: supported behavior

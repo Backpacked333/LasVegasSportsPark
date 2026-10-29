@@ -36,17 +36,43 @@ export const ErrorCodes = {
 
 export type ErrorCode = keyof typeof ErrorCodes;
 
+/**
+ * Next actions an error may name instead of its code's default (§4.10 "the permitted next
+ * action"). `see_code` is what the filter answers for a framework HTTP exception; the others are
+ * named by a module for a more precise recovery than the code's default.
+ */
+export const ADDITIONAL_NEXT_ACTIONS = [
+  'see_code',
+  /** §5.6: the legacy system is authoritative for this record category (migration, K-11). */
+  'write_in_authoritative_system',
+  /** Support: a case action's outcome must be recorded first. */
+  'settle_case_action',
+  /** Support: an authorized action must be linked to the case first. */
+  'link_authorized_action',
+] as const;
+
+/** Every next action the API can send: each code's default plus `ADDITIONAL_NEXT_ACTIONS`. */
+export const NEXT_ACTIONS = [
+  ...new Set<string>([
+    ...Object.values(ErrorCodes).map((c) => c.nextAction),
+    ...ADDITIONAL_NEXT_ACTIONS,
+  ]),
+] as unknown as readonly ErrorNextAction[];
+export type ErrorNextAction =
+  (typeof ErrorCodes)[ErrorCode]['nextAction'] | (typeof ADDITIONAL_NEXT_ACTIONS)[number];
+
 export interface ErrorResponseBody {
   code: ErrorCode;
   message: string;
   correlationId: string;
-  nextAction: string;
+  nextAction: ErrorNextAction;
   details?: unknown;
 }
 
 export interface DomainErrorOptions {
   details?: unknown;
-  nextAction?: string;
+  /** Defaults to the code's next action; any other value must be listed in NEXT_ACTIONS. */
+  nextAction?: ErrorNextAction;
   cause?: unknown;
 }
 
@@ -54,7 +80,7 @@ export class DomainError extends Error {
   override readonly name: string = 'DomainError';
   readonly code: ErrorCode;
   readonly httpStatus: number;
-  readonly nextAction: string;
+  readonly nextAction: ErrorNextAction;
   readonly details: unknown;
 
   constructor(code: ErrorCode, message: string, options: DomainErrorOptions = {}) {
