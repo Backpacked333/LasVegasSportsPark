@@ -65,8 +65,9 @@ export interface AssetDirectoryEntry {
 /**
  * Asset directory for booking equipment (FAC-02, IF-33): reads through the passed or active
  * transaction; unknown or other-organization ids are omitted, so a booking naming an omitted or
- * unusable asset is refused. Facilities registers ASSET_DIRECTORY_IMPL; until then every asset
- * reads as unknown (the conservative default: no equipment can be booked).
+ * unusable asset is refused. FacilitiesModule registers ASSET_DIRECTORY_IMPL
+ * (`AssetDirectoryService`); without it every asset reads as unknown (the conservative default:
+ * no equipment can be booked).
  */
 export interface AssetDirectoryPort {
   describe(

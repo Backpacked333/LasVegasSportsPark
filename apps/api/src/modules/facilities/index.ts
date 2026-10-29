@@ -8,5 +8,7 @@ export * from './services/assets.service';
 export * from './services/maintenance-tasks.service';
 export * from './services/restrictions.service';
 export * from './services/preventive-schedules.service';
+export * from './services/asset-directory.service';
+export { RAISE_OVERDUE_TASK_EXCEPTIONS_JOB, FacilitiesJobs } from './services/facilities-jobs';
 export { FacilitiesReader } from './services/facilities-reader';
 export * from './testing/facilities-fixtures';

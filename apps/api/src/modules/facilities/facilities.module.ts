@@ -18,7 +18,9 @@ import {
   OPERATING_STATUS_PORT,
   type AssetDirectoryPort,
 } from './ports';
+import { AssetDirectoryService } from './services/asset-directory.service';
 import { AssetsService } from './services/assets.service';
+import { FacilitiesJobs } from './services/facilities-jobs';
 import { FacilitiesReader } from './services/facilities-reader';
 import { MaintenanceTasksService } from './services/maintenance-tasks.service';
 import { PreventiveSchedulesService } from './services/preventive-schedules.service';
@@ -31,9 +33,15 @@ const providers: Provider[] = [
   MaintenanceTasksService,
   RestrictionsService,
   PreventiveSchedulesService,
+  AssetDirectoryService,
+  // FAC-03 (SPK-UX-006): registers facilities.raise_overdue_task_exceptions with the kernel runner.
+  FacilitiesJobs,
   { provide: MAINTENANCE_REPORT_PORT, useExisting: MaintenanceTasksService },
   { provide: OPERATING_STATUS_PORT, useExisting: RestrictionsService },
-  // IF-33: declared by stage 3; FAC-02 registers ASSET_DIRECTORY_IMPL (until then: no asset known).
+  // FAC-02, IF-33: facilities is the provider of the asset directory (SPK-COND-003 equipment).
+  { provide: ASSET_DIRECTORY_IMPL, useExisting: AssetDirectoryService },
+  // The port resolves ASSET_DIRECTORY_IMPL lazily; the declared default (no asset known) answers
+  // only where FacilitiesModule is absent.
   {
     provide: ASSET_DIRECTORY_PORT,
     inject: [ModuleRef],
