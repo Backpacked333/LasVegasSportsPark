@@ -1,40 +1,49 @@
 /**
  * SCR-C-17 Invitation acceptance (SPK-IAM-004, SPK-IAM-003, SPK-CAP-001, POL-044 pending).
  *
- * Two kinds of invitation reach this screen from a link (SCR-C-39), with the id in the route and
- * the token held in memory:
+ * Two kinds of invitation reach this screen, from a link (SCR-C-39: the token is held in memory,
+ * never in the route) or from the invitations list (no token):
  *
- * - family access (guardian, caregiver or pickup delegate): `POST /v1/invitations/{id}/accept`.
- *   The API grants only the requested permissions the sender still holds and reports the rest as
- *   `droppedPermissions`; the success state lists both explicitly.
- * - team: `POST /v1/team-invitations/{id}/accept`, for the person themself or for a child over
- *   whom they hold `register` (from `GET /v1/me` authorities; the API re-checks).
+ * - family access (guardian, caregiver or delegate): read first with `GET /v1/me/invitations/{id}`
+ *   (sender, the people it covers, the relationship, each requested permission and the expiry, as
+ *   the API states them); accept with `POST /v1/invitations/{id}/accept` and decline with
+ *   `POST /v1/invitations/{id}/decline` (the token and the revision read, so a decision made on a
+ *   stale view is refused). The API grants only the requested permissions the sender still holds
+ *   and reports the rest as `droppedPermissions`; the success state lists both explicitly.
+ * - team: read first with `GET /v1/team-invitations/{id}` (team, season, sender, message, expiry);
+ *   accept with `POST /v1/team-invitations/{id}/accept`, for the person themself or for a child over
+ *   whom they hold `register` (from `GET /v1/me` authorities; the API re-checks); decline with
+ *   `POST /v1/team-invitations/{id}/decline` (no token needed, the revision read is sent).
  *
- * The API has no read of an invitation before acceptance, so the sender, scope, requested
- * permissions and expiry cannot be shown before Accept (reported); they are shown after. Declining
- * is not offered by the API either: "Not now" records nothing.
+ * Accepting a family or team invitation, and declining a family one, needs the token from the link:
+ * opened from the list without it, the invitation is shown and the screen says to open the link.
+ * How long an invitation stays open is POL-044 (pending): the screen shows the API's `expiresAt`.
  *
- * States: loading; empty (no invitation to show: open the link); ready; validation failure: not
- * applicable, "cannot accept for this participant" instead; permission restriction (addressed to
- * someone else: not available, no hint it exists); stale version (expired, revoked or already
- * answered, from INVALID_TRANSITION); offline (cannot accept, invitation kept); processing;
- * success (granted scope listed); partial completion: not permitted; recovery required: not
- * applicable, a failed accept shows "Try again" under the same idempotency key.
+ * States: loading; empty: not applicable here (the list, SCR-C-17 InvitationsScreen, has it);
+ * ready (details before deciding); validation failure: not applicable, "cannot accept for this
+ * participant" instead; permission restriction (addressed to someone else, or the account not
+ * linked or not verified for it: not available, no hint it exists); stale version (expired,
+ * revoked or already answered, from the read or from INVALID_TRANSITION; STALE_REVISION on decline
+ * offers Reload); offline (cannot accept or decline, invitation kept); processing; success (granted
+ * scope listed, or "Declined"); partial completion: not permitted; recovery required: not
+ * applicable, a failed accept or decline shows "Try again" under the same idempotency key.
  */
-import { ApiError, type Schema } from '@sportspark/api-client';
+import { ApiError, presentationForError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiQuery } from '../../api/useApiQuery';
 import { forgetLinkSecret, readLinkSecret } from '../../links/link-secrets';
 import { isUuid } from '../../links/link-targets';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge } from '../../ui/StatusBadge';
+import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import {
   formatDateTime,
@@ -47,14 +56,31 @@ import {
   type MeData,
 } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
-import { Paragraph, RadioGroup, RadioRow, SectionHeader } from '../account/components/forms';
+import {
+  Paragraph,
+  RadioGroup,
+  RadioRow,
+  SectionHeader,
+  TextField,
+} from '../account/components/forms';
 
 export type InvitationType = 'family' | 'team';
 
+type FamilyView = Schema<'InvitationView'>;
+type TeamView = Schema<'TeamInvitationView'>;
 type FamilyAccepted = Schema<'InvitationAccepted'>;
 type TeamAccepted = Schema<'TeamInvitationAccepted'>;
+type InvitationState = FamilyView['effectiveStatus'];
 
-/** journeys.md section 3: "Accepted", "Declined" (team only), "Expired", "Revoked". */
+/** Query keys of the invitation reads, refreshed after an answer. */
+export const INVITATION_KEYS = {
+  familyList: ['api', '/me/invitations'] as const,
+  family: ['api', '/me/invitations/{id}'] as const,
+  teamList: ['api', '/me/team-invitations'] as const,
+  team: ['api', '/team-invitations/{id}'] as const,
+};
+
+/** journeys.md section 3: "Accepted", "Declined", "Expired", "Revoked". */
 export function invitationStateLabel(state: unknown): string {
   switch (state) {
     case 'accepted':
@@ -68,6 +94,31 @@ export function invitationStateLabel(state: unknown): string {
     default:
       return 'No longer open';
   }
+}
+
+/** The badge of an invitation in its effective state: open (with its expiry) or closed. */
+export function invitationStatus(state: InvitationState, expiresAt: string): StatusBadgeProps {
+  if (state === 'pending')
+    return { tone: 'info', label: `Open until ${formatDateTime(expiresAt)}` };
+  return { tone: 'neutral', label: invitationStateLabel(state) };
+}
+
+const RELATIONSHIP_LABELS: Record<FamilyView['relationshipKind'], string> = {
+  guardian: 'Guardian',
+  caregiver: 'Caregiver',
+  delegate: 'Delegate',
+};
+
+export function relationshipLabel(kind: FamilyView['relationshipKind']): string {
+  return RELATIONSHIP_LABELS[kind];
+}
+
+/** The people an invitation covers, by the names the API gives (fixed at issue). */
+export function subjectsText(subjects: FamilyView['subjects']): string {
+  const names = subjects.map((s) => s.displayName).filter((n) => n.length > 0);
+  if (names.length === 0) return 'People not named';
+  if (names.length === 1) return names[0] as string;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 function noLongerOpen(error: ApiError): string | null {
@@ -85,7 +136,7 @@ export function InvitationRoute() {
   const params = useLocalSearchParams<{ id?: string; type?: string }>();
   const type: InvitationType = params.type === 'team' ? 'team' : 'family';
   const id = typeof params.id === 'string' ? params.id : '';
-  // Read once: the token is forgotten after a confirmed acceptance, the outcome stays on screen.
+  // Read once: the token is forgotten after a confirmed answer, the outcome stays on screen.
   const [token] = useState(() =>
     isUuid(id) ? readLinkSecret(type === 'team' ? 'team-invitation' : 'invitation', id) : null,
   );
@@ -105,17 +156,21 @@ export function InvitationScreen({
     <Screen>
       <SectionHeader title={type === 'team' ? 'Team invitation' : 'Family access invitation'} />
       <RequireSession what="this invitation">
-        {token && isUuid(invitationId) ? (
-          type === 'team' ? (
-            <TeamInvitation invitationId={invitationId} token={token} />
-          ) : (
-            <FamilyInvitation invitationId={invitationId} token={token} />
-          )
+        {isUuid(invitationId) ? (
+          <LinkedPerson>
+            {(me) =>
+              type === 'team' ? (
+                <TeamInvitation me={me} invitationId={invitationId} token={token} />
+              ) : (
+                <FamilyInvitation invitationId={invitationId} token={token} />
+              )
+            }
+          </LinkedPerson>
         ) : (
           <StateView
-            variant="empty"
-            title="No invitation to show"
-            description="Open the invitation link you received. Invitations are not listed in the app yet."
+            variant="unavailable"
+            title="Invitation not available"
+            description="This link is incomplete or damaged. Open the invitation link you received again."
           />
         )}
       </RequireSession>
@@ -123,89 +178,323 @@ export function InvitationScreen({
   );
 }
 
-function PreviewUnavailable() {
-  return (
-    <StateView
-      variant="unavailable"
-      title="Details shown after you accept"
-      description="The app cannot show who sent this invitation, what it covers or when it expires until you accept it. Accepting never gives more than the sender is allowed to give."
-    />
-  );
-}
-
-function NotNow() {
+/** Only a person can read or answer an invitation: an unlinked account finishes setup first. */
+function LinkedPerson({ children }: { children: (me: MeData) => ReactNode }) {
   const router = useRouter();
-  return (
-    <>
-      <Button
-        label="Not now"
-        variant="secondary"
-        onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
-        accessibilityHint="Leaves without answering. Nothing is recorded."
+  const me = useMe();
+  if (me.data === undefined) {
+    return (
+      <QueryBoundary
+        query={me}
+        label="your account"
+        empty={{ title: 'No account details', description: '' }}
+      >
+        {() => null}
+      </QueryBoundary>
+    );
+  }
+  if (!me.data.person) {
+    return (
+      <StateView
+        variant="unavailable"
+        title="Finish setting up first"
+        description="Link your account to your participant record before answering an invitation."
+        actionLabel="Go to account setup"
+        onAction={() => router.push('/onboarding')}
       />
-      <Paragraph muted inset={false}>
-        Declining in the app is not available yet. The invitation stays unanswered until it expires
-        or the sender withdraws it.
-      </Paragraph>
-    </>
-  );
-}
-
-function OfflineNotice({ offline }: { offline: boolean }) {
-  if (!offline) return null;
-  return <Paragraph muted>Accepting needs a connection. The invitation is kept.</Paragraph>;
+    );
+  }
+  return <>{children(me.data)}</>;
 }
 
 const ADDRESSED_ELSEWHERE = {
   title: 'Invitation not available',
   description:
-    'Check that you opened the link you received and that you are signed in with the account it was sent to.',
+    'Check that you opened the link you received, that you are signed in with the account it was sent to, and that the email or phone it was sent to is verified on this account.',
 };
 
-function FamilyInvitation({ invitationId, token }: { invitationId: string; token: string }) {
+function NotNow() {
+  const router = useRouter();
+  return (
+    <Button
+      label="Not now"
+      variant="secondary"
+      onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
+      accessibilityHint="Leaves without answering. Nothing is recorded."
+    />
+  );
+}
+
+function OfflineNotice({ offline }: { offline: boolean }) {
+  if (!offline) return null;
+  return (
+    <Paragraph muted>Answering an invitation needs a connection. The invitation is kept.</Paragraph>
+  );
+}
+
+function StaleInvitation({ label, at }: { label: string; at?: string | null }) {
+  return (
+    <View style={styles.result} testID="invitation-closed">
+      <StatusBadge tone="neutral" label={label} />
+      <Paragraph inset={false}>
+        This invitation is no longer open, so it cannot be answered. Ask the sender for a new one if
+        you still need it.
+      </Paragraph>
+      {at ? (
+        <Paragraph muted inset={false}>
+          {`${label} ${formatDateTime(at)}.`}
+        </Paragraph>
+      ) : null}
+    </View>
+  );
+}
+
+function DeclinedView() {
+  return (
+    <View style={styles.result} testID="invitation-declined">
+      <StatusBadge tone="neutral" label="Declined" />
+      <Paragraph inset={false}>
+        You declined this invitation. It can no longer be accepted, and nothing was granted.
+      </Paragraph>
+    </View>
+  );
+}
+
+/** One fact of an invitation as a readable row ("From, Jordan Lee"). */
+function Fact({ title, detail }: { title: string; detail: string }) {
+  return <ListRow title={title} detail={detail} />;
+}
+
+/**
+ * Declining is final, so it is confirmed first; the reason is optional (the API takes one). The
+ * request of the intent is kept: "Try again" resends it unchanged under the same key (§4.9).
+ */
+function DeclineConfirm({
+  busy,
+  disabled,
+  onConfirm,
+  onCancel,
+}: {
+  busy: boolean;
+  disabled: boolean;
+  onConfirm: (reason: string | undefined) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <View style={styles.body} testID="decline-confirm">
+      <Paragraph>
+        Declining is final: this invitation can no longer be accepted. Nothing is granted.
+      </Paragraph>
+      <TextField
+        label="Reason (optional)"
+        hint="Kept with the invitation."
+        value={reason}
+        onChangeText={setReason}
+        editable={!busy}
+        testID="decline-reason"
+      />
+      <View style={styles.actions}>
+        <Button
+          label="Confirm decline"
+          onPress={() => onConfirm(reason.trim().length > 0 ? reason.trim() : undefined)}
+          busy={busy}
+          disabled={disabled}
+          accessibilityHint={disabled ? 'Needs a connection' : undefined}
+        />
+        <Button label="Keep invitation" variant="secondary" onPress={onCancel} />
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Family access
+// ---------------------------------------------------------------------------------------------
+function FamilyInvitation({ invitationId, token }: { invitationId: string; token: string | null }) {
+  const view = useApiQuery({
+    path: '/me/invitations/{id}',
+    request: { path: { id: invitationId } },
+    staleTime: 0,
+  });
+  if (view.error && presentationForError(view.error) === 'unavailable') {
+    return <StateView variant="unavailable" {...ADDRESSED_ELSEWHERE} />;
+  }
+  return (
+    <QueryBoundary
+      query={view}
+      label="the invitation"
+      empty={{ title: 'No invitation to show', description: '' }}
+      unavailableOffline={['accepting or declining the invitation']}
+    >
+      {(invitation) => (
+        <FamilyInvitationBody
+          invitation={invitation}
+          token={token}
+          onReload={() => void view.refetch()}
+        />
+      )}
+    </QueryBoundary>
+  );
+}
+
+function FamilyFacts({ invitation }: { invitation: FamilyView }) {
+  return (
+    <View accessibilityRole="list" accessibilityLabel="Invitation details">
+      <Fact title="From" detail={invitation.inviter?.displayName || 'The facility'} />
+      <Fact title="For" detail={subjectsText(invitation.subjects)} />
+      <Fact title="As" detail={relationshipLabel(invitation.relationshipKind)} />
+      <Fact
+        title="Permissions requested"
+        detail={`${listPermissions(invitation.requestedPermissions)}. Each one is separate.`}
+      />
+      {invitation.recipientContact ? (
+        <Fact title="Sent to" detail={invitation.recipientContact.value} />
+      ) : null}
+    </View>
+  );
+}
+
+function closedAt(invitation: FamilyView): string | null {
+  switch (invitation.effectiveStatus) {
+    case 'accepted':
+      return invitation.acceptedAt;
+    case 'declined':
+      return invitation.declinedAt;
+    case 'revoked':
+      return invitation.revokedAt;
+    case 'expired':
+      return invitation.expiresAt;
+    default:
+      return null;
+  }
+}
+
+function FamilyInvitationBody({
+  invitation,
+  token,
+  onReload,
+}: {
+  invitation: FamilyView;
+  token: string | null;
+  onReload: () => void;
+}) {
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const accept = useApiCommand('post', '/invitations/{id}/accept', {
-    invalidate: [ME_QUERY_KEY],
-  });
-  const submit = async () => {
+  const [declining, setDeclining] = useState(false);
+  const refresh = [
+    ME_QUERY_KEY,
+    INVITATION_KEYS.familyList,
+    INVITATION_KEYS.family,
+    ['api', '/me/access-grants'],
+  ] as const;
+  const accept = useApiCommand('post', '/invitations/{id}/accept', { invalidate: refresh });
+  const decline = useApiCommand('post', '/invitations/{id}/decline', { invalidate: refresh });
+  const declineRequest = useRef<{ token: string; reason?: string } | null>(null);
+  const id = invitation.id;
+
+  const submitAccept = async () => {
+    if (!token) return;
     try {
-      await accept.submit({ path: { id: invitationId }, body: { token } });
-      forgetLinkSecret('invitation', invitationId);
+      await accept.submit({ path: { id }, body: { token } });
+      forgetLinkSecret('invitation', id);
     } catch (error) {
       // accept.error is rendered below; the invitation is kept for "Try again" unless the API says
       // it is closed or unknown, in which case its token is dead and is not offered again.
-      if (isDeadInvitation(error)) forgetLinkSecret('invitation', invitationId);
+      if (isDeadInvitation(error)) forgetLinkSecret('invitation', id);
+    }
+  };
+
+  const sendDecline = async (request: { token: string; reason?: string }) => {
+    declineRequest.current = request;
+    try {
+      await decline.submit({
+        path: { id },
+        body: { ...request, expectedRevision: invitation.revision },
+      });
+      forgetLinkSecret('invitation', id);
+    } catch (error) {
+      if (isDeadInvitation(error)) forgetLinkSecret('invitation', id);
     }
   };
 
   if (accept.data) return <FamilyAcceptedView result={accept.data} />;
-  const stale = accept.error ? noLongerOpen(accept.error) : null;
+  if (decline.data) return <DeclinedView />;
+
+  const stale =
+    (accept.error && noLongerOpen(accept.error)) || (decline.error && noLongerOpen(decline.error));
+  const open = invitation.effectiveStatus === 'pending' && !stale;
+  const busy = accept.isProcessing || decline.isProcessing;
   return (
     <View style={styles.body}>
-      <Paragraph>
-        Accepting gives you only the permissions the sender is allowed to give over the people in
-        this invitation. Anything else is left out and listed after you accept.
-      </Paragraph>
-      <PreviewUnavailable />
-      <View style={styles.actions}>
-        <Button
-          label="Accept invitation"
-          onPress={() => void submit()}
-          busy={accept.isProcessing}
-          disabled={offline}
-          accessibilityHint={offline ? 'Needs a connection' : undefined}
-        />
-        <NotNow />
+      <View style={styles.result}>
+        <StatusBadge {...invitationStatus(invitation.effectiveStatus, invitation.expiresAt)} />
       </View>
-      <OfflineNotice offline={offline} />
-      {accept.error && stale ? (
+      <FamilyFacts invitation={invitation} />
+      {invitation.effectiveStatus !== 'pending' ? (
+        <StaleInvitation
+          label={invitationStateLabel(invitation.effectiveStatus)}
+          at={closedAt(invitation)}
+        />
+      ) : stale ? (
         <StaleInvitation label={stale} />
-      ) : accept.error ? (
+      ) : null}
+      {open ? (
+        <>
+          <Paragraph>
+            Accepting gives you only the permissions the sender is still allowed to give over the
+            people in this invitation. Anything else is left out and listed after you accept.
+          </Paragraph>
+          {token === null ? (
+            <>
+              <Paragraph>
+                To accept or decline, open the invitation link you received. The link shows that the
+                invitation was sent to you.
+              </Paragraph>
+              <View style={styles.actions}>
+                <NotNow />
+              </View>
+            </>
+          ) : declining ? (
+            <DeclineConfirm
+              busy={decline.isProcessing}
+              disabled={offline || accept.isProcessing}
+              onConfirm={(reason) =>
+                void sendDecline(reason === undefined ? { token } : { token, reason })
+              }
+              onCancel={() => {
+                setDeclining(false);
+                declineRequest.current = null;
+                decline.reset();
+              }}
+            />
+          ) : (
+            <View style={styles.actions}>
+              <Button
+                label="Accept invitation"
+                onPress={() => void submitAccept()}
+                busy={accept.isProcessing}
+                disabled={offline || busy}
+                accessibilityHint={offline ? 'Needs a connection' : undefined}
+              />
+              <Button
+                label="Decline"
+                variant="secondary"
+                onPress={() => setDeclining(true)}
+                disabled={busy}
+                accessibilityHint="Asks you to confirm. Declining cannot be undone."
+              />
+              <NotNow />
+            </View>
+          )}
+          <OfflineNotice offline={offline && token !== null} />
+        </>
+      ) : null}
+      {accept.error && !noLongerOpen(accept.error) ? (
         <CommandError
           error={accept.error}
-          onRetry={() => void submit()}
+          onRetry={() => void submitAccept()}
           notFound={ADDRESSED_ELSEWHERE}
           denied={
             accept.error.code === 'ACCESS_DENIED'
@@ -219,18 +508,25 @@ function FamilyInvitation({ invitationId, token }: { invitationId: string; token
           }
         />
       ) : null}
-    </View>
-  );
-}
-
-function StaleInvitation({ label }: { label: string }) {
-  return (
-    <View style={styles.result}>
-      <StatusBadge tone="neutral" label={label} />
-      <Paragraph inset={false}>
-        This invitation is no longer open, so it cannot be accepted. Ask the sender for a new one if
-        you still need it.
-      </Paragraph>
+      {decline.error && !noLongerOpen(decline.error) ? (
+        <CommandError
+          error={decline.error}
+          onRetry={() => {
+            if (declineRequest.current) void sendDecline(declineRequest.current);
+          }}
+          onReload={() => {
+            decline.reset();
+            declineRequest.current = null;
+            setDeclining(false);
+            onReload();
+          }}
+          notFound={ADDRESSED_ELSEWHERE}
+          denied={{
+            title: 'You cannot decline this invitation',
+            description: decline.error.message,
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -333,16 +629,41 @@ function FamilyAcceptedView({ result }: { result: FamilyAccepted }) {
   );
 }
 
-function TeamInvitation({ invitationId, token }: { invitationId: string; token: string }) {
-  const me = useMe();
+// ---------------------------------------------------------------------------------------------
+// Team
+// ---------------------------------------------------------------------------------------------
+function TeamInvitation({
+  me,
+  invitationId,
+  token,
+}: {
+  me: MeData;
+  invitationId: string;
+  token: string | null;
+}) {
+  const view = useApiQuery({
+    path: '/team-invitations/{id}',
+    request: { path: { id: invitationId } },
+    staleTime: 0,
+  });
+  if (view.error && presentationForError(view.error) === 'unavailable') {
+    return <StateView variant="unavailable" {...ADDRESSED_ELSEWHERE} />;
+  }
   return (
     <QueryBoundary
-      query={me}
-      label="who can accept"
-      empty={{ title: 'No account details', description: '' }}
-      unavailableOffline={['accepting the invitation']}
+      query={view}
+      label="the invitation"
+      empty={{ title: 'No invitation to show', description: '' }}
+      unavailableOffline={['accepting or declining the invitation']}
     >
-      {(data) => <TeamInvitationForm me={data} invitationId={invitationId} token={token} />}
+      {(invitation) => (
+        <TeamInvitationBody
+          me={me}
+          invitation={invitation}
+          token={token}
+          onReload={() => void view.refetch()}
+        />
+      )}
     </QueryBoundary>
   );
 }
@@ -369,105 +690,188 @@ function ParticipantRadio({
   );
 }
 
-function TeamInvitationForm({
+function TeamFacts({ invitation }: { invitation: TeamView }) {
+  return (
+    <View accessibilityRole="list" accessibilityLabel="Invitation details">
+      <Fact title="Team" detail={invitation.teamName} />
+      <Fact title="Season" detail={invitation.seasonName} />
+      <Fact title="From" detail={invitation.invitedBy?.displayName || 'The league'} />
+      {invitation.message ? <Fact title="Message" detail={invitation.message} /> : null}
+    </View>
+  );
+}
+
+function TeamInvitationBody({
   me,
-  invitationId,
+  invitation,
   token,
+  onReload,
 }: {
   me: MeData;
-  invitationId: string;
-  token: string;
+  invitation: TeamView;
+  token: string | null;
+  onReload: () => void;
 }) {
-  const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
+  const self = me.person?.id ?? null;
   // The person themself, plus each person the API says they may register (SPK-IAM-003).
   const children = me.authorities.filter((a) => a.permissions.includes('register'));
-  const [participant, setParticipant] = useState<string | null>(me.person?.id ?? null);
-  const accept = useApiCommand('post', '/team-invitations/{id}/accept', {
-    invalidate: [ME_QUERY_KEY],
+  const [participant, setParticipant] = useState<string | null>(self);
+  const [declining, setDeclining] = useState(false);
+  const refresh = [
+    ME_QUERY_KEY,
+    INVITATION_KEYS.teamList,
+    INVITATION_KEYS.team,
+    ['api', '/me/team-entries'],
+  ] as const;
+  const accept = useApiCommand('post', '/team-invitations/{id}/accept', { invalidate: refresh });
+  const decline = useApiCommand('post', '/team-invitations/{id}/decline', {
+    invalidate: refresh,
   });
+  const declineReason = useRef<string | undefined>(undefined);
+  const id = invitation.id;
 
-  if (!me.person) {
-    return (
-      <StateView
-        variant="unavailable"
-        title="Finish setting up first"
-        description="Link your account to your participant record before accepting a team invitation."
-        actionLabel="Go to account setup"
-        onAction={() => router.push('/onboarding')}
-      />
-    );
-  }
-  const self = me.person.id;
   const choose = (next: string) => {
     setParticipant(next);
     accept.reset();
   };
-  const submit = async () => {
-    if (!participant) return;
+  const submitAccept = async () => {
+    if (!participant || !token) return;
     try {
       await accept.submit({
-        path: { id: invitationId },
+        path: { id },
         body: participant === self ? { token } : { token, personId: participant },
       });
-      forgetLinkSecret('team-invitation', invitationId);
+      forgetLinkSecret('team-invitation', id);
     } catch (error) {
       // accept.error is rendered below; the choice is kept. A closed or unknown invitation's token
       // is dead and is not offered again.
-      if (isDeadInvitation(error)) forgetLinkSecret('team-invitation', invitationId);
+      if (isDeadInvitation(error)) forgetLinkSecret('team-invitation', id);
+    }
+  };
+  const sendDecline = async (reason: string | undefined) => {
+    declineReason.current = reason;
+    try {
+      await decline.submit({
+        path: { id },
+        body:
+          reason === undefined
+            ? { expectedRevision: invitation.revision }
+            : { expectedRevision: invitation.revision, reason },
+      });
+      forgetLinkSecret('team-invitation', id);
+    } catch (error) {
+      if (isDeadInvitation(error)) forgetLinkSecret('team-invitation', id);
     }
   };
 
   if (accept.data) return <TeamAcceptedView result={accept.data} />;
-  const stale = accept.error ? noLongerOpen(accept.error) : null;
+  if (decline.data) return <DeclinedView />;
+
+  const stale =
+    (accept.error && noLongerOpen(accept.error)) || (decline.error && noLongerOpen(decline.error));
+  const open = invitation.effectiveStatus === 'pending' && !stale;
+  const busy = accept.isProcessing || decline.isProcessing;
   return (
     <View style={styles.body}>
-      <Paragraph>
-        Accepting adds the participant you choose to the team roster. Only the person the invitation
-        was sent to, or their guardian, can accept it.
-      </Paragraph>
-      <PreviewUnavailable />
-      {children.length > 0 ? (
-        <RadioGroup label="Accept for">
-          <RadioRow
-            label={`You, ${personDisplayName(me.person)}`}
-            checked={participant === self}
-            disabled={accept.isProcessing}
-            onPress={() => choose(self)}
-          />
-          {children.map((child) => (
-            <ParticipantRadio
-              key={child.subjectPersonId}
-              personId={child.subjectPersonId}
-              checked={participant === child.subjectPersonId}
-              disabled={accept.isProcessing}
-              onPress={() => choose(child.subjectPersonId)}
-            />
-          ))}
-        </RadioGroup>
-      ) : null}
-      <View style={styles.actions}>
-        <Button
-          label="Accept invitation"
-          onPress={() => void submit()}
-          busy={accept.isProcessing}
-          disabled={offline || !participant}
-          accessibilityHint={offline ? 'Needs a connection' : undefined}
-        />
-        <NotNow />
+      <View style={styles.result}>
+        <StatusBadge {...invitationStatus(invitation.effectiveStatus, invitation.expiresAt)} />
       </View>
-      <OfflineNotice offline={offline} />
-      {accept.error && stale ? (
+      <TeamFacts invitation={invitation} />
+      {invitation.effectiveStatus !== 'pending' ? (
+        <StaleInvitation label={invitationStateLabel(invitation.effectiveStatus)} />
+      ) : stale ? (
         <StaleInvitation label={stale} />
-      ) : accept.error ? (
+      ) : null}
+      {open ? (
+        <>
+          <Paragraph>
+            Accepting adds the participant you choose to the team roster. Only the person the
+            invitation was sent to, or their guardian, can accept it.
+          </Paragraph>
+          {token !== null && children.length > 0 && self ? (
+            <RadioGroup label="Accept for">
+              <RadioRow
+                label={`You, ${me.person ? personDisplayName(me.person) : ''}`}
+                checked={participant === self}
+                disabled={busy}
+                onPress={() => choose(self)}
+              />
+              {children.map((child) => (
+                <ParticipantRadio
+                  key={child.subjectPersonId}
+                  personId={child.subjectPersonId}
+                  checked={participant === child.subjectPersonId}
+                  disabled={busy}
+                  onPress={() => choose(child.subjectPersonId)}
+                />
+              ))}
+            </RadioGroup>
+          ) : null}
+          {token === null ? (
+            <Paragraph>
+              To accept, open the invitation link you received. You can decline here.
+            </Paragraph>
+          ) : null}
+          {declining ? (
+            <DeclineConfirm
+              busy={decline.isProcessing}
+              disabled={offline || accept.isProcessing}
+              onConfirm={(reason) => void sendDecline(reason)}
+              onCancel={() => {
+                setDeclining(false);
+                decline.reset();
+              }}
+            />
+          ) : (
+            <View style={styles.actions}>
+              {token !== null ? (
+                <Button
+                  label="Accept invitation"
+                  onPress={() => void submitAccept()}
+                  busy={accept.isProcessing}
+                  disabled={offline || busy || !participant}
+                  accessibilityHint={offline ? 'Needs a connection' : undefined}
+                />
+              ) : null}
+              <Button
+                label="Decline"
+                variant="secondary"
+                onPress={() => setDeclining(true)}
+                disabled={busy}
+                accessibilityHint="Asks you to confirm. Declining cannot be undone."
+              />
+              <NotNow />
+            </View>
+          )}
+          <OfflineNotice offline={offline} />
+        </>
+      ) : null}
+      {accept.error && !noLongerOpen(accept.error) ? (
         <CommandError
           error={accept.error}
-          onRetry={() => void submit()}
+          onRetry={() => void submitAccept()}
           notFound={ADDRESSED_ELSEWHERE}
           denied={{
             title: 'You cannot accept for this participant',
             description: accept.error.message,
+          }}
+        />
+      ) : null}
+      {decline.error && !noLongerOpen(decline.error) ? (
+        <CommandError
+          error={decline.error}
+          onRetry={() => void sendDecline(declineReason.current)}
+          onReload={() => {
+            decline.reset();
+            setDeclining(false);
+            onReload();
+          }}
+          notFound={ADDRESSED_ELSEWHERE}
+          denied={{
+            title: 'You cannot decline this invitation',
+            description: decline.error.message,
           }}
         />
       ) : null}

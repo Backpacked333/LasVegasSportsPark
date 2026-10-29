@@ -1,19 +1,23 @@
 /**
- * SCR-C-31 Family and permissions (SPK-IAM-001, SPK-IAM-003 "One permission must not silently
- * imply another", SPK-IAM-004, SPK-IAM-006, SPK-ENTRY-007, DEC-004, DEC-005, DEC-075, POL-023).
+ * SCR-C-31 Family and permissions (SPK-IAM-001 "household membership alone must not grant
+ * authority", SPK-IAM-003 "One permission must not silently imply another", SPK-IAM-004,
+ * SPK-IAM-005 "Under review", SPK-IAM-006, SPK-ENTRY-007, DEC-004, DEC-005, DEC-075, DEC-089,
+ * POL-023).
  */
 import { fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Share } from 'react-native';
 import type { AppConfig } from '../../../config/app-config';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, mePermissions } from '../../../testing/test-app';
 import {
   apiError,
   CHILD,
   CHILD_TWO,
   me,
+  namesRoute,
   ok,
-  peopleRoute,
+  OTHER_ADULT,
+  page,
   person,
   SELF,
   TOKEN,
@@ -46,6 +50,54 @@ function issued(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const SINCE = '2026-09-01T10:00:00.000Z';
+
+/** `GET /me/access-grants` item (GrantView). */
+function grantView(permission: string, overrides: Record<string, unknown> = {}) {
+  return {
+    grantId: `grant-${permission}-${String(overrides.subjectPersonId ?? CHILD)}`,
+    relationshipId: '0192f1a0-0000-7000-8000-00000000d100',
+    relationshipKind: 'guardian',
+    actorPersonId: SELF,
+    actorDisplayName: 'Alex Morgan',
+    subjectPersonId: CHILD,
+    subjectDisplayName: 'Sam Morgan',
+    permission,
+    source: 'claim',
+    effectiveFrom: SINCE,
+    effectiveTo: null,
+    revokedAt: null,
+    status: 'effective',
+    underReview: false,
+    revision: 2,
+    ...overrides,
+  };
+}
+
+/** `GET /me/access-grants` answering `held` and `over_me` separately. */
+function grantsRoute(held: unknown[], overMe: unknown[] = []) {
+  return (request: { query: Record<string, string> }) =>
+    fakeResponse(200, {
+      items: request.query.direction === 'over_me' ? overMe : held,
+      nextCursor: null,
+    });
+}
+
+/** `GET /me/invitations?direction=sent` item (InvitationView). */
+function sentView(overrides: Record<string, unknown> = {}) {
+  const { token: _token, ...invitation } = issued();
+  return {
+    ...invitation,
+    inviter: { personId: SELF, displayName: 'Alex Morgan' },
+    subjects: [{ personId: CHILD, displayName: 'Sam Morgan' }],
+    effectiveStatus: 'pending',
+    declinedAt: null,
+    ...overrides,
+  };
+}
+
+const HELD = [grantView('view'), grantView('register'), grantView('collect')];
+
 const FAMILY = me({
   authorities: [
     { subjectPersonId: CHILD, permissions: ['view', 'register', 'collect'] },
@@ -63,10 +115,18 @@ function familyApp(
     config,
     routes: {
       'GET /me': ok(FAMILY),
-      'GET /people/{id}': peopleRoute([SAM]),
+      'GET /person-names': namesRoute([SAM]),
+      'GET /me/access-grants': grantsRoute(HELD),
+      'GET /me/households': ok({ items: [] }),
+      'GET /me/invitations': page([]),
       ...(routes as Record<string, never>),
     },
   });
+}
+
+/** The family app with an empty family (no authorities, no grants). */
+function emptyFamilyApp(routes: Record<string, unknown> = {}) {
+  return familyApp({ 'GET /me': ok(me({})), 'GET /me/access-grants': grantsRoute([]), ...routes });
 }
 
 async function openInvite() {
@@ -91,7 +151,7 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(within(sam).getByText('Pay: Not allowed')).toBeOnTheScreen();
   });
 
-  it('never reads another household: only the people the API lists are looked up, and an unreadable one is not named', async () => {
+  it('§4.14: names come from GET /person-names only (no date of birth or contacts are read), and a person the API omits is not named', async () => {
     const app = familyApp();
     render(<FamilyScreen />, { wrapper: app.wrapper });
     const second = await screen.findByTestId('person-access-1');
@@ -99,28 +159,35 @@ describe('SCR-C-31 FamilyScreen', () => {
       await within(second).findByRole('header', { name: 'Name not available to you' }),
     ).toBeOnTheScreen();
     expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
-    const looked = new Set(
-      app.fake.requests.filter((r) => r.route === '/people/{id}').map((r) => r.params.id),
-    );
-    expect(looked).toEqual(new Set([CHILD, CHILD_TWO]));
-    expect(app.fake.requests.every((r) => r.route === '/me' || r.route === '/people/{id}')).toBe(
-      true,
+    const routes = new Set(app.fake.requests.map((r) => r.route));
+    expect(routes.has('/people/{id}')).toBe(false);
+    expect([...routes].every((r) => r !== null)).toBe(true);
+    expect(routes).toEqual(
+      new Set([
+        '/me',
+        '/person-names',
+        '/me/access-grants',
+        '/me/households',
+        '/me/invitations',
+        '/me/permissions',
+      ]),
     );
   });
 
   it('empty: says that no family members are recorded yet', async () => {
-    const app = createTestApp({ routes: { 'GET /me': ok(me({})) } });
+    const app = emptyFamilyApp();
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No family members yet' })).toBeOnTheScreen();
   });
 
   it('asks to finish setup when the account is not linked to a participant record', async () => {
-    const app = createTestApp({ routes: { 'GET /me': ok(me({ person: null })) } });
+    const app = familyApp({ 'GET /me': ok(me({ person: null })) });
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(await screen.findByLabelText('Finish setting up first')).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.route === '/me/access-grants')).toBe(false);
   });
 
-  it('shows adding a child as pending DEC-004 and pickup as pending DEC-075 and DEC-005', async () => {
+  it("shows adding a child (DEC-004), pickup (DEC-075, DEC-005), other adults' permissions (DEC-004) and ending them (DEC-089) as pending", async () => {
     const app = familyApp();
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(
@@ -133,7 +200,14 @@ describe('SCR-C-31 FamilyScreen', () => {
         /Supervised pickup arrangements is not available yet: it depends on DEC-075, DEC-005/,
       ),
     ).toBeOnTheScreen();
-    expect(screen.getByLabelText('Not shown in the app yet')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        /Seeing the permissions other adults hold over the people you manage is not available yet: it depends on DEC-004/,
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(/Ending another adult's permissions .* it depends on DEC-089, DEC-004/),
+    ).toBeOnTheScreen();
   });
 
   it('permission restriction: a permission the parent does not hold cannot be passed on', async () => {
@@ -341,7 +415,10 @@ describe('SCR-C-31 FamilyScreen', () => {
                 : [],
             }),
           ),
-        'GET /people/{id}': peopleRoute([SAM]),
+        'GET /person-names': namesRoute([SAM]),
+        'GET /me/access-grants': grantsRoute([]),
+        'GET /me/households': ok({ items: [] }),
+        'GET /me/invitations': page([]),
         'POST /claims/{token}/accept': () => {
           claimed = true;
           return fakeResponse(200, {
@@ -377,5 +454,353 @@ describe('SCR-C-31 FamilyScreen', () => {
       await screen.findByText(/guardian of Sam Morgan with these permissions: View and Pay/),
     ).toBeOnTheScreen();
     await waitFor(() => expect(screen.getByTestId('person-access-0')).toBeOnTheScreen());
+  });
+});
+
+describe('SCR-C-31 permissions as the grants state them (GET /me/access-grants)', () => {
+  it('SPK-IAM-003: an allowed permission names its start date and where it came from', async () => {
+    const app = familyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const sam = await screen.findByTestId('person-access-0');
+    expect(
+      await within(sam).findByLabelText(/^View: allowed\. .*Since .*, from a claim code$/),
+    ).toBeOnTheScreen();
+    const read = app.fake.requests.find(
+      (r) => r.route === '/me/access-grants' && r.query.direction === 'held',
+    );
+    expect(read?.query.limit).toBe('100');
+  });
+
+  it('SPK-IAM-005: a permission paused by a disputed-access review reads "Under review", never "Allowed"', async () => {
+    const app = familyApp({
+      'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
+      'GET /me/access-grants': grantsRoute([
+        grantView('view'),
+        grantView('pay', { status: 'suspended', underReview: true }),
+      ]),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const sam = await screen.findByTestId('person-access-0');
+    expect(await within(sam).findByLabelText(/^Pay: under review\./)).toBeOnTheScreen();
+    expect(within(sam).getByText('Pay: Under review')).toBeOnTheScreen();
+    expect(within(sam).getByLabelText(/^View: allowed\./)).toBeOnTheScreen();
+  });
+
+  it('SPK-IAM-005: a person over whom every grant is paused is still listed, as under review', async () => {
+    const app = familyApp({
+      'GET /me': ok(me({ authorities: [] })),
+      'GET /me/access-grants': grantsRoute([
+        grantView('view', { status: 'suspended', underReview: true }),
+      ]),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const sam = await screen.findByTestId('person-access-0');
+    expect(await within(sam).findByRole('header', { name: 'Sam Morgan' })).toBeOnTheScreen();
+    expect(within(sam).getByLabelText(/^View: under review\./)).toBeOnTheScreen();
+    // Nothing can be passed on from a paused permission.
+    expect(screen.queryByRole('button', { name: /^Invite another adult/ })).toBeNull();
+  });
+
+  it('a permission that starts later says when', async () => {
+    const app = familyApp({
+      'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
+      'GET /me/access-grants': grantsRoute([
+        grantView('view'),
+        grantView('pay', { status: 'scheduled', effectiveFrom: '2026-11-01T10:00:00.000Z' }),
+      ]),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const sam = await screen.findByTestId('person-access-0');
+    expect(await within(sam).findByLabelText(/^Pay: starts .*2026/)).toBeOnTheScreen();
+  });
+
+  it('partial completion: a failed grants read shows its code and Try again; what the API says is allowed stays', async () => {
+    const app = familyApp({
+      'GET /me/access-grants': () =>
+        apiError(500, 'INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const failure = await screen.findByTestId('grants-error');
+    expect(within(failure).getByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(within(failure).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(
+      within(screen.getByTestId('person-access-0')).getByLabelText(/^View: allowed\./),
+    ).toBeOnTheScreen();
+  });
+});
+
+describe('SCR-C-31 giving up a permission (SPK-IAM-006)', () => {
+  const MAY_REVOKE = mePermissions({
+    conditionalActions: [{ id: 'identity.revoke_access', self: true }],
+  });
+
+  it('is not offered when GET /me/permissions does not list identity.revoke_access', async () => {
+    const app = familyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByRole('button', { name: 'Invite another adult for Sam Morgan' }),
+    ).toBeOnTheScreen();
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/me/permissions')).toBe(true),
+    );
+    expect(screen.queryByRole('button', { name: /^Give up a permission/ })).toBeNull();
+  });
+
+  it('gives up one chosen permission with a reason and the grant revision', async () => {
+    const app = familyApp({
+      'GET /me/permissions': MAY_REVOKE,
+      'POST /access-grants/{id}/revoke': ok({
+        id: 'grant-register-' + CHILD,
+        relationshipId: '0192f1a0-0000-7000-8000-00000000d100',
+        actorPersonId: SELF,
+        subjectPersonId: CHILD,
+        permission: 'register',
+        source: 'claim',
+        effectiveFrom: SINCE,
+        effectiveTo: null,
+        revokedAt: '2026-10-24T12:00:00.000Z',
+        revocationReason: 'No longer needed',
+        suspendedAt: null,
+        suspendedByReviewId: null,
+        effective: false,
+        revision: 3,
+        createdAt: SINCE,
+      }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    fireEvent.press(
+      await screen.findByRole('button', { name: 'Give up a permission for Sam Morgan' }),
+    );
+    const form = screen.getByTestId('give-up-form');
+    fireEvent.press(within(form).getByRole('radio', { name: 'Register' }));
+    expect(within(form).getByRole('radio', { name: 'Register' })).toBeChecked();
+    fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+    expect(within(form).getByText(/Say why you are giving it up/)).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    fireEvent.changeText(within(form).getByLabelText('Reason'), 'No longer needed');
+    fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+
+    expect(await screen.findByLabelText('Permission given up')).toBeOnTheScreen();
+    const post = app.fake.requests.find((r) => r.method === 'POST');
+    expect(post?.route).toBe('/access-grants/{id}/revoke');
+    expect(post?.params.id).toBe(`grant-register-${CHILD}`);
+    expect(post?.body).toEqual({ reason: 'No longer needed', expectedRevision: 2 });
+    expect(post?.headers['idempotency-key']).toBe('key-00000001');
+  });
+
+  it('stale version: STALE_REVISION reloads the permissions as they are now', async () => {
+    const app = familyApp({
+      'GET /me/permissions': MAY_REVOKE,
+      'POST /access-grants/{id}/revoke': () =>
+        apiError(409, 'STALE_REVISION', { nextAction: 'reload_and_retry' }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    fireEvent.press(
+      await screen.findByRole('button', { name: 'Give up a permission for Sam Morgan' }),
+    );
+    const form = screen.getByTestId('give-up-form');
+    fireEvent.changeText(within(form).getByLabelText('Reason'), 'Mistake');
+    fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+    expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
+    const heldReads = () =>
+      app.fake.requests.filter(
+        (r) => r.route === '/me/access-grants' && r.query.direction === 'held',
+      ).length;
+    const before = heldReads();
+    fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(heldReads()).toBe(before + 1));
+    expect(screen.queryByTestId('give-up-form')).toBeNull();
+  });
+});
+
+describe('SCR-C-31 households (SPK-IAM-001)', () => {
+  it('names the members the API shows, counts the others, and says membership grants nothing', async () => {
+    const app = familyApp({
+      'GET /me/households': ok({
+        items: [
+          {
+            id: '0192f1a0-0000-7000-8000-00000000f201',
+            name: 'Morgan household',
+            members: [
+              {
+                personId: SELF,
+                displayName: 'Alex Morgan',
+                kind: 'adult',
+                label: null,
+                isSelf: true,
+              },
+              {
+                personId: CHILD,
+                displayName: 'Sam Morgan',
+                kind: 'child',
+                label: 'Son',
+                isSelf: false,
+              },
+            ],
+            otherMemberCount: 1,
+            revision: 1,
+            createdAt: SINCE,
+          },
+        ],
+      }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const household = await screen.findByTestId('household-0192f1a0-0000-7000-8000-00000000f201');
+    expect(within(household).getByRole('header', { name: 'Morgan household' })).toBeOnTheScreen();
+    expect(within(household).getByLabelText('Alex Morgan, You')).toBeOnTheScreen();
+    expect(within(household).getByLabelText('Sam Morgan, Child, Son')).toBeOnTheScreen();
+    expect(
+      within(household).getByText(
+        '1 other member is not shown, because you do not have permission to view them.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/Being in a household gives nobody any permission/)).toBeOnTheScreen();
+  });
+
+  it('empty: no household yet', async () => {
+    const app = familyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'No household yet' })).toBeOnTheScreen();
+  });
+});
+
+describe('SCR-C-31 invitations sent (SPK-IAM-004)', () => {
+  it('lists sent invitations with their state; only an open one can be withdrawn', async () => {
+    const accepted = '0192f1a0-0000-7000-8000-00000000c009';
+    const app = familyApp({
+      'GET /me/invitations': page([
+        sentView(),
+        sentView({ id: accepted, status: 'accepted', effectiveStatus: 'accepted' }),
+      ]),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const open = await screen.findByTestId(`sent-invitation-${INVITATION}`);
+    expect(
+      within(open).getByLabelText(
+        /^Delegate for Sam Morgan, To jo@example.test\. Collect, Open until /,
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      within(open).getByRole('button', { name: 'Withdraw invitation for Sam Morgan' }),
+    ).toBeOnTheScreen();
+    const done = screen.getByTestId(`sent-invitation-${accepted}`);
+    expect(within(done).getByLabelText('Accepted')).toBeOnTheScreen();
+    expect(within(done).queryByRole('button', { name: /^Withdraw/ })).toBeNull();
+    const read = app.fake.requests.find((r) => r.route === '/me/invitations');
+    expect(read?.query.direction).toBe('sent');
+  });
+
+  it('withdraws an open invitation with a reason and its revision; the list then shows it revoked', async () => {
+    let revoked = false;
+    const app = familyApp({
+      'GET /me/invitations': () =>
+        fakeResponse(200, {
+          items: [
+            revoked
+              ? sentView({ status: 'revoked', effectiveStatus: 'revoked', revision: 2 })
+              : sentView(),
+          ],
+          nextCursor: null,
+        }),
+      'POST /invitations/{id}/revoke': () => {
+        revoked = true;
+        return fakeResponse(200, { ...issued({ status: 'revoked', revision: 2 }) });
+      },
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`sent-invitation-${INVITATION}`);
+    fireEvent.press(
+      within(row).getByRole('button', { name: 'Withdraw invitation for Sam Morgan' }),
+    );
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw invitation' }));
+    expect(within(row).getByText(/Say why you are withdrawing it/)).toBeOnTheScreen();
+    fireEvent.changeText(within(row).getByLabelText('Reason for withdrawing'), 'Wrong address');
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw invitation' }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId(`sent-invitation-${INVITATION}`)).getByLabelText('Revoked'),
+      ).toBeOnTheScreen(),
+    );
+    const revoke = app.fake.requests.find((r) => r.route === '/invitations/{id}/revoke');
+    expect(revoke?.body).toEqual({ reason: 'Wrong address', expectedRevision: 1 });
+    expect(revoke?.headers['idempotency-key']).toBe('key-00000001');
+  });
+
+  it('stale version: a withdraw refused with INVALID_TRANSITION says it changed and reloads the list', async () => {
+    const app = familyApp({
+      'GET /me/invitations': page([sentView()]),
+      'POST /invitations/{id}/revoke': () =>
+        apiError(409, 'INVALID_TRANSITION', {
+          nextAction: 'reload_current_state',
+          details: { machine: 'Invitation', from: 'accepted', event: 'revoke' },
+        }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`sent-invitation-${INVITATION}`);
+    fireEvent.press(
+      within(row).getByRole('button', { name: 'Withdraw invitation for Sam Morgan' }),
+    );
+    fireEvent.changeText(within(row).getByLabelText('Reason for withdrawing'), 'Mistake');
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw invitation' }));
+    expect(
+      await within(row).findByText(/This invitation changed since it was shown/),
+    ).toBeOnTheScreen();
+    const before = app.fake.requests.filter((r) => r.route === '/me/invitations').length;
+    fireEvent.press(within(row).getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/invitations').length).toBe(
+        before + 1,
+      ),
+    );
+  });
+});
+
+describe('SCR-C-31 who can act for you (GET /me/access-grants?direction=over_me)', () => {
+  it('lists each permission another adult holds over this person with its state; ending it is pending DEC-089', async () => {
+    const app = familyApp({
+      'GET /me/access-grants': grantsRoute(HELD, [
+        grantView('view', {
+          grantId: 'over-view',
+          actorPersonId: OTHER_ADULT,
+          actorDisplayName: 'Jordan Lee',
+          subjectPersonId: SELF,
+          subjectDisplayName: 'Alex Morgan',
+          relationshipKind: 'caregiver',
+          source: 'invitation',
+        }),
+        grantView('pay', {
+          grantId: 'over-pay',
+          actorPersonId: OTHER_ADULT,
+          actorDisplayName: 'Jordan Lee',
+          subjectPersonId: SELF,
+          status: 'suspended',
+          underReview: true,
+        }),
+        grantView('collect', {
+          grantId: 'over-collect',
+          actorPersonId: OTHER_ADULT,
+          actorDisplayName: 'Jordan Lee',
+          subjectPersonId: SELF,
+          status: 'revoked',
+        }),
+      ]),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const list = await screen.findByLabelText('What Jordan Lee may do for you');
+    expect(
+      within(list).getByLabelText(/^View, Since .*, from an invitation, Allowed$/),
+    ).toBeOnTheScreen();
+    expect(within(list).getByLabelText(/^Pay, .*, Under review$/)).toBeOnTheScreen();
+    // A withdrawn grant is history, not current access.
+    expect(within(list).queryByLabelText(/^Collect,/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Jordan Lee/ })).toBeNull();
+  });
+
+  it('empty: nobody else holds permissions over this person', async () => {
+    const app = familyApp();
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByRole('header', { name: 'Nobody else holds permissions over you' }),
+    ).toBeOnTheScreen();
   });
 });

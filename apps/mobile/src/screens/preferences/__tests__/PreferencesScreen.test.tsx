@@ -11,8 +11,8 @@ import {
   apiError,
   CHILD,
   me,
+  namesRoute,
   ok,
-  peopleRoute,
   person,
   SELF,
 } from '../../account/__tests__/fixtures';
@@ -71,7 +71,8 @@ function prefsApp(routes: Record<string, unknown> = {}, reachable = true) {
       'GET /me/communication-preferences': ok(prefs()),
       'GET /me/calendar-feeds': ok({ feeds: [] }),
       'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
-      'GET /people/{id}': peopleRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
+      'GET /person-names': namesRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
+      'GET /me/push-devices': ok({ devices: [] }),
       ...(routes as Record<string, never>),
     },
   });
@@ -318,5 +319,202 @@ describe('SCR-C-36 calendar feeds (SPK-COMMS-008)', () => {
       ),
     ).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Revoke Family' })).toBeNull();
+  });
+});
+
+describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-061, DEC-020)', () => {
+  const DEVICE = '0192f1a0-0000-7000-8000-00000000f301';
+  const OLD_DEVICE = '0192f1a0-0000-7000-8000-00000000f302';
+
+  function device(overrides: Record<string, unknown> = {}) {
+    return {
+      id: DEVICE,
+      personId: SELF,
+      accountId: '0192f1a0-0000-7000-8000-0000000000aa',
+      platform: 'ios',
+      tokenHint: 'a1b2',
+      appVersion: '0.1.0',
+      status: 'active',
+      registeredAt: '2026-10-01T10:00:00.000Z',
+      lastSeenAt: '2026-10-23T10:00:00.000Z',
+      revokedAt: null,
+      revokedReason: null,
+      revision: 2,
+      ...overrides,
+    };
+  }
+
+  it('this build has no push module: registering this device is pending DEC-061 and DEC-020', async () => {
+    const app = prefsApp();
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByText(
+        /Registering this device for push notifications is not available yet: it depends on DEC-061, DEC-020/,
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Register this device' })).toBeNull();
+    expect(
+      app.fake.requests.some((r) => r.route === '/me/push-devices' && r.method === 'POST'),
+    ).toBe(false);
+  });
+
+  it('lists the registered devices by token hint only, with their state; a stopped one has no action', async () => {
+    const app = prefsApp({
+      'GET /me/push-devices': ok({
+        devices: [
+          device({
+            id: OLD_DEVICE,
+            platform: 'android',
+            tokenHint: 'zz99',
+            status: 'revoked',
+            revokedAt: '2026-10-10T10:00:00.000Z',
+            revokedReason: 'reregistered',
+          }),
+          device(),
+        ],
+      }),
+    });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    const active = await screen.findByTestId(`push-device-${DEVICE}`);
+    expect(
+      within(active).getByLabelText(
+        /^iPhone or iPad ending a1b2, App version 0\.1\.0\. Registered .*\. Last seen .*, Receives push$/,
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      within(active).getByRole('button', { name: 'Stop push to iPhone or iPad ending a1b2' }),
+    ).toBeOnTheScreen();
+    const stopped = screen.getByTestId(`push-device-${OLD_DEVICE}`);
+    expect(within(stopped).getByLabelText('No longer receives push')).toBeOnTheScreen();
+    expect(within(stopped).queryByRole('button')).toBeNull();
+  });
+
+  it('SPK-IAM-006: stops push to a device with a reason and its revision; the list then shows it stopped', async () => {
+    let revoked = false;
+    const app = prefsApp({
+      'GET /me/push-devices': () =>
+        fakeResponse(200, {
+          devices: [
+            revoked
+              ? device({ status: 'revoked', revokedAt: '2026-10-24T12:00:00.000Z', revision: 3 })
+              : device(),
+          ],
+        }),
+      'POST /me/push-devices/{id}/revoke': () => {
+        revoked = true;
+        return fakeResponse(
+          200,
+          device({ status: 'revoked', revokedAt: '2026-10-24T12:00:00.000Z', revision: 3 }),
+        );
+      },
+    });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`push-device-${DEVICE}`);
+    fireEvent.press(
+      within(row).getByRole('button', { name: 'Stop push to iPhone or iPad ending a1b2' }),
+    );
+    fireEvent.press(within(row).getByRole('button', { name: 'Stop push' }));
+    expect(within(row).getByText(/Say why you are stopping push here/)).toBeOnTheScreen();
+    fireEvent.changeText(within(row).getByLabelText('Reason'), 'Old phone');
+    fireEvent.press(within(row).getByRole('button', { name: 'Stop push' }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId(`push-device-${DEVICE}`)).getByLabelText(
+          'No longer receives push',
+        ),
+      ).toBeOnTheScreen(),
+    );
+    const post = app.fake.requests.find((r) => r.route === '/me/push-devices/{id}/revoke');
+    expect(post?.params.id).toBe(DEVICE);
+    expect(post?.body).toEqual({ reason: 'Old phone', expectedRevision: 2 });
+    expect(post?.headers['idempotency-key']).toBe('key-00000001');
+  });
+
+  it('a failed stop keeps the reason, shows the code and retries under the same key', async () => {
+    let calls = 0;
+    const app = prefsApp({
+      'GET /me/push-devices': ok({ devices: [device()] }),
+      'POST /me/push-devices/{id}/revoke': () => {
+        calls += 1;
+        return apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' });
+      },
+    });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`push-device-${DEVICE}`);
+    fireEvent.press(
+      within(row).getByRole('button', { name: 'Stop push to iPhone or iPad ending a1b2' }),
+    );
+    fireEvent.changeText(within(row).getByLabelText('Reason'), 'Old phone');
+    fireEvent.press(within(row).getByRole('button', { name: 'Stop push' }));
+    expect(await within(row).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(within(row).getByLabelText('Reason')).toHaveProp('value', 'Old phone');
+    fireEvent.press(within(row).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(calls).toBe(2));
+    const keys = app.fake.requests
+      .filter((r) => r.route === '/me/push-devices/{id}/revoke')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toEqual(['key-00000001', 'key-00000001']);
+  });
+
+  it('a device the API no longer has (NOT_FOUND) is "not available"', async () => {
+    const app = prefsApp({
+      'GET /me/push-devices': ok({ devices: [device()] }),
+      'POST /me/push-devices/{id}/revoke': () =>
+        apiError(404, 'NOT_FOUND', { nextAction: 'verify_reference' }),
+    });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`push-device-${DEVICE}`);
+    fireEvent.press(
+      within(row).getByRole('button', { name: 'Stop push to iPhone or iPad ending a1b2' }),
+    );
+    fireEvent.changeText(within(row).getByLabelText('Reason'), 'Old phone');
+    fireEvent.press(within(row).getByRole('button', { name: 'Stop push' }));
+    expect(await within(row).findByLabelText('Device not available')).toBeOnTheScreen();
+    expect(within(row).queryByText(/NOT_FOUND/)).toBeNull();
+  });
+
+  it('empty: no device receives push, and essential notices stay in the app', async () => {
+    const app = prefsApp();
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'No devices registered' })).toBeOnTheScreen();
+  });
+
+  it('a build that supplies a push token registers this install with platform, token and app version', async () => {
+    const app = prefsApp({
+      'POST /me/push-devices': { status: 201, body: device() },
+    });
+    const reader = {
+      status: async () => 'granted' as const,
+      deviceToken: async () => 'platform-push-token-a1b2',
+    };
+    render(
+      <app.wrapper>
+        <PushPermissionProvider reader={reader}>
+          <PreferencesScreen />
+        </PushPermissionProvider>
+      </app.wrapper>,
+    );
+    fireEvent.press(await screen.findByRole('button', { name: 'Register this device' }));
+    expect(await screen.findByLabelText('This device receives push')).toBeOnTheScreen();
+    const post = app.fake.requests.find(
+      (r) => r.route === '/me/push-devices' && r.method === 'POST',
+    );
+    expect(post?.body).toEqual({
+      platform: 'ios',
+      token: 'platform-push-token-a1b2',
+      appVersion: '0.1.0',
+    });
+    expect(post?.headers['idempotency-key']).toBe('key-00000001');
+    expect(screen.queryByText(/DEC-061, DEC-020/)).toBeNull();
+  });
+
+  it('offline: stopping push is disabled and nothing is queued', async () => {
+    const app = prefsApp({ 'GET /me/push-devices': ok({ devices: [device()] }) });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`push-device-${DEVICE}`);
+    act(() => app.sources.setReachable(false));
+    expect(
+      within(row).getByRole('button', { name: 'Stop push to iPhone or iPad ending a1b2' }),
+    ).toBeDisabled();
   });
 });

@@ -55,6 +55,8 @@ describe('SCR-C-39 LinkLanding', () => {
     );
     expect(routeForTarget({ to: 'claim', token: TOKEN })).toBe('/onboarding');
     expect(routeForTarget({ to: 'inbox' })).toBe('/inbox');
+    // SCR-C-17: the open invitations (no token, nothing is answered from the link).
+    expect(routeForTarget({ to: 'invitations' })).toBe('/invitations');
     expect(routeForTarget({ to: 'family' })).toBe('/family');
     expect(routeForTarget({ to: 'preferences' })).toBe('/preferences');
     expect(routeForTarget({ to: 'account' })).toBe('/account');

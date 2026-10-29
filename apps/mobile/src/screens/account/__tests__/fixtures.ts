@@ -95,3 +95,28 @@ export function peopleRoute(people: ReturnType<typeof person>[]) {
       : fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' }));
   };
 }
+
+/**
+ * `GET /person-names` (ID-02) answering with the names of the given people; anyone else is
+ * omitted, as the API leaves out people the caller may not view (§4.10). (The fake request keeps
+ * one value per query key, so the answer does not filter on `ids`; the hook keeps only the ids it
+ * asked for.)
+ */
+export function namesRoute(people: ReturnType<typeof person>[]) {
+  return () => {
+    const items = people.map((p) => ({
+      personId: p.id,
+      canonicalPersonId: p.id,
+      givenName: p.givenName,
+      familyName: p.familyName,
+      displayName: `${p.givenName} ${p.familyName}`,
+      kind: p.kind,
+    }));
+    return fakeResponse(200, { items });
+  };
+}
+
+/** A page of a paged list (`{ items, nextCursor }`). */
+export function page<T>(items: T[], nextCursor: string | null = null) {
+  return { status: 200, body: { items, nextCursor } };
+}

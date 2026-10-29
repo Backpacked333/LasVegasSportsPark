@@ -10,7 +10,8 @@
  * 2. Participant record: `GET /v1/me` `person`. Not linked yet: claim the record the front desk
  *    created (`POST /v1/claims/{token}/accept`). Creating one's own adult record is not offered by
  *    the API (customers may create only child records), so the desk does it.
- * 3. Email or phone: added here, verified by the identity provider (DEC-018, pending).
+ * 3. Email or phone: added, made primary or removed here (ContactPointStep); verified by the
+ *    identity provider (DEC-018, pending).
  * 4. Notification and camera permission explanations: their wording is DEC-061 (pending); the
  *    person can continue without either, and essential notices always appear in the in-app inbox
  *    (SPK-COMMS-007). Nothing is asked of the operating system in this build.

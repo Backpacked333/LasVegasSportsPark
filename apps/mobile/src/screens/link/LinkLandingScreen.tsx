@@ -5,7 +5,8 @@
  *
  * Every link from outside the app arrives here (src/links/native-intent). The landing validates it
  * against the closed list in src/links/link-targets and then either moves to the target screen
- * (invitation, claim, inbox, account, family, preferences), keeping any token in memory only, or
+ * (invitation, the open invitations, claim, inbox, account, family, preferences), keeping any
+ * token in memory only, or
  * shows the target in its current state (an operation, read now from `GET /v1/operations/{id}`).
  * A link never performs an action: the person confirms on the target screen.
  *
@@ -61,6 +62,8 @@ export function routeForTarget(target: LinkTarget): string | null {
       return `/invitations/${target.id}?type=family`;
     case 'team-invitation':
       return `/invitations/${target.id}?type=team`;
+    case 'invitations':
+      return '/invitations';
     case 'claim':
       return '/onboarding';
     case 'inbox':

@@ -375,3 +375,138 @@ describe('SCR-C-01 OnboardingScreen', () => {
     expect(screen.getByLabelText('Claim code')).toHaveProp('value', TOKEN);
   });
 });
+
+describe('SCR-C-01 managing contact points (SPK-IAM-001; make primary, remove)', () => {
+  const PRIMARY = '0192f1a0-0000-7000-8000-00000000c201';
+  const SECOND = '0192f1a0-0000-7000-8000-00000000c202';
+
+  function points(primaryId = PRIMARY) {
+    return [
+      {
+        ...contactPoint(PRIMARY, SELF, 'email', 'alex@example.test', true),
+        isPrimary: primaryId === PRIMARY,
+      },
+      {
+        ...contactPoint(SECOND, SELF, 'email', 'alex.work@example.test', false),
+        isPrimary: primaryId === SECOND,
+      },
+    ];
+  }
+
+  function contactsApp(routes: Record<string, unknown> = {}) {
+    return createTestApp({
+      routes: {
+        'GET /me': ok(me({ person: SELF_PERSON })),
+        'GET /people/{id}': ok({ ...personDetail(SELF_PERSON, points()), revision: 4 }),
+        ...(routes as Record<string, never>),
+      },
+    });
+  }
+
+  it('makes a contact point the primary one of its kind with the person revision', async () => {
+    let primary = PRIMARY;
+    const app = contactsApp({
+      'GET /people/{id}': () =>
+        fakeResponse(200, { ...personDetail(SELF_PERSON, points(primary)), revision: 4 }),
+      'POST /people/{id}/contact-points/{contactPointId}/make-primary': () => {
+        primary = SECOND;
+        return fakeResponse(200, points(SECOND)[1]);
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    // The primary one offers no "Make primary".
+    expect(
+      await screen.findByRole('button', { name: 'Remove alex@example.test' }),
+    ).toBeOnTheScreen();
+    expect(
+      screen.queryByRole('button', { name: 'Make alex@example.test the primary email' }),
+    ).toBeNull();
+    fireEvent.press(
+      screen.getByRole('button', { name: 'Make alex.work@example.test the primary email' }),
+    );
+    expect(
+      await screen.findByLabelText('alex.work@example.test, Email, primary, Verification pending'),
+    ).toBeOnTheScreen();
+    const post = app.fake.requests.find((r) => r.method === 'POST');
+    expect(post?.params).toEqual({ id: SELF, contactPointId: SECOND });
+    expect(post?.body).toEqual({ expectedRevision: 4 });
+    expect(post?.headers['idempotency-key']).toBe('key-00000001');
+  });
+
+  it('removes a contact point only after a confirmation, with the person revision', async () => {
+    let removed = false;
+    const app = contactsApp({
+      'GET /people/{id}': () =>
+        fakeResponse(200, {
+          ...personDetail(SELF_PERSON, removed ? points().slice(0, 1) : points()),
+          revision: 4,
+        }),
+      'POST /people/{id}/contact-points/{contactPointId}/remove': () => {
+        removed = true;
+        return fakeResponse(200, { removedContactPointId: SECOND });
+      },
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Remove alex.work@example.test' }));
+    expect(screen.getByText(/Messages and invitations will no longer use it/)).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    fireEvent.press(
+      screen.getByRole('button', { name: 'Confirm removing alex.work@example.test' }),
+    );
+    // A boolean, so a failed poll does not print the whole element tree (slow).
+    await waitFor(() =>
+      expect(screen.queryByTestId(`contact-point-${SECOND}`) === null).toBe(true),
+    );
+    const post = app.fake.requests.find((r) => r.method === 'POST');
+    expect(post?.route).toBe('/people/{id}/contact-points/{contactPointId}/remove');
+    expect(post?.body).toEqual({ expectedRevision: 4 });
+  });
+
+  it('validation failure: the only verified contact is kept (LAST_VERIFIED_CONTACT), with the API reason', async () => {
+    const app = contactsApp({
+      'POST /people/{id}/contact-points/{contactPointId}/remove': () =>
+        apiError(400, 'VALIDATION_FAILED', {
+          message:
+            'The only verified contact point of a person with an account cannot be removed; verify another one first.',
+          nextAction: 'correct_input',
+          details: { code: 'LAST_VERIFIED_CONTACT', contactPointId: PRIMARY },
+        }),
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Remove alex@example.test' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm removing alex@example.test' }));
+    expect(await screen.findByLabelText('This contact cannot be removed')).toBeOnTheScreen();
+    expect(screen.getByText(/verify another one first/)).toBeOnTheScreen();
+    expect(screen.getByTestId(`contact-point-${PRIMARY}`)).toBeOnTheScreen();
+  });
+
+  it('stale version: STALE_REVISION offers Reload, which reads the record again', async () => {
+    const app = contactsApp({
+      'POST /people/{id}/contact-points/{contactPointId}/make-primary': () =>
+        apiError(409, 'STALE_REVISION', { nextAction: 'reload_and_retry' }),
+    });
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    fireEvent.press(
+      await screen.findByRole('button', { name: 'Make alex.work@example.test the primary email' }),
+    );
+    expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
+    const reads = () => app.fake.requests.filter((r) => r.route === '/people/{id}').length;
+    const before = reads();
+    fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await waitFor(() =>
+      expect(screen.queryByText(/Error code: STALE_REVISION/) === null).toBe(true),
+    );
+  });
+
+  it('offline: making primary and removing are disabled', async () => {
+    const app = contactsApp();
+    render(<OnboardingScreen />, { wrapper: app.wrapper });
+    const remove = await screen.findByRole('button', { name: 'Remove alex@example.test' });
+    act(() => app.sources.setReachable(false));
+    expect(remove).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Make alex.work@example.test the primary email' }),
+    ).toBeDisabled();
+  });
+});

@@ -1,12 +1,15 @@
 /**
- * What this person may do for someone else (SCR-C-02, SCR-C-31; SPK-IAM-003): the six
- * permissions are listed one by one as "Allowed" or "Not allowed" with a glyph, so one permission
- * never reads as implying another and status is never colour alone (SPK-UX-009). The list comes
- * from `GET /v1/me` `authorities` only; the client infers nothing from household membership.
+ * What this person may do for someone else (SCR-C-02, SCR-C-31; SPK-IAM-003, SPK-IAM-005): the six
+ * permissions are listed one by one with a glyph and words ("Allowed", "Not allowed", "Under
+ * review", "Starts <date>"), so one permission never reads as implying another and status is never
+ * colour alone (SPK-UX-009). Whether a permission is in effect comes from `GET /v1/me` `authorities`
+ * only; the grants from `GET /v1/me/access-grants`, when given, add their dates, source and a
+ * disputed-access review. The client infers nothing from household membership.
  */
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, spacing, type } from '../../../ui/theme';
+import { permissionState, type GrantView } from '../../family/grants';
 import {
   GRANT_PERMISSIONS,
   listPermissions,
@@ -18,13 +21,20 @@ import {
 export function PersonAccessCard({
   authority,
   index,
+  name: givenName,
+  grants,
   children,
 }: {
   authority: Authority;
   index: number;
+  /** The person's name when the screen already read it; otherwise it is read here. */
+  name?: string;
+  /** This account's grants over the person; undefined while not loaded. */
+  grants?: readonly GrantView[];
   children?: ReactNode;
 }) {
-  const name = personNameText(usePersonName(authority.subjectPersonId));
+  const read = personNameText(usePersonName(givenName ? '' : authority.subjectPersonId));
+  const name = givenName ?? read;
   return (
     <View style={styles.card} testID={`person-access-${index}`}>
       <Text style={styles.title} accessibilityRole="header">
@@ -32,26 +42,31 @@ export function PersonAccessCard({
       </Text>
       <View accessibilityRole="list" accessibilityLabel={`What you may do for ${name}`}>
         {GRANT_PERMISSIONS.map((g) => {
-          const allowed = authority.permissions.includes(g.permission);
+          const state = permissionState(
+            g.permission,
+            authority.permissions.includes(g.permission),
+            grants,
+          );
+          const detail = state.note ? `${g.detail}. ${state.note}` : g.detail;
           return (
             <View
               key={g.permission}
               style={styles.row}
               accessible
-              accessibilityLabel={`${g.label}: ${allowed ? 'allowed' : 'not allowed'}. ${g.detail}`}
+              accessibilityLabel={`${g.label}: ${state.label.toLowerCase()}. ${detail}`}
             >
               <Text
-                style={[styles.glyph, { color: allowed ? colors.success : colors.neutral }]}
+                style={[styles.glyph, { color: colors[state.tone] }]}
                 accessibilityElementsHidden
                 importantForAccessibility="no-hide-descendants"
               >
-                {allowed ? '✓' : '–'}
+                {state.glyph}
               </Text>
               <View style={styles.text}>
                 <Text style={styles.label}>
-                  {g.label}: {allowed ? 'Allowed' : 'Not allowed'}
+                  {g.label}: {state.label}
                 </Text>
-                <Text style={styles.caption}>{g.detail}</Text>
+                <Text style={styles.caption}>{detail}</Text>
               </View>
             </View>
           );

@@ -1,13 +1,15 @@
 /**
  * Account data shared by SCR-C-01, SCR-C-02, SCR-C-17, SCR-C-30, SCR-C-31 and SCR-C-36: who is
- * signed in and what they may do (`GET /v1/me`), one person's name (`GET /v1/people/{id}`), the six
- * action-specific permissions (SPK-IAM-003) and date wording.
+ * signed in and what they may do (`GET /v1/me`), one person's name (`GET /v1/person-names`, names
+ * only: never a date of birth or contact point, §4.14), the six action-specific permissions
+ * (SPK-IAM-003) and date wording.
  *
  * The client never decides authorization: `authorities` is the API's statement of the permissions
  * this person holds over others right now (never inferred from household membership, §4.5). A
  * person the viewer may not read is "not available", with no hint that a record exists (§4.10).
  */
 import type { Schema } from '@sportspark/api-client';
+import { usePersonNames } from '../../../api/person-names';
 import { useApiQuery, type ApiQueryResult } from '../../../api/useApiQuery';
 import { useApp } from '../../../providers/AppProviders';
 
@@ -72,23 +74,31 @@ export function personDisplayName(person: Pick<Person, 'givenName' | 'familyName
 export type PersonNameState =
   | { status: 'loading' }
   | { status: 'ready'; name: string; kind: Person['kind'] }
-  /** NOT_FOUND or ACCESS_DENIED: the viewer may not read this person (e.g. a collect-only delegate). */
+  /** The API omitted the person: the viewer may not read them (e.g. a collect-only delegate). */
   | { status: 'unavailable' }
   | { status: 'error'; code: string };
 
-/** One person's display name; the id never appears on screen or in a log. */
+/**
+ * One person's display name through `GET /v1/person-names` (ID-02): the API names only people the
+ * viewer may view and leaves the others out, which reads as "not available" (§4.10). The id never
+ * appears on screen or in a log.
+ */
 export function usePersonName(personId: string): PersonNameState {
-  const person = useApiQuery({ path: '/people/{id}', request: { path: { id: personId } } });
-  if (person.data) {
-    return { status: 'ready', name: personDisplayName(person.data), kind: person.data.kind };
-  }
-  if (person.error) {
-    if (person.error.isNotFound || person.error.isPermissionRestriction) {
+  const entry = usePersonNames([personId]).get(personId);
+  switch (entry?.state) {
+    case 'ready':
+      return {
+        status: 'ready',
+        name: personDisplayName(entry.name),
+        kind: entry.name.kind,
+      };
+    case 'unavailable':
       return { status: 'unavailable' };
-    }
-    return { status: 'error', code: person.error.code };
+    case 'error':
+      return { status: 'error', code: entry.error.code };
+    default:
+      return { status: 'loading' };
   }
-  return { status: 'loading' };
 }
 
 export function personNameText(state: PersonNameState): string {

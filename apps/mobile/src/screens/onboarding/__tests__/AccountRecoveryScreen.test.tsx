@@ -9,10 +9,9 @@ import {
   CHILD,
   CHILD_TWO,
   me,
+  namesRoute,
   ok,
-  peopleRoute,
   person,
-  SELF,
 } from '../../account/__tests__/fixtures';
 import { AccountRecoveryScreen } from '../AccountRecoveryScreen';
 
@@ -45,8 +44,8 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
             ],
           }),
         ),
-        // CHILD_TWO is collect-only: the API does not let this account read the record.
-        'GET /people/{id}': peopleRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
+        // CHILD_TWO is collect-only: the API leaves the name out for this account.
+        'GET /person-names': namesRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
       },
     });
     render(<AccountRecoveryScreen />, { wrapper: app.wrapper });
@@ -55,12 +54,13 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
     expect(screen.getByLabelText('Alex Morgan, Your own record, Linked')).toBeOnTheScreen();
     expect(screen.getByText(/Account recovery never adds permissions/)).toBeOnTheScreen();
     expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
-    // Only the people the API listed were looked up: no other household is read.
-    const looked = app.fake.requests
-      .filter((r) => r.route === '/people/{id}')
-      .map((r) => r.params.id);
-    expect(new Set(looked)).toEqual(new Set([CHILD, CHILD_TWO]));
-    expect(looked).not.toContain(SELF);
+    // Names only, through GET /person-names: no person record (date of birth, contacts) is read,
+    // and no other household is looked up.
+    expect(app.fake.requests.some((r) => r.route === '/people/{id}')).toBe(false);
+    expect(app.fake.requests.filter((r) => r.route === '/person-names').length).toBe(2);
+    expect(app.fake.requests.every((r) => r.route === '/me' || r.route === '/person-names')).toBe(
+      true,
+    );
   });
 
   it('shows "No family access on this account" when the API lists none (success: nothing new)', async () => {

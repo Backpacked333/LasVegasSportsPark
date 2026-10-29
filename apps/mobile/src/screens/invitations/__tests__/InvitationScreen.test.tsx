@@ -1,6 +1,7 @@
 /**
- * SCR-C-17 Invitation acceptance (SPK-IAM-004 "Accepting an invitation grants only the
- * authorized scope", SPK-IAM-003, SPK-CAP-001, POL-044).
+ * SCR-C-17 Invitation acceptance (SPK-IAM-004 "Invitations record inviter, recipient, scope,
+ * requested permissions and expiry; accepting grants only the authorized scope", SPK-IAM-003,
+ * SPK-CAP-001, POL-044).
  */
 import { fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
@@ -11,8 +12,9 @@ import {
   CHILD,
   CHILD_TWO,
   me,
+  namesRoute,
   ok,
-  peopleRoute,
+  OTHER_ADULT,
   person,
   SELF,
   TOKEN,
@@ -20,6 +22,7 @@ import {
 import { InvitationScreen, invitationStateLabel } from '../InvitationScreen';
 
 const INVITATION = '0192f1a0-0000-7000-8000-00000000c001';
+const TEAM_ENTRY = '0192f1a0-0000-7000-8000-00000000e100';
 const AT = '2026-10-24T12:00:00.000Z';
 const SAM = person(CHILD, 'Sam', 'Morgan', 'child');
 const RIO = person(CHILD_TWO, 'Rio', 'Morgan', 'child');
@@ -44,28 +47,68 @@ function grant(permission: string, subjectPersonId = CHILD) {
   };
 }
 
+function invitation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: INVITATION,
+    invitedByPersonId: OTHER_ADULT,
+    recipientPersonId: null,
+    recipientContact: { kind: 'email', value: 'alex@example.test' },
+    scope: { type: 'person', personId: CHILD },
+    relationshipKind: 'guardian',
+    requestedPermissions: ['view', 'pay', 'collect'],
+    grantedPermissions: [],
+    status: 'pending',
+    expiresAt: '2026-10-27T12:00:00.000Z',
+    acceptedAt: null,
+    acceptedByPersonId: null,
+    revokedAt: null,
+    declinedAt: null,
+    revision: 1,
+    createdAt: '2026-10-24T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** `GET /me/invitations/{id}` (InvitationView): names as the API gives them, fixed at issue. */
+function familyView(overrides: Record<string, unknown> = {}) {
+  return {
+    ...invitation(),
+    inviter: { personId: OTHER_ADULT, displayName: 'Jordan Lee' },
+    subjects: [{ personId: CHILD, displayName: 'Sam Morgan' }],
+    effectiveStatus: 'pending',
+    ...overrides,
+  };
+}
+
 function familyAccepted() {
   return {
-    invitation: {
-      id: INVITATION,
-      invitedByPersonId: '0192f1a0-0000-7000-8000-00000000a002',
-      recipientPersonId: null,
-      recipientContact: { kind: 'email', value: 'alex@example.test' },
-      scope: { type: 'person', personId: CHILD },
-      relationshipKind: 'guardian',
-      requestedPermissions: ['view', 'pay', 'collect'],
+    invitation: invitation({
       grantedPermissions: ['view', 'collect'],
       status: 'accepted',
-      expiresAt: '2026-10-27T12:00:00.000Z',
       acceptedAt: AT,
       acceptedByPersonId: SELF,
-      revokedAt: null,
       revision: 2,
-      createdAt: '2026-10-24T10:00:00.000Z',
-    },
+    }),
     relationships: [],
     grants: [grant('view'), grant('collect')],
     droppedPermissions: ['pay'],
+  };
+}
+
+/** `GET /team-invitations/{id}` (TeamInvitationView). */
+function teamView(overrides: Record<string, unknown> = {}) {
+  return {
+    id: INVITATION,
+    teamEntryId: TEAM_ENTRY,
+    teamName: 'Thursday Strikers',
+    seasonName: 'Fall 2026 Adult League',
+    invitedBy: { personId: OTHER_ADULT, displayName: 'Jordan Lee' },
+    message: 'We play Thursdays at 7.',
+    status: 'pending',
+    effectiveStatus: 'pending',
+    expiresAt: '2026-10-27T12:00:00.000Z',
+    revision: 3,
+    ...overrides,
   };
 }
 
@@ -73,8 +116,8 @@ function teamAccepted(personId = SELF, displayName = 'Alex Morgan') {
   return {
     invitation: {
       id: INVITATION,
-      teamEntryId: '0192f1a0-0000-7000-8000-00000000e100',
-      invitedByPersonId: '0192f1a0-0000-7000-8000-00000000a002',
+      teamEntryId: TEAM_ENTRY,
+      invitedByPersonId: OTHER_ADULT,
       recipientPersonId: personId,
       recipientContact: null,
       message: null,
@@ -84,12 +127,12 @@ function teamAccepted(personId = SELF, displayName = 'Alex Morgan') {
       acceptedByPersonId: personId,
       revokedAt: null,
       rosterMembershipId: '0192f1a0-0000-7000-8000-00000000e200',
-      revision: 2,
+      revision: 4,
       createdAt: '2026-10-24T10:00:00.000Z',
     },
     membership: {
       id: '0192f1a0-0000-7000-8000-00000000e200',
-      teamEntryId: '0192f1a0-0000-7000-8000-00000000e100',
+      teamEntryId: TEAM_ENTRY,
       personId,
       displayName,
       personKind: personId === SELF ? 'adult' : 'child',
@@ -106,32 +149,54 @@ function teamAccepted(personId = SELF, displayName = 'Alex Morgan') {
   };
 }
 
+function familyApp(routes: Record<string, unknown> = {}, reachable = true) {
+  return createTestApp({
+    reachable,
+    routes: {
+      'GET /me': ok(me({})),
+      'GET /me/invitations/{id}': ok(familyView()),
+      'GET /person-names': namesRoute([SAM, RIO]),
+      ...(routes as Record<string, never>),
+    },
+  });
+}
+
+const posts = (app: ReturnType<typeof createTestApp>) =>
+  app.fake.requests.filter((r) => r.method === 'POST');
+
 afterEach(clearLinkSecrets);
 
 describe('SCR-C-17 InvitationScreen (family access)', () => {
-  it('empty: without the link it shows that there is no invitation to show', async () => {
-    const app = createTestApp();
-    render(<InvitationScreen invitationId={INVITATION} type="family" token={null} />, {
+  it('SPK-IAM-004: shows the sender, the people covered, the relationship, each requested permission and the expiry before anything is answered', async () => {
+    const app = familyApp();
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
-    expect(await screen.findByRole('header', { name: 'No invitation to show' })).toBeOnTheScreen();
-    expect(app.fake.requests).toHaveLength(0);
+    expect(await screen.findByLabelText('From, Jordan Lee')).toBeOnTheScreen();
+    expect(screen.getByLabelText('For, Sam Morgan')).toBeOnTheScreen();
+    expect(screen.getByLabelText('As, Guardian')).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText('Permissions requested, View, Pay and Collect. Each one is separate.'),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Sent to, alex@example.test')).toBeOnTheScreen();
+    // POL-044 is pending: the expiry is the one the API states.
+    expect(screen.getByLabelText(/^Open until /)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Accept invitation' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Decline' })).toBeOnTheScreen();
+    expect(posts(app)).toHaveLength(0);
+    const read = app.fake.requests.find((r) => r.route === '/me/invitations/{id}');
+    expect(read?.params.id).toBe(INVITATION);
+    // The token never travels on a read (§4.14).
+    expect(JSON.stringify(read)).not.toContain(TOKEN);
   });
 
   it('SPK-IAM-004: accepting lists exactly what was granted, what was left out, and nothing else', async () => {
     holdLinkSecret('invitation', TOKEN, INVITATION);
-    const app = createTestApp({
-      routes: {
-        'POST /invitations/{id}/accept': ok(familyAccepted()),
-        'GET /people/{id}': peopleRoute([SAM]),
-        'GET /me': ok(me({})),
-      },
-    });
+    const app = familyApp({ 'POST /invitations/{id}/accept': ok(familyAccepted()) });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
-    expect(await screen.findByLabelText('Details shown after you accept')).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Accept invitation' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
 
     expect(await screen.findByLabelText('Accepted')).toBeOnTheScreen();
     expect(
@@ -141,7 +206,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     ).toBeOnTheScreen();
     expect(screen.getByText('Nothing else was granted.')).toBeOnTheScreen();
 
-    const post = app.fake.requests.find((r) => r.method === 'POST');
+    const post = posts(app)[0];
     expect(post?.params.id).toBe(INVITATION);
     expect(post?.body).toEqual({ token: TOKEN });
     expect(post?.headers['idempotency-key']).toBe('key-00000001');
@@ -149,7 +214,6 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
   });
 
   it('SPK-IAM-004: a household invitation says, per child, what was left out (only one child lost a permission)', async () => {
-    holdLinkSecret('invitation', TOKEN, INVITATION);
     const household = familyAccepted();
     household.invitation.scope = {
       type: 'household',
@@ -158,13 +222,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     household.invitation.requestedPermissions = ['view', 'pay'];
     household.grants = [grant('view', CHILD), grant('pay', CHILD), grant('view', CHILD_TWO)];
     household.droppedPermissions = ['pay'];
-    const app = createTestApp({
-      routes: {
-        'POST /invitations/{id}/accept': ok(household),
-        'GET /people/{id}': peopleRoute([SAM, RIO]),
-        'GET /me': ok(me({})),
-      },
-    });
+    const app = familyApp({ 'POST /invitations/{id}/accept': ok(household) });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
@@ -178,37 +236,72 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     expect(screen.queryByText(/^Not granted, because/)).toBeNull();
   });
 
-  it('permission restriction: an invitation addressed to someone else (NOT_FOUND) is "not available", with no hint it exists', async () => {
-    const app = createTestApp({
-      routes: {
-        'POST /invitations/{id}/accept': () =>
-          apiError(404, 'NOT_FOUND', { nextAction: 'verify_reference' }),
-      },
+  it('permission restriction: an invitation addressed to someone else (NOT_FOUND on the read) is "not available", with no hint it exists and nothing to answer', async () => {
+    const app = familyApp({
+      'GET /me/invitations/{id}': () =>
+        apiError(404, 'NOT_FOUND', { nextAction: 'verify_reference' }),
     });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
-    fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
     expect(await screen.findByLabelText('Invitation not available')).toBeOnTheScreen();
     expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
+    expect(screen.getByText(/verified on this account/)).toBeOnTheScreen();
   });
 
-  it('stale version: an expired invitation shows "Expired" (INVALID_TRANSITION)', async () => {
-    const app = createTestApp({
-      routes: {
-        'POST /invitations/{id}/accept': () =>
-          apiError(409, 'INVALID_TRANSITION', {
-            nextAction: 'reload_current_state',
-            details: { machine: 'Invitation', from: 'expired', event: 'accept' },
-          }),
+  it('a failed read shows its code and "Try again", and nothing can be answered yet', async () => {
+    let calls = 0;
+    const app = familyApp({
+      'GET /me/invitations/{id}': () => {
+        calls += 1;
+        return calls === 1
+          ? apiError(500, 'INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' })
+          : fakeResponse(200, familyView());
       },
     });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
+    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Accept invitation' })).toBeOnTheScreen();
+  });
+
+  it('stale version: an invitation the read reports as expired shows "Expired" and offers no answer', async () => {
+    const app = familyApp({
+      'GET /me/invitations/{id}': ok(familyView({ effectiveStatus: 'expired' })),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    const closed = await screen.findByTestId('invitation-closed');
+    expect(closed).toBeOnTheScreen();
+    expect(screen.getAllByLabelText('Expired').length).toBeGreaterThan(0);
+    expect(screen.getByText(/no longer open, so it cannot be answered/)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
+  });
+
+  it('stale version: INVALID_TRANSITION on accept names the state the invitation is in now', async () => {
+    const app = familyApp({
+      'POST /invitations/{id}/accept': () =>
+        apiError(409, 'INVALID_TRANSITION', {
+          nextAction: 'reload_current_state',
+          details: { machine: 'Invitation', from: 'revoked', event: 'accept' },
+        }),
+    });
+    holdLinkSecret('invitation', TOKEN, INVITATION);
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
     fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
-    expect(await screen.findByLabelText('Expired')).toBeOnTheScreen();
-    expect(screen.getByText(/no longer open, so it cannot be accepted/)).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Revoked')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    // A closed invitation's token is dead: it is not offered again.
+    expect(readLinkSecret('invitation', INVITATION)).toBeNull();
   });
 
   it('uses the journeys.md labels for every closed state', () => {
@@ -220,14 +313,12 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
   });
 
   it('shows the API reason when the account may not accept yet (ACCESS_DENIED: contact not verified)', async () => {
-    const app = createTestApp({
-      routes: {
-        'POST /invitations/{id}/accept': () =>
-          apiError(403, 'ACCESS_DENIED', {
-            message: 'This invitation was sent to a contact point your account has not verified.',
-            nextAction: 'contact_support_or_request_access',
-          }),
-      },
+    const app = familyApp({
+      'POST /invitations/{id}/accept': () =>
+        apiError(403, 'ACCESS_DENIED', {
+          message: 'This invitation was sent to a contact point your account has not verified.',
+          nextAction: 'contact_support_or_request_access',
+        }),
     });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
@@ -240,14 +331,12 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
 
   it('§4.9: a failed accept is retried under the same idempotency key', async () => {
     let calls = 0;
-    const app = createTestApp({
-      routes: {
-        'POST /invitations/{id}/accept': () => {
-          calls += 1;
-          return calls === 1
-            ? apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })
-            : fakeResponse(200, familyAccepted());
-        },
+    const app = familyApp({
+      'POST /invitations/{id}/accept': () => {
+        calls += 1;
+        return calls === 1
+          ? apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })
+          : fakeResponse(200, familyAccepted());
       },
     });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
@@ -256,22 +345,98 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
     fireEvent.press(await screen.findByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(calls).toBe(2));
-    expect(app.fake.requests.map((r) => r.headers['idempotency-key'])).toEqual([
+    expect(posts(app).map((r) => r.headers['idempotency-key'])).toEqual([
       'key-00000001',
       'key-00000001',
     ]);
+    expect(await screen.findByLabelText('Accepted')).toBeOnTheScreen();
   });
 
-  it('offline: accepting is disabled and the invitation is kept', async () => {
-    const app = createTestApp({ reachable: false });
+  it('SPK-IAM-004: declines after a confirmation with the token, the revision read and the optional reason', async () => {
+    holdLinkSecret('invitation', TOKEN, INVITATION);
+    const app = familyApp({
+      'POST /invitations/{id}/decline': ok(
+        invitation({ status: 'declined', declinedAt: AT, revision: 2 }),
+      ),
+    });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
-    expect(await screen.findByRole('button', { name: 'Accept invitation' })).toBeDisabled();
+    const decline = await screen.findByRole('button', { name: 'Decline' });
+    expect(decline).toHaveProp(
+      'accessibilityHint',
+      'Asks you to confirm. Declining cannot be undone.',
+    );
+    fireEvent.press(decline);
+    expect(posts(app)).toHaveLength(0); // nothing is sent before the confirmation
+    expect(screen.getByText(/Declining is final/)).toBeOnTheScreen();
+    fireEvent.changeText(screen.getByLabelText('Reason (optional)'), 'I am not a guardian');
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+
+    expect(await screen.findByTestId('invitation-declined')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Declined')).toBeOnTheScreen();
+    const post = posts(app)[0];
+    expect(post?.route).toBe('/invitations/{id}/decline');
+    expect(post?.body).toEqual({
+      token: TOKEN,
+      expectedRevision: 1,
+      reason: 'I am not a guardian',
+    });
+    expect(post?.headers['idempotency-key']).toBe('key-00000001');
+    expect(readLinkSecret('invitation', INVITATION)).toBeNull();
+  });
+
+  it('stale version: STALE_REVISION on decline offers Reload, which reads the invitation again', async () => {
+    let reads = 0;
+    const app = familyApp({
+      'GET /me/invitations/{id}': () => {
+        reads += 1;
+        return fakeResponse(200, familyView({ revision: reads }));
+      },
+      'POST /invitations/{id}/decline': () =>
+        apiError(409, 'STALE_REVISION', { nextAction: 'reload_and_retry' }),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
+    expect(posts(app)[0]?.body).toEqual({ token: TOKEN, expectedRevision: 1 });
+    fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(reads).toBe(2));
+    expect(await screen.findByRole('button', { name: 'Decline' })).toBeOnTheScreen();
+    expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull();
+  });
+
+  it('opened from the list without the link: shows the invitation and says to open the link to answer', async () => {
+    const app = familyApp();
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={null} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByLabelText('From, Jordan Lee')).toBeOnTheScreen();
+    expect(screen.getByText(/To accept or decline, open the invitation link/)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Not now' })).toHaveProp(
+      'accessibilityHint',
+      'Leaves without answering. Nothing is recorded.',
+    );
+  });
+
+  it('offline: answering is disabled and the invitation is kept on screen', async () => {
+    const app = familyApp();
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByRole('button', { name: 'Accept invitation' })).not.toBeDisabled();
+    act(() => app.sources.setReachable(false));
+    expect(screen.getByRole('button', { name: 'Accept invitation' })).toBeDisabled();
     expect(
-      screen.getByText('Accepting needs a connection. The invitation is kept.'),
+      screen.getByText('Answering an invitation needs a connection. The invitation is kept.'),
     ).toBeOnTheScreen();
-    expect(app.fake.requests).toHaveLength(0);
+    expect(screen.getByLabelText('From, Jordan Lee')).toBeOnTheScreen();
+    expect(posts(app)).toHaveLength(0);
   });
 
   it('signed out: asks to sign in and sends nothing', async () => {
@@ -283,34 +448,59 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     expect(app.fake.requests).toHaveLength(0);
   });
 
-  it('"Not now" says declining is not recorded', async () => {
-    const app = createTestApp();
+  it('asks to finish setup first when the account is not linked to a person, without reading the invitation', async () => {
+    const app = familyApp({ 'GET /me': ok(me({ person: null })) });
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
-    const notNow = await screen.findByRole('button', { name: 'Not now' });
-    expect(notNow).toHaveProp(
-      'accessibilityHint',
-      'Leaves without answering. Nothing is recorded.',
-    );
-    expect(screen.getByText(/Declining in the app is not available yet/)).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Finish setting up first')).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.route === '/me/invitations/{id}')).toBe(false);
+  });
+
+  it('a malformed id is "Invitation not available" and nothing is requested', async () => {
+    const app = familyApp();
+    render(<InvitationScreen invitationId="not-an-id" type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByLabelText('Invitation not available')).toBeOnTheScreen();
+    expect(app.fake.requests).toHaveLength(0);
   });
 });
 
 describe('SCR-C-17 InvitationScreen (team)', () => {
-  it('SPK-CAP-001: offers the person and each child they may register, as radio choices with state', async () => {
-    const app = createTestApp({
+  function teamApp(routes: Record<string, unknown> = {}) {
+    return createTestApp({
       routes: {
-        'GET /me': ok(
-          me({
-            authorities: [
-              { subjectPersonId: CHILD, permissions: ['view', 'register'] },
-              { subjectPersonId: CHILD_TWO, permissions: ['view'] },
-            ],
-          }),
-        ),
-        'GET /people/{id}': peopleRoute([SAM, RIO]),
+        'GET /me': ok(me({})),
+        'GET /team-invitations/{id}': ok(teamView()),
+        'GET /person-names': namesRoute([SAM, RIO]),
+        ...(routes as Record<string, never>),
       },
+    });
+  }
+
+  it('SPK-CAP-001: shows the team, season, sender, message and expiry before accepting', async () => {
+    const app = teamApp();
+    render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByLabelText('Team, Thursday Strikers')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Season, Fall 2026 Adult League')).toBeOnTheScreen();
+    expect(screen.getByLabelText('From, Jordan Lee')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Message, We play Thursdays at 7.')).toBeOnTheScreen();
+    expect(screen.getByLabelText(/^Open until /)).toBeOnTheScreen();
+  });
+
+  it('SPK-CAP-001: offers the person and each child they may register, as radio choices with state', async () => {
+    const app = teamApp({
+      'GET /me': ok(
+        me({
+          authorities: [
+            { subjectPersonId: CHILD, permissions: ['view', 'register'] },
+            { subjectPersonId: CHILD_TWO, permissions: ['view'] },
+          ],
+        }),
+      ),
     });
     render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
       wrapper: app.wrapper,
@@ -325,70 +515,110 @@ describe('SCR-C-17 InvitationScreen (team)', () => {
   });
 
   it('accepts for a child by sending personId, and names who joined the roster', async () => {
-    const app = createTestApp({
-      routes: {
-        'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['register'] }] })),
-        'GET /people/{id}': peopleRoute([SAM]),
-        'POST /team-invitations/{id}/accept': ok(teamAccepted(CHILD, 'Sam Morgan')),
-      },
+    const app = teamApp({
+      'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['register'] }] })),
+      'POST /team-invitations/{id}/accept': ok(teamAccepted(CHILD, 'Sam Morgan')),
     });
     render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
-    fireEvent.press(await screen.findByRole('radio', { name: 'Sam Morgan' }));
+    const sam = await screen.findByRole('radio', { name: 'Sam Morgan' });
+    await waitFor(() => expect(sam).not.toBeDisabled());
+    fireEvent.press(sam);
     fireEvent.press(screen.getByRole('button', { name: 'Accept invitation' }));
     expect(await screen.findByText('Sam Morgan is on the team roster.')).toBeOnTheScreen();
-    const post = app.fake.requests.find((r) => r.method === 'POST');
+    const post = posts(app)[0];
     expect(post?.route).toBe('/team-invitations/{id}/accept');
     expect(post?.body).toEqual({ token: TOKEN, personId: CHILD });
   });
 
   it('accepts for the person themself without a personId', async () => {
-    const app = createTestApp({
-      routes: {
-        'GET /me': ok(me({})),
-        'POST /team-invitations/{id}/accept': ok(teamAccepted()),
-      },
-    });
+    const app = teamApp({ 'POST /team-invitations/{id}/accept': ok(teamAccepted()) });
     render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
     expect(await screen.findByText('Alex Morgan is on the team roster.')).toBeOnTheScreen();
-    expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({ token: TOKEN });
+    expect(posts(app)[0]?.body).toEqual({ token: TOKEN });
   });
 
-  it('shows "You cannot accept for this participant" on PARTICIPANT_AUTHORITY_REQUIRED', async () => {
-    const app = createTestApp({
-      routes: {
-        'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['register'] }] })),
-        'GET /people/{id}': peopleRoute([SAM]),
-        'POST /team-invitations/{id}/accept': () =>
-          apiError(403, 'PARTICIPANT_AUTHORITY_REQUIRED', {
-            message: 'Authority over this participant is required.',
-            nextAction: 'request_participant_authority',
-          }),
-      },
+  it('shows "You cannot accept for this participant" on PARTICIPANT_AUTHORITY_REQUIRED and keeps the choice', async () => {
+    const app = teamApp({
+      'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['register'] }] })),
+      'POST /team-invitations/{id}/accept': () =>
+        apiError(403, 'PARTICIPANT_AUTHORITY_REQUIRED', {
+          message: 'Authority over this participant is required.',
+          nextAction: 'request_participant_authority',
+        }),
     });
     render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
-    fireEvent.press(await screen.findByRole('radio', { name: 'Sam Morgan' }));
+    const sam = await screen.findByRole('radio', { name: 'Sam Morgan' });
+    await waitFor(() => expect(sam).not.toBeDisabled());
+    fireEvent.press(sam);
     fireEvent.press(screen.getByRole('button', { name: 'Accept invitation' }));
     expect(
       await screen.findByLabelText('You cannot accept for this participant'),
     ).toBeOnTheScreen();
-    // The choice is kept for another attempt.
     expect(screen.getByRole('radio', { name: 'Sam Morgan' })).toBeChecked();
   });
 
+  it('CMP-03: declines from the list without the link, sending the revision read; accepting needs the link', async () => {
+    const app = teamApp({
+      'POST /team-invitations/{id}/decline': ok(
+        teamView({ status: 'declined', effectiveStatus: 'declined', revision: 4 }),
+      ),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="team" token={null} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByText(/To accept, open the invitation link/)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Decline' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    expect(await screen.findByLabelText('Declined')).toBeOnTheScreen();
+    const post = posts(app)[0];
+    expect(post?.route).toBe('/team-invitations/{id}/decline');
+    expect(post?.body).toEqual({ expectedRevision: 3 });
+    expect(post?.headers['idempotency-key']).toBe('key-00000001');
+  });
+
+  it('INVALID_TRANSITION on decline (expired meanwhile) shows "Expired" and no further answer', async () => {
+    const app = teamApp({
+      'POST /team-invitations/{id}/decline': () =>
+        apiError(409, 'INVALID_TRANSITION', {
+          nextAction: 'reload_current_state',
+          details: { machine: 'TeamInvitation', from: 'expired', event: 'decline' },
+        }),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    expect(await screen.findByLabelText('Expired')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+  });
+
+  it('permission restriction: a team invitation the API does not show (NOT_FOUND) is not available', async () => {
+    const app = teamApp({
+      'GET /team-invitations/{id}': () =>
+        apiError(404, 'NOT_FOUND', { nextAction: 'verify_reference' }),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByLabelText('Invitation not available')).toBeOnTheScreen();
+    expect(screen.queryByRole('radio')).toBeNull();
+  });
+
   it('asks to finish setup first when the account is not linked to a person', async () => {
-    const app = createTestApp({ routes: { 'GET /me': ok(me({ person: null })) } });
+    const app = teamApp({ 'GET /me': ok(me({ person: null })) });
     render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
     expect(await screen.findByLabelText('Finish setting up first')).toBeOnTheScreen();
-    await act(async () => undefined);
-    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+    expect(posts(app)).toHaveLength(0);
   });
 });

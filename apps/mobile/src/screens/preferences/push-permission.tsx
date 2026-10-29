@@ -1,11 +1,13 @@
 /**
- * SCR-C-36 push permission on this device (SPK-UX-001 "Push notification registration and
- * preferences", §4.13 "Native permission explanations", DEC-061, DEC-020).
+ * SCR-C-36 push permission and token on this device (SPK-UX-001 "Push notification registration
+ * and preferences", §4.13 "Native permission explanations", DEC-061, DEC-020).
  *
  * This build contains no push module: the messaging provider is DEC-020, push setup and the
- * permission explanation are DEC-061, and the API has no endpoint to register a device. The
- * reader is therefore "unavailable" by default; a build that adds push supplies a reader through
- * `PushPermissionProvider`, and tests supply "denied" or "granted".
+ * permission explanation are DEC-061 (no vendor SDK is added, §5.2). The reader is therefore
+ * "unavailable" by default and has no device token, so the app cannot register this install with
+ * `POST /v1/me/push-devices`. A build that adds push supplies a reader through
+ * `PushPermissionProvider` (its status and this install's platform token); tests supply "denied"
+ * or "granted" and a fake token. The token is passed to the API only and never stored or logged.
  */
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 
@@ -13,6 +15,11 @@ export type PushPermissionStatus = 'granted' | 'denied' | 'undetermined' | 'unav
 
 export interface PushPermissionReader {
   status(): Promise<PushPermissionStatus>;
+  /**
+   * This install's platform push token, or null when there is none (permission not granted, or no
+   * push module in the build). Absent in this build (DEC-061, DEC-020).
+   */
+  deviceToken?(): Promise<string | null>;
 }
 
 export const unavailablePushPermission: PushPermissionReader = {
@@ -29,6 +36,11 @@ export function PushPermissionProvider({
   children: ReactNode;
 }) {
   return <PushPermissionContext.Provider value={reader}>{children}</PushPermissionContext.Provider>;
+}
+
+/** The reader the build supplies (for the device token). */
+export function usePushPermissionReader(): PushPermissionReader {
+  return useContext(PushPermissionContext);
 }
 
 /** `null` until read; re-read whenever the screen mounts (returning from device settings). */
