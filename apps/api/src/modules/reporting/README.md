@@ -16,13 +16,28 @@ success measures; metric keys and wording from `docs/package-a/metric-dictionary
 `1301_reporting_actor_keys.sql` (the requester of a run and of an export and the approver of a
 cost input are composite keys to accounts and persons of the row's organization; a cost input's
 space belongs to its facility); `1302_reporting_space_status_and_order_totals.sql` (space status
-history view, order total on the order-line view).
+history view, order total on the order-line view); `1303_reporting_requirement_retirement.sql`
+(REP-03: the requirements view exposes `retired_at`, read from the whole row so it is right
+whichever order it and workforce migration 0704 are applied in).
 
 The module never writes another module's records. It reads them through the read-only
 `reporting_*_v` views of migration 1300 (each refuses writes with an INSTEAD OF trigger and exposes
-no names, contact details or dates of birth) and through two exported query services: the
-competition module's `ReadinessService` (match readiness) and the workforce module's
-`ASSIGNMENT_COVERAGE_PORT` (uncovered assignments).
+no names, contact details or dates of birth) and through exported query services and ports: the
+competition module's `ReadinessService` (match readiness), the workforce module's
+`ASSIGNMENT_COVERAGE_PORT` (uncovered assignments) and the enrollment module's
+`BOOKING_QUERY_PORT` (IF-36, rental customer retention).
+
+## Stage 3 (REP-01 to REP-03) at a glance (§6.7 labels)
+
+| Item   | What                                                                                                                                                                                                                                                                     | Status                                                                                                                                                                                      | Tests                                                                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| REP-01 | `GET /v1/reports/exports` lists the caller's own exports (keyset `requested_at desc, id desc`, `status` filter), an export past its expiry is marked expired by the timer's rule first; expected-arrival rows carry `offeringId` and, for a catalog session, `sessionId` | **Verified**                                                                                                                                                                                | `exports.spec.ts` ("§4.14: a requester lists their exports with expiry; another account's exports never appear", "§4.14: an expired export lists as expired"); `operating-reports.spec.ts` |
+| REP-02 | Retention cohort `rental_customers` from bookings (BOOKING_QUERY_PORT): bookers of rental and party bookings confirmed or completed in the anchor period, returned when they hold one in the comparison period                                                           | **Verified** against a deterministic port implementation; the enrollment implementation is ENR-13 (until it is registered the port answers no bookings and the cohort is zero, with a note) | `rental-retention.spec.ts` ("SPK-REPORT-005: a booker who rebooks in the comparison period counts as retained"), `retention.spec.ts`                                                       |
+| REP-03 | One read-only repeatable-read snapshot per report, handed to every port; policy values as module settings without defaults; retired requirements skipped                                                                                                                 | **Verified**; match readiness is the one report still read outside a snapshot (see Known gaps)                                                                                              | `rental-retention.spec.ts` ("REP-03: a report computed while another transaction commits reflects one snapshot"), `settings.spec.ts`, `requirement-retirement.spec.ts`                     |
+
+No reporting behaviour sits behind a capability switch: reads are never gated (DEC-016). The rental
+customers cohort is computed whether or not the `rentals` and `parties` capabilities (DEC-076,
+DEC-077) are enabled; with neither enabled there are simply no bookings to count.
 
 ## Tables
 
@@ -52,37 +67,41 @@ status) and the order total on each order line.
 stored run, point-in-time support and its explanation), `metrics` (the full definitions),
 `disclosures`, `values` (a null value always carries its reason, rule G13), `columns`, `rows`
 (aggregates only; no person-level rows, rule G9). Money is integer minor units with its currency
-and is never summed across currencies.
+and is never summed across currencies. Since REP-03: `settings` names every module setting the
+report used (environment variable, configured or not, value, pending decision, effect) and
+`freshness.consistency` says how the figures were read (`snapshot`, or `owner_reads` for match
+readiness). Runs stored before REP-03 carry neither and keep their digests.
 
 ## Endpoints
 
-| Method and path                                                                                                                                           | Action (staff roles from permission matrix C.14, **Proposed**)                                                         | Notes                                                      |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `GET /v1/reports/daily-schedule`                                                                                                                          | `reporting.view_operations_reports` (FD, LM, PM, SC, FA, GM, SA, SO)                                                   | MET-001..003                                               |
-| `GET /v1/reports/expected-arrivals`                                                                                                                       | operations                                                                                                             | MET-004, MET-006                                           |
-| `GET /v1/reports/attendance`                                                                                                                              | operations                                                                                                             | MET-004, MET-007..009, MET-011, MET-012                    |
-| `GET /v1/reports/match-readiness`                                                                                                                         | operations                                                                                                             | MET-013..015, live only                                    |
-| `GET /v1/reports/uncovered-assignments`                                                                                                                   | operations                                                                                                             | MET-017, MET-018, live only                                |
-| `GET /v1/reports/maintenance-restrictions`                                                                                                                | operations                                                                                                             | MET-054, MET-056, MET-057, live only                       |
-| `GET /v1/reports/communication-failures`                                                                                                                  | operations (organization-wide)                                                                                         | MET-059..062, live only                                    |
-| `GET /v1/reports/waitlist-demand`                                                                                                                         | `reporting.view_demand_reports` (LM, PM, GM, SA)                                                                       | MET-021..023, live only                                    |
-| `GET /v1/reports/registration-funnel`                                                                                                                     | demand                                                                                                                 | MET-025, MET-026, MET-028                                  |
-| `GET /v1/reports/enrollment-completeness`                                                                                                                 | demand                                                                                                                 | MET-033, MET-034, MET-037, live only                       |
-| `GET /v1/reports/demand`                                                                                                                                  | demand                                                                                                                 | MET-086 observed; MET-089 forecast in its own series       |
-| `GET /v1/reports/outstanding-obligations`                                                                                                                 | `reporting.view_financial_reports` (FO, GM), organization-wide                                                         | MET-039, MET-040, MET-043, live only                       |
-| `GET /v1/reports/payment-reconciliation`                                                                                                                  | financial, organization-wide                                                                                           | MET-045..050, live only                                    |
-| `GET /v1/reports/economics`                                                                                                                               | financial                                                                                                              | MET-067, MET-074..077; `allocationMethod` required         |
-| `GET /v1/reports/utilization`                                                                                                                             | `reporting.view_utilization` (SC, FO, FA, GM)                                                                          | MET-064..073                                               |
-| `GET /v1/reports/retention`                                                                                                                               | `reporting.view_retention` (LM, PM, GM), organization-wide                                                             | MET-079..083, one cohort per request                       |
-| `GET /v1/reports/metric-definitions[/{key}]`                                                                                                              | `reporting.read_metric_definitions`                                                                                    | active definitions; a metric's version history             |
-| `POST /v1/reports/runs` (idempotent)                                                                                                                      | the report's view action                                                                                               | evaluate and store a run                                   |
-| `GET /v1/reports/runs`, `GET /v1/reports/runs/{id}`                                                                                                       | the report's view action, re-checked on every read (protected: NOT_FOUND)                                              | stored run exactly as produced                             |
-| `POST /v1/reports/runs/{id}/reproduce` (idempotent)                                                                                                       | the report's view action                                                                                               | re-evaluate at the stored as-of instant; digest comparison |
-| `POST /v1/reports/exports` (idempotent)                                                                                                                   | the run's view action AND `reporting.export_operational` (LM, PM, SC, GM, SA) or `reporting.export_financial` (FO, GM) | audited; returns the one-time token                        |
-| `GET /v1/reports/exports/{id}`                                                                                                                            | requester only                                                                                                         |                                                            |
-| `GET /v1/reports/exports/{id}/download`                                                                                                                   | requester, `X-Export-Token`, view and export actions re-checked                                                        | single use; refused after expiry; audited                  |
-| `POST /v1/reports/exports/{id}/revoke` (idempotent)                                                                                                       | requester; `expectedRevision`                                                                                          |                                                            |
-| `POST /v1/reports/cost-inputs` (idempotent), `GET /v1/reports/cost-inputs`, `POST /v1/reports/cost-inputs/{id}/withdraw` (idempotent, `expectedRevision`) | `reporting.manage_cost_inputs` / `reporting.read_cost_inputs` (FO, GM)                                                 |                                                            |
+| Method and path                                                                                                                                           | Action (staff roles from permission matrix C.14, **Proposed**)                                                         | Notes                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /v1/reports/daily-schedule`                                                                                                                          | `reporting.view_operations_reports` (FD, LM, PM, SC, FA, GM, SA, SO)                                                   | MET-001..003                                                                                                |
+| `GET /v1/reports/expected-arrivals`                                                                                                                       | operations                                                                                                             | MET-004, MET-006; rows carry `offeringId`, `sessionId`                                                      |
+| `GET /v1/reports/attendance`                                                                                                                              | operations                                                                                                             | MET-004, MET-007..009, MET-011, MET-012                                                                     |
+| `GET /v1/reports/match-readiness`                                                                                                                         | operations                                                                                                             | MET-013..015, live only                                                                                     |
+| `GET /v1/reports/uncovered-assignments`                                                                                                                   | operations                                                                                                             | MET-017, MET-018, live only                                                                                 |
+| `GET /v1/reports/maintenance-restrictions`                                                                                                                | operations                                                                                                             | MET-054, MET-056, MET-057, live only                                                                        |
+| `GET /v1/reports/communication-failures`                                                                                                                  | operations (organization-wide)                                                                                         | MET-059..062, live only                                                                                     |
+| `GET /v1/reports/waitlist-demand`                                                                                                                         | `reporting.view_demand_reports` (LM, PM, GM, SA)                                                                       | MET-021..023, live only                                                                                     |
+| `GET /v1/reports/registration-funnel`                                                                                                                     | demand                                                                                                                 | MET-025, MET-026, MET-028                                                                                   |
+| `GET /v1/reports/enrollment-completeness`                                                                                                                 | demand                                                                                                                 | MET-033, MET-034, MET-037, live only                                                                        |
+| `GET /v1/reports/demand`                                                                                                                                  | demand                                                                                                                 | MET-086 observed; MET-089 forecast in its own series                                                        |
+| `GET /v1/reports/outstanding-obligations`                                                                                                                 | `reporting.view_financial_reports` (FO, GM), organization-wide                                                         | MET-039, MET-040, MET-043, live only                                                                        |
+| `GET /v1/reports/payment-reconciliation`                                                                                                                  | financial, organization-wide                                                                                           | MET-045..050, live only                                                                                     |
+| `GET /v1/reports/economics`                                                                                                                               | financial                                                                                                              | MET-067, MET-074..077; `allocationMethod` required                                                          |
+| `GET /v1/reports/utilization`                                                                                                                             | `reporting.view_utilization` (SC, FO, FA, GM)                                                                          | MET-064..073                                                                                                |
+| `GET /v1/reports/retention`                                                                                                                               | `reporting.view_retention` (LM, PM, GM), organization-wide                                                             | MET-079..083, one cohort per request                                                                        |
+| `GET /v1/reports/metric-definitions[/{key}]`                                                                                                              | `reporting.read_metric_definitions`                                                                                    | active definitions; a metric's version history                                                              |
+| `POST /v1/reports/runs` (idempotent)                                                                                                                      | the report's view action                                                                                               | evaluate and store a run                                                                                    |
+| `GET /v1/reports/runs`, `GET /v1/reports/runs/{id}`                                                                                                       | the report's view action, re-checked on every read (protected: NOT_FOUND)                                              | stored run exactly as produced                                                                              |
+| `POST /v1/reports/runs/{id}/reproduce` (idempotent)                                                                                                       | the report's view action                                                                                               | re-evaluate at the stored as-of instant; digest comparison                                                  |
+| `POST /v1/reports/exports` (idempotent)                                                                                                                   | the run's view action AND `reporting.export_operational` (LM, PM, SC, GM, SA) or `reporting.export_financial` (FO, GM) | audited; returns the one-time token; refused without a configured lifetime (`EXPORT_LIFETIME_UNCONFIGURED`) |
+| `GET /v1/reports/exports` (`status`, `cursor`, `limit`)                                                                                                   | `reporting.read_exports` (LM, PM, SC, FO, GM, SA), re-checked per request; the caller's own exports only               | REP-01; never a token or download path                                                                      |
+| `GET /v1/reports/exports/{id}`                                                                                                                            | `reporting.read_exports`; requester only                                                                               | an export past its expiry reads as expired                                                                  |
+| `GET /v1/reports/exports/{id}/download`                                                                                                                   | requester, `X-Export-Token`, view and export actions re-checked                                                        | single use; refused after expiry; audited                                                                   |
+| `POST /v1/reports/exports/{id}/revoke` (idempotent)                                                                                                       | requester; `expectedRevision`                                                                                          |                                                                                                             |
+| `POST /v1/reports/cost-inputs` (idempotent), `GET /v1/reports/cost-inputs`, `POST /v1/reports/cost-inputs/{id}/withdraw` (idempotent, `expectedRevision`) | `reporting.manage_cost_inputs` / `reporting.read_cost_inputs` (FO, GM)                                                 |                                                                                                             |
 
 Organization scope always comes from the principal; a facility of another organization is not
 found. Facility-scoped staff see only their facilities and cannot read organization-wide reports.
@@ -109,7 +128,12 @@ found. Facility-scoped staff see only their facilities and cannot read organizat
 - **SPK-REPORT-005** — one cohort per request; households (purchases) and participants are
   separate metrics; persons resolve merges to the survivor; not-offered members are counted
   separately and leave the denominator only when asked (K4). An order refunded in full by the
-  as-of instant is not a household purchase (MET-082).
+  as-of instant is not a household purchase (MET-082). Rental customers (REP-02) are the bookers
+  of rental and party bookings read through `BOOKING_QUERY_PORT` (IF-36) whose first occurrence
+  falls in the period by each facility's local operating day and whose status is `confirmed` or
+  `completed`; a customer returned when they hold such a booking in the comparison period (a
+  request never confirmed is not a return). Booking status is read as it stands now. An enrollment
+  line of a rental offering (the pre-booking path) is not a booking and does not count.
 - **SPK-REPORT-006** — observed signals and any forecast are separate columns; the only forecast
   method offered (`trailing_mean`) is an engineering baseline named in the response.
 - **SPK-REPORT-007** — a stored run is the reproducible record (append-only, digest); reports whose
@@ -119,14 +143,32 @@ found. Facility-scoped staff see only their facilities and cannot read organizat
   so a rerun at the same instant after a correction reproduces the figures (test "reports are
   reproducible after a correction"). Live-only reports refuse a past as-of instant. Exports need
   their own action, are requester-bound, single use, audited at creation, download, revocation and
-  expiry, and expire through the `reporting.export_expiry_due` timer.
+  expiry, and expire through the `reporting.export_expiry_due` timer; a read of an export past its
+  expiry (list or single) marks it expired through the timer's own rule (REP-01). The requester
+  lists their own exports only: another account's never appear, administrators included.
+- **One snapshot (REP-03, rule K-00 (i))** — `ReportsService.evaluate` seeds the metric
+  definitions (a write) first, then reads the definitions and computes the whole report inside one
+  `UnitOfWork.run` at `repeatable read`, made `read only` by its first statement; the transaction is
+  passed to every port (`ASSIGNMENT_COVERAGE_PORT.coverage(…, trx)`,
+  `BOOKING_QUERY_PORT.bookingsOfPeriod(…, trx)`). Inside an idempotent request the commit fence
+  sees no write and leaves the key alone. Called inside an active transaction, a report reads
+  through it. Test "REP-03: a report computed while another transaction commits reflects one
+  snapshot" merges two persons in another transaction that commits mid-report (PostgreSQL) and
+  proves the report does not see it; it fails at `read committed`.
+- **Retired requirements (WRK-02, migration 1303)** — the uncovered-assignments report lists only
+  requirements whose `retired_at` is null and skips any role of the coverage port that is not one
+  of them.
 
 ## Ports, events and handlers
 
-- Consumed: `ReadinessService` (competition), `ASSIGNMENT_COVERAGE_PORT` (workforce); pure
-  helpers `currentHeads` / `effectiveState` / `attended` (entry) for attendance after corrections.
+- Consumed: `ReadinessService` (competition), `ASSIGNMENT_COVERAGE_PORT` (workforce),
+  `BOOKING_QUERY_PORT` (enrollment, IF-36; implemented by ENR-13, until then no bookings); pure
+  helpers `currentHeads` / `effectiveState` / `attended` (entry) for attendance after corrections;
+  module settings (kernel K-15, IF-43).
+- Provided: none of the declared stage-3 interfaces names reporting as a provider.
 - Exported: `ReportsService`, `ReportRunsService`, `ExportsService`, `CostInputsService`,
-  `MetricDefinitionsService`, `REPORTING_POLICY`, the calculators (`computeUtilization`,
+  `MetricDefinitionsService`, `REPORTING_POLICY`, `reportingPolicyFrom`, `REPORTING_LIMITS`,
+  `ReportingSettings`, `REPORTING_SETTING_NAMES`, the calculators (`computeUtilization`,
   `allocateSales`, `cohortOutcome`), output helpers, actions, events, machines, and fixtures
   (`testing/reporting-fixtures.ts`: `createReportRunFixture`, `createExportFixture`,
   `createCostInputFixture`).
@@ -136,11 +178,21 @@ found. Facility-scoped staff see only their facilities and cannot read organizat
   `reporting.cost_input_recorded`, `reporting.cost_input_withdrawn`.
 - Handler: `reporting.expire_export` on `reporting.export_expiry_due` (idempotent under replay).
 
-## Policy values (`reporting.policy.ts`, **Proposed**)
+## Module settings (`reporting.settings.ts`, REP-03; K-15, IF-43)
 
-Export lifetime 24 hours (DEC-060, Operator/privacy owner); operating day from local midnight
-(G4, DEC-001); aging bands at 0/30/60/90 days past due (DEC-007); unknown-delivery threshold 60
-minutes (DEC-015); at most 366 days per request; hourly start-time bands.
+Policy values are module settings with **no default** (rule K-00 (i)); each is validated at boot (a
+malformed value refuses boot) and every report response names the ones it used. The values are
+**Pending decision**; the behaviour without a value is **Verified** (`settings.spec.ts`).
+
+| Setting                              | Decision                         | Without a value (verified)                                                                               | With a value (verified)                                                          |
+| ------------------------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `REPORTING_EXPORT_LIFETIME_MINUTES`  | DEC-060 (Operator/privacy owner) | `POST /v1/reports/exports` answers `VALIDATION_FAILED` `EXPORT_LIFETIME_UNCONFIGURED`; nothing stored    | the export expires that many minutes after creation (audited `lifetimeMinutes`)  |
+| `REPORTING_AGING_BANDS_DAYS`         | DEC-007 (Finance)                | outstanding balances are unbanded totals per currency and mode (`agingBand` `unbanded`)                  | upper bounds such as `30,60,90` → `0-30`, `31-60`, `61-90`, `over_90`, `not_due` |
+| `REPORTING_UNKNOWN_DELIVERY_MINUTES` | DEC-015                          | every unknown delivery counts as unresolved at once (MET-062 dimension `thresholdMinutes: unconfigured`) | counted once unknown for longer than the threshold                               |
+| `REPORTING_OPERATING_DAY_START`      | DEC-001 (Operations)             | a reported day is the facility-local calendar day, and the response says so                              | `HH:MM`: a reported day runs from that local time to the same time the next day  |
+
+Technical bounds stay constants (`REPORTING_LIMITS`): at most 366 days per request; hourly
+start-time bands.
 
 ## Known gaps
 
@@ -160,14 +212,24 @@ minutes (DEC-015); at most 366 days per request; hourly start-time bands.
 - Payment reconciliation counts attempts never submitted to a provider over all time at the
   request instant (labelled so, by state): payment attempts carry no clock-stamped creation
   instant to place them in the period (MET-045).
-- Report reads do not run in one snapshot transaction (the readiness service reads through its own
-  connection); the stored run is the consistent record.
+- **Pending (cross-module):** match readiness is read outside a snapshot (consistency
+  `owner_reads`, disclosed in the response): the competition module's `ReadinessService` reads the
+  season, rule set, proposed suspensions and disputes through its own database handle
+  (`this.db`), which cannot join a transaction (under PGlite it would wait for the report's own
+  connection). Once those reads go through `executorFor(this.db)`, the definition's
+  `consistency` can be dropped and the report joins the snapshot.
+- **Pending (integration):** retired requirements are skipped from the moment workforce migration
+  0704 adds `assignment_requirements.retired_at` (WRK-02); on a schema without it every
+  requirement reads as in force. Rental customers are counted from the moment enrollment registers
+  `BOOKING_QUERY_IMPL` (ENR-13). `docs/api/openapi.json` and the typed client are regenerated at
+  integration (the new list route and the `settings` / `consistency` fields).
 - Retention does not detect children who aged out (age bands are DEC-003) and does not compute
-  "not offered" for teams, players, households or rentals.
-- The one-time export token is returned by an idempotent command, so the kernel's idempotency store
-  keeps that response (server side, until the key expires); a download still needs the
-  requester's authenticated session and a re-checked export action.
+  "not offered" for teams, players, households or rental customers (DEC-076, DEC-077).
+- Rental customer status is read as it stands now: the booking port exposes no confirmation
+  instant, so that cohort is not reconstructed as of an earlier instant.
+- Not a gap, for the record: the one-time export token is withheld from the kernel's idempotency
+  store (`withhold: ['downloadToken']`); a replay answers `IDEMPOTENCY_SECRET_WITHHELD`.
 - Operators cannot edit metric definitions (`reporting.manage_metric_definition` is not
   registered): the code registry is the source and every change is a new version.
-- The proposed `reporting.*` actions are not yet reflected in `docs/package-a/permission-matrix.md`
-  as implemented.
+- The proposed `reporting.*` actions (including `reporting.read_exports`, REP-01) are not yet
+  reflected in `docs/package-a/permission-matrix.md` as implemented.
