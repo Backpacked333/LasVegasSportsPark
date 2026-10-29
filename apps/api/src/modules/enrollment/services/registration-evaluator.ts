@@ -222,6 +222,8 @@ export class RegistrationEvaluator {
       cancellationPolicyVersionId: snapshot.cancellationPolicy?.id ?? null,
       requiredFormPolicyVersionIds: snapshot.requiredForms.map((f) => f.id),
       approvalPolicyVersionId: approvalPolicy?.id ?? null,
+      // ENR-13: the booking terms a rental or party line is booked under (null otherwise).
+      bookingTermsPolicyVersionId: snapshot.bookingTerms?.id ?? null,
     };
   }
 

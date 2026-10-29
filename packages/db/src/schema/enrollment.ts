@@ -22,7 +22,10 @@ export type RegistrationIntent =
   | 'trial'
   | 'makeup'
   | 'pickup'
-  | 'rental_request';
+  | 'rental_request'
+  | 'membership'
+  | 'package_purchase'
+  | 'party_request';
 
 export type CapacityPoolScopeType =
   'offering' | 'session' | 'division' | 'team_entry' | 'camp_group' | 'rental';

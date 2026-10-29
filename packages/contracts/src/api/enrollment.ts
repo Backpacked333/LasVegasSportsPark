@@ -18,7 +18,11 @@ import { EligibilitySeveritySchema } from './competition';
 // Vocabulary (mirrored by the database check constraints in migration 0500 and the §4.6 machines)
 // ---------------------------------------------------------------------------------------------
 
-/** SPK-REG-001 registration intents. */
+/**
+ * SPK-REG-001 registration intents, and the Package G purchases a basket line can carry (ENR-10,
+ * §3.16): a membership, a session package, a party request. A rental or party request is created
+ * only with its reservation and staffing (POST /bookings, SPK-COND-003), never as a bare line.
+ */
 export const RegistrationIntentSchema = z
   .enum([
     'individual_league',
@@ -29,6 +33,9 @@ export const RegistrationIntentSchema = z
     'makeup',
     'pickup',
     'rental_request',
+    'membership',
+    'package_purchase',
+    'party_request',
   ])
   .openapi('RegistrationIntent');
 export type RegistrationIntent = z.infer<typeof RegistrationIntentSchema>;
@@ -176,6 +183,8 @@ export const PolicyReferencesSchema = z
     cancellationPolicyVersionId: z.uuid().nullable(),
     requiredFormPolicyVersionIds: z.array(z.uuid()),
     approvalPolicyVersionId: z.uuid().nullable().default(null),
+    /** ENR-13: the approved booking terms version a rental or party line was booked under. */
+    bookingTermsPolicyVersionId: z.uuid().nullable().default(null),
   })
   .openapi('PolicyReferences');
 export type PolicyReferences = z.infer<typeof PolicyReferencesSchema>;
@@ -258,6 +267,7 @@ export type DeclineApplicationInput = z.infer<typeof DeclineApplicationBody>;
 export const WithdrawApplicationBody = withCommandMeta({}).openapi('WithdrawApplicationRequest');
 export type WithdrawApplicationInput = z.infer<typeof WithdrawApplicationBody>;
 
+/** ENR-02 (§4.5): keyset pages, newest first (created_at desc, id desc). */
 export const ListApplicationsQuery = PageRequestSchema.extend({
   offeringId: z.uuid().optional(),
   participantPersonId: z.uuid().optional(),
@@ -468,6 +478,35 @@ export const FinancialConsequenceSchema = z
   .openapi('FinancialConsequence');
 export type FinancialConsequence = z.infer<typeof FinancialConsequenceSchema>;
 
+/**
+ * ENR-02 (SPK-UX-004, SPK-SCHED-008): what the enrollment is for, read through catalog's offering
+ * port also for closed and archived offerings, with the facility time zone its dates are local to.
+ */
+export const EnrollmentOfferingSchema = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    kind: OfferingKindSchema,
+    startsOn: z.iso.date(),
+    endsOn: z.iso.date(),
+    facilityId: z.uuid(),
+    /** IANA time zone of the facility (SPK-SCHED-008). */
+    timezone: z.string(),
+  })
+  .openapi('EnrollmentOffering');
+export type EnrollmentOffering = z.infer<typeof EnrollmentOfferingSchema>;
+
+/**
+ * ENR-02 (SPK-UX-004): what a pending enrollment still waits for, from enrollment's records:
+ * `approval` (its application is submitted or awaiting review), `forms` (a required form is not
+ * acknowledged), `payment` (its basket is held or checking out), `placement` (its placement request
+ * is unassigned or proposed). Null when the enrollment is not pending or nothing is known.
+ */
+export const EnrollmentPendingReasonSchema = z
+  .enum(['approval', 'payment', 'forms', 'placement'])
+  .openapi('EnrollmentPendingReason');
+export type EnrollmentPendingReason = z.infer<typeof EnrollmentPendingReasonSchema>;
+
 export const EnrollmentSchema = z
   .object({
     id: z.uuid(),
@@ -504,6 +543,10 @@ export const EnrollmentSchema = z
      */
     transferConsequence: FinancialConsequenceSchema.nullable(),
     completedAt: Instant.nullable(),
+    /** ENR-02: the offering (also closed or archived) and its facility zone; null if unreadable. */
+    offering: EnrollmentOfferingSchema.nullable(),
+    /** ENR-02: what a pending enrollment waits for; null otherwise. */
+    pendingReason: EnrollmentPendingReasonSchema.nullable(),
     revision: Revision,
     createdAt: Instant,
     updatedAt: Instant,
@@ -511,6 +554,7 @@ export const EnrollmentSchema = z
   .openapi('Enrollment');
 export type Enrollment = z.infer<typeof EnrollmentSchema>;
 
+/** ENR-02 (§4.5): keyset pages, newest first (created_at desc, id desc). */
 export const ListEnrollmentsQuery = PageRequestSchema.extend({
   participantPersonId: z.uuid().optional(),
   offeringId: z.uuid().optional(),
@@ -518,7 +562,24 @@ export const ListEnrollmentsQuery = PageRequestSchema.extend({
 });
 export type ListEnrollmentsQuery = z.infer<typeof ListEnrollmentsQuery>;
 
-export const CancelEnrollmentBody = withCommandMeta({})
+/**
+ * ENR-03 (SPK-REG-010, §4.9, §4.11): the consequence the customer accepted, as previewed. A command
+ * recomputes the consequence in its transaction; when it is not `none` and this is missing or
+ * differs in kind, amount or currency, nothing is committed (RESOURCE_CONFLICT
+ * `CONSEQUENCE_ACCEPTANCE_REQUIRED` or `CONSEQUENCE_CHANGED`, with the current consequence).
+ */
+export const AcceptedConsequenceSchema = z
+  .object({
+    kind: z.enum(['none', 'refund', 'credit', 'charge', 'review_required']),
+    amountMinor: z.number().int().nullable(),
+    currency: CurrencyCode.nullable(),
+  })
+  .openapi('AcceptedConsequence');
+export type AcceptedConsequence = z.infer<typeof AcceptedConsequenceSchema>;
+
+export const CancelEnrollmentBody = withCommandMeta({
+  acceptedConsequence: AcceptedConsequenceSchema.optional(),
+})
   .extend({ reason: Reason, expectedRevision: Revision })
   .openapi('CancelEnrollmentRequest');
 export type CancelEnrollmentInput = z.infer<typeof CancelEnrollmentBody>;
@@ -529,16 +590,26 @@ export const CompleteEnrollmentBody = withCommandMeta({})
   .openapi('CompleteEnrollmentRequest');
 export type CompleteEnrollmentInput = z.infer<typeof CompleteEnrollmentBody>;
 
-/** §4.8 transfer: `commit: false` previews (SPK-REG-010 "before commitment, show …"); `true` commits. */
+/**
+ * §4.8 transfer. `commit: true` commits; `commit: false` (the default, deprecated by ENR-03) still
+ * previews, but `GET /enrollments/{id}/transfer-preview` is the read-only preview a client should
+ * use (an idempotent POST can replay a stale preview).
+ */
 export const TransferEnrollmentBody = withCommandMeta({
   targetOfferingId: z.uuid(),
   commit: z.boolean().default(false),
-  /** Acknowledges the previewed financial consequence (required when it is not `none`). */
+  /** Deprecated (ENR-03): read but never binding; send `acceptedConsequence` instead. */
   acceptConsequence: z.boolean().default(false),
+  /** ENR-03: the previewed consequence the customer accepted (required when it is not `none`). */
+  acceptedConsequence: AcceptedConsequenceSchema.optional(),
 })
   .extend({ expectedRevision: Revision })
   .openapi('TransferEnrollmentRequest');
 export type TransferEnrollmentInput = z.infer<typeof TransferEnrollmentBody>;
+
+/** ENR-03: the read-only transfer preview (same authorization as the transfer). */
+export const TransferPreviewQuery = z.object({ targetOfferingId: z.uuid() });
+export type TransferPreviewQuery = z.infer<typeof TransferPreviewQuery>;
 
 export const ParticipationSummarySchema = z
   .object({
@@ -565,7 +636,8 @@ export const TransferPreviewSchema = z
       released: z.array(z.object({ poolId: z.uuid(), unit: CapacityUnitKindSchema })),
       required: z.array(
         z.object({
-          poolId: z.uuid(),
+          /** Null when the pool does not exist yet: it is created from the catalog limit at commit. */
+          poolId: z.uuid().nullable(),
           unit: CapacityUnitKindSchema,
           constraintKind: CapacityConstraintKindSchema,
           available: z.number().int(),
@@ -681,12 +753,48 @@ export const RemoveWaitlistEntryBody = withCommandMeta({})
   .openapi('RemoveWaitlistEntryRequest');
 export type RemoveWaitlistEntryInput = z.infer<typeof RemoveWaitlistEntryBody>;
 
+/** ENR-04 (SPK-REG-008, DEC-006): staff offer the place to the next waiting entry. */
+export const OfferWaitlistEntryBody = withCommandMeta({})
+  .extend({ reason: Reason })
+  .openapi('OfferWaitlistEntryRequest');
+export type OfferWaitlistEntryInput = z.infer<typeof OfferWaitlistEntryBody>;
+
 export const ListWaitlistQuery = z.object({
   offeringId: z.uuid(),
   poolId: z.uuid().optional(),
   status: WaitlistEntryStatusSchema.optional(),
 });
 export type ListWaitlistQuery = z.infer<typeof ListWaitlistQuery>;
+
+/**
+ * ENR-01 (SPK-REG-008): one of the caller's waitlist entries (themselves and everyone they may
+ * view), with the offering's name and the open offer to act on before it expires.
+ */
+export const MyWaitlistEntrySchema = WaitlistEntrySchema.extend({
+  offeringName: z.string().nullable(),
+  openOffer: z
+    .object({ id: z.uuid(), status: WaitlistOfferStatusSchema, expiresAt: Instant })
+    .nullable(),
+}).openapi('MyWaitlistEntry');
+export type MyWaitlistEntry = z.infer<typeof MyWaitlistEntrySchema>;
+
+/** ENR-01: the caller's own lists are keyset pages, newest first (created_at desc, id desc). */
+export const ListMyBasketsQuery = PageRequestSchema.extend({
+  status: BasketStatusSchema.optional(),
+});
+export type ListMyBasketsQuery = z.infer<typeof ListMyBasketsQuery>;
+export const ListMyWaitlistEntriesQuery = PageRequestSchema.extend({
+  status: WaitlistEntryStatusSchema.optional(),
+});
+export type ListMyWaitlistEntriesQuery = z.infer<typeof ListMyWaitlistEntriesQuery>;
+export const ListMyApplicationsQuery = PageRequestSchema.extend({
+  status: ApplicationStatusSchema.optional(),
+});
+export type ListMyApplicationsQuery = z.infer<typeof ListMyApplicationsQuery>;
+export const ListMyTrialParticipationsQuery = PageRequestSchema.extend({
+  status: TrialParticipationStatusSchema.optional(),
+});
+export type ListMyTrialParticipationsQuery = z.infer<typeof ListMyTrialParticipationsQuery>;
 
 export const AcceptWaitlistOfferBody = withCommandMeta({
   /** Household adult the follow-up basket belongs to; defaults to the acting customer (staff must name it). */
@@ -740,6 +848,8 @@ export const PlacementRequestSchema = z
     proposedAt: Instant.nullable(),
     proposalReasons: z.array(PlacementReasonSchema),
     assignedTeamEntryId: z.uuid().nullable(),
+    /** ENR-02 (SPK-PLACE-003): the assigned team's name (competition's team entry). */
+    assignedTeamName: z.string().nullable(),
     assignedAt: Instant.nullable(),
     decidedByPersonId: z.uuid().nullable(),
     decisionReasons: z.array(PlacementReasonSchema),
@@ -809,6 +919,7 @@ export const ReleasePlacementBody = withCommandMeta({})
   .openapi('ReleasePlacementRequest');
 export type ReleasePlacementInput = z.infer<typeof ReleasePlacementBody>;
 
+/** ENR-02 (§4.5): keyset pages, newest first (created_at desc, id desc). */
 export const ListPlacementRequestsQuery = PageRequestSchema.extend({
   seasonId: z.uuid(),
   status: PlacementStatusSchema.optional(),
@@ -1029,6 +1140,45 @@ export const TrialConversionSchema = z
 export type TrialConversion = z.infer<typeof TrialConversionSchema>;
 
 // ---------------------------------------------------------------------------------------------
+// Registration options (ENR-05; SPK-REG-001, SPK-REG-002, SPK-PLACE-001, SCR-C-08, SCR-C-10)
+// ---------------------------------------------------------------------------------------------
+
+/** `participantPersonIds` is a comma-separated list (at most 20 people). */
+const UUID_LIST =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,19}$/i;
+export const RegistrationOptionsQuery = z.object({
+  participantPersonIds: z
+    .string()
+    .regex(UUID_LIST, 'a comma-separated list of at most 20 person ids')
+    .optional()
+    .transform((v) => (v ? [...new Set(v.toLowerCase().split(','))] : [])),
+});
+export type RegistrationOptionsQuery = z.infer<typeof RegistrationOptionsQuery>;
+
+/**
+ * What an offering accepts (SPK-REG-001) and, for each named participant the caller may register,
+ * the read-only eligibility of each intent (SPK-REG-002): nothing is held, written or charged, and
+ * unknown evidence stays unknown. `seasonId` links an individual league offering to the season a
+ * placement request names (SPK-PLACE-001).
+ */
+export const RegistrationOptionsSchema = z
+  .object({
+    offeringId: z.uuid(),
+    availableIntents: z.array(RegistrationIntentSchema),
+    seasonId: z.uuid().nullable(),
+    participants: z.array(
+      z.object({
+        personId: z.uuid(),
+        intents: z.array(
+          z.object({ intent: RegistrationIntentSchema, eligibility: EligibilityResultSchema }),
+        ),
+      }),
+    ),
+  })
+  .openapi('RegistrationOptions');
+export type RegistrationOptions = z.infer<typeof RegistrationOptionsSchema>;
+
+// ---------------------------------------------------------------------------------------------
 // Family calendar (SPK-YOUTH-007)
 // ---------------------------------------------------------------------------------------------
 
@@ -1048,6 +1198,9 @@ export const FamilyCalendarItemSchema = z
     start: Instant,
     end: Instant,
     status: z.string(),
+    /** ENR-02 (SPK-SCHED-008): where it happens and the IANA zone its local times are shown in. */
+    facilityId: z.uuid().nullable(),
+    timezone: z.string().nullable(),
   })
   .openapi('FamilyCalendarItem');
 export type FamilyCalendarItem = z.infer<typeof FamilyCalendarItemSchema>;
@@ -1504,6 +1657,50 @@ command(
   200,
 );
 
+query(
+  '/me/baskets',
+  "The caller's own baskets, newest first, to resume an interrupted registration (ENR-01, SPK-REG-004, SPK-UX-001)",
+  ListMyBasketsQuery,
+  pageSchema(BasketSchema),
+);
+query(
+  '/me/waitlist-entries',
+  'Waitlist entries of the caller and everyone they may view, with the open offer and its expiry (ENR-01, SPK-REG-008)',
+  ListMyWaitlistEntriesQuery,
+  pageSchema(MyWaitlistEntrySchema),
+);
+query(
+  '/me/applications',
+  'Applications of the caller and everyone they may view (ENR-01, SPK-REG-001)',
+  ListMyApplicationsQuery,
+  pageSchema(ApplicationSchema),
+);
+query(
+  '/me/trial-participations',
+  'Trial participations of the caller and everyone they may view (ENR-01, SPK-YOUTH-003)',
+  ListMyTrialParticipationsQuery,
+  pageSchema(TrialParticipationSchema),
+);
+query(
+  '/enrollments/{id}/transfer-preview',
+  'Read-only transfer preview against the current target offering: participation, dates, capacity, financial consequence, approval (ENR-03, SPK-REG-010)',
+  TransferPreviewQuery,
+  TransferPreviewSchema,
+);
+command(
+  'post',
+  '/waitlist-entries/{id}/offer',
+  'Offer a place to the next waiting entry (staff; the capacity constraints still decide, ENR-04, SPK-REG-008)',
+  OfferWaitlistEntryBody,
+  WaitlistEntrySchema,
+  200,
+);
+query(
+  '/offerings/{id}/registration-options',
+  'Registration intents an offering accepts, its season, and read-only eligibility per authorized participant (ENR-05, SPK-REG-001/002)',
+  RegistrationOptionsQuery,
+  RegistrationOptionsSchema,
+);
 query(
   '/me/family-calendar',
   'All authorized children in one calendar with highlighted overlaps (SPK-YOUTH-007)',

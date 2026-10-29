@@ -6,6 +6,7 @@ import {
   type AddBasketLineInput,
   type Basket,
   type BasketLine,
+  type CapabilityId,
   type CompleteBasketInput,
   type CreateBasketInput,
   type EligibilityOverride,
@@ -25,6 +26,7 @@ import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  CapabilityService,
   DATABASE,
   OperationsService,
   Outbox,
@@ -58,7 +60,12 @@ import {
   type Reader,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
-import { SESSION_INTENT_COMMANDS } from '../enrollment.policy';
+import {
+  BOOKING_INTENTS,
+  INTENT_CAPABILITIES,
+  SESSION_INTENT_COMMANDS,
+  SINGLE_ENTITLEMENT_INTENTS,
+} from '../enrollment.policy';
 import { ApplicationsService } from './applications.service';
 import { CapacityService, type HoldRow } from './capacity.service';
 import { CatalogSessions } from './catalog-sessions';
@@ -93,7 +100,29 @@ export class BasketsService implements BasketPort {
     private readonly sessions: CatalogSessions,
     @Inject(OFFERING_LOOKUP_PORT) private readonly offerings: OfferingLookupPort,
     private readonly scope: EnrollmentFacilityScope,
+    private readonly capabilities: CapabilityService,
   ) {}
+
+  /**
+   * ENR-10 (DEC-016): every line of a Package G intent needs its capability switch now — when it
+   * is added, held, completed, or its checkout starts — so disabling a capability stops new sales
+   * before any payment attempt. Release, cancellation, expiry and payment outcomes never check.
+   */
+  async assertLinesCapable(
+    trx: Trx,
+    organizationId: string,
+    lines: ReadonlyArray<{ intent: BasketLine['intent']; outcome?: BasketLine['outcome'] }>,
+  ): Promise<void> {
+    const needed = new Set<CapabilityId>();
+    for (const line of lines) {
+      if (line.outcome === 'failed' || line.outcome === 'released') continue;
+      const capability = INTENT_CAPABILITIES[line.intent];
+      if (capability) needed.add(capability);
+    }
+    for (const capability of [...needed].sort()) {
+      await this.capabilities.require(organizationId, capability, trx);
+    }
+  }
 
   // -------------------------------------------------------------------------------------------
   // Reads and views
@@ -313,6 +342,20 @@ export class BasketsService implements BasketPort {
           },
         );
       }
+      // ENR-10, SPK-COND-003: a rental or party exists only with its reservation and staffing.
+      if (BOOKING_INTENTS.includes(input.intent)) {
+        throw errors.validation(
+          'A rental or party is requested with its space, equipment and staff: POST /v1/bookings.',
+          { code: 'BOOKING_REQUIRED', path: 'intent' },
+        );
+      }
+      if (SINGLE_ENTITLEMENT_INTENTS.includes(input.intent) && input.quantity !== 1) {
+        throw errors.validation(`A ${input.intent.replaceAll('_', ' ')} line is one entitlement.`, {
+          code: 'QUANTITY_ONE',
+          path: 'quantity',
+        });
+      }
+      await this.assertLinesCapable(trx, organizationId, [{ intent: input.intent }]);
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
       const evaluation = await this.evaluator.evaluate(trx, organizationId, {
         snapshot,
@@ -537,6 +580,8 @@ export class BasketsService implements BasketPort {
       if (basket.status !== 'open') throw errors.invalidTransition('Basket', basket.status, 'hold');
       const lines = await this.lineRows(trx, organizationId, basketId);
       if (lines.length === 0) throw errors.validation('The basket has no lines to hold.');
+      // ENR-10 (DEC-016): a Package G line is held only while its capability is enabled.
+      await this.assertLinesCapable(trx, organizationId, lines);
       const operationId = await this.operations.create(trx, {
         organizationId,
         kind: 'enrollment.hold_basket',
@@ -943,6 +988,7 @@ export class BasketsService implements BasketPort {
     actor: Principal,
     correlationId: string | null,
     status: 'released' | 'expired' | 'abandoned',
+    operationId: string | null = null,
   ): Promise<void> {
     const now = this.clock.now();
     const lines = await this.lineRows(trx, organizationId, basket.id);
@@ -964,6 +1010,7 @@ export class BasketsService implements BasketPort {
             correlationId,
             null,
             'released',
+            operationId,
           );
         }
       }
@@ -974,7 +1021,13 @@ export class BasketsService implements BasketPort {
     }
     await trx
       .updateTable('baskets')
-      .set({ status, released_at: now, release_reason: reason, revision: basket.revision + 1 })
+      .set({
+        status,
+        released_at: now,
+        release_reason: reason,
+        last_operation_id: operationId ?? basket.last_operation_id,
+        revision: basket.revision + 1,
+      })
       .where('organization_id', '=', organizationId)
       .where('id', '=', basket.id)
       .where('revision', '=', basket.revision)
@@ -1063,6 +1116,7 @@ export class BasketsService implements BasketPort {
         throw errors.invalidTransition('Basket', basket.status, 'complete');
       const current = await this.view(trx, organizationId, basket);
       this.assertPayable(current);
+      await this.assertLinesCapable(trx, organizationId, current.lines);
       const held = current.lines.filter((l) => l.outcome === 'held');
       // §4.7 (1), SPK-IAM-003/006: authority over each participant is re-read before confirming.
       for (const line of held) {
@@ -1217,6 +1271,7 @@ export class BasketsService implements BasketPort {
     basketId: string,
     orderRef: string,
     actor: Principal,
+    operationId: string | null = null,
   ): Promise<Basket> {
     const basket = await this.load(trx, organizationId, basketId, true);
     if (!basket) throw errors.notFound('basket', basketId);
@@ -1226,18 +1281,30 @@ export class BasketsService implements BasketPort {
       throw errors.invalidTransition('Basket', basket.status, 'start_checkout');
     const current = await this.view(trx, organizationId, basket);
     this.assertPayable(current);
+    await this.assertLinesCapable(trx, organizationId, current.lines);
     await trx
       .updateTable('baskets')
       .set({
         status: 'checking_out',
         order_ref: orderRef,
         checkout_started_at: this.clock.now(),
+        last_operation_id: operationId ?? basket.last_operation_id,
         revision: basket.revision + 1,
       })
       .where('organization_id', '=', organizationId)
       .where('id', '=', basketId)
       .where('revision', '=', basket.revision)
       .execute();
+    if (operationId) {
+      // ENR-06 (§4.11 step 4, SPK-UX-001): every pending enrollment of the basket names the checkout.
+      await trx
+        .updateTable('enrollments')
+        .set((eb) => ({ last_operation_id: operationId, revision: eb('revision', '+', 1) }))
+        .where('organization_id', '=', organizationId)
+        .where('basket_id', '=', basketId)
+        .where('status', '=', 'pending')
+        .execute();
+    }
     await this.audit.record(trx, {
       organizationId,
       actor,
@@ -1246,6 +1313,7 @@ export class BasketsService implements BasketPort {
       targetId: basketId,
       beforeRevision: basket.revision,
       afterRevision: basket.revision + 1,
+      operationId,
       details: { orderRef },
     });
     return this.view(trx, organizationId, (await this.load(trx, organizationId, basketId))!);
@@ -1263,6 +1331,8 @@ export class BasketsService implements BasketPort {
       throw errors.invalidTransition('Basket', current.status, 'capture_payment');
     }
     this.assertPayable(current);
+    // ENR-10 (DEC-016): checked again before any payment attempt of a Package G line.
+    await this.assertLinesCapable(trx, organizationId, current.lines);
     return current;
   }
 
@@ -1272,6 +1342,7 @@ export class BasketsService implements BasketPort {
     basketId: string,
     outcome: 'fulfilled' | 'partially_fulfilled' | 'abandoned',
     actor: Principal,
+    operationId: string | null = null,
   ): Promise<Basket> {
     const basket = await this.load(trx, organizationId, basketId, true);
     if (!basket) throw errors.notFound('basket', basketId);
@@ -1286,6 +1357,7 @@ export class BasketsService implements BasketPort {
         actor,
         null,
         'abandoned',
+        operationId,
       );
     } else {
       if (basket.status === 'fulfilled' || basket.status === 'partially_fulfilled')
@@ -1298,7 +1370,7 @@ export class BasketsService implements BasketPort {
         lines
           .filter((l) => l.outcome === 'confirmed' && l.enrollment_id)
           .map((l) => l.enrollment_id as string),
-        basket.last_operation_id,
+        operationId ?? basket.last_operation_id,
         null,
       );
     }

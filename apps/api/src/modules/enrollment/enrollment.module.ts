@@ -11,7 +11,9 @@ import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
 import { CapacityController } from './controllers/capacity.controller';
 import { EnrollmentsController } from './controllers/enrollments.controller';
+import { MeRegistrationsController } from './controllers/me.controller';
 import { PlacementController } from './controllers/placement.controller';
+import { RegistrationOptionsController } from './controllers/registration-options.controller';
 import { SessionBookingsController } from './controllers/session-bookings.controller';
 import { WaitlistController } from './controllers/waitlist.controller';
 import { YouthController } from './controllers/youth.controller';
@@ -42,6 +44,10 @@ import { BasketsService } from './services/baskets.service';
 import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
 import { CompetitionFormsCheck } from './services/competition-forms-check';
+import { CustomerScope } from './services/customer-scope';
+import { EnrollmentViews } from './services/enrollment-views';
+import { MyRegistrationsService } from './services/my-registrations.service';
+import { RegistrationOptionsService } from './services/registration-options.service';
 import { EnrollmentsService } from './services/enrollments.service';
 import { EnrollmentFacilityScope } from './services/facility-scope';
 import { FamilyCalendarService } from './services/family-calendar.service';
@@ -79,6 +85,10 @@ const providers: Provider[] = [
   RegistrationEvaluator,
   CatalogSessions,
   EnrollmentFacilityScope,
+  EnrollmentViews,
+  CustomerScope,
+  MyRegistrationsService,
+  RegistrationOptionsService,
   CapacityService,
   EnrollmentsService,
   ApplicationsService,
@@ -125,6 +135,8 @@ const providers: Provider[] = [
     SessionBookingsController,
     YouthController,
     CapacityController,
+    MeRegistrationsController,
+    RegistrationOptionsController,
   ],
   exports: [
     RegistrationEvaluator,

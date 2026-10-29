@@ -52,8 +52,12 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  beforeCursor,
+  cursorAt,
+  decodeCreatedCursor,
   hiddenFrom,
   isStaffLike,
+  keysetPage,
   minutesFrom,
   organizationOf,
   toPlacementRequest,
@@ -250,7 +254,7 @@ export class PlacementService {
           participantPersonId: person.id,
         },
       });
-      return toPlacementRequest((await this.load(trx, organizationId, id))!);
+      return this.view((await this.load(trx, organizationId, id))!, trx);
     });
   }
 
@@ -270,7 +274,7 @@ export class PlacementService {
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return toPlacementRequest(row);
+    return this.view(row);
   }
 
   async list(
@@ -289,14 +293,17 @@ export class PlacementService {
       EnrollmentActions.managePlacement,
       organizationId,
     );
+    // ENR-02 (§4.5): keyset pages, newest first (created_at desc, id desc).
+    const cursor = decodeCreatedCursor(query.cursor);
     let q = this.db
       .selectFrom('placement_requests')
       .selectAll()
+      .select(cursorAt('placement_requests').as('cursor_at'))
       .where('organization_id', '=', organizationId)
       .where('season_id', '=', query.seasonId)
-      .orderBy('created_at')
-      .orderBy('id')
-      .limit(query.limit);
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
     if (query.status) q = q.where('status', '=', query.status);
     if (offerings) {
       q = q.where((eb) =>
@@ -305,7 +312,31 @@ export class PlacementService {
           : eb('offering_id', 'is', null),
       );
     }
-    return { items: (await q.execute()).map(toPlacementRequest), nextCursor: null };
+    if (cursor) q = q.where(beforeCursor('placement_requests', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
+    return { items: await this.views(page.rows), nextCursor: page.nextCursor };
+  }
+
+  /** ENR-02 (SPK-PLACE-003): the request with the assigned team's name (competition's entry). */
+  async views(rows: readonly PlacementRow[], trx?: Trx): Promise<PlacementRequest[]> {
+    const names = new Map<string, string | null>();
+    const out: PlacementRequest[] = [];
+    for (const row of rows) {
+      const teamEntryId = row.assigned_team_entry_id;
+      if (teamEntryId && !names.has(teamEntryId)) {
+        const entry = await this.teamEntries.findTeamEntry(row.organization_id, teamEntryId, trx);
+        names.set(teamEntryId, entry?.teamName ?? null);
+      }
+      out.push({
+        ...toPlacementRequest(row),
+        assignedTeamName: teamEntryId ? (names.get(teamEntryId) ?? null) : null,
+      });
+    }
+    return out;
+  }
+
+  private async view(row: PlacementRow, trx?: Trx): Promise<PlacementRequest> {
+    return (await this.views([row], trx))[0] as PlacementRequest;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -472,7 +503,7 @@ export class PlacementService {
         correlationId,
         payload: { organizationId, placementRequestId: id, teamEntryId: input.teamEntryId },
       });
-      return toPlacementRequest((await this.load(trx, organizationId, id))!);
+      return this.view((await this.load(trx, organizationId, id))!, trx);
     });
   }
 
@@ -513,7 +544,7 @@ export class PlacementService {
           teamEntryId: row.proposed_team_entry_id,
         },
       );
-      return toPlacementRequest((await this.load(trx, organizationId, id))!);
+      return this.view((await this.load(trx, organizationId, id))!, trx);
     });
   }
 
@@ -797,7 +828,7 @@ export class PlacementService {
           rosterMembershipRef: membershipId,
         },
       });
-      return toPlacementRequest((await this.load(trx, organizationId, id))!);
+      return this.view((await this.load(trx, organizationId, id))!, trx);
     });
     return { placement };
   }
@@ -925,7 +956,7 @@ export class PlacementService {
         operationId: prepared.operationId,
         payload: { organizationId, placementRequestId: id, reason: input.reason },
       });
-      return toPlacementRequest((await this.load(trx, organizationId, id))!);
+      return this.view((await this.load(trx, organizationId, id))!, trx);
     });
     return { placement };
   }

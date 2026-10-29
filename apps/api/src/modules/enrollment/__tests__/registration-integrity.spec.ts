@@ -293,9 +293,10 @@ describe('registration integrity: price basis, applications, overrides, checkout
     expect((await post(t, `/v1/baskets/${first.id}/hold`, parent.header, {})).status).toBe(200);
     expect((await post(t, `/v1/baskets/${first.id}/complete`, parent.header, {})).status).toBe(200);
     const { teen, applicationId } = await overriddenTeen(setup);
-    // A rental_request on a term offering holds no seat; the youth override must not cover it.
+    // A create_team_entry line on a term offering holds no seat; the youth override must not
+    // cover it. (A rental request is never a bare basket line: ENR-10, SPK-COND-003.)
     const basket = await basketWith(t, parent, [
-      { participantPersonId: teen, offeringId: setup.offeringId, intent: 'rental_request' },
+      { participantPersonId: teen, offeringId: setup.offeringId, intent: 'create_team_entry' },
     ]);
     expect((basket.body['lines'] as Array<{ applicationId: string }>)[0]?.applicationId).not.toBe(
       applicationId,

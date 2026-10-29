@@ -240,6 +240,45 @@ export class CapacityService implements CapacityPort {
     );
   }
 
+  /**
+   * ENR-03: the offering-level pools an intent would hold, without writing anything: the existing
+   * pools, plus the ones the catalog limits would create at commitment (`id` null, nothing held).
+   */
+  async previewPoolsForIntent(
+    db: Reader,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    intent: RegistrationIntent,
+  ): Promise<
+    Array<
+      Pick<PoolRow, 'unit' | 'constraint_kind' | 'capacity' | 'committed' | 'held'> & {
+        id: string | null;
+      }
+    >
+  > {
+    const existing = this.poolsForIntent(
+      await this.poolRowsForOffering(db, organizationId, snapshot.offering.id),
+      intent,
+    );
+    const units: readonly string[] = INTENT_CAPACITY_UNITS[intent];
+    const virtual = this.offeringPoolSpecs(
+      snapshot.capacityUnits.filter((u) => u.unit !== 'session_seats' && units.includes(u.unit)),
+    )
+      .filter(
+        (spec) =>
+          !existing.some((p) => p.unit === spec.unit && p.constraint_kind === spec.constraintKind),
+      )
+      .map((spec) => ({
+        id: null,
+        unit: spec.unit,
+        constraint_kind: spec.constraintKind,
+        capacity: spec.capacity,
+        committed: 0,
+        held: 0,
+      }));
+    return [...existing, ...virtual];
+  }
+
   // -------------------------------------------------------------------------------------------
   // Pool creation and sizing
   // -------------------------------------------------------------------------------------------

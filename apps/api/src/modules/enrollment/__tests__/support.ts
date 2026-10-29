@@ -1,5 +1,6 @@
 import {
   newId,
+  type CapabilityId,
   type CapacityUnit,
   type ChargeLine,
   type OfferingKind,
@@ -23,6 +24,7 @@ import {
 } from '../../identity';
 import type { GrantPermissionValue } from '@sportspark/db';
 import { EnrollmentModule } from '../enrollment.module';
+import { withStage3Doubles } from './stage3-doubles';
 
 /** Shared helpers for the enrollment API tests (not a spec file). */
 
@@ -30,11 +32,22 @@ export const CLOCK_START = '2026-11-02T15:00:00Z';
 
 export const key = (): string => `k-${newId()}`;
 
-export function enrollmentTestApp(options: { clockStart?: string } = {}): Promise<TestApp> {
+export function enrollmentTestApp(
+  options: {
+    clockStart?: string;
+    capabilities?: readonly CapabilityId[];
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): Promise<TestApp> {
   return createTestApp({
     imports: [EnrollmentModule],
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
+    capabilities: options.capabilities,
+    env: options.env,
+    // Stage-3 port members other work items implement answer through their declared contract
+    // until those items are merged (stage3-doubles.ts).
+    configure: withStage3Doubles,
   });
 }
 
