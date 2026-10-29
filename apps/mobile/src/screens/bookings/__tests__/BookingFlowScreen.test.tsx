@@ -1,34 +1,370 @@
 /**
- * Booking flow placeholder (Package G; SPK-COND-003, DEC-016, DEC-076, DEC-077): blocked while
- * both switches are off, and a malformed offering id is "Link not available" with no request
- * (SCR-C-39). Replace with the screen's own tests when the flow is built.
+ * Book a rental or party (Package G; SPK-COND-003, ENR-13, POL-040, DEC-016, DEC-076, DEC-077,
+ * DEC-029, DEC-030, §4.9, SPK-SCHED-008, SPK-UX-008): the approved terms before anything is sent,
+ * free times of one facility-local day from the API (a rental's length typed by the customer, a
+ * party's from the API), exactly the number of resources the API states, one idempotency key per
+ * intent; a request holds nothing, an instant booking is held and paid in its basket; field
+ * errors next to their field; conflicts listed; turned off before and after a refusal.
  */
-import { render, screen } from '@testing-library/react-native';
-import { describeCustomerPackageGPlaceholder } from '../../../features/package-g/testing';
-import { createTestApp } from '../../../testing/test-app';
+import {
+  apiErrorBody,
+  capabilityDisabledBody,
+  fakeResponse,
+  type FakeHandler,
+} from '@sportspark/api-client/testing';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { createRouterMock } from '../../../features/money/testing/fixtures';
+import {
+  createMoneyTestApp as createTestApp,
+  settleApps,
+} from '../../../features/money/testing/money-test-app';
+import {
+  booking,
+  bookingTerms,
+  G,
+  offering,
+  ok,
+  partyAvailability,
+  partyOffering,
+  rentalAvailability,
+  switchesOn,
+} from '../../../features/package-g/__tests__/fixtures';
+import { mePermissions } from '../../../testing/test-app';
 import { BookingFlowScreen } from '../BookingFlowScreen';
 
-const OFFERING = '0192f1a0-0000-7000-8000-00000000e001';
+const mockRouter = createRouterMock();
+jest.mock('expo-router', () => ({
+  ...jest.requireActual('expo-router'),
+  useRouter: () => mockRouter,
+}));
 
-function OfferingBooking() {
-  return <BookingFlowScreen offeringId={OFFERING} />;
+type App = ReturnType<typeof createTestApp>;
+
+const TEN_AM = 'Sat, Oct 24, 10:00 AM to 11:00 AM PDT, 2 free: Court 1, Court 2';
+const ELEVEN_AM = 'Sat, Oct 24, 11:00 AM to 12:00 PM PDT, 1 free: Court 1';
+const PARTY_TIME = 'Sat, Oct 24, 1:00 PM to 3:00 PM PDT, 1 free: Party room';
+
+function rentalRoutes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
+  return {
+    ...switchesOn('rentals'),
+    'GET /offerings/{id}': ok(offering()),
+    'GET /policy-versions/{id}': ok(bookingTerms()),
+    'GET /offerings/{id}/booking-availability': ok(rentalAvailability()),
+    'POST /bookings': ok(booking()),
+    ...overrides,
+  };
 }
 
-describeCustomerPackageGPlaceholder({
-  Screen: OfferingBooking,
-  testID: 'screen-booking-flow',
-  title: 'Book a rental or party',
-  reference: 'Package G booking flow, SPK-COND-003',
-  capability: 'parties',
-  decisions: 'DEC-016, DEC-076, DEC-077',
-  pending: 'POL-040, DEC-029, DEC-030, DEC-019',
-});
+function partyRoutes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
+  return {
+    ...switchesOn('parties'),
+    'GET /offerings/{id}': ok(partyOffering()),
+    'GET /policy-versions/{id}': ok(
+      bookingTerms({ confirmationMode: 'request', hostResponsibilities: 'An adult host stays.' }),
+    ),
+    'GET /offerings/{id}/booking-availability': ok(partyAvailability()),
+    'POST /bookings': ok(
+      booking({
+        id: G.bookingB,
+        kind: 'party',
+        offeringId: G.party,
+        offeringName: 'Birthday party',
+        status: 'requested',
+        outstanding: ['approval'],
+        basketId: null,
+        enrollmentId: null,
+        guestCount: 12,
+      }),
+    ),
+    ...overrides,
+  };
+}
 
-describe('booking flow route (SCR-C-39)', () => {
-  it('a malformed offering id is "Link not available", without a request', () => {
+function renderFlow(routes: Record<string, FakeHandler>, offeringId: string = G.rental) {
+  const app = createTestApp({ routes });
+  render(<BookingFlowScreen offeringId={offeringId} />, { wrapper: app.wrapper });
+  return app;
+}
+
+const availabilityReads = (app: App) =>
+  app.fake.requests.filter((r) => r.route === '/offerings/{id}/booking-availability');
+const posts = (app: App) =>
+  app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/bookings');
+
+async function press(name: string) {
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name }));
+  });
+}
+
+async function chooseRentalHour() {
+  fireEvent.changeText(await screen.findByLabelText('How long, in minutes'), '60');
+  fireEvent.press(await screen.findByRole('radio', { name: TEN_AM }));
+  fireEvent.press(await screen.findByRole('radio', { name: 'Court 2' }));
+}
+
+describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
+  afterEach(settleApps);
+  beforeEach(() => jest.clearAllMocks());
+
+  it('POL-040: shows the approved terms before anything is sent, and asks a rental how long before reading free times', async () => {
+    const app = renderFlow(rentalRoutes());
+    expect(await screen.findByRole('header', { name: 'Court rental' })).toBeOnTheScreen();
+    expect(
+      await screen.findByLabelText(
+        'How it is confirmed: Booked at once: the time is held for you, then you pay in your basket to confirm it.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText(
+        'Paying: Paid in full at checkout. Your basket shows the price, taxes and fees.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Access conditions: Enter by the north gate.')).toBeOnTheScreen();
+    expect(screen.getByText('Enter how long to see the free times.')).toBeOnTheScreen();
+    expect(availabilityReads(app)).toHaveLength(0);
+    expect(posts(app)).toHaveLength(0);
+  });
+
+  it('ENR-13: an instant rental reads one facility-local day, offers only future times with a free court, and is held in its basket', async () => {
+    const app = renderFlow(rentalRoutes());
+    await chooseRentalHour();
+    expect(screen.getByRole('radio', { name: ELEVEN_AM })).toBeOnTheScreen();
+    // 4:00 AM is before the clock: never offered.
+    expect(screen.queryByRole('radio', { name: /4:00 AM/ })).toBeNull();
+    expect(screen.getByText("Times are in the facility's time zone (PDT).")).toBeOnTheScreen();
+    expect(availabilityReads(app)[0]?.query).toEqual({
+      from: '2026-10-24T07:00:00.000Z',
+      to: '2026-10-25T07:00:00.000Z',
+      durationMinutes: '60',
+    });
+    await press('Book now');
+    expect(await screen.findByTestId('booking-outcome')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Held for you: pay to confirm')).toBeOnTheScreen();
+    const [sent] = posts(app);
+    expect(sent?.body).toEqual({
+      offeringId: G.rental,
+      start: '2026-10-24T17:00:00.000Z',
+      end: '2026-10-24T18:00:00.000Z',
+      resourceIds: [G.court2],
+    });
+    expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
+    fireEvent.press(screen.getByRole('button', { name: 'Go to basket' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${G.basket}`);
+  });
+
+  it('SPK-COND-003 request mode: a party request holds nothing, states its guests, and the deposit-before-approval question stays pending', async () => {
+    const app = renderFlow(partyRoutes(), G.party);
+    expect(await screen.findByLabelText('Length: 120 minutes')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Host responsibilities: An adult host stays.')).toBeOnTheScreen();
+    const pending = screen.getByTestId('state-pending-decision');
+    expect(within(pending).getByText(/DEC-029, DEC-030/)).toBeOnTheScreen();
+    // A party's length is the package's: the read names no duration.
+    expect(availabilityReads(app)[0]?.query).toEqual({
+      from: '2026-10-24T07:00:00.000Z',
+      to: '2026-10-25T07:00:00.000Z',
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: PARTY_TIME }));
+    fireEvent.press(await screen.findByRole('radio', { name: 'Party room' }));
+    fireEvent.changeText(screen.getByLabelText('Number of guests'), '12');
+    await press('Send request');
+    expect(await screen.findByLabelText('Request awaiting approval')).toBeOnTheScreen();
+    expect(
+      screen.getByText(/Nothing is reserved or charged until staff approve your request\./),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    expect(posts(app)[0]?.body).toEqual({
+      offeringId: G.party,
+      start: '2026-10-24T20:00:00.000Z',
+      resourceIds: [G.room],
+      guestCount: 12,
+    });
+  });
+
+  it('validation failure: missing length and time are field messages and nothing is sent', async () => {
+    const app = renderFlow(rentalRoutes());
+    await screen.findByLabelText('How long, in minutes');
+    await press('Book now');
+    expect(screen.getByText(/Enter how long, in minutes \(15 to 1440\)\./)).toBeOnTheScreen();
+    expect(screen.getByText(/Choose a start time\./)).toBeOnTheScreen();
+    expect(posts(app)).toHaveLength(0);
+  });
+
+  it("the package's guest limit is the API's: GUEST_LIMIT_EXCEEDED is shown next to the guests field", async () => {
+    const app = renderFlow(
+      partyRoutes({
+        'POST /bookings': {
+          status: 400,
+          body: apiErrorBody('VALIDATION_FAILED', {
+            message: 'This package takes at most 10 guests.',
+            nextAction: 'correct_input',
+            details: { code: 'GUEST_LIMIT_EXCEEDED', path: 'guestCount' },
+          }),
+        },
+      }),
+      G.party,
+    );
+    fireEvent.press(await screen.findByRole('radio', { name: PARTY_TIME }));
+    fireEvent.press(await screen.findByRole('radio', { name: 'Party room' }));
+    fireEvent.changeText(screen.getByLabelText('Number of guests'), '12');
+    await press('Send request');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /This package takes at most 10 guests\./,
+    );
+    expect(screen.getByLabelText('Number of guests')).toHaveDisplayValue('12');
+    expect(posts(app)).toHaveLength(1);
+  });
+
+  it('a weekly rental sends its number of weeks; weeks that are not free (RESOURCE_CONFLICT) are listed and the times read again', async () => {
+    const app = renderFlow(
+      rentalRoutes({
+        'POST /bookings': {
+          status: 409,
+          body: apiErrorBody('RESOURCE_CONFLICT', {
+            message: 'The requested time is not free.',
+            nextAction: 'choose_another_time',
+            details: {
+              conflicts: [{ occurrenceStart: '2026-11-07T18:00:00.000Z', resourceId: G.court2 }],
+            },
+          }),
+        },
+      }),
+    );
+    await chooseRentalHour();
+    fireEvent.press(
+      screen.getByRole('checkbox', { name: 'Repeat every week, Same time and spaces each week' }),
+    );
+    fireEvent.changeText(screen.getByLabelText('Number of weeks, including the first'), '4');
+    await press('Book now');
+    expect(
+      await screen.findByText('▲ Not free: Sat, Nov 7, 10:00 AM PST, Court 2'),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: RESOURCE_CONFLICT/)).toBeOnTheScreen();
+    expect(posts(app)[0]?.body).toMatchObject({ recurrence: { count: 4 } });
+    await waitFor(() => expect(availabilityReads(app).length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('a later day reads the next facility-local day; the first day has no earlier one', async () => {
+    const app = renderFlow(rentalRoutes());
+    fireEvent.changeText(await screen.findByLabelText('How long, in minutes'), '60');
+    await screen.findByRole('radio', { name: TEN_AM });
+    expect(screen.getByRole('button', { name: 'Earlier day' })).toBeDisabled();
+    fireEvent.press(screen.getByRole('button', { name: 'Later day' }));
+    expect(await screen.findByText('Sun, Oct 25 (PDT)')).toBeOnTheScreen();
+    await waitFor(() =>
+      expect(availabilityReads(app).at(-1)?.query).toEqual({
+        from: '2026-10-25T07:00:00.000Z',
+        to: '2026-10-26T07:00:00.000Z',
+        durationMinutes: '60',
+      }),
+    );
+  });
+
+  it('DEC-016: blocked while both switches are off; a rental is turned off while only parties are on', async () => {
+    const off = renderFlow({ 'GET /offerings/{id}': ok(offering()) });
+    expect(await screen.findByLabelText('Book a rental or party turned off')).toBeOnTheScreen();
+    expect(off.fake.requests.filter((r) => r.route === '/offerings/{id}')).toHaveLength(0);
+    await settleApps();
+    screen.unmount();
+
+    const partiesOnly = renderFlow(rentalRoutes(switchesOn('parties')));
+    const state = await screen.findByTestId('state-turned-off');
+    expect(within(state).getByLabelText('Rentals turned off')).toBeOnTheScreen();
+    expect(within(state).getByText(/DEC-076/)).toBeOnTheScreen();
+    expect(
+      partiesOnly.fake.requests.filter((r) => r.route === '/policy-versions/{id}'),
+    ).toHaveLength(0);
+  });
+
+  it('a CAPABILITY_DISABLED answer is "turned off" with its code, never a failure or "not available"', async () => {
+    renderFlow(
+      rentalRoutes({
+        'POST /bookings': {
+          status: 403,
+          body: capabilityDisabledBody('rentals', ['DEC-016', 'DEC-076']),
+        },
+      }),
+    );
+    await chooseRentalHour();
+    await press('Book now');
+    expect(await screen.findByLabelText('Rentals turned off')).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: ACCESS_DENIED \(CAPABILITY_DISABLED\)/)).toBeOnTheScreen();
+    expect(screen.queryByTestId('state-unavailable')).toBeNull();
+    // The customer's choices are kept.
+    expect(screen.getByLabelText('How long, in minutes')).toHaveDisplayValue('60');
+  });
+
+  it('after a CAPABILITY_DISABLED answer the switches are read again and the flow follows them', async () => {
+    let rentalsOn = true;
+    const app = renderFlow(
+      rentalRoutes({
+        'GET /me/permissions': () =>
+          fakeResponse(200, mePermissions({ enabled: rentalsOn ? ['rentals'] : [] }).body),
+        'POST /bookings': () => {
+          rentalsOn = false;
+          return fakeResponse(403, capabilityDisabledBody('rentals', ['DEC-016', 'DEC-076']));
+        },
+      }),
+    );
+    await chooseRentalHour();
+    await press('Book now');
+    expect(await screen.findByLabelText('Book a rental or party turned off')).toBeOnTheScreen();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/me/permissions').length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('an offering without approved booking terms is not bookable yet (POL-040), and nothing is read for it', async () => {
+    const app = renderFlow(
+      rentalRoutes({ 'GET /offerings/{id}': ok(offering({ bookingTermsPolicyVersionId: null })) }),
+    );
+    expect(await screen.findByLabelText('Not bookable yet')).toBeOnTheScreen();
+    expect(screen.getByText(/no approved booking terms yet \(POL-040\)/)).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.route === '/policy-versions/{id}')).toHaveLength(0);
+  });
+
+  it('the terms read error shows its code and "Try again"', async () => {
+    let calls = 0;
+    renderFlow(
+      rentalRoutes({
+        'GET /policy-versions/{id}': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-t' }))
+            : fakeResponse(200, bookingTerms());
+        },
+      }),
+    );
+    expect(
+      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-t/),
+    ).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByLabelText('How long, in minutes')).toBeOnTheScreen();
+  });
+
+  it('§4.10: an offering the API does not show is "not available"; one that is not a rental or party is not booked here', async () => {
+    renderFlow(
+      rentalRoutes({
+        'GET /offerings/{id}': {
+          status: 404,
+          body: apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' }),
+        },
+      }),
+    );
+    expect(await screen.findByTestId('state-unavailable')).toBeOnTheScreen();
+    await settleApps();
+    screen.unmount();
+
+    renderFlow(rentalRoutes({ 'GET /offerings/{id}': ok(offering({ kind: 'season' })) }));
+    expect(await screen.findByLabelText('Not booked here')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Open the activity' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/offering/${G.rental}`);
+  });
+
+  it('a malformed offering id is "Link not available", without a request', async () => {
     const app = createTestApp();
     render(<BookingFlowScreen offeringId={null} />, { wrapper: app.wrapper });
-    expect(screen.getByLabelText('Link not available')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Link not available')).toBeOnTheScreen();
     expect(app.fake.requests).toHaveLength(0);
   });
 });

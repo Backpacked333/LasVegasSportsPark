@@ -6,6 +6,8 @@
  */
 export const packageGRoutes = {
   bookings: () => '/bookings' as const,
+  /** One rental or party (GET /v1/bookings/{id}) with its cancellation. */
+  booking: (bookingId: string) => `/bookings/${bookingId}` as const,
   /** The booking flow for a published rental or party offering (POST /v1/bookings). */
   newBooking: (offeringId: string) => `/bookings/new/${offeringId}` as const,
   memberships: () => '/memberships' as const,
