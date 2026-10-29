@@ -46,6 +46,7 @@ import {
 } from '../enrollment.shared';
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
+import { EnrollmentFacilityScope } from './facility-scope';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
 
 export type ApplicationRow = Selectable<ApplicationsTable>;
@@ -82,6 +83,7 @@ export class ApplicationsService {
     private readonly evaluator: RegistrationEvaluator,
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   async load(
@@ -211,6 +213,7 @@ export class ApplicationsService {
       await this.authorization.require(principal, EnrollmentActions.apply, {
         type: 'application',
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [person.id],
       });
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
@@ -385,6 +388,7 @@ export class ApplicationsService {
       type: 'application',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -393,20 +397,31 @@ export class ApplicationsService {
 
   async list(principal: Principal, query: ListApplicationsQuery): Promise<Page<Application>> {
     const organizationId = organizationOf(principal);
+    const facilityId = await this.scope.facilityOf(organizationId, query.offeringId);
     if (isStaffLike(principal)) {
       await this.authorization.require(principal, EnrollmentActions.listApplications, {
         type: 'application',
         organizationId,
+        facilityId,
       });
     } else {
       if (!query.participantPersonId) throw errors.validation('participantPersonId is required.');
       await this.authorization.require(principal, EnrollmentActions.readApplication, {
         type: 'application',
         organizationId,
+        facilityId,
         subjectPersonIds: [query.participantPersonId],
         protected: true,
       });
     }
+    // §4.3, §4.14: facility-scoped staff list only their facilities' applications.
+    const offerings = await this.scope.listOfferings(
+      principal,
+      EnrollmentActions.listApplications,
+      organizationId,
+      query.participantPersonId,
+    );
+    if (offerings?.length === 0) return { items: [], nextCursor: null };
     let q = this.db
       .selectFrom('applications')
       .selectAll()
@@ -415,6 +430,7 @@ export class ApplicationsService {
       .orderBy('id', 'desc')
       .limit(query.limit);
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
+    if (offerings) q = q.where('offering_id', 'in', offerings);
     if (query.participantPersonId)
       q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.status) q = q.where('status', '=', query.status);
@@ -445,6 +461,7 @@ export class ApplicationsService {
         type: 'application',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: await hiddenFrom(
           this.authorization,
@@ -580,6 +597,7 @@ export class ApplicationsService {
         type: 'application',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: await hiddenFrom(
           this.authorization,
@@ -657,6 +675,7 @@ export class ApplicationsService {
         type: 'application',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });

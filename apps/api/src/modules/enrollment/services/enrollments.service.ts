@@ -65,6 +65,7 @@ import {
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
 import { CapacityService, type HoldRow } from './capacity.service';
 import { RegistrationEvaluator } from './registration-evaluator';
+import { EnrollmentFacilityScope } from './facility-scope';
 
 export type EnrollmentRow = Selectable<EnrollmentsTable>;
 
@@ -107,6 +108,7 @@ export class EnrollmentsService implements EnrollmentPort {
     private readonly evaluator: RegistrationEvaluator,
     @Inject(FINANCE_POLICY_PORT) private readonly finance: FinancePolicyPort,
     private readonly exceptions: OperationalExceptions,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -190,6 +192,7 @@ export class EnrollmentsService implements EnrollmentPort {
       type: 'enrollment',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -204,9 +207,18 @@ export class EnrollmentsService implements EnrollmentPort {
     await this.authorization.require(principal, EnrollmentActions.readEnrollment, {
       type: 'enrollment',
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, query.offeringId),
       subjectPersonIds: query.participantPersonId ? [query.participantPersonId] : undefined,
       protected: !isStaffLike(principal),
     });
+    // §4.3, §4.14: facility-scoped staff list only their facilities' registrations.
+    const offerings = await this.scope.listOfferings(
+      principal,
+      EnrollmentActions.readEnrollment,
+      organizationId,
+      query.participantPersonId,
+    );
+    if (offerings?.length === 0) return { items: [], nextCursor: null };
     let q = this.db
       .selectFrom('enrollments')
       .selectAll()
@@ -217,6 +229,7 @@ export class EnrollmentsService implements EnrollmentPort {
     if (query.participantPersonId)
       q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
+    if (offerings) q = q.where('offering_id', 'in', offerings);
     if (query.status) q = q.where('status', '=', query.status);
     const rows = await q.execute();
     return {
@@ -745,6 +758,7 @@ export class EnrollmentsService implements EnrollmentPort {
       type: 'enrollment',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -809,6 +823,7 @@ export class EnrollmentsService implements EnrollmentPort {
         type: 'enrollment',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -873,6 +888,7 @@ export class EnrollmentsService implements EnrollmentPort {
         type: 'enrollment',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -1020,13 +1036,23 @@ export class EnrollmentsService implements EnrollmentPort {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, input.commit);
       if (!row) throw errors.protectedNotFound('enrollment');
-      await this.authorization.require(principal, EnrollmentActions.transferEnrollment, {
-        type: 'enrollment',
-        id,
-        organizationId,
-        subjectPersonIds: [row.participant_person_id],
-        protected: true,
-      });
+      // §4.3: a transfer acts at the source and the target offering's facility.
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.transferEnrollment,
+        {
+          type: 'enrollment',
+          id,
+          organizationId,
+          subjectPersonIds: [row.participant_person_id],
+          protected: true,
+        },
+        await this.scope.facilitiesOf(
+          organizationId,
+          [row.offering_id, input.targetOfferingId],
+          trx,
+        ),
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (input.targetOfferingId === row.offering_id) {
         throw errors.validation('The target offering must differ from the current one.');

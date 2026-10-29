@@ -161,6 +161,16 @@ Payloads carry identifiers only (§4.14).
 
 ## Behaviour notes — verified
 
+- **Facility scope (§4.3, §4.14):** every application, enrollment, waitlist entry and offer,
+  session booking, trial, placement request, basket line and offering pool is authorized at its
+  offering's facility (catalog `OFFERING_LOOKUP_PORT.facilitiesOfOfferings`;
+  `services/facility-scope.ts`). Facility-scoped staff read, list and change only their
+  facilities' records (another facility's customer-private record reads as NOT_FOUND, a list
+  filtered by another facility's offering is ACCESS_DENIED); a transfer or trial conversion is
+  checked at both offerings, a basket hold, release or completion at every line's facility, a
+  makeup at its eligible offerings'. Pools and placement requests without an offering stay
+  organization-wide. A staff member who is also the participant or a guardian keeps that own
+  authority at every facility (SPK-IAM-001/003). **Verified**, `__tests__/facility-scope.spec.ts`.
 - **Eligibility (SPK-REG-002):** pure evaluation (`eligibility/registration-eligibility.ts`) of the
   catalog's versioned eligibility policy at the offering's configured reference date, from the
   identity date of birth (never a stored age); unknown evidence is never a pass; outstanding forms

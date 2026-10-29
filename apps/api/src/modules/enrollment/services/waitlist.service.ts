@@ -63,6 +63,7 @@ import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { RegistrationEvaluator } from './registration-evaluator';
 import { SessionBookingsService } from './session-bookings.service';
+import { EnrollmentFacilityScope } from './facility-scope';
 
 export type WaitlistEntryRow = Selectable<WaitlistEntriesTable>;
 export type WaitlistOfferRow = Selectable<WaitlistOffersTable>;
@@ -92,6 +93,7 @@ export class WaitlistService implements WaitlistPort {
     private readonly baskets: BasketsService,
     private readonly bookings: SessionBookingsService,
     private readonly sessions: CatalogSessions,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -235,6 +237,7 @@ export class WaitlistService implements WaitlistPort {
       await this.authorization.require(principal, EnrollmentActions.joinWaitlist, {
         type: 'waitlist_entry',
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [person.id],
       });
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
@@ -369,6 +372,7 @@ export class WaitlistService implements WaitlistPort {
       type: 'waitlist_entry',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -381,9 +385,11 @@ export class WaitlistService implements WaitlistPort {
 
   async list(principal: Principal, query: ListWaitlistQuery): Promise<WaitlistEntry[]> {
     const organizationId = organizationOf(principal);
+    // §4.3, §4.14: the queue of an offering is read at the offering's facility.
     await this.authorization.require(principal, EnrollmentActions.manageWaitlist, {
       type: 'waitlist_entry',
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, query.offeringId),
     });
     let q = this.db
       .selectFrom('waitlist_entries')
@@ -411,6 +417,7 @@ export class WaitlistService implements WaitlistPort {
       type: 'waitlist_offer',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, entry.offering_id),
       subjectPersonIds: [entry.participant_person_id],
       protected: true,
     });
@@ -462,6 +469,7 @@ export class WaitlistService implements WaitlistPort {
           type: 'waitlist_entry',
           id,
           organizationId,
+          facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
           subjectPersonIds: [row.participant_person_id],
           protected:
             outcome === 'removed'
@@ -933,6 +941,7 @@ export class WaitlistService implements WaitlistPort {
         type: 'waitlist_offer',
         id: offerId,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, entry.offering_id, trx),
         subjectPersonIds: [entry.participant_person_id],
         protected: true,
       });
@@ -1043,6 +1052,7 @@ export class WaitlistService implements WaitlistPort {
         await this.authorization.require(principal, EnrollmentActions.manageBasket, {
           type: 'basket',
           organizationId,
+          facilityId: await this.scope.facilityOf(organizationId, entry.offering_id, trx),
           subjectPersonIds: [...new Set([owner.id, person.id])],
         });
         // The payer follows the basket owner (finance lets only the payer quote and pay): a
@@ -1180,6 +1190,7 @@ export class WaitlistService implements WaitlistPort {
         type: 'waitlist_offer',
         id: offerId,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, entry.offering_id, trx),
         subjectPersonIds: [entry.participant_person_id],
         protected: true,
       });

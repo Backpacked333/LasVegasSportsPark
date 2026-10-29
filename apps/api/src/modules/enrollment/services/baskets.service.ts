@@ -63,6 +63,7 @@ import { ApplicationsService } from './applications.service';
 import { CapacityService, type HoldRow } from './capacity.service';
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
+import { EnrollmentFacilityScope } from './facility-scope';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
 
 export type BasketRow = Selectable<BasketsTable>;
@@ -91,6 +92,7 @@ export class BasketsService implements BasketPort {
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
     @Inject(OFFERING_LOOKUP_PORT) private readonly offerings: OfferingLookupPort,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -110,6 +112,24 @@ export class BasketsService implements BasketPort {
       .where('id', '=', id);
     if (forUpdate) q = q.forUpdate();
     return q.executeTakeFirst();
+  }
+
+  /**
+   * §4.3, §4.14: the facilities of a basket's lines (their offerings'). A basket is acted on and
+   * read at its lines' facilities; one with no line yet is organization-wide.
+   */
+  private async lineFacilities(trx: Trx | undefined, organizationId: string, basketId: string) {
+    const lines = await (trx ?? this.db)
+      .selectFrom('basket_lines')
+      .select('offering_id')
+      .where('organization_id', '=', organizationId)
+      .where('basket_id', '=', basketId)
+      .execute();
+    return this.scope.facilitiesOf(
+      organizationId,
+      lines.map((l) => l.offering_id),
+      trx,
+    );
   }
 
   async lineRows(db: Reader, organizationId: string, basketId: string): Promise<BasketLineRow[]> {
@@ -159,13 +179,19 @@ export class BasketsService implements BasketPort {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('basket');
-    await this.authorization.require(principal, EnrollmentActions.readBasket, {
-      type: 'basket',
-      id,
-      organizationId,
-      subjectPersonIds: [row.owner_person_id],
-      protected: true,
-    });
+    await this.scope.requireAt(
+      principal,
+      EnrollmentActions.readBasket,
+      {
+        type: 'basket',
+        id,
+        organizationId,
+        subjectPersonIds: [row.owner_person_id],
+        protected: true,
+      },
+      await this.lineFacilities(undefined, organizationId, id),
+      'any',
+    );
     return this.view(this.db, organizationId, row);
   }
 
@@ -271,6 +297,7 @@ export class BasketsService implements BasketPort {
         type: 'basket',
         id: basketId,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [...new Set([basket.owner_person_id, person.id])],
         protected: true,
       });
@@ -427,10 +454,18 @@ export class BasketsService implements BasketPort {
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
+      const removed = await trx
+        .selectFrom('basket_lines')
+        .select('offering_id')
+        .where('organization_id', '=', organizationId)
+        .where('basket_id', '=', basketId)
+        .where('id', '=', lineId)
+        .executeTakeFirst();
       await this.authorization.require(principal, EnrollmentActions.manageBasket, {
         type: 'basket',
         id: basketId,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, removed?.offering_id, trx),
         subjectPersonIds: [basket.owner_person_id],
         protected: true,
       });
@@ -485,13 +520,19 @@ export class BasketsService implements BasketPort {
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
-      await this.authorization.require(principal, EnrollmentActions.manageBasket, {
-        type: 'basket',
-        id: basketId,
-        organizationId,
-        subjectPersonIds: [basket.owner_person_id],
-        protected: true,
-      });
+      // §4.3: a hold reserves places at every line's facility.
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.manageBasket,
+        {
+          type: 'basket',
+          id: basketId,
+          organizationId,
+          subjectPersonIds: [basket.owner_person_id],
+          protected: true,
+        },
+        await this.lineFacilities(trx, organizationId, basketId),
+      );
       assertExpectedRevision(input.expectedRevision, basket.revision);
       if (basket.status !== 'open') throw errors.invalidTransition('Basket', basket.status, 'hold');
       const lines = await this.lineRows(trx, organizationId, basketId);
@@ -842,13 +883,18 @@ export class BasketsService implements BasketPort {
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
-      await this.authorization.require(principal, EnrollmentActions.manageBasket, {
-        type: 'basket',
-        id: basketId,
-        organizationId,
-        subjectPersonIds: [basket.owner_person_id],
-        protected: true,
-      });
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.manageBasket,
+        {
+          type: 'basket',
+          id: basketId,
+          organizationId,
+          subjectPersonIds: [basket.owner_person_id],
+          protected: true,
+        },
+        await this.lineFacilities(trx, organizationId, basketId),
+      );
       assertExpectedRevision(input.expectedRevision, basket.revision);
       if (basket.status === 'checking_out') {
         // §4.11, SPK-PAY-007, SPK-AT-006: while a checkout runs, finance owns the basket. Money may
@@ -1000,13 +1046,18 @@ export class BasketsService implements BasketPort {
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
-      await this.authorization.require(principal, EnrollmentActions.manageBasket, {
-        type: 'basket',
-        id: basketId,
-        organizationId,
-        subjectPersonIds: [basket.owner_person_id],
-        protected: true,
-      });
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.manageBasket,
+        {
+          type: 'basket',
+          id: basketId,
+          organizationId,
+          subjectPersonIds: [basket.owner_person_id],
+          protected: true,
+        },
+        await this.lineFacilities(trx, organizationId, basketId),
+      );
       assertExpectedRevision(input.expectedRevision, basket.revision);
       if (basket.status !== 'held')
         throw errors.invalidTransition('Basket', basket.status, 'complete');

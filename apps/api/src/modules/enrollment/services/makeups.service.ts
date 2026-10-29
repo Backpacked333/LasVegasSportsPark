@@ -44,6 +44,7 @@ import {
 import { CatalogSessions } from './catalog-sessions';
 import { RegistrationEvaluator } from './registration-evaluator';
 import { SessionBookingsService } from './session-bookings.service';
+import { EnrollmentFacilityScope } from './facility-scope';
 
 export type MakeupRow = Selectable<MakeupEntitlementsTable>;
 
@@ -69,6 +70,7 @@ export class MakeupsService {
     private readonly bookings: SessionBookingsService,
     private readonly sessions: CatalogSessions,
     @Inject(OFFERING_LOOKUP_PORT) private readonly offerings: OfferingLookupPort,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   async load(
@@ -110,10 +112,13 @@ export class MakeupsService {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const now = this.clock.now();
-      await this.authorization.require(principal, EnrollmentActions.issueMakeup, {
-        type: 'makeup_entitlement',
-        organizationId,
-      });
+      // §4.3: an entitlement is issued at every facility whose offerings it may be redeemed in.
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.issueMakeup,
+        { type: 'makeup_entitlement', organizationId },
+        await this.scope.facilitiesOf(organizationId, input.eligibleOfferingIds, trx),
+      );
       const person = await this.evaluator.participant(
         trx,
         organizationId,
@@ -215,13 +220,19 @@ export class MakeupsService {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('makeup_entitlement');
-    await this.authorization.require(principal, EnrollmentActions.readMakeup, {
-      type: 'makeup_entitlement',
-      id,
-      organizationId,
-      subjectPersonIds: [row.participant_person_id],
-      protected: true,
-    });
+    await this.scope.requireAt(
+      principal,
+      EnrollmentActions.readMakeup,
+      {
+        type: 'makeup_entitlement',
+        id,
+        organizationId,
+        subjectPersonIds: [row.participant_person_id],
+        protected: true,
+      },
+      await this.scope.facilitiesOf(organizationId, row.eligible_offering_ids as string[]),
+      'any',
+    );
     return this.view(this.db, organizationId, row);
   }
 
@@ -236,14 +247,28 @@ export class MakeupsService {
       subjectPersonIds: [query.participantPersonId],
       protected: true,
     });
-    const rows = await this.db
-      .selectFrom('makeup_entitlements')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .where('participant_person_id', '=', query.participantPersonId)
-      .orderBy('created_at')
-      .orderBy('id')
-      .execute();
+    // §4.3, §4.14: facility-scoped staff list the entitlements redeemable at their facilities
+    // (and those naming only programs, which no facility owns).
+    const offerings = await this.scope.listOfferings(
+      principal,
+      EnrollmentActions.readMakeup,
+      organizationId,
+      query.participantPersonId,
+    );
+    const visible = offerings ? new Set(offerings) : null;
+    const rows = (
+      await this.db
+        .selectFrom('makeup_entitlements')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('participant_person_id', '=', query.participantPersonId)
+        .orderBy('created_at')
+        .orderBy('id')
+        .execute()
+    ).filter((row) => {
+      const eligible = row.eligible_offering_ids as string[];
+      return !visible || eligible.length === 0 || eligible.some((o) => visible.has(o));
+    });
     const out: MakeupEntitlement[] = [];
     for (const row of rows) out.push(await this.view(this.db, organizationId, row));
     return out;
@@ -266,10 +291,12 @@ export class MakeupsService {
       // The row lock serializes concurrent redemptions; the trigger and check are the guarantee.
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('makeup_entitlement');
+      // §4.3: the redemption books a seat at the replacement offering's facility.
       await this.authorization.require(principal, EnrollmentActions.redeemMakeup, {
         type: 'makeup_entitlement',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -402,17 +429,22 @@ export class MakeupsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('makeup_entitlement');
-      await this.authorization.require(principal, EnrollmentActions.issueMakeup, {
-        type: 'makeup_entitlement',
-        id,
-        organizationId,
-        protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readMakeup, {
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.issueMakeup,
+        {
           type: 'makeup_entitlement',
           id,
           organizationId,
-          subjectPersonIds: [row.participant_person_id],
-        }),
-      });
+          protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readMakeup, {
+            type: 'makeup_entitlement',
+            id,
+            organizationId,
+            subjectPersonIds: [row.participant_person_id],
+          }),
+        },
+        await this.scope.facilitiesOf(organizationId, row.eligible_offering_ids as string[], trx),
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'active')
         throw errors.invalidTransition('MakeupEntitlement', row.status, 'revoke');
