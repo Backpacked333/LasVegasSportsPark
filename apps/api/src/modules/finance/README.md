@@ -64,8 +64,10 @@ carry `revision` and `touch_updated_at`.
   checkout, per installment and per payer and obligation; one live checkout or installment charge
   per obligation (`0601`: the checkout charge names the obligation it pays, so the installment
   worker can never charge the same debt beside it); one succeeded attempt per checkout; one
-  credit per source fact; one redemption per credit and reference; one reversal per journal, entry
-  and redemption.
+  credit per source fact (an in-process caller may name the source of an adjustment credit —
+  migration passes the imported balance's mapping id — and a second credit for it is refused with
+  `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
+  and reference; one reversal per journal, entry and redemption.
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
   (`refunded + reserved <= captured`); captured is fixed and refunded only accumulates.
 - **§4.7 invariant 7 / SPK-PAY-009:** `remaining_minor >= 0`, `remaining <= original`, and a

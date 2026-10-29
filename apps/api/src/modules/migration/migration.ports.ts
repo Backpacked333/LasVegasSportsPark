@@ -15,7 +15,10 @@ import type { Trx } from '../../kernel';
  * is refused, so SportsPark never becomes a second writer of a record the legacy system still
  * owns. Without any assignment SportsPark is authoritative (a facility that never migrates is
  * not affected). The migration module also enforces the guard on the HTTP write routes of every
- * category (AuthorityWriteInterceptor), so modules built before this port are covered too.
+ * category (AuthorityWriteInterceptor, deny-by-default over every served write route), so modules
+ * built before this port are covered on their routes. In-process, finance guards its refund
+ * command itself (finance's RECORD_AUTHORITY_PORT, implemented by this module's AuthorityService);
+ * other service-to-service writes are guarded only at their routes (README "Known gaps").
  */
 export const AUTHORITY_GUARD_PORT = Symbol('AUTHORITY_GUARD_PORT');
 
@@ -44,6 +47,15 @@ export interface AuthorityGuardPort {
     scope?: AuthorityScopeRef,
     trx?: Trx,
   ): Promise<AuthorityResolution>;
+  /**
+   * For a caller that cannot name the record's scope: throws the same ACCESS_DENIED while any
+   * assignment of the category in effect, at any scope, names the legacy system.
+   */
+  assertNoLegacyAuthorityInEffect(
+    organizationId: string,
+    category: ImportEntityTypeValue,
+    trx?: Trx,
+  ): Promise<void>;
 }
 
 /** EXTERNAL_MAPPING_PORT: stable identity of migrated records (§5.3, SPK-AT-024). */

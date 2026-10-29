@@ -27,6 +27,14 @@ export interface SupportPolicy {
   todayEventLimit: number;
   /** Priority given to a case opened by an escalated disputed-access review (SPK-IAM-005). */
   accessEscalationPriority: CasePriority;
+  /**
+   * Minutes after a helper request (for example a refund from a case) is recorded `requested`
+   * before support treats its outcome as lost: the action becomes `unknown`, the support operation
+   * `recovery_required`, and the owning module's queue gets an exception (§4.7 invariant 12,
+   * §4.11). Proposed: 15 minutes, longer than a provider call's timeout; pending the §6.6 support
+   * and operations ownership decisions.
+   */
+  helperOutcomeGraceMinutes: number;
 }
 
 export const DEFAULT_SUPPORT_POLICY: SupportPolicy = {
@@ -36,6 +44,7 @@ export const DEFAULT_SUPPORT_POLICY: SupportPolicy = {
   timelineSourceLimit: 200,
   todayEventLimit: 200,
   accessEscalationPriority: 'high',
+  helperOutcomeGraceMinutes: 15,
 };
 
 export const SUPPORT_POLICY = Symbol('SUPPORT_POLICY');

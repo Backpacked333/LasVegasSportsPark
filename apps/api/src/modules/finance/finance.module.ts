@@ -1,4 +1,11 @@
-import { Module, type OnModuleDestroy, type OnModuleInit, type Provider } from '@nestjs/common';
+import {
+  Logger,
+  Module,
+  type OnModuleDestroy,
+  type OnModuleInit,
+  type Provider,
+} from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
 import {
   APP_CONFIG,
@@ -31,7 +38,13 @@ import {
   RefundSettled,
 } from './finance.events';
 import { DEFAULT_FINANCE_POLICY, FINANCE_POLICY_CONFIG } from './finance.policy';
-import { PAYMENT_PROVIDER_PORT, type PaymentProviderPort } from './finance.ports';
+import {
+  PAYMENT_PROVIDER_PORT,
+  RECORD_AUTHORITY_IMPL,
+  RECORD_AUTHORITY_PORT,
+  type PaymentProviderPort,
+  type RecordAuthorityPort,
+} from './finance.ports';
 import { LedgerService } from './ledger/ledger.service';
 import { FAKE_PAYMENTS_PROVIDER, FakePaymentProvider } from './providers/fake-payment.provider';
 import { CashTendersService } from './services/cash-tenders.service';
@@ -51,7 +64,43 @@ import { QuotesService } from './services/quotes.service';
 import { ReconciliationService } from './services/reconciliation.service';
 import { RefundsService } from './services/refunds.service';
 
+/**
+ * RECORD_AUTHORITY_PORT (§5.6, §4.7 invariant 11): the migration module's authority guard, found
+ * at call time (no import cycle). Only "no implementation registered" (the migration module is
+ * not loaded, so no assignment exists) means SportsPark is authoritative; any other failure is
+ * rethrown. A found implementation is cached.
+ */
+function lazyRecordAuthority(moduleRef: ModuleRef): RecordAuthorityPort {
+  const logger = new Logger('Finance');
+  let impl: RecordAuthorityPort | null = null;
+  let warned = false;
+  return {
+    assertNoLegacyAuthorityInEffect: async (organizationId, category, trx) => {
+      if (!impl) {
+        try {
+          impl = moduleRef.get<RecordAuthorityPort>(RECORD_AUTHORITY_IMPL, { strict: false });
+        } catch (error) {
+          if (error instanceof Error && /Nest could not find/.test(error.message)) {
+            if (!warned) {
+              warned = true;
+              logger.warn('no RECORD_AUTHORITY_IMPL registered: SportsPark is authoritative');
+            }
+            return;
+          }
+          throw error;
+        }
+      }
+      await impl.assertNoLegacyAuthorityInEffect(organizationId, category, trx);
+    },
+  };
+}
+
 const providers: Provider[] = [
+  {
+    provide: RECORD_AUTHORITY_PORT,
+    inject: [ModuleRef],
+    useFactory: (moduleRef: ModuleRef): RecordAuthorityPort => lazyRecordAuthority(moduleRef),
+  },
   // Policy values the specification leaves to operators (DEC-007/008/009): proposed defaults,
   // overridden by approved catalog policy versions (FinancePolicyResolver).
   { provide: FINANCE_POLICY_CONFIG, useValue: DEFAULT_FINANCE_POLICY },

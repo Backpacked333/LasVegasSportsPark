@@ -85,7 +85,7 @@ waiting_internal | resolved`; `waiting_internal → open | waiting_customer | re
 | POST           | `/cases/{id}/actions`                                            | case staff (`support.link_action`): link the operation or audit record of a command the operator ran                                             |
 | POST           | `/cases/{id}/resend-notification`                                | case staff; communications authorizes the read and the compose + send (`communications.read_notification`, `communications.compose`/`send`)      |
 | POST           | `/cases/{id}/request-refund`                                     | case staff; finance authorizes `finance.refund` (finance operator, general manager, system administrator) and enforces the refundable ceiling    |
-| POST           | `/cases/{id}/actions/{actionId}/settle`                          | case staff: record the owning module's outcome of an `unknown` helper action (succeeded only with the evidence of the command the helper ran)    |
+| POST           | `/cases/{id}/actions/{actionId}/settle`                          | case staff who also hold `exceptions.manage` and see the outcome's queue: record the owning module's outcome of an `unknown` helper action       |
 | GET            | `/today`                                                         | operations staff (`support.read_today`): front desk, league/program managers, scheduler, finance and facilities operators, GM, sysadmin, support |
 | GET            | `/exceptions`, `/exceptions/{id}`                                | kernel `exceptions.read`, limited to the viewer's queues (oversight roles see every queue) and facilities                                        |
 | POST           | `/exceptions/{id}/acknowledge`, `/resolve`, `/close`             | kernel `exceptions.manage` (GM, sysadmin, support operator) within the viewer's queues; resolve and close require a reason                       |
@@ -119,6 +119,19 @@ Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write
   again, and a reviewer settles it (failed, or succeeded with the helper's own command evidence);
   links verify that the evidence is the operator's own command of the named action; resends go
   through communications and re-resolve recipients from current permissions.
+- **Settling a helper outcome (support-migration-04/06/08):** the reviewer needs the kernel's
+  `exceptions.manage` and must see the outcome's queue (a front-desk case worker is refused), and the
+  finance-owned exception is resolved as the reviewer, not the system. A refund helper settles
+  `failed` only while finance holds no refund for that request other than a failed or canceled one
+  (`REFUND_RECORDED_BY_FINANCE`); it settles `succeeded` only with the refund that request ran —
+  same operator, payment and amount, recorded since the request under its correlation id, not
+  failed or canceled — and not already another case action's evidence (`EVIDENCE_NOT_OF_THIS_REQUEST`,
+  `EVIDENCE_ALREADY_LINKED`). That refund cannot be linked to another case while the request is
+  outstanding (`HELPER_REQUEST_OUTSTANDING`). The intent transaction enqueues a delayed
+  `support.helper_outcome_due`; a request still `requested` after the grace period becomes
+  `unknown` (`OUTCOME_NOT_RECORDED`) with the finance-owned exception and a `recovery_required`
+  support operation, so it can be settled; a late answer from finance still records its outcome
+  and resolves the exception.
 - **Escalation hook (SPK-IAM-005):** `identity.access_review_decided` with `kind = escalate` opens one
   `access` case owned by the review's owner role (the live-origin unique index makes replays
   harmless); later decisions are appended to the case history and never resolve it.
@@ -150,6 +163,7 @@ Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write
 
 `support.case_opened`, `support.case_updated`, `support.case_assigned`,
 `support.case_status_changed`, `support.case_note_added`, `support.case_action_recorded`,
+`support.helper_outcome_due` (delayed follow-up of a helper request),
 `support.exception_transitioned`, `support.exception_queue_changed`. Payloads carry identifiers
 and enumerations only.
 
@@ -158,14 +172,16 @@ Handlers registered: `support.index_payment` (`finance.payment_received`, `payme
 `support.index_order` (`finance.order_paid`), `support.index_message`
 (`communications.notification_dispatched`), `support.index_schedule_change`
 (`scheduling.event_changed`), `support.follow_person_merge` (`identity.persons_merged`),
-`support.access_review_escalation` (`identity.access_review_decided`). All are idempotent under
+`support.access_review_escalation` (`identity.access_review_decided`),
+`support.helper_outcome_overdue` (`support.helper_outcome_due`). All are idempotent under
 replay (kernel consumption records plus unique keys).
 
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
 `support.policy.ts` (`DEFAULT_SUPPORT_POLICY`, token `SUPPORT_POLICY`): case service levels urgent
 4 h, high 1 day, normal 3 days, low 7 days; oversight roles (every queue visible) general manager,
-system administrator, support operator; escalated access reviews open as `high`; fixtures with only
+system administrator, support operator; escalated access reviews open as `high`; a helper request's
+outcome is treated as lost 15 minutes after its intent (`helperOutcomeGraceMinutes`); fixtures with only
 warnings or unknown readiness evidence are shown as `info` items. The support service levels and
 queue ownership are not in the decision register yet; they belong with the §6.6 support/operations
 ownership decisions.
@@ -180,10 +196,10 @@ ownership decisions.
   finance records without one of the indexed events are not shown; records created before this
   module was deployed (or by fixtures that emit no events) are not indexed — a backfill would read
   the owning modules' exported services. Lists return one page per source (`timelineSourceLimit`).
-- **Case actions:** a helper outcome left `requested` (the process failed while recording the
-  outcome) is visible on the case but is not swept automatically; there is no worker that settles
-  stale helper actions. Only refund and resend helpers exist; transfers and permission changes are
-  run in their modules and linked.
+- **Case actions:** only refund and resend helpers exist; transfers and permission changes are
+  run in their modules and linked. Whether a refund or a linked record must concern the case's
+  subject or household is not checked (finance authorizes the refund itself; what counts as a
+  related record is pending the §6.6 support decisions).
 - **Exceptions:** managing an exception requires the kernel's `exceptions.manage` (GM, sysadmin,
   support operator); a queue's owning role (for example the finance operator) can see but not
   acknowledge its queue's exceptions until the kernel widens that action.

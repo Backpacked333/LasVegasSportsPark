@@ -100,6 +100,29 @@ export class ImportTargets {
   };
 
   /**
+   * Every record the owning module audited as created for these correlation ids (the creation
+   * audit record is written in the same transaction as the record). Used by reconciliation to find
+   * a creation no mapping links (support-migration-05).
+   */
+  async creationsFor(
+    organizationId: string,
+    entityType: Exclude<MappedEntityType, 'relationship_evidence'>,
+    correlationIds: readonly string[],
+  ): Promise<Array<{ correlationId: string; targetId: string }>> {
+    if (correlationIds.length === 0) return [];
+    const anchor = ImportTargets.CREATION_AUDIT[entityType];
+    const rows = await this.db
+      .selectFrom('audit_records')
+      .select(['correlation_id', 'target_id'])
+      .where('organization_id', '=', organizationId)
+      .where('correlation_id', 'in', [...correlationIds])
+      .where('action', '=', anchor.action)
+      .where('target_type', '=', anchor.targetType)
+      .execute();
+    return rows.map((r) => ({ correlationId: r.correlation_id as string, targetId: r.target_id }));
+  }
+
+  /**
    * Finds a record an earlier, interrupted apply created for this correlation id: the owning
    * module wrote its audit record in the same transaction as the record, so its absence proves
    * the creation never committed.
@@ -413,6 +436,7 @@ export class ImportTargets {
   async issueOpeningCredit(
     ctx: TargetContext,
     input: {
+      mappingId: string;
       ownerPersonId: string;
       amountMinor: number;
       currency: string;
@@ -420,6 +444,9 @@ export class ImportTargets {
       permittedUses: readonly ('registration' | 'obligation')[];
     },
   ): Promise<string> {
+    // support-migration-05 (§4.7 invariants 5 and 7): the mapping id is the credit's source fact,
+    // so finance's unique index on (source kind, source id) refuses a second credit for the same
+    // imported balance — also from an apply that lost its lock while it was creating.
     const credit = await this.credits.issue(
       ctx.principal,
       {
@@ -432,6 +459,7 @@ export class ImportTargets {
         reason: ctx.reason,
       },
       ctx.correlationId,
+      { sourceId: input.mappingId },
     );
     return credit.id;
   }

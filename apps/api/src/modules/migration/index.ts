@@ -19,9 +19,12 @@ export { batchChecksum, canonicalJson, payloadHash } from './staging/checksum';
 export { compareControlTotals, type ControlTotalDiscrepancy } from './staging/control-totals';
 export { csvToStagedRows, parseCsv } from './staging/csv';
 export {
+  AUTHORITY_EXEMPT_ROUTES,
   AUTHORITY_ROUTES,
   matchAuthorityRoute,
+  type AuthorityExemptRoute,
   type AuthorityRoute,
+  type AuthorityScopeSource,
 } from './services/authority-routes';
 export { AuthorityService } from './services/authority.service';
 export { AuthorityWriteInterceptor } from './services/authority-write.interceptor';
