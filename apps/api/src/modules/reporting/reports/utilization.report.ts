@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { errors, type MetricValue, type ReportRow } from '@sportspark/contracts';
 import { attended as isAttended, currentHeads, effectiveState } from '../../entry';
-import type { Interval } from '../calculators/intervals';
+import { intersect, type Interval } from '../calculators/intervals';
 import {
   computeUtilization,
   type UtilizationClosure,
@@ -37,6 +37,33 @@ export function parseWeights(text: string | undefined): Map<string, number> {
 }
 
 /**
+ * Closed periods of each space from its recorded status changes, in order (SPK-REPORT-003,
+ * MET-064). A space is created active, so it is closed from a change to `closed` until the next
+ * change to another status, or open-ended when no such change is recorded.
+ */
+export function closedPeriods(
+  changes: ReadonlyArray<{ resourceId: string; status: string; at: number }>,
+): Map<string, Interval[]> {
+  const periods = new Map<string, Interval[]>();
+  const closedSince = new Map<string, number>();
+  const push = (resourceId: string, period: Interval) =>
+    periods.set(resourceId, [...(periods.get(resourceId) ?? []), period]);
+  for (const c of changes) {
+    const since = closedSince.get(c.resourceId);
+    if (c.status === 'closed') {
+      if (since === undefined) closedSince.set(c.resourceId, c.at);
+    } else if (since !== undefined) {
+      push(c.resourceId, [since, c.at]);
+      closedSince.delete(c.resourceId);
+    }
+  }
+  for (const [resourceId, since] of closedSince) {
+    push(resourceId, [since, Number.POSITIVE_INFINITY]);
+  }
+  return periods;
+}
+
+/**
  * Field utilization (SPK-REPORT-003): the scheduling, entry and catalog views of migration 1300
  * feed the pure calculator (calculators/utilization.calculator.ts), which measures everything on
  * conflict units so the same physical hour is never counted twice (U1).
@@ -52,7 +79,7 @@ export class UtilizationReport {
     scope: 'facility',
     pointInTime: 'partial',
     pointInTimeNote:
-      'Releases and closure applications and lifts after the as-of instant are ignored (their instants are recorded). The scheduling module does not stamp when a reservation was created, so reservations made after the as-of instant are included; the stored run is the reproducible record.',
+      'Releases, closure applications and lifts, and space status changes after the as-of instant are ignored (their instants are recorded). The scheduling module does not stamp when a reservation was created, so reservations made after the as-of instant are included; the stored run is the reproducible record.',
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
@@ -206,6 +233,37 @@ export class UtilizationReport {
         end: Math.min(new Date(c.ends_at).getTime(), liftedBy),
       };
     });
+
+    // MET-064 exclusion: scheduling refuses a space with status `closed`, so a unit is closed
+    // while every space holding it is closed — a closed whole pitch whose halves are open still
+    // books the halves. Its operating time is then closure time, not available time. The status
+    // at an instant is the last change recorded by the as-of instant (migration 1302), so a later
+    // change never rewrites an earlier period (G3).
+    const statusChanges = await ctx.db
+      .selectFrom('reporting_resource_status_changes_v')
+      .select(['change_id', 'resource_id', 'status', 'changed_at'])
+      .where('organization_id', '=', ctx.organizationId)
+      .where('facility_id', '=', facility.id)
+      .where('changed_at', '<=', ctx.asOf)
+      .orderBy('changed_at')
+      .orderBy('change_id')
+      .execute();
+    const closedOf = closedPeriods(
+      statusChanges.map((c) => ({
+        resourceId: c.resource_id,
+        status: c.status,
+        at: new Date(c.changed_at).getTime(),
+      })),
+    );
+    for (const [unitId, list] of holders) {
+      let closed: Interval[] | null = null;
+      for (const r of list) {
+        const own = closedOf.get(r.id) ?? [];
+        closed = closed === null ? own : intersect(closed, own);
+        if (closed.length === 0) break;
+      }
+      for (const [start, end] of closed ?? []) closures.push({ unitIds: [unitId], start, end });
+    }
 
     const reservedRows = await ctx.db
       .selectFrom('reporting_reserved_units_v')
@@ -377,6 +435,25 @@ export class UtilizationReport {
       }${re.excluded.length > 0 ? `; excluded: ${re.excluded.map((e) => `${e.name} (${e.reason})`).join('; ')}` : ''}. Subdivisions are inside their whole space and are never weighted.`,
       `Operating day: local midnight to midnight in ${tz} (DEC-001 pending).`,
     ];
+    const closedNames = resources
+      .filter((r) =>
+        (closedOf.get(r.id) ?? []).some(
+          ([s, e]) => s < spanEnd.getTime() && e > spanStart.getTime(),
+        ),
+      )
+      .map((r) => {
+        const periods = (closedOf.get(r.id) ?? []).map(([s, e]) =>
+          Number.isFinite(e)
+            ? `${new Date(s).toISOString()} to ${new Date(e).toISOString()}`
+            : `from ${new Date(s).toISOString()}`,
+        );
+        return `${r.name} (closed ${periods.join('; ')})`;
+      });
+    if (closedNames.length > 0) {
+      disclosures.push(
+        `Spaces with status closed in the range: ${closedNames.join(', ')}. A unit counts as closed (closure hours, not available hours) only while every space holding it is closed, from the status changes recorded by the as-of instant (MET-064).`,
+      );
+    }
     if (unconfigured > 0) {
       disclosures.push(
         `${unconfigured} unit-day(s) have no operating hours configured: they count as no available hours and their reserved time as outside operating hours.`,

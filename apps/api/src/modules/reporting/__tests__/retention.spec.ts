@@ -10,7 +10,15 @@ import {
 } from '../../competition';
 import { createEnrollmentFixture } from '../../enrollment';
 import { createPersonFixture } from '../../identity';
-import { createFulfilledOrder, get, reportingTestApp, staff, valueOf, type Actor } from './support';
+import {
+  createFulfilledOrder,
+  createRefundedOrderPayment,
+  get,
+  reportingTestApp,
+  staff,
+  valueOf,
+  type Actor,
+} from './support';
 
 const PERIODS = {
   anchorFrom: '2027-01-01',
@@ -322,6 +330,93 @@ describe('retention by cohort (SPK-REPORT-005)', () => {
     );
     expect(rate.value).toBeNull();
     expect(rate.unavailableReason).toBeTruthy();
+  });
+
+  it('SPK-REPORT-005 (MET-082): an order refunded in full by the as-of instant is not a purchase; a partly refunded one is', async () => {
+    const managerId = (await staff(t, ['program_manager'])).personId;
+    const term = (startsOn: string, endsOn: string) =>
+      createOfferingFixture(t, {
+        responsibleManagerPersonId: managerId,
+        kind: 'term',
+        startsOn,
+        endsOn,
+        basePriceMinor: 8_000,
+      });
+    const winter = await term('2027-01-12', '2027-03-12');
+    const spring = await term('2027-04-12', '2027-06-12');
+    /** A household of one paying adult with a fulfilled order per offering, refunded as given. */
+    const household = async (
+      name: string,
+      orders: Array<{ offering: typeof winter; refundedMinor: number }>,
+    ) => {
+      const payer = await createPersonFixture(t, { kind: 'adult' });
+      const householdId = newId();
+      await t.db
+        .insertInto('households')
+        .values({
+          id: householdId,
+          organization_id: t.organizationId,
+          name,
+          created_by: json({ kind: 'system' }),
+        })
+        .execute();
+      await t.db
+        .insertInto('household_memberships')
+        .values({
+          id: newId(),
+          organization_id: t.organizationId,
+          household_id: householdId,
+          person_id: payer,
+          label: null,
+          added_by: json({ kind: 'system' }),
+        })
+        .execute();
+      for (const { offering, refundedMinor } of orders) {
+        const order = await createFulfilledOrder(t, {
+          payerPersonId: payer,
+          fulfilledAt: t.clock.now(),
+          lines: [
+            {
+              offeringId: offering.offeringId,
+              participantPersonId: payer,
+              priceRuleId: offering.priceRuleId!,
+              amountMinor: 8_000,
+            },
+          ],
+        });
+        await createRefundedOrderPayment(t, {
+          order,
+          payerPersonId: payer,
+          paidMinor: 8_000,
+          paidAt: t.clock.now(),
+          refunds:
+            refundedMinor > 0 ? [{ amountMinor: refundedMinor, resolvedAt: t.clock.now() }] : [],
+        });
+      }
+    };
+    // Bought in the winter; the spring order was refunded in full: not a repeat purchase.
+    await household('Chen household', [
+      { offering: winter, refundedMinor: 0 },
+      { offering: spring, refundedMinor: 8_000 },
+    ]);
+    // A partly refunded winter order is still a purchase; it bought again in the spring.
+    await household('Diaz household', [
+      { offering: winter, refundedMinor: 4_000 },
+      { offering: spring, refundedMinor: 0 },
+    ]);
+    // Its only winter order was refunded in full: not in the cohort at all.
+    await household('Evans household', [
+      { offering: winter, refundedMinor: 8_000 },
+      { offering: spring, refundedMinor: 0 },
+    ]);
+
+    const res = await report({ cohort: 'households', ...PERIODS });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    // Rivera (from the setup), Chen and Diaz bought in the winter; Rivera and Diaz again in the spring.
+    expect(res.body.rows).toEqual([
+      expect.objectContaining({ cohort: 'households', cohortSize: 3, returned: 2 }),
+    ]);
+    expect(valueOf(res.body, 'MET-082', 'Household repeat purchase rate')).toBeCloseTo(2 / 3, 4);
   });
 
   it('K2: the comparable periods are explicit and validated; access is for retention viewers', async () => {

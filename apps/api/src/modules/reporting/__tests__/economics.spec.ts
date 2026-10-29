@@ -1,3 +1,4 @@
+import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createOfferingFixture, createOfferingSessionFixture } from '../../catalog';
@@ -11,7 +12,9 @@ import {
 } from '../../scheduling';
 import {
   createFulfilledOrder,
+  createRefundedOrderPayment,
   get,
+  HOUR,
   post,
   reportingTestApp,
   staff,
@@ -284,6 +287,122 @@ describe('economics (SPK-REPORT-004)', () => {
     expect(refused.body.details.missing).toEqual(
       expect.arrayContaining([expect.objectContaining({ resourceId: pitch.northHalfId })]),
     );
+  });
+
+  it('SPK-REPORT-007 (G3): a margin run reproduces after its cost input is corrected (withdrawn and recorded again)', async () => {
+    const costInput = {
+      facilityId: t.facilityId,
+      basis: 'per_activity_hour',
+      currency: 'USD',
+      effectiveFrom: '2027-01-01',
+      description: 'Direct field cost (lighting, line marking, turf wear)',
+      approvalReference: 'DEC-085 finance approval',
+    };
+    const recorded = await post(t, '/v1/reports/cost-inputs', finance, {
+      ...costInput,
+      amountMinor: 1_000,
+    });
+    expect(recorded.status, JSON.stringify(recorded.body)).toBe(201);
+    const run = await post(t, '/v1/reports/runs', finance, {
+      report: 'economics',
+      parameters: {
+        facilityId: t.facilityId,
+        from: '2027-02-01',
+        to: '2027-02-07',
+        allocationMethod: 'pro_rata',
+        includeMargin: true,
+      },
+      reason: 'Monthly margin review',
+    });
+    expect(run.status, JSON.stringify(run.body)).toBe(201);
+    expect(spaceRow(run.body.result, pitch.northHalfId)).toMatchObject({ costMinor: 1_500 });
+
+    // An hour later finance corrects the input: withdrawn, then recorded with the right amount.
+    t.clock.advance(HOUR);
+    const withdrawn = await post(
+      t,
+      `/v1/reports/cost-inputs/${recorded.body.id}/withdraw`,
+      finance,
+      { reason: 'Corrected amount', expectedRevision: recorded.body.revision },
+    );
+    expect(withdrawn.status, JSON.stringify(withdrawn.body)).toBe(200);
+    const corrected = await post(t, '/v1/reports/cost-inputs', finance, {
+      ...costInput,
+      amountMinor: 1_200,
+    });
+    expect(corrected.status, JSON.stringify(corrected.body)).toBe(201);
+
+    // Re-evaluated at the run's as-of instant, the inputs in force then give the same figures.
+    const reproduced = await post(t, `/v1/reports/runs/${run.body.id}/reproduce`, finance, {});
+    expect(reproduced.status, JSON.stringify(reproduced.body)).toBe(201);
+    expect(reproduced.body.matched).toBe(true);
+    // Evaluated now, the corrected input applies.
+    const live = await report(finance, { allocationMethod: 'pro_rata', includeMargin: 'true' });
+    expect(live.status, JSON.stringify(live.body)).toBe(200);
+    expect(spaceRow(live.body, pitch.northHalfId)).toMatchObject({ costMinor: 1_800 });
+  });
+
+  it('SPK-REPORT-004 (E2, G2): a refund of an order with lines at several facilities counts only the share of this facility’s lines', async () => {
+    const otherFacilityId = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: otherFacilityId,
+        organization_id: t.organizationId,
+        slug: 'north-complex',
+        name: 'North complex',
+        timezone: 'America/Los_Angeles',
+        address: null,
+      })
+      .execute();
+    const managerId = (await staff(t, ['program_manager'])).personId;
+    const offering = (facilityId: string, basePriceMinor: number) =>
+      createOfferingFixture(t, {
+        responsibleManagerPersonId: managerId,
+        facilityId,
+        kind: 'membership',
+        startsOn: '2027-02-01',
+        endsOn: '2027-12-31',
+        basePriceMinor,
+      });
+    const here = await offering(t.facilityId, 100);
+    const there = await offering(otherFacilityId, 900);
+    const payer = await createPersonFixture(t, { kind: 'adult' });
+    const order = await createFulfilledOrder(t, {
+      payerPersonId: payer,
+      fulfilledAt: t.clock.now(),
+      lines: [
+        {
+          offeringId: here.offeringId,
+          participantPersonId: payer,
+          priceRuleId: here.priceRuleId!,
+          amountMinor: 100,
+        },
+        {
+          offeringId: there.offeringId,
+          participantPersonId: payer,
+          priceRuleId: there.priceRuleId!,
+          amountMinor: 900,
+        },
+      ],
+    });
+    // Refunded in full, in two refunds: 667 and 333 of the 1000 paid.
+    await createRefundedOrderPayment(t, {
+      order,
+      payerPersonId: payer,
+      paidMinor: 1_000,
+      paidAt: t.clock.now(),
+      refunds: [
+        { amountMinor: 667, resolvedAt: t.clock.now() },
+        { amountMinor: 333, resolvedAt: t.clock.now() },
+      ],
+    });
+    const res = await report(finance, { allocationMethod: 'pro_rata' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    // Each refund is split over the order's lines by their totals (largest remainder): 67 + 33.
+    expect(
+      valueOf(res.body, 'MET-074', 'Refunds of these sales (adjustment, not netted)', 'USD'),
+    ).toBe(100);
   });
 
   it('access: financial viewers only; cost inputs are managed by finance', async () => {

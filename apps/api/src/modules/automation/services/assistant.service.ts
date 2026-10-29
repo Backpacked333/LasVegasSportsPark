@@ -207,8 +207,23 @@ export class AssistantService {
       };
     }
 
-    // 3. Record the outcome.
-    await this.complete(principal, id, operationId, correlationId, result);
+    // 3. Record the outcome. If it cannot be recorded (a proposal the database refuses), the
+    // request and its operation still reach a terminal state (§4.9, §4.11): they fail, with no
+    // recommendation, instead of staying processing/running.
+    try {
+      await this.complete(principal, id, operationId, correlationId, result);
+    } catch (error) {
+      if (result.status !== 'answered') throw error;
+      this.logger.error(`assistant request ${id}: outcome could not be recorded: ${String(error)}`);
+      await this.complete(principal, id, operationId, correlationId, {
+        ...result,
+        status: 'failed',
+        text: null,
+        commands: [],
+        informational: [],
+        error: { code: 'INTERNAL_ERROR', message: 'The assistant could not record its outcome.' },
+      });
+    }
     return this.detail(this.db, organizationId, id);
   }
 
@@ -398,7 +413,13 @@ export class AssistantService {
       response: row.response_text ? { text: row.response_text } : null,
       evidence: (row.evidence ?? []) as unknown as AssistantEvidence[],
       missingEvidence: (row.missing_evidence ?? []) as unknown as AssistantMissingEvidence[],
-      recommendations: recommendations.map(toRecommendation),
+      // SPK-AUTO-002: a recommendation's evidence carries its freshness at this read.
+      recommendations: recommendations.map((r) =>
+        toRecommendation(r, {
+          now: this.clock.now(),
+          maxAgeMinutes: this.settings.evidenceMaxAgeMinutes,
+        }),
+      ),
       toolInvocations: invocations.map(toToolInvocation),
       error: row.error ?? null,
       operationId: row.operation_id,

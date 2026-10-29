@@ -269,7 +269,7 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
       [
         (id) => `/v1/installments/${id}/extend`,
         installmentId,
-        { dueAt: '2027-06-01T15:00:00Z', reason: 'x' },
+        { dueAt: '2027-06-01T15:00:00Z', reason: 'x', expectedRevision: 1 },
       ],
       [
         (id) => `/v1/registration-checkouts/${id}/recover`,

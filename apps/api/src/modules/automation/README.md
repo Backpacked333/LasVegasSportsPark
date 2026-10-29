@@ -50,7 +50,14 @@ unless marked proposed or pending.
   denied reads, unknown readiness checks, unvalidated drafts, unknown payment outcomes, sources the
   caller may not read, calls beyond the limit — is listed explicitly and is never presented as
   "ready" or "none". `not_available` covers both "does not exist" and "you may not see it", so a
-  denial never reveals another household's record (§4.10).
+  denial never reveals another household's record (§4.10). A recommendation keeps the evidence read
+  when it was proposed; when it is read later its evidence is shown with its freshness at that
+  read (`recent` within the evidence window, then `stale`; never `live` again) and its age to that
+  instant.
+- **Provider output is data, not authority (SPK-AUTO-004).** A facility the provider names in a
+  proposed command must be a facility of the requester's organization (otherwise `NOT_FOUND`,
+  logged `denied`, no recommendation). If the outcome of a request cannot be recorded, the request
+  and its operation fail instead of staying `processing`/`running`.
 - **No provider is selected (§5.2).** `AssistantProviderPort` has only the deterministic
   `FakeAssistantProvider` (scripted turns, failure, timeout); it is refused in production, and
   enabling the assistant in production without a selected provider stops startup.
@@ -153,8 +160,11 @@ through the matching tool; evidence reports `changedSinceClientObservation`.
   its target; others, other organizations and other facilities NOT_FOUND; lists likewise); a
   reviewer who lost the role is refused by scheduling at apply time (claim released, denial logged,
   operation failed); refunds applied once, the refundable ceiling enforced by finance (failed, claim
-  released); notices sent only on apply, as the reviewer; schedule repairs open and publish a draft
-  as the reviewer; rejection needs a reason and is final; informational recommendations cannot be
+  released); a refund the provider declines is a failed apply that can be retried, and one with no
+  reported outcome stays claimed and is never marked applied; notices sent only on apply, as the
+  reviewer; schedule repairs open and publish a draft as the reviewer, and a refused publication
+  keeps the draft it opened (named on the recommendation's last error) so a retry publishes that
+  draft instead of opening another, unless it was changed in scheduling meanwhile; rejection needs a reason and is final; informational recommendations cannot be
   applied; expiry by the durable timer and at command time; an apply with an unknown outcome stays
   claimed (`recovery_required` operation, exception owned by the command's queue, retries refused,
   never expired).

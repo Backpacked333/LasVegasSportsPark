@@ -182,6 +182,47 @@ export class AuthorityService implements AuthorityGuardPort {
     );
   }
 
+  /**
+   * For a write whose scope cannot be proven before the owning module loads the record: refuses
+   * while ANY assignment of the category in effect now, at any scope, names the legacy system
+   * (§4.7 invariant 11 — ambiguity refuses rather than duplicates; §4.8 the scope is never taken
+   * from client-supplied identifiers). Without such an assignment SportsPark is authoritative.
+   */
+  async assertNoLegacyAuthorityInEffect(
+    organizationId: string,
+    category: ImportEntityTypeValue,
+    trx?: Trx,
+  ): Promise<void> {
+    const db: Reader = trx ?? currentTransaction() ?? this.db;
+    const at = this.clock.now();
+    const legacy = await db
+      .selectFrom('authority_assignments')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('record_category', '=', category)
+      .where('authoritative_system', '=', 'legacy')
+      .where('effective_from', '<=', at)
+      .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]))
+      .orderBy('effective_from')
+      .orderBy('id')
+      .executeTakeFirst();
+    if (!legacy) return;
+    throw new DomainError(
+      'ACCESS_DENIED',
+      `The legacy system is authoritative for ${category} records in at least one scope, and this write's scope is only known to the owning module; a synchronized copy does not become an independent writer (§5.6).`,
+      {
+        nextAction: 'write_in_authoritative_system',
+        details: {
+          code: 'LEGACY_AUTHORITY',
+          recordCategory: category,
+          basis: 'assignment',
+          assignmentId: legacy.id,
+          scopeResolution: 'unproven',
+        },
+      },
+    );
+  }
+
   // -------------------------------------------------------------------------------------------
   // Queries
   // -------------------------------------------------------------------------------------------

@@ -195,6 +195,15 @@ dispatch creates the attempts or suppresses the notice.
   `createTestApp({ imports: [CommunicationsModule], principalResolver: 'module' })` and the
   identity fixtures.
 
+### Session participants (SPK-AT-009, SPK-COMMS-002) — verified
+
+`SESSION_AUDIENCE_PORT` (implemented by enrollment as `SESSION_AUDIENCE_IMPL`, resolved lazily, none
+without enrollment): a scheduling event that commits no person or team (a youth session) still gets
+its change or cancellation notice to the enrolled and booked participants of the catalog sessions
+behind it (their guardians through `receive_messages`); such a notice is `protected`, so recipients
+are re-checked before dispatch. A closure preview lists unsent notices about affected events
+(`impact.messages`). **Verified**: `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`.
+
 ## Events (`communications.events.ts`)
 
 `communications.notification_composed`, `communications.notification_queued`,

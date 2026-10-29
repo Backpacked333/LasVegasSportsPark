@@ -383,7 +383,9 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       ageBand: { minAgeYears: 5, maxAgeYears: 12 },
     });
     const trial = await offering(t, { kind: 'trial', programId: trialProgram, basePriceMinor: 0 });
-    const trialSession = await session(trial, '2026-11-15T17:00:00Z');
+    // The session starts within the hour (the file shares one clock, so it advances only a little).
+    const trialStart = new Date(t.clock.now().getTime() + 60 * 60_000);
+    const trialSession = await session(trial, trialStart.toISOString());
     const term = await offering(t, { programId: trialProgram, basePriceMinor: 18_000 });
     const kid = await child(t, [parent]);
     await acknowledge(t, trial, kid, parent.personId);
@@ -420,12 +422,15 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         })
       ).status,
     ).toBe(403);
+    // SPK-YOUTH-003: attendance is recorded once the session has taken place.
+    t.clock.advance(90 * 60_000);
     const attended = await post(t, `/v1/trial-participations/${id}/outcome`, frontDesk.header, {
       outcome: 'attended',
       expectedRevision: 1,
     });
     expect(attended.body).toMatchObject({ status: 'attended' });
     const attendedAt = attended.body.attendedAt as string;
+    expect(new Date(attendedAt).getTime()).toBeGreaterThan(trialStart.getTime());
     // Staff may not reuse the trial for a follow-up without the family's permission (SPK-YOUTH-003).
     const byStaff = await post(t, `/v1/trial-participations/${id}/convert`, frontDesk.header, {
       targetOfferingId: term.offeringId,
@@ -498,7 +503,10 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       ageBand: { minAgeYears: 5, maxAgeYears: 12 },
     });
     const trial = await offering(t, { kind: 'trial', programId: trialProgram, basePriceMinor: 0 });
-    const trialSession = await session(trial, '2026-11-16T17:00:00Z');
+    const trialSession = await session(
+      trial,
+      new Date(t.clock.now().getTime() + 30 * 60_000).toISOString(),
+    );
     const term = await offering(t, { programId: trialProgram, basePriceMinor: 18_000 });
     const kid = await child(t, [parent]);
     await acknowledge(t, trial, kid, parent.personId);
@@ -509,6 +517,7 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
     });
     expect(created.status).toBe(201);
     const id = created.body.id as string;
+    t.clock.advance(60 * 60_000);
     const noShow = await post(t, `/v1/trial-participations/${id}/outcome`, frontDesk.header, {
       outcome: 'no_show',
       expectedRevision: 1,
@@ -547,6 +556,45 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       noShowAt,
       attendedAt: null,
     });
+  });
+
+  it('SPK-YOUTH-003 / SPK-AT-019: trial attendance and no-show cannot be recorded before the session starts', async () => {
+    const trialProgram = await createProgramFixture(t, {
+      ageBand: { minAgeYears: 5, maxAgeYears: 12 },
+    });
+    const trial = await offering(t, { kind: 'trial', programId: trialProgram, basePriceMinor: 0 });
+    const start = new Date(t.clock.now().getTime() + 2 * DAY);
+    const trialSession = await session(trial, start.toISOString());
+    const kid = await child(t, [parent]);
+    await acknowledge(t, trial, kid, parent.personId);
+    const created = await post(t, '/v1/trial-participations', parent.header, {
+      offeringId: trial.offeringId,
+      participantPersonId: kid,
+      sessionId: trialSession,
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+    for (const outcome of ['attended', 'no_show'] as const) {
+      const early = await post(t, `/v1/trial-participations/${id}/outcome`, frontDesk.header, {
+        outcome,
+        expectedRevision: 1,
+      });
+      expect(early.status, JSON.stringify(early.body)).toBe(400);
+      expect(early.body.code).toBe('VALIDATION_FAILED');
+      expect(early.body.details).toMatchObject({
+        code: 'trial_not_started',
+        scheduledFor: start.toISOString(),
+      });
+    }
+    const unchanged = await t.http.get(`/v1/trial-participations/${id}`).set(parent.header);
+    expect(unchanged.body).toMatchObject({ status: 'scheduled', revision: 1, attendedAt: null });
+    // The family may still cancel before the session.
+    const canceled = await post(t, `/v1/trial-participations/${id}/outcome`, parent.header, {
+      outcome: 'canceled',
+      expectedRevision: 1,
+    });
+    expect(canceled.status).toBe(200);
+    expect(canceled.body).toMatchObject({ status: 'canceled' });
   });
 
   it('SPK-YOUTH-007: one calendar for all authorized children, overlaps highlighted but not prevented', async () => {

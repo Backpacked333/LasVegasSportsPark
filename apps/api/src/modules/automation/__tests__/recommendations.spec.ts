@@ -1,9 +1,18 @@
+import { newId, systemPrincipal } from '@sportspark/contracts';
+import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { NotificationsService } from '../../communications';
-import { createCapturedPaymentFixture } from '../../finance';
-import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
+import { FakePaymentProvider, createCapturedPaymentFixture } from '../../finance';
+import {
+  EventsService,
+  at,
+  createScheduledEvent,
+  seedPitchWithHalves,
+  type PitchFixture,
+} from '../../scheduling';
 import type { FakeAssistantProvider } from '../providers/fake-assistant.provider';
+import { RecommendationsService } from '../services/recommendations.service';
 import {
   CLOCK_START,
   adultCustomer,
@@ -16,6 +25,7 @@ import {
   key,
   openDraft,
   otherOrganization,
+  patch,
   post,
   staffMember,
   type Actor,
@@ -517,6 +527,340 @@ describe('recommendations (SPK-AUTO-003, SPK-AUTO-004)', () => {
       .executeTakeFirstOrThrow();
     expect(draft.status).toBe('published');
     expect(draft.author).toMatchObject({ accountId: schedulerA.accountId });
+  });
+
+  it('SPK-AUTO-003 / §4.11: a refused repair publication keeps the draft it opened; a retry publishes that draft instead of opening another', async () => {
+    const events = t.app.get(EventsService);
+    const system = systemPrincipal(t.organizationId, 'tests');
+    const proposeRepair = async (name: string, date: string): Promise<Rec> => {
+      fake.script(`repair ${name}`, [
+        {
+          type: 'tool_calls',
+          calls: [
+            {
+              tool: 'scheduling.publish_schedule',
+              arguments: {
+                repair: {
+                  facilityId: t.facilityId,
+                  name,
+                  changes: [
+                    createChange(at(date, '09:00'), at(date, '10:00'), [pitch.northHalfId]),
+                  ],
+                },
+              },
+            },
+          ],
+        },
+        { type: 'answer', text: 'A repair is ready.' },
+      ]);
+      const res = await ask(t, schedulerA, { prompt: `repair ${name}` });
+      return (await approve(schedulerA, res.body.recommendations[0])).body as Rec;
+    };
+    const draftsNamed = (name: string) =>
+      t.db
+        .selectFrom('schedule_drafts')
+        .select(['id', 'status'])
+        .where('name', '=', name)
+        .execute();
+    const blocking = await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.northHalfId],
+      start: at('2027-03-20', '09:00'),
+      end: at('2027-03-20', '10:00'),
+    });
+
+    // Refused twice: one draft, named on the recommendation, never a second one.
+    let rec = await proposeRepair('Retry repair', '2027-03-20');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const refused = await apply(schedulerA, rec);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+      expect(refused.body.code).toBe('RESOURCE_CONFLICT');
+      rec = (await get(t, `/v1/recommendations/${rec.id}`, schedulerA)).body as Rec;
+    }
+    const opened = await draftsNamed('Retry repair');
+    expect(opened).toEqual([{ id: expect.any(String), status: 'failed' }]);
+    const draftId = opened[0]!.id;
+    const refusedView = (await get(t, `/v1/recommendations/${rec.id}`, schedulerA)).body;
+    expect(refusedView).toMatchObject({
+      status: 'approved',
+      apply: {
+        state: 'pending',
+        lastError: {
+          code: 'RESOURCE_CONFLICT',
+          details: { outcome: 'failed', record: { type: 'schedule_draft', id: draftId } },
+        },
+      },
+    });
+    const logged = await t.db
+      .selectFrom('tool_invocations')
+      .select(['outcome', 'result_refs'])
+      .where('recommendation_id', '=', rec.id)
+      .execute();
+    expect(logged).toEqual([
+      { outcome: 'failed', result_refs: [{ type: 'schedule_draft', id: draftId }] },
+      { outcome: 'failed', result_refs: [{ type: 'schedule_draft', id: draftId }] },
+    ]);
+
+    // Once the clash is gone, the retry publishes the draft it opened.
+    await events.cancelEvent(system, blocking.id, { reason: 'Moved elsewhere' });
+    const applied = await apply(schedulerA, rec);
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    expect(applied.body).toMatchObject({ status: 'applied', apply: { lastError: null } });
+    expect(await draftsNamed('Retry repair')).toEqual([{ id: draftId, status: 'published' }]);
+
+    // A draft somebody changed in scheduling meanwhile is not published from the recommendation.
+    await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.northHalfId],
+      start: at('2027-03-27', '09:00'),
+      end: at('2027-03-27', '10:00'),
+    });
+    let changed = await proposeRepair('Edited repair', '2027-03-27');
+    expect((await apply(schedulerA, changed)).status).toBe(409);
+    const [edited] = await draftsNamed('Edited repair');
+    const draft = (await get(t, `/v1/schedule-drafts/${edited!.id}`, schedulerA)).body;
+    t.clock.advance(60_000);
+    const autosaved = await patch(t, `/v1/schedule-drafts/${edited!.id}`, schedulerA, {
+      expectedRevision: draft.revision,
+      changes: [
+        createChange(at('2027-03-27', '11:00'), at('2027-03-27', '12:00'), [pitch.northHalfId]),
+      ],
+    });
+    expect(autosaved.status, JSON.stringify(autosaved.body)).toBe(200);
+    changed = (await get(t, `/v1/recommendations/${changed.id}`, schedulerA)).body as Rec;
+    const stale = await apply(schedulerA, changed);
+    expect(stale.status).toBe(409);
+    expect(stale.body.details).toMatchObject({ code: 'REPAIR_DRAFT_CHANGED', draftId: edited!.id });
+    expect(await draftsNamed('Edited repair')).toEqual([{ id: edited!.id, status: 'editing' }]);
+  });
+
+  it('SPK-AUTO-003 / §4.11: a refund the provider declines is a failed apply that can be retried; a refund with no reported outcome keeps the apply claimed and is never marked applied', async () => {
+    const payments = t.app.get(FakePaymentProvider);
+    const payer = await adultCustomer(t);
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 3000,
+    });
+    const proposeRefund = async (prompt: string, amountMinor: number): Promise<Rec> => {
+      fake.script(prompt, [
+        {
+          type: 'tool_calls',
+          calls: [
+            {
+              tool: 'finance.refund',
+              arguments: {
+                paymentAttemptId: payment.paymentAttemptId,
+                amountMinor,
+                reason: 'Session canceled',
+              },
+            },
+          ],
+        },
+        { type: 'answer', text: 'Refund prepared.' },
+      ]);
+      const res = await ask(t, financeOperator, { prompt });
+      return (await approve(financeOperator, res.body.recommendations[0])).body as Rec;
+    };
+    const refundsOf = () =>
+      t.db
+        .selectFrom('refund_attempts')
+        .select(['id', 'amount_minor', 'status', 'reservation_status'])
+        .where('payment_attempt_id', '=', payment.paymentAttemptId)
+        .orderBy('created_at')
+        .orderBy('id')
+        .execute();
+
+    // Declined by the provider: nothing was refunded, the claim is released, a retry refunds.
+    const declined = await proposeRefund('declined refund', 1000);
+    payments.scriptRefunds('fail');
+    const refused = await apply(financeOperator, declined);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: { code: 'REFUND_NOT_COMPLETED', refundStatus: 'failed' },
+    });
+    const [failedRefund] = await refundsOf();
+    expect(failedRefund).toMatchObject({ status: 'failed', reservation_status: 'released' });
+    const afterDecline = (await get(t, `/v1/recommendations/${declined.id}`, financeOperator)).body;
+    expect(afterDecline).toMatchObject({
+      status: 'approved',
+      apply: {
+        state: 'pending',
+        record: null,
+        lastError: {
+          code: 'RESOURCE_CONFLICT',
+          details: { outcome: 'failed', record: { type: 'refund_attempt', id: failedRefund!.id } },
+        },
+      },
+    });
+    const retried = await apply(financeOperator, afterDecline);
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+    expect(retried.body).toMatchObject({
+      status: 'applied',
+      apply: { state: 'applied', record: { type: 'refund_attempt' } },
+    });
+    expect((await refundsOf()).map((r) => [r.amount_minor, r.status])).toEqual([
+      [1000, 'failed'],
+      [1000, 'succeeded'],
+    ]);
+
+    // No outcome reported yet: unknown, claimed, recovery-required, and not applied.
+    const pending = await proposeRefund('pending refund', 500);
+    payments.scriptRefunds('processing');
+    const unknown = await apply(financeOperator, pending);
+    expect(unknown.status).toBe(409);
+    expect(unknown.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      nextAction: 'await_reconciliation',
+      details: { code: 'APPLY_OUTCOME_UNKNOWN' },
+    });
+    const afterUnknown = (await get(t, `/v1/recommendations/${pending.id}`, financeOperator)).body;
+    expect(afterUnknown).toMatchObject({
+      status: 'approved',
+      apply: { state: 'running', lastError: { code: 'APPLY_OUTCOME_UNKNOWN' } },
+    });
+    const op = await t.db
+      .selectFrom('operations')
+      .select('status')
+      .where('id', '=', afterUnknown.apply.operationId)
+      .executeTakeFirstOrThrow();
+    expect(op.status).toBe('recovery_required');
+    expect((await apply(financeOperator, afterUnknown)).body.details).toMatchObject({
+      code: 'APPLY_IN_PROGRESS',
+    });
+    expect((await refundsOf()).at(-1)).toMatchObject({
+      amount_minor: 500,
+      status: 'processing',
+      reservation_status: 'reserved',
+    });
+  });
+
+  it('SPK-AUTO-004: a provider-chosen facility that does not exist in the organization is refused and the request completes', async () => {
+    const other = await seedOrganization(t.db, { slug: 'phantom-facility-org' });
+    const operationStatus = async (id: string) =>
+      (
+        await t.db
+          .selectFrom('operations')
+          .select('status')
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow()
+      ).status;
+    const cases: Array<{
+      requester: Actor;
+      call: { tool: string; arguments: Record<string, unknown> };
+    }> = [];
+    for (const facilityId of [newId(), other.facilityId]) {
+      cases.push({
+        requester: leagueManager,
+        call: {
+          tool: 'communications.send',
+          arguments: {
+            kind: 'staff_broadcast',
+            category: 'operational',
+            facilityId,
+            audience: { staffRoles: ['front_desk'] },
+            title: 'Desk notice',
+            body: 'Please check the lost and found.',
+          },
+        },
+      });
+      cases.push({
+        requester: schedulerA,
+        call: {
+          tool: 'scheduling.publish_schedule',
+          arguments: {
+            repair: {
+              facilityId,
+              name: 'Phantom repair',
+              changes: [
+                createChange(at('2027-03-13', '09:00'), at('2027-03-13', '10:00'), [
+                  pitch.northHalfId,
+                ]),
+              ],
+            },
+          },
+        },
+      });
+    }
+    for (const [index, { requester, call }] of cases.entries()) {
+      const prompt = `phantom facility ${index}`;
+      fake.script(prompt, [
+        { type: 'tool_calls', calls: [call] },
+        { type: 'answer', text: 'Prepared.' },
+      ]);
+      const res = await ask(t, requester, { prompt });
+      expect(res.body).toMatchObject({ status: 'answered', recommendations: [] });
+      expect(res.body.toolInvocations).toEqual([
+        expect.objectContaining({ tool: call.tool, outcome: 'denied', errorCode: 'NOT_FOUND' }),
+      ]);
+      expect(res.body.missingEvidence).toContainEqual(
+        expect.objectContaining({ source: call.tool, reason: 'not_available' }),
+      );
+      expect(await operationStatus(res.body.operationId)).toBe('succeeded');
+    }
+    const recommendations = await t.db
+      .selectFrom('recommendations')
+      .select('id')
+      .where('facility_id', 'in', [other.facilityId])
+      .execute();
+    expect(recommendations).toEqual([]);
+  });
+
+  it('§4.11: when the recommendations cannot be recorded, the request and its operation fail instead of staying processing/running', async () => {
+    const { draftId } = await proposePublish(schedulerA);
+    fake.script(`again ${draftId}`, [
+      {
+        type: 'tool_calls',
+        calls: [{ tool: 'scheduling.publish_schedule', arguments: { draftId } }],
+      },
+      { type: 'answer', text: 'Ready for review.' },
+    ]);
+    const spy = vi
+      .spyOn(t.app.get(RecommendationsService), 'createInTrx')
+      .mockRejectedValueOnce(new Error('insert refused'));
+    try {
+      const res = await ask(t, schedulerA, { prompt: `again ${draftId}` });
+      expect(res.body).toMatchObject({
+        status: 'failed',
+        response: null,
+        recommendations: [],
+        error: { code: 'INTERNAL_ERROR' },
+      });
+      expect(res.body.completedAt).not.toBeNull();
+      const op = await t.db
+        .selectFrom('operations')
+        .select('status')
+        .where('id', '=', res.body.operationId)
+        .executeTakeFirstOrThrow();
+      expect(op.status).toBe('failed');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('SPK-AUTO-002: a recommendation’s evidence ages from its read — live when proposed, recent when reviewed later, never live again', async () => {
+    const { rec } = await proposePublish(schedulerA);
+    type Evidence = { recordType: string; observedAt: string; asOf: string; ageSeconds: number };
+    const [proposed] = (rec as unknown as { evidence: Evidence[] }).evidence;
+    expect(proposed).toMatchObject({ recordType: 'schedule_draft', freshness: 'live' });
+    t.clock.advance(23 * 3600_000);
+    const later = await get(t, `/v1/recommendations/${rec.id}`, schedulerA);
+    expect(later.status).toBe(200);
+    expect(later.body.evidence).toEqual([
+      expect.objectContaining({
+        recordType: 'schedule_draft',
+        observedAt: proposed!.observedAt,
+        asOf: proposed!.asOf,
+        freshness: 'recent',
+        ageSeconds: proposed!.ageSeconds + 23 * 3600,
+      }),
+    ]);
+    const listed = await get(t, `/v1/recommendations?status=proposed`, schedulerA);
+    expect(
+      listed.body.items.find((r: { id: string }) => r.id === rec.id)?.evidence[0].freshness,
+    ).toBe('recent');
   });
 
   it('SPK-AUTO-003: rejecting needs a reason and is final; informational recommendations cannot be applied', async () => {

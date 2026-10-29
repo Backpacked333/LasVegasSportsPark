@@ -161,6 +161,16 @@ Payloads carry identifiers only (§4.14).
 
 ## Behaviour notes — verified
 
+- **Facility scope (§4.3, §4.14):** every application, enrollment, waitlist entry and offer,
+  session booking, trial, placement request, basket line and offering pool is authorized at its
+  offering's facility (catalog `OFFERING_LOOKUP_PORT.facilitiesOfOfferings`;
+  `services/facility-scope.ts`). Facility-scoped staff read, list and change only their
+  facilities' records (another facility's customer-private record reads as NOT_FOUND, a list
+  filtered by another facility's offering is ACCESS_DENIED); a transfer or trial conversion is
+  checked at both offerings, a basket hold, release or completion at every line's facility, a
+  makeup at its eligible offerings'. Pools and placement requests without an offering stay
+  organization-wide. A staff member who is also the participant or a guardian keeps that own
+  authority at every facility (SPK-IAM-001/003). **Verified**, `__tests__/facility-scope.spec.ts`.
 - **Eligibility (SPK-REG-002):** pure evaluation (`eligibility/registration-eligibility.ts`) of the
   catalog's versioned eligibility policy at the offering's configured reference date, from the
   identity date of birth (never a stored age); unknown evidence is never a pass; outstanding forms
@@ -238,7 +248,10 @@ Payloads carry identifiers only (§4.14).
 - **Trials (SPK-AT-019):** a trial is its own record with a trial booking; conversion opens a
   follow-up basket (nothing held, charged or enrolled) that reuses permitted information; the paid
   enrollment links back and marks the trial `converted`, keeping its attendance outcome
-  (`attendedAt`, or `noShowAt`, migration 0502). **Verified**, `__tests__/youth.spec.ts`.
+  (`attendedAt`, or `noShowAt`, migration 0502). Attendance and no-show are observations: they are
+  refused before the trial session starts (400 `VALIDATION_FAILED`, `details.code
+trial_not_started`); cancellation stays allowed. **Verified**, `__tests__/youth.spec.ts` and,
+  paid through finance, `apps/api/src/__tests__/journeys/spk-at-019.spec.ts`.
 
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
@@ -258,9 +271,22 @@ are at most 120 days.
   Deposit-before-approval workflows (DEC-030) are not supported.
 - `join_team` and `create_team_entry` enrollments hold roster-place / team-entry capacity (a
   `join_team` line the offering's `roster_places` pools and the named team entry's `roster_places`
-  pools) but do not create roster rows or team entries; competition's join requests, invitations
-  and `POST /team-entries` do (placement is the one flow that adds a roster row). Offerings carry
-  no season, so a `join_team` line is not checked against the team entry's season.
+  pools). **Verified** (SPK-AT-002, `apps/api/src/__tests__/journeys/spk-at-002.spec.ts`): a
+  `join_team` line is evaluated against competition's player eligibility for the entry
+  (`ELIGIBILITY_PORT`, restricted reasons, source `team_entry`) before approval, quote or payment,
+  and confirming a `join_team` enrollment places the player on the roster through
+  `RosterPort.addRegisteredMember` in the confirming transaction (source `registration`; the audit
+  records name each other). A refusal at confirmation fails the confirmation, so finance keeps the
+  payment visible as `recovery_required`. Still open: `create_team_entry` creates no team entry;
+  cancelling or transferring a confirmed `join_team` enrollment does not end its roster membership;
+  payment on invitation or join-request acceptance follows the billing model (**Pending decision**
+  DEC-008). Offerings carry no season, so a `join_team` line is not checked against the team
+  entry's season.
+- SPK-AT-009 (**Verified**, `__tests__/journeys/spk-at-009.spec.ts`): `SessionParticipants` answers
+  who takes part in the catalog sessions behind scheduling events (live enrollments of the offering,
+  live bookings of the session). It is communications' `SESSION_AUDIENCE_IMPL` (change notices reach
+  those participants' guardians) and a closure impact contributor (customers, and the orders they
+  paid through).
 - Makeups are issued by staff (with the originating session); automatic issue on
   `catalog.session_canceled` awaits the makeup rules (DEC-003). Package-credit redemption
   (invariant 7 for packages) belongs to finance/entry.

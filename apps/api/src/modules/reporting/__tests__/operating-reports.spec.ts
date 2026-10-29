@@ -512,6 +512,18 @@ describe('operating reports (SPK-REPORT-002) and demand (SPK-REPORT-006)', () =>
     expect(valueOf(res.body, 'MET-050', 'Recognised sales (fulfilled order lines)', 'USD')).toBe(
       9_000,
     );
+    // MET-045: attempts never submitted have no submission instant to fall in the period; they are
+    // counted over all time at the request instant and say so, never as if of the period.
+    const never = 'Attempts never submitted to a provider (all time, at the request instant)';
+    const notSubmitted = res.body.values.find((v: { label: string }) => v.label === never);
+    expect(notSubmitted).toMatchObject({ metric: 'MET-045', dimensions: { window: 'all_time' } });
+    const earlier = await view('payment-reconciliation', {
+      periodStart: '2026-01-01T00:00:00.000Z',
+      periodEnd: '2026-02-01T00:00:00.000Z',
+    });
+    expect(earlier.status, JSON.stringify(earlier.body)).toBe(200);
+    expect(valueOf(earlier.body, 'MET-045', never)).toBe(notSubmitted.value);
+    expect((res.body.disclosures as string[]).join(' ')).toContain('never submitted');
   });
 
   it('SPK-REPORT-002 maintenance restrictions: active restriction and overdue task', async () => {

@@ -58,11 +58,12 @@ import {
   requirePerson,
   toRecommendation,
   type AssistantRequestRow,
+  type EvidenceAging,
   type Reader,
   type RecommendationRow,
 } from '../automation.shared';
 import { ToolRegistry } from '../tools/tool-registry';
-import type { AppliedCommand, ApplyContext } from '../tools/tool.types';
+import { ApplyFailure, type AppliedCommand, type ApplyContext } from '../tools/tool.types';
 import { ToolRunner } from './tool-runner.service';
 
 export interface NewRecommendation {
@@ -91,6 +92,24 @@ const COMMAND_ACTIONS: ReadonlyArray<RecommendationCommand['actionId']> = [
 
 const Cursor = z.object({ at: z.string(), id: z.uuid() });
 
+/** How an apply that did not succeed ended, and what the owning module left behind. */
+interface ApplyFailureFacts {
+  error: unknown;
+  outcome: 'denied' | 'failed' | 'unknown';
+  record: { type: string; id: string } | null;
+  carried: Readonly<Record<string, unknown>> | null;
+}
+
+/** What the last failed apply reported for a retry to continue from (`ApplyFailure.carried`). */
+function carriedOf(row: RecommendationRow): Readonly<Record<string, unknown>> | null {
+  const details = (row.last_apply_error as { details?: unknown } | null)?.details;
+  const carried =
+    details && typeof details === 'object' ? (details as { carried?: unknown }).carried : null;
+  return carried && typeof carried === 'object' && !Array.isArray(carried)
+    ? (carried as Record<string, unknown>)
+    : null;
+}
+
 /**
  * Reviewable recommendations (SPK-AUTO-003, SPK-AUTO-004). A recommendation is seen, approved,
  * rejected and applied by its requester, or by a person who holds the action of its command on
@@ -116,6 +135,11 @@ export class RecommendationsService {
     private readonly registry: ToolRegistry,
     private readonly runner: ToolRunner,
   ) {}
+
+  /** SPK-AUTO-002: stored evidence is shown with its freshness at the instant it is read. */
+  private aging(): EvidenceAging {
+    return { now: this.clock.now(), maxAgeMinutes: this.settings.evidenceMaxAgeMinutes };
+  }
 
   // -------------------------------------------------------------------------------------------
   // Creation (from a completed assistant request, inside its transaction)
@@ -230,7 +254,7 @@ export class RecommendationsService {
     if (!row || !(await this.visibility(principal, row))) {
       throw errors.protectedNotFound('recommendation');
     }
-    return toRecommendation(row);
+    return toRecommendation(row, this.aging());
   }
 
   /** The viewer's own recommendations and those whose command they may run on its target. */
@@ -270,11 +294,12 @@ export class RecommendationsService {
       }
       const rows = await q.execute();
       exhausted = rows.length <= query.limit;
+      const aging = this.aging();
       for (const row of rows) {
         last = row;
         cursor = { at: new Date(row.proposed_at).toISOString(), id: row.id };
         if (await this.visibility(principal, row)) {
-          items.push(toRecommendation(row));
+          items.push(toRecommendation(row, aging));
           if (items.length > query.limit) break;
         }
       }
@@ -388,7 +413,7 @@ export class RecommendationsService {
       return { expired: false as const, row: result };
     });
     if (outcome.expired) throw errors.invalidTransition('Recommendation', 'expired', event);
-    return toRecommendation(outcome.row);
+    return toRecommendation(outcome.row, this.aging());
   }
 
   // -------------------------------------------------------------------------------------------
@@ -480,23 +505,38 @@ export class RecommendationsService {
       reason: body.reason ?? null,
       policyReferences: body.policyReferences ?? [],
       startedAt,
+      carried: carriedOf(claim.row),
     };
     let applied: AppliedCommand | null = null;
-    let failure: { error: unknown; outcome: 'denied' | 'failed' | 'unknown' } | null = null;
+    let failure: ApplyFailureFacts | null = null;
     try {
       applied = await tool.apply(principal, command.input, ctx);
-    } catch (error) {
-      if (DomainError.is(error) && error.httpStatus < 500) {
+    } catch (thrown) {
+      // A tool may know more than the owning module's error says (ApplyFailure): the outcome, the
+      // record the module made, and what a retry continues from (kept until a later report).
+      const signal = thrown instanceof ApplyFailure ? thrown : null;
+      const error = signal ? signal.error : thrown;
+      const facts = {
+        record: signal?.options.record ?? null,
+        carried: signal?.options.carried ?? ctx.carried,
+      };
+      if (signal?.options.outcome) {
+        if (signal.options.outcome === 'unknown') {
+          this.logger.warn(`apply of recommendation ${id}: the command's outcome is not known`);
+        }
+        failure = { error, outcome: signal.options.outcome, ...facts };
+      } else if (DomainError.is(error) && error.httpStatus < 500) {
         const recorded = tool.effectRecordedDespiteError
           ? await tool.effectRecordedDespiteError(principal, command.input, ctx)
           : false;
         failure = {
           error,
           outcome: recorded ? 'unknown' : DENIAL_CODES.has(error.code) ? 'denied' : 'failed',
+          ...facts,
         };
       } else {
         this.logger.error(`apply of recommendation ${id} has no known outcome: ${String(error)}`);
-        failure = { error, outcome: 'unknown' };
+        failure = { error, outcome: 'unknown', ...facts };
       }
     }
 
@@ -510,7 +550,7 @@ export class RecommendationsService {
         applied,
         ctx,
       );
-      return toRecommendation(row);
+      return toRecommendation(row, this.aging());
     }
     const f = failure as NonNullable<typeof failure>;
     await this.completeFailed(principal, claim.row, command, operationId, f, ctx);
@@ -624,7 +664,7 @@ export class RecommendationsService {
     claimed: RecommendationRow,
     command: RecommendationCommand,
     operationId: string,
-    failure: { error: unknown; outcome: 'denied' | 'failed' | 'unknown' },
+    failure: ApplyFailureFacts,
     ctx: ApplyContext,
   ): Promise<void> {
     const organizationId = claimed.organization_id;
@@ -640,7 +680,13 @@ export class RecommendationsService {
       const lastError = {
         code,
         message,
-        details: { operationId, commandErrorCode: domain?.code ?? null, outcome: failure.outcome },
+        details: {
+          operationId,
+          commandErrorCode: domain?.code ?? null,
+          outcome: failure.outcome,
+          ...(failure.record ? { record: failure.record } : {}),
+          ...(failure.carried ? { carried: failure.carried } : {}),
+        },
       };
       // A refused or failed command releases the claim (nothing happened); an unknown outcome keeps
       // it, so the recommendation can never be applied twice (§4.7 invariant 5).
@@ -674,7 +720,7 @@ export class RecommendationsService {
         outcome: failure.outcome,
         errorCode: domain?.code ?? code,
         errorMessage: message.slice(0, 2000),
-        resultRefs: [],
+        resultRefs: failure.record ? [failure.record] : [],
         correlationId: ctx.correlationId,
         operationId,
       });

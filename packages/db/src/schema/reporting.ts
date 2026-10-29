@@ -214,6 +214,20 @@ export interface ReportingClosuresView {
   lifted_at: V<Date | null>;
 }
 
+/**
+ * A space's recorded status changes (migration 1302): the scheduling module's audit records of
+ * `scheduling.resource_updated` that set a status, stamped with the injected clock. A space is
+ * created active, so its status at an instant is the last change recorded by then.
+ */
+export interface ReportingResourceStatusChangesView {
+  change_id: V<string>;
+  organization_id: V<string>;
+  facility_id: V<string>;
+  resource_id: V<string>;
+  status: V<string>;
+  changed_at: V<Date>;
+}
+
 export interface ReportingReservedUnitsView {
   reservation_unit_id: V<string>;
   organization_id: V<string>;
@@ -604,6 +618,8 @@ export interface ReportingOrderLinesView {
   canceled_at: V<Date | null>;
   facility_id: V<string>;
   offering_kind: V<string>;
+  /** The order's total (migration 1302): MET-082 compares succeeded refunds with it. */
+  order_total_minor: V<number>;
 }
 
 export interface ReportingRestrictionsView {
@@ -694,6 +710,7 @@ export interface ReportingTables {
   reporting_resource_units_v: ReportingResourceUnitsView;
   reporting_operating_hours_v: ReportingOperatingHoursView;
   reporting_closures_v: ReportingClosuresView;
+  reporting_resource_status_changes_v: ReportingResourceStatusChangesView;
   reporting_reserved_units_v: ReportingReservedUnitsView;
   reporting_offerings_v: ReportingOfferingsView;
   reporting_sessions_v: ReportingSessionsView;

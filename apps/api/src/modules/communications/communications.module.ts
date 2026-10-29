@@ -1,16 +1,30 @@
 import { Module, type OnModuleDestroy, type OnModuleInit, type Provider } from '@nestjs/common';
 import { DeliveryReceiptSchema, type EventPayload } from '@sportspark/contracts';
-import { BackgroundWorkers, EventHandlerRegistry, Inbox } from '../../kernel';
+import { ModuleRef } from '@nestjs/core';
+import { BackgroundWorkers, EventHandlerRegistry, Inbox, lazyPort } from '../../kernel';
 import { CHANGE_NOTICE_CHECK_IMPL, CompetitionModule } from '../competition';
 import { IdentityEvents, IdentityModule } from '../identity';
-import { EventChanged, SchedulePublished, SchedulingModule } from '../scheduling';
+import {
+  ClosureImpactContributors,
+  EventChanged,
+  SchedulePublished,
+  SchedulingModule,
+} from '../scheduling';
 import { DeliveryRequested } from './communications.events';
 import { COMMUNICATIONS_POLICY, DEFAULT_COMMUNICATIONS_POLICY } from './communications.policy';
 import { CalendarFeedController } from './controllers/calendar-feed.controller';
 import { MeCommunicationsController } from './controllers/me.controller';
 import { NotificationsController } from './controllers/notifications.controller';
 import { MessagingWebhooksController } from './controllers/webhooks.controller';
-import { CHANNEL_PROVIDERS, TEAM_MEMBERSHIP_PORT, type ChannelProviderPort } from './ports';
+import {
+  CHANNEL_PROVIDERS,
+  noSessionAudience,
+  SESSION_AUDIENCE_IMPL,
+  SESSION_AUDIENCE_PORT,
+  TEAM_MEMBERSHIP_PORT,
+  type ChannelProviderPort,
+  type SessionAudiencePort,
+} from './ports';
 import {
   FAKE_MESSAGING_PROVIDER,
   FakeEmailProvider,
@@ -43,6 +57,13 @@ const providers: Provider[] = [
   // Team audiences and calendar scopes read the competition module's effective roster (§4.2).
   CompetitionTeamMembership,
   { provide: TEAM_MEMBERSHIP_PORT, useExisting: CompetitionTeamMembership },
+  // SPK-AT-009: participants of the catalog sessions behind a scheduling event (enrollment).
+  {
+    provide: SESSION_AUDIENCE_PORT,
+    inject: [ModuleRef],
+    useFactory: (moduleRef: ModuleRef): SessionAudiencePort =>
+      lazyPort(moduleRef, SESSION_AUDIENCE_IMPL, noSessionAudience, null),
+  },
   AudienceResolver,
   RecipientAddresses,
   PreferencesService,
@@ -100,9 +121,16 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: NotificationsService,
     private readonly scheduleNotices: ScheduleNotices,
     private readonly worker: DeliveryWorker,
+    private readonly impactContributors: ClosureImpactContributors,
   ) {}
 
   onModuleInit(): void {
+    // SPK-SCHED-009 "messages": a closure preview names the unsent notices about affected events.
+    this.impactContributors.register(
+      'communications.pending_notices',
+      (db, organizationId, events) =>
+        this.scheduleNotices.closureImpact(db, organizationId, events),
+    );
     // §4.1, §4.12: the provider-facing poll loop belongs to the worker process (worker.ts starts
     // every registered background worker); request-serving API processes never run it. Tests
     // drive `runOnce()` directly.

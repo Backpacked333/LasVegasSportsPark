@@ -14,7 +14,12 @@ capacity and staffing configuration), §4.7 invariants 2, 5 and 7
 **Migration range:** `packages/db/migrations/0200_catalog_core.sql` … `0299`
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for person checks, `AUTHORITY_LOOKUP_PORT` for the
-`complete_forms` authority of a signer). Consumes no domain events.
+`complete_forms` authority of a signer). Consumes `scheduling.event_changed`
+(`catalog.follow_scheduling_event`): when the scheduling event that reserves a session's space is
+canceled, the linked sessions are canceled too (`catalog.session_canceled`, audit with the closure),
+idempotently (SPK-AT-009, **Verified** `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`). A moved
+event does not yet move its session. `SessionsService.sessionsOfSchedulingEvents` (migration `0204`
+index) lets enrollment resolve the sessions of affected events.
 
 **Status: implemented** (verified by `apps/api/src/modules/catalog/__tests__` and the unit specs
 next to the code: `pricing/discount-evaluator.spec.ts`, `entitlements/equivalence-key.spec.ts`,
@@ -72,7 +77,10 @@ because the kernel consults the identity port without a transaction handle (see 
 - `OFFERING_LOOKUP_PORT` → `OfferingsService.getOffering(organizationId, offeringId, at)`:
   the offering (staff view), the price rule effective at `at`, the entitlement definition, capacity
   units, the eligibility reference date (SPK-REG-002: configured, else the start date), the
-  eligibility and cancellation policy versions, required form versions, and `registrationOpen`.
+  eligibility and cancellation policy versions, required form versions, and `registrationOpen`;
+  `facilitiesOfOfferings(organizationId, offeringIds)` and
+  `offeringIdsAtFacilities(organizationId, facilityIds)` give modules whose records hang off an
+  offering its facility for authorization and list scope (§4.3, §4.14; enrollment).
 - `POLICY_PORT` → `PoliciesService.getPolicyVersion`, `currentPolicyVersion(kind, key, at)`
   (approved, effective, highest version), `hasAcknowledgment(subject, policyVersion)`.
 - `PRICING_PORT` → `PricingService.effectivePriceRule`, `evaluateDiscounts` (loads active

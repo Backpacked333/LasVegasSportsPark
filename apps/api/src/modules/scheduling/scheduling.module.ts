@@ -18,6 +18,7 @@ import {
   type FixtureObligationPort,
 } from './ports';
 import { DEFAULT_SCHEDULING_POLICY, SCHEDULING_POLICY } from './scheduling.policy';
+import { ClosureImpactContributors } from './services/closure-impact-contributors';
 import { ClosureLiftGuards } from './services/closure-lift-guards';
 import { ClosuresService } from './services/closures.service';
 import { EventSeriesService } from './services/event-series.service';
@@ -69,6 +70,7 @@ const providers: Provider[] = [
   EventsService,
   ResourcesService,
   ClosureLiftGuards,
+  ClosureImpactContributors,
   ClosuresService,
   EventSeriesService,
   ScheduleDraftsService,
@@ -98,6 +100,7 @@ const providers: Provider[] = [
     ResourcesService,
     ClosuresService,
     ClosureLiftGuards,
+    ClosureImpactContributors,
     EventSeriesService,
     ScheduleDraftsService,
     EVENT_SCHEDULING_PORT,

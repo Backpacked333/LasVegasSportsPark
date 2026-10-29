@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   systemPrincipal,
   type DomainEvent,
@@ -6,8 +6,15 @@ import {
   type EventPayload,
   type NotificationKindValue,
 } from '@sportspark/contracts';
+import type { Db } from '@sportspark/db';
 import type { Trx } from '../../../kernel';
-import type { EventChanged, SchedulePublished } from '../../scheduling';
+import type {
+  ClosureImpactContribution,
+  EventChanged,
+  ImpactedEventRef,
+  SchedulePublished,
+} from '../../scheduling';
+import { SESSION_AUDIENCE_PORT, type SessionAudiencePort } from '../ports';
 import { uniqueStrings } from '../communications.shared';
 import { CalendarEntriesService } from './calendar-entries.service';
 import { NotificationsService } from './notifications.service';
@@ -28,6 +35,7 @@ export class ScheduleNotices {
   constructor(
     private readonly notifications: NotificationsService,
     private readonly entries: CalendarEntriesService,
+    @Inject(SESSION_AUDIENCE_PORT) private readonly sessionAudience: SessionAudiencePort,
   ) {}
 
   async onEventChanged(trx: Trx, event: DomainEvent<EventChangedPayload>): Promise<void> {
@@ -38,9 +46,17 @@ export class ScheduleNotices {
     const payload = event.payload;
     const kind = noticeKindFor(payload);
     if (!kind) return;
-    const subjectPersonIds = uniqueStrings(
-      payload.commitments.filter((c) => c.partyType === 'person').map((c) => c.partyId),
+    // SPK-AT-009, SPK-COMMS-002: a youth session event commits no person or team; the enrolled
+    // and booked participants of its catalog sessions (their guardians) are told as well.
+    const participants = await this.sessionAudience.participantsOfSchedulingEvent(
+      trx,
+      event.organizationId,
+      payload.eventId,
     );
+    const subjectPersonIds = uniqueStrings([
+      ...payload.commitments.filter((c) => c.partyType === 'person').map((c) => c.partyId),
+      ...participants,
+    ]);
     const teamEntryIds = uniqueStrings(
       payload.commitments.filter((c) => c.partyType === 'team').map((c) => c.partyId),
     );
@@ -59,11 +75,42 @@ export class ScheduleNotices {
         body: text.body,
         ...(payload.before ? { detailsBefore: payload.before } : {}),
         ...(payload.after ? { detailsAfter: payload.after } : {}),
-        protected: false,
+        // Who is enrolled is customer-private: recipients are re-checked before dispatch (§4.7
+        // invariant 10).
+        protected: participants.length > 0,
         sourceEventId: event.id,
         correlationId: event.correlationId,
       },
     );
+  }
+
+  /** SPK-SCHED-009 "messages": notices about the affected events that have not been sent yet. */
+  async closureImpact(
+    db: Db | Trx,
+    organizationId: string,
+    events: readonly ImpactedEventRef[],
+  ): Promise<ClosureImpactContribution> {
+    const rows = await db
+      .selectFrom('notifications')
+      .select(['id', 'subject_id', 'kind', 'status'])
+      .where('organization_id', '=', organizationId)
+      .where('subject_type', '=', 'event')
+      .where(
+        'subject_id',
+        'in',
+        events.map((e) => e.eventId),
+      )
+      .where('status', 'in', ['composed', 'queued'])
+      .orderBy('id')
+      .execute();
+    return {
+      messages: rows.map((r) => ({
+        notificationId: r.id,
+        eventId: r.subject_id as string,
+        kind: r.kind,
+        status: r.status,
+      })),
+    };
   }
 
   /** Staff summary of a publication group: what went out and which obligations remain. */

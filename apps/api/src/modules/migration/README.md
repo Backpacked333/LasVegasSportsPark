@@ -120,6 +120,14 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
   committed before its mapping was linked is found through the owning module's audit record of
   the mapping's correlation id (`migration:<mappingId>`), never created twice
   (`apply-recovery.spec.ts`). A row the owning module refuses becomes an apply-phase exception.
+  Every reservation and every outcome is fenced by the lock: an apply whose lock another apply
+  took over (after the lease ran out while it stalled) stops before it reserves anything new, and
+  a mapping changed under it is refused (`MAPPING_CHANGED`). A creation already in flight cannot
+  be fenced, so the database keys what it can: an opening credit carries its mapping id as its
+  source (finance's `credits_source_idx`, as obligations already do), so a second credit for one
+  imported balance is refused; a person or household the stale apply created anyway raises an
+  owned `migration.orphaned_creation` exception and is reported by reconciliation
+  (`unlinked_creation`) — verified on PGlite and PostgreSQL (support-migration-05).
 - **Authority matrix (§5.6, verified):** assignments per category and scope; a transfer names the
   assignment in effect and its revision, ends it and starts the next one at the same instant;
   never retroactive. Without an assignment SportsPark is authoritative; importing a category needs
@@ -128,15 +136,39 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
   `assertSportsparkAuthority`) for in-process callers, and a global interceptor
   (`AuthorityWriteInterceptor`, registered by this module) that refuses the HTTP write commands
   of a category while the legacy system is authoritative (`ACCESS_DENIED`,
-  `nextAction: write_in_authoritative_system`, `details.code: LEGACY_AUTHORITY`). The guarded
-  routes are listed once in `services/authority-routes.ts`; a test asserts each is a route the
-  complete application serves. The most specific scope wins (program/competition, facility,
-  organization); two answers at one specificity refuse writes.
-- **Reconciliation (§5.5, verified):** four levels — control totals; record identity (every row
-  has an outcome, every mapping reaches an existing record); relationships (imported permissions
-  are effective in identity; households hold their members); operational outcomes (opening
-  balances hold the approved amounts; active records not applied are counted). Each discrepancy is
-  reported on its own, per category and currency, never netted. Approval per area: finance
+  `nextAction: write_in_authoritative_system`, `details.code: LEGACY_AUTHORITY`). The guard is
+  deny-by-default: every served POST/PATCH/PUT/DELETE route is classified exactly once in
+  `services/authority-routes.ts`, either guarded (`AUTHORITY_ROUTES`, with its category and scope
+  source) or exempt with the reason it changes no record of an authority category
+  (`AUTHORITY_EXEMPT_ROUTES`); `__tests__/authority.spec.ts` fails on an unclassified or unserved
+  route. The scope is never taken from identifiers a client adds to the body (§4.8): a route
+  creating a top-level record resolves at organization scope; a route names the validated field
+  its handler writes to (`POST /schedule-drafts`, `/event-series`, `/closures`,
+  `/maintenance-restrictions` → `facilityId`; `POST /fixtures` → `schedule.facilityId`;
+  `POST /seasons` → `competitionId`; `POST /offerings` → `programId`, `facilityId`;
+  `PATCH /programs/{id}`, `/competitions/{id}` → the path id); every other route is `unproven`
+  and is refused while any assignment of its category in effect, at any scope, names the legacy
+  system (`details.scopeResolution: unproven`). Where a scope is known the most specific scope
+  wins (program/competition, facility, organization); two answers at one specificity refuse
+  writes. Youth enrollment routes are guarded as `program` (participation follows its offering,
+  authority matrix §4.1, a proposed reading pending DEC-014); makeup entitlements as `credit`
+  (row 14).
+- **Refunds in-process (§5.6, verified):** `RefundsService.request` (finance) checks the record
+  authority itself through finance's `RECORD_AUTHORITY_PORT`, which this module implements
+  (`RECORD_AUTHORITY_IMPL`), so support's refund helper and automation's refund proposal are
+  refused exactly like `POST /payments/{id}/refunds` (`__tests__/record-authority.spec.ts`;
+  the automation proposal in `automation/__tests__/record-authority.spec.ts`).
+- **Reconciliation (§5.5, verified):** four levels — control totals (declared against staged, and
+  declared opening-balance amounts against what finance holds after the apply:
+  `loaded_total_mismatch`); record identity (every row has an outcome, every mapping reaches an
+  existing record; a row rejected in review is `rejected_in_review` with its source amount; a
+  creation no mapping links is `unlinked_creation`); relationships (imported permissions are
+  effective in identity; households hold their members); operational outcomes (opening balances
+  hold the approved amounts; an amount re-valued in review is `revalued_in_review` against the
+  source amount; active records not applied are counted). Review decisions therefore never make
+  the totals appear correct: finance approves those differences with a reason
+  (support-migration-07). Each discrepancy is reported on its own, per category and currency,
+  never netted. Approval per area: finance
   (`finance_operator`, GM), participation (`program_manager`, `league_manager`, GM), schedule
   (`scheduler`, GM), identity (GM, `support_operator` — proposed); accepting discrepancies needs a
   reason and leaves them listed; regenerating supersedes the pending report; an owned operational
@@ -164,8 +196,10 @@ staff of another role, another organization) receives `NOT_FOUND` (§4.10).
 ## Ports
 
 - `AUTHORITY_GUARD_PORT` (`AuthorityGuardPort`, `migration.ports.ts`): `resolve(org, category,
-scope?, at?)`, `assertSportsparkAuthority(org, category, scope?)`; reads through the active
-  transaction.
+scope?, at?)`, `assertSportsparkAuthority(org, category, scope?)`,
+  `assertNoLegacyAuthorityInEffect(org, category)` (for a caller that cannot name the record's
+  scope); reads through the active transaction. The same service is registered as finance's
+  `RECORD_AUTHORITY_IMPL`.
 - `EXTERNAL_MAPPING_PORT` (`ExternalMappingPort`): `findInternalId(org, source, entityType,
 externalId)`, `mappingsFor(org, entityType, internalId)`.
 - Fixtures for downstream tests: `testing/migration-fixtures.ts`
@@ -206,11 +240,22 @@ otherwise (finance, SPK-PAY-009). Accepting an expired credit issues it without 
   `migration.import:<batchId>`). Relationships and grants carry source `import`.
 - **Team obligations:** opening balances are imported for person debtors only (team entries are
   not imported).
-- **Guarded routes:** the interceptor resolves scope from `facilityId`, `programId` and
-  `competitionId` in the request body (and the program id of `PATCH /programs/{id}`); writes
-  whose scope is only implied by a path id resolve at organization scope. Modules built earlier
-  do not call `AUTHORITY_GUARD_PORT` in-process (outbox handlers and service-to-service calls are
-  not guarded).
+- **Import keys for persons and households:** identity has no unique import reference, so a person
+  or household an apply created after losing its lock (a stall longer than the lease) is not
+  refused by the database; it is reported (owned exception, `unlinked_creation`) and identity's
+  duplicate detection flags a duplicate person. A database key would need an identity schema
+  change (proposed follow-up).
+- **Guarded routes:** routes whose scope is only known from the record behind a path id
+  (`PATCH /fixtures/{id}`, `/seasons/{id}`, team entries, rosters, results, checkouts,
+  obligations, closures, offerings by id, …) cannot prove their scope before the owning module
+  loads the record, so they are refused while the category is legacy in any scope. During a
+  facility-by-facility or program-by-program cutover this over-refuses writes to records SportsPark
+  already owns. Follow-up (proposed): the owning modules call `AUTHORITY_GUARD_PORT
+.assertSportsparkAuthority` inside their unit of work with the loaded record's scope
+  (fixture/event → facility, old and new; season, division, team entry, roster, result →
+  competition; order, obligation → program or facility), and those routes move to exact
+  resolution. In-process writes are guarded only for refunds (finance); other outbox handlers and
+  service-to-service calls of the owning modules are not guarded.
 - **Size:** the apply runs synchronously in the request (rows in their own small transactions);
   very large batches would need chunked or background apply. HTTP bodies are bound by the server's
   body limit, so large snapshots are staged in chunks.

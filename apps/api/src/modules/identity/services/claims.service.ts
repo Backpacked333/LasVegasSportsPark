@@ -29,11 +29,14 @@ import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { ClaimMachine } from '../identity.machines';
 import {
+  claimIssuerAssignsStaffRoles,
   hashToken,
+  holdsStaffMembership,
   hoursFromNow,
   newToken,
   normalizeContactValue,
   personColumns,
+  requireStaffLoginAuthority,
   toAccessGrant,
   toClaim,
   toRelationship,
@@ -107,6 +110,16 @@ export class ClaimsService {
           .where('status', '=', 'active')
           .executeTakeFirst();
         if (linked) throw errors.resourceConflict('This person already has an active account.');
+        // §4.14, SPK-AT-025: a self claim hands the person's login to whoever holds the token, so
+        // on a person with a staff membership it needs the authority that assigns staff roles.
+        await requireStaffLoginAuthority(
+          this.authorization,
+          trx,
+          principal,
+          organizationId,
+          subjectPersonId,
+          this.clock.now(),
+        );
       }
       const id = newId();
       const token = newToken();
@@ -210,6 +223,18 @@ export class ClaimsService {
         if (claim.recipient_contact_kind) {
           throw errors.accessDenied(
             'This claim was issued to a contact point your account has not verified.',
+          );
+        }
+        // §4.14, SPK-AT-025: a staff membership may have been added after the claim was issued;
+        // the login of a staff person is handed over only on a claim issued with staff-role
+        // authority (the claimant learns only that the claim cannot be accepted).
+        if (
+          account.person_id !== claim.subject_person_id &&
+          !claimIssuerAssignsStaffRoles(claim.issued_by) &&
+          (await holdsStaffMembership(trx, organizationId, claim.subject_person_id, now))
+        ) {
+          throw errors.accessDenied(
+            'This claim cannot be accepted; ask an administrator to issue a new one.',
           );
         }
         if (account.person_id === claim.subject_person_id) {

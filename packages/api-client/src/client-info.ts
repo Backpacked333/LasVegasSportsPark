@@ -2,9 +2,10 @@
  * Client identification (spec §4.13: API compatibility window and minimum supported app version;
  * SPK-AT-027 "Old mobile app contacts updated API: supported behavior or clear update requirement").
  *
- * The API kernel defines no client compatibility header today (verified absence in
- * apps/api/src/kernel, 2026-10-24), so the name is proposed here, once, for the API to adopt with
- * the version gate (DEC-061, DEC-092). Every request carries it.
+ * Every request carries it. The API kernel's client-compatibility guard reads it
+ * (apps/api/src/kernel/http/client-compatibility.guard.ts): a build below the minimum configured
+ * for its app and platform gets 426 CLIENT_UPDATE_REQUIRED (DEC-092 proposed); the minimum versions
+ * are pending DEC-061, so none is enforced by default.
  */
 export const CLIENT_INFO_HEADER = 'X-Sportspark-Client';
 

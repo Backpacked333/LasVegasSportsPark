@@ -30,15 +30,17 @@ export const API_ERROR_CODES = [
   'REFUND_PENDING',
   'INTEGRATION_UNAVAILABLE',
   'RATE_LIMITED',
+  'CLIENT_UPDATE_REQUIRED',
   'INTERNAL_ERROR',
 ] as const;
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 
 /**
- * Proposed, not implemented by the API: DEC-092 proposes `CLIENT_UPDATE_REQUIRED` (HTTP 426,
- * next action `update_app`, `details.minimumVersion`) for a build below the minimum supported app
- * version (§4.13, SPK-AT-027). The client already recognises it, and any HTTP 426, so the
- * "Update required" state exists before the gate does. The minimum version itself is DEC-061.
+ * `CLIENT_UPDATE_REQUIRED` (HTTP 426, next action `update_app`, `details.minimumVersion`): the API
+ * kernel's client-compatibility guard answers it for a build below the minimum supported app
+ * version of its platform, read from the `X-Sportspark-Client` header (§4.13, SPK-AT-027, DEC-092
+ * proposed). The client also treats any HTTP 426 as update-required. The minimum versions are
+ * configuration pending DEC-061 (none enforced by default).
  */
 export const UPDATE_REQUIRED_CODE = 'CLIENT_UPDATE_REQUIRED';
 export const UPDATE_REQUIRED_STATUS = 426;

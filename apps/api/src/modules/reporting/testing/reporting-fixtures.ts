@@ -26,6 +26,7 @@ export async function createReportRunFixture(
     facilityId?: string | null;
     asOf?: Date;
     requestedByAccountId?: string | null;
+    requestedByPersonId?: string | null;
     organizationId?: string;
   } = {},
 ): Promise<string> {
@@ -47,7 +48,7 @@ export async function createReportRunFixture(
       access_action: 'reporting.view_operations_reports',
       requested_by: json(FIXTURE_ACTOR),
       requested_by_account_id: input.requestedByAccountId ?? null,
-      requested_by_person_id: null,
+      requested_by_person_id: input.requestedByPersonId ?? null,
       row_count: 0,
       result: json({ rows: [] }),
       result_digest: '0'.repeat(64),
@@ -65,6 +66,7 @@ export async function createExportFixture(
   input: {
     reportRunId: string;
     requestedByAccountId: string;
+    requestedByPersonId?: string | null;
     format?: 'csv' | 'json';
     expiresAt?: Date;
     organizationId?: string;
@@ -90,7 +92,7 @@ export async function createExportFixture(
       authorized_action: 'reporting.export_operational',
       requested_by: json({ ...FIXTURE_ACTOR, accountId: input.requestedByAccountId }),
       requested_by_account_id: input.requestedByAccountId,
-      requested_by_person_id: null,
+      requested_by_person_id: input.requestedByPersonId ?? null,
       requested_at: now,
       expires_at: input.expiresAt ?? new Date(now.getTime() + 3_600_000),
       download_token_hash: hashExportToken(token),
@@ -118,6 +120,7 @@ export async function createCostInputFixture(
     effectiveFrom: string;
     effectiveTo?: string | null;
     organizationId?: string;
+    approvedByPersonId?: string | null;
   },
 ): Promise<string> {
   const id = newId();
@@ -136,7 +139,7 @@ export async function createCostInputFixture(
       description: 'Fixture cost input',
       approval_reference: 'fixture',
       approved_by: json(FIXTURE_ACTOR),
-      approved_by_person_id: null,
+      approved_by_person_id: input.approvedByPersonId ?? null,
       recorded_at: ctx.clock.now(),
       withdrawn_at: null,
       withdrawn_by: null,

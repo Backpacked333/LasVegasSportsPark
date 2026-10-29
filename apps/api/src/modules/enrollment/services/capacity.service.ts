@@ -52,6 +52,7 @@ import {
   toHold,
   type Reader,
 } from '../enrollment.shared';
+import { EnrollmentFacilityScope } from './facility-scope';
 
 export type PoolRow = Selectable<CapacityPoolsTable>;
 export type HoldRow = Selectable<HoldsTable>;
@@ -80,6 +81,7 @@ export class CapacityService implements CapacityPort {
     private readonly outbox: Outbox,
     private readonly exceptions: OperationalExceptions,
     @Inject(OFFERING_LOOKUP_PORT) private readonly offerings: OfferingLookupPort,
+    private readonly scope: EnrollmentFacilityScope,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -109,7 +111,15 @@ export class CapacityService implements CapacityPort {
     await this.authorization.require(principal, EnrollmentActions.readCapacity, {
       type: 'capacity_pool',
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, query.offeringId),
     });
+    // §4.3, §4.14: facility-scoped staff list the pools of their facilities' offerings and the
+    // organization-wide pools (a team-entry or rental pool has no offering).
+    const offerings = await this.scope.listOfferings(
+      principal,
+      EnrollmentActions.readCapacity,
+      organizationId,
+    );
     let q = this.db
       .selectFrom('capacity_pools')
       .selectAll()
@@ -117,6 +127,13 @@ export class CapacityService implements CapacityPort {
       .orderBy('created_at')
       .orderBy('id');
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
+    if (offerings) {
+      q = q.where((eb) =>
+        offerings.length > 0
+          ? eb.or([eb('offering_id', 'is', null), eb('offering_id', 'in', offerings)])
+          : eb('offering_id', 'is', null),
+      );
+    }
     if (query.scopeType) q = q.where('scope_type', '=', query.scopeType);
     if (query.scopeId) q = q.where('scope_id', '=', query.scopeId);
     return (await q.execute()).map(toCapacityPool);
@@ -404,6 +421,7 @@ export class CapacityService implements CapacityPort {
       await this.authorization.require(principal, EnrollmentActions.manageCapacity, {
         type: 'capacity_pool',
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
       });
       if (input.offeringId) {
         const snapshot = await this.offerings.getOffering(
@@ -466,6 +484,7 @@ export class CapacityService implements CapacityPort {
         type: 'capacity_pool',
         id: poolId,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       let capacity: number;
@@ -561,6 +580,7 @@ export class CapacityService implements CapacityPort {
         type: 'offering',
         id: offeringId,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, offeringId, trx),
       });
       const snapshot = await this.offerings.getOffering(
         organizationId,

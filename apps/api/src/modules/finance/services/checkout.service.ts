@@ -234,13 +234,28 @@ export class CheckoutService {
     const quoteLines = await this.quotes.lines(this.db, organizationId, quote.id);
     const participants = [...new Set(quoteLines.map((l) => l.participant_person_id))];
     // The payer holds `pay` over every participant line or is the adult participant (SPK-IAM-003).
-    await this.authorization.require(principal, FinanceActions.checkout, {
-      type: 'quote',
-      id: quote.id,
-      organizationId,
-      subjectPersonIds: participants,
-      protected: true,
-    });
+    const target = { type: 'quote', id: quote.id, organizationId, subjectPersonIds: participants };
+    const decision = await this.authorization.decide(principal, FinanceActions.checkout, target);
+    if (!decision.allowed) {
+      // SPK-AT-001, §4.10: the quote's own payer (whose pay authority lapsed since quoting) is told
+      // which participants need it; anyone else learns nothing about the quote.
+      if (!principal.personId || principal.personId !== quote.payer_person_id) {
+        throw errors.protectedNotFound('quote');
+      }
+      const lacking: string[] = [];
+      for (const participant of participants) {
+        const one = await this.authorization.decide(principal, FinanceActions.checkout, {
+          ...target,
+          subjectPersonIds: [participant],
+        });
+        if (!one.allowed) lacking.push(participant);
+      }
+      throw new DomainError(
+        'PARTICIPANT_AUTHORITY_REQUIRED',
+        'Paying for this quote needs pay authority over every participant (SPK-IAM-003).',
+        { details: { permission: 'pay', participantPersonIds: lacking } },
+      );
+    }
     if (!isStaffLike(principal) && principal.personId !== quote.payer_person_id) {
       throw errors.protectedNotFound('quote');
     }

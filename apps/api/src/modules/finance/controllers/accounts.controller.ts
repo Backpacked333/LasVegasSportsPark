@@ -28,7 +28,15 @@ import {
   type ReconciliationReport,
   type SettlementReconciliation,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  AllowedDuringRecovery,
+  CurrentPrincipal,
+  Idempotent,
+  RefusedDuringRecovery,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CorrelationId } from '../finance.shared';
 import { CashTendersService } from '../services/cash-tenders.service';
 import { CreditsService } from '../services/credits.service';
@@ -40,6 +48,7 @@ const IdParams = z.object({ id: z.uuid() });
 const BalancesQuery = z.object({ currency: CurrencyCode.default('USD') });
 
 /** Obligations, team contributions and payments toward them (SPK-PAY-004/005, SPK-AT-022). */
+@RefusedDuringRecovery()
 @Controller()
 export class ObligationsController {
   constructor(private readonly obligations: ObligationsService) {}
@@ -113,6 +122,7 @@ export class ObligationsController {
 }
 
 /** Credits (SPK-PAY-009). */
+@RefusedDuringRecovery()
 @Controller('credits')
 export class CreditsController {
   constructor(private readonly credits: CreditsService) {}
@@ -167,6 +177,7 @@ export class CreditsController {
 }
 
 /** Installment plans (SPK-PAY-006). */
+@RefusedDuringRecovery()
 @Controller()
 export class InstallmentsController {
   constructor(private readonly installments: InstallmentsService) {}
@@ -203,6 +214,7 @@ export class InstallmentsController {
 }
 
 /** Cash tenders (SPK-PAY-012), settlement reconciliation and reports (SPK-PAY-010/011). */
+@RefusedDuringRecovery()
 @Controller()
 export class ReconciliationController {
   constructor(
@@ -220,6 +232,8 @@ export class ReconciliationController {
     return this.tenders.record(principal, body, correlationId);
   }
 
+  // §5.8, SPK-AT-028: reconciling provider facts is how recovery ends.
+  @AllowedDuringRecovery()
   @Post('settlement-reconciliations')
   @Idempotent()
   reconcile(

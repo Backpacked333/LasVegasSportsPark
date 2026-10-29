@@ -64,8 +64,10 @@ carry `revision` and `touch_updated_at`.
   checkout, per installment and per payer and obligation; one live checkout or installment charge
   per obligation (`0601`: the checkout charge names the obligation it pays, so the installment
   worker can never charge the same debt beside it); one succeeded attempt per checkout; one
-  credit per source fact; one redemption per credit and reference; one reversal per journal, entry
-  and redemption.
+  credit per source fact (an in-process caller may name the source of an adjustment credit —
+  migration passes the imported balance's mapping id — and a second credit for it is refused with
+  `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
+  and reference; one reversal per journal, entry and redemption.
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
   (`refunded + reserved <= captured`); captured is fixed and refunded only accumulates.
 - **§4.7 invariant 7 / SPK-PAY-009:** `remaining_minor >= 0`, `remaining <= original`, and a
@@ -77,7 +79,18 @@ carry `revision` and `touch_updated_at`.
   debit or a credit.
 - **SPK-PAY-004:** `allocated <= amount`, a deferred trigger keeps `allocated` equal to the
   allocation rows, allocations only accumulate, a settled obligation is fully allocated; a
+  receipt's allocations always equal its allocated part in its currency (checked on every
+  allocation that names it, migration 0602, so received money is never allocated twice); a
   contribution request can only reference a `team_with_contributions` obligation.
+- **SPK-PAY-001 (`0603`):** a quote or order line, installment, contribution request, credit
+  redemption or refund attempt names its quote, order, plan, obligation, credit or payment attempt
+  together with that record's currency (composite foreign keys), so amounts in different
+  currencies never mix.
+- **§4.3 (`0604`):** journal entry attribution (person, order, obligation) and a quote's consuming
+  checkout are organization-scoped composite foreign keys; a payment or refund attempt's provider
+  evidence must be an inbox event of its own organization (`*_evidence_inbox_scope` triggers,
+  until the kernel inbox has an `(organization_id, id)` key). `0605` indexes receipts and
+  obligations by order and obligation, and credit redemptions by consuming record.
 - **§4.6:** transition guards refuse every change the PaymentAttempt, Refund and Checkout machines
   do not allow (a `failed` attempt never becomes `succeeded`); quotes, orders, obligations,
   credits, installments and tenders keep their money basis immutable.
@@ -230,6 +243,21 @@ minutes; a payment challenge abandoned 60 minutes after submission is canceled a
 (DEC-019); a credit is applied to a given obligation once, with the amount chosen in that one
 application (whether repeated partial use is allowed is pending, POL-010 / DEC-058); percentage
 taxes and fees rounded half up per line (DEC-007).
+
+## Journey fixes (review stage 2) — verified
+
+- SPK-AT-001, SPK-IAM-003, §4.10: the basket owner who may register but not pay a participant gets
+  403 `PARTICIPANT_AUTHORITY_REQUIRED` (`details { permission: 'pay', participantPersonIds }`) from
+  `POST /registration-quotes`, and the quote's payer whose pay authority lapsed gets it from
+  `POST /registration-checkouts`; an owner who named another payer gets `ACCESS_DENIED`; everyone else
+  still gets `NOT_FOUND`. `apps/api/src/__tests__/journeys/spk-at-001.spec.ts`.
+- SPK-AT-028, §5.8: money commands are `@RefusedDuringRecovery()` (503 `INTEGRATION_UNAVAILABLE`
+  `recovery_mode` while the organization recovers from a restore); payment and refund reconcile and
+  settlement reconciliation stay allowed; installment collection starts no new charge; the
+  `finance.provider_facts` recovery check blocks resuming until no payment or refund outcome is
+  unresolved and a processor settlement since the restore balances.
+  `apps/api/src/__tests__/journeys/spk-at-028.spec.ts`. A provider feed that recreates post-backup
+  facts is **Pending decision** (DEC-019).
 
 ## Known gaps
 

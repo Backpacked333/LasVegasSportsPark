@@ -57,6 +57,32 @@ export interface ApplyContext {
   policyReferences: readonly string[];
   /** When the apply started (bounds the search for effects of a failed command). */
   startedAt: Date;
+  /**
+   * What an earlier failed apply of the same recommendation left behind (`ApplyFailure.carried`,
+   * e.g. the draft a repair opened), so a retry continues from it instead of repeating that step
+   * (§4.11: follow-up work is neither lost nor duplicated). Null on a first apply.
+   */
+  carried: Readonly<Record<string, unknown>> | null;
+}
+
+/**
+ * Thrown by a command tool's `apply` when the owning module's error — or its normal return — does
+ * not tell the whole story (SPK-AUTO-003, §4.11): the outcome is already known (`failed`: nothing
+ * took effect; `unknown`: it may have), the record the owning module made for it, and what a
+ * retry must continue from. `error` is what the reviewer is told.
+ */
+export class ApplyFailure extends Error {
+  constructor(
+    readonly error: unknown,
+    readonly options: {
+      outcome?: 'failed' | 'unknown';
+      record?: { type: string; id: string };
+      carried?: Record<string, unknown>;
+    } = {},
+  ) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = 'ApplyFailure';
+  }
 }
 
 export interface AppliedCommand {

@@ -88,7 +88,10 @@ Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.t
 - Every workforce table refuses `DELETE` (SPK-STAFF-004: expiry never removes historical work
   records); `fee_adjustments` and `fee_export_batches` also refuse `UPDATE`.
 - `fee_submissions (organization_id, export_batch_id, currency)` references the batch's
-  `(organization_id, id, currency)`: a submission exports only in its own currency.
+  `(organization_id, id, currency)`: a submission exports only in its own currency; a fee
+  adjustment likewise names its submission with the submission's currency (`0703`).
+- An event-type requirement or assignment always carries its composite-keyed
+  `scheduling_event_id` (`0702`; a null id no longer satisfies the target check).
 - Composite `(organization_id, …)` foreign keys on every reference (§4.3).
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/workforce.ts`)

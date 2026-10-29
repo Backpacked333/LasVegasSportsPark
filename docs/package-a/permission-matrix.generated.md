@@ -3,7 +3,7 @@
 > Generated from code by `apps/api/scripts/emit-permission-matrix.ts`; do not edit by hand.
 > Regenerate with `pnpm build && pnpm permission-matrix` from the repository root.
 
-Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 230 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
+Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 231 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
 
 Columns: **Staff roles** may perform the action within their organization or facility scope; **Self** means a customer may act on themselves as the subject person; **Subject permission** is the grant a customer must hold over every subject person; **Team role** is the role a customer must hold on the target team entry; **Requirements** are the specification ids the action declares.
 
@@ -24,12 +24,12 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `finance`        | 19      |
 | `identity`       | 25      |
 | `migration`      | 14      |
-| `operations`     | 1       |
+| `operations`     | 2       |
 | `reporting`      | 10      |
 | `scheduling`     | 8       |
 | `support`        | 7       |
 | `workforce`      | 20      |
-| **Total**        | **230** |
+| **Total**        | **231** |
 
 ## Actions
 
@@ -220,6 +220,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `migration.stage_batch`                      | Stage a source snapshot (rows, control totals, checksum, provenance)                                                                                                       | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —         | §5.3, §5.4                                                    |
 | `migration.validate_batch`                   | Seal and dry-run a batch; ambiguity and conflicts enter review queues                                                                                                      | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —         | §5.4                                                          |
 | `operations.read`                            | Read an asynchronous operation outcome (requester or operating staff)                                                                                                      | `front_desk`, `league_manager`, `program_manager`, `scheduler`, `finance_operator`, `facilities_operator`, `general_manager`, `system_administrator`, `support_operator`                      | no   | —                  | —         | §4.8, §4.14                                                   |
+| `operations.resume_after_recovery`           | Resume normal operation after a database restore, once provider facts are reconciled (hand back authority, §5.8)                                                           | `general_manager`                                                                                                                                                                             | no   | —                  | —         | §5.8, SPK-AT-028, §4.11                                       |
 | `reporting.export_financial`                 | Export a financial report run (independent check, audited, expiring)                                                                                                       | `finance_operator`, `general_manager`                                                                                                                                                         | no   | —                  | —         | SPK-REPORT-007, §4.14                                         |
 | `reporting.export_operational`               | Export an operational, demand, utilization or retention report run (independent check, audited, expiring)                                                                  | `league_manager`, `program_manager`, `scheduler`, `general_manager`, `system_administrator`                                                                                                   | no   | —                  | —         | SPK-REPORT-007, §4.14                                         |
 | `reporting.manage_cost_inputs`               | Record or withdraw agreed cost inputs for contribution margin                                                                                                              | `finance_operator`, `general_manager`                                                                                                                                                         | no   | —                  | —         | SPK-REPORT-004                                                |

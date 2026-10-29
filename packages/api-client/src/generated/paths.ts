@@ -12612,7 +12612,47 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List the reconciliation reports of a batch (§5.5) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MigrationReconciliationReport"][];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
         put?: never;
         /** Reconcile an applied batch at the four §5.5 levels (discrepancies are never netted) */
         post: {
@@ -21793,6 +21833,120 @@ export type paths = {
                 };
                 /** @description INTEGRATION_UNAVAILABLE: the assistant is disabled (AUTOMATION_ENABLED=false, SPK-AUTO-005) */
                 503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recovery mode after a restore: whether it is active and what still blocks resuming (§5.8, SPK-AT-028) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Recovery status for the organization */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecoveryStatus"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recovery/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume normal operation after a restore once provider facts are reconciled (general manager; §5.8, SPK-AT-028) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "Idempotency-Key": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ResumeAfterRecoveryRequest"];
+                };
+            };
+            responses: {
+                /** @description Normal operation resumed */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecoveryStatus"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not in recovery mode (INVALID_TRANSITION), or provider facts not reconciled yet (RESOURCE_CONFLICT, details.code recovery_reconciliation_incomplete, details.blockers) */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -31099,7 +31253,7 @@ export type components = {
         };
         AdjustFeeRequest: {
             amountMinor: number;
-            expectedRevision?: number;
+            expectedRevision: number;
             policyReferences?: string[];
             reason: string;
         };
@@ -32242,12 +32396,31 @@ export type components = {
                 status: "draft" | "published" | "canceled";
                 title: string;
             }[];
+            customers: {
+                eventIds: string[];
+                /** Format: uuid */
+                personId: string;
+                via: ("commitment" | "enrollment" | "booking" | "roster")[];
+            }[];
             interval: {
                 /** Format: date-time */
                 end: string;
                 /** Format: date-time */
                 start: string;
             };
+            messages: {
+                /** Format: uuid */
+                eventId: string;
+                kind: string;
+                /** Format: uuid */
+                notificationId: string;
+                status: string;
+            }[];
+            obligations: {
+                eventIds: string[];
+                id: string;
+                type: string;
+            }[];
             sourceRecords: {
                 eventIds: string[];
                 /** Format: uuid */
@@ -32255,8 +32428,11 @@ export type components = {
                 sourceType: string;
             }[];
             summary: {
+                customers: number;
                 equipment: number;
                 games: number;
+                messages: number;
+                obligations: number;
                 other: number;
                 people: number;
                 programs: number;
@@ -34303,7 +34479,7 @@ export type components = {
         ExtendInstallmentRequest: {
             /** Format: date-time */
             dueAt: string;
-            expectedRevision?: number;
+            expectedRevision: number;
             policyReferences?: string[];
             reason: string;
         };
@@ -37047,6 +37223,21 @@ export type components = {
             policyReferences?: string[];
             reason: string;
         };
+        RecoveryBlocker: {
+            check: string;
+            code: string;
+            count?: number;
+            message: string;
+        };
+        RecoveryStatus: {
+            active: boolean;
+            blockers: components["schemas"]["RecoveryBlocker"][];
+            /** Format: date-time */
+            enteredAt: string | null;
+            /** Format: uuid */
+            exceptionId: string | null;
+            restoreReference: string | null;
+        };
         RecurrenceRule: {
             byWeekday?: number[];
             count?: number;
@@ -37699,6 +37890,11 @@ export type components = {
         };
         /** @enum {string} */
         ResultStatus: "draft" | "submitted" | "official" | "superseded";
+        ResumeAfterRecoveryRequest: {
+            expectedRevision?: number;
+            policyReferences?: string[];
+            reason: string;
+        };
         /** @enum {string} */
         RetentionCohort: "adult_teams" | "individual_players" | "youth_participants" | "households" | "rental_customers";
         RetireAssetBody: {
@@ -37823,7 +38019,7 @@ export type components = {
             /** Format: date-time */
             removedAt: string | null;
             /** @enum {string} */
-            source: "invitation" | "join_request" | "captain" | "staff" | "renewal";
+            source: "invitation" | "join_request" | "captain" | "staff" | "renewal" | "registration";
             status: components["schemas"]["RosterMembershipStatus"];
             statusBeforeRemoval: components["schemas"]["RosterPlayingStatus"] & (string | null);
             /** Format: uuid */

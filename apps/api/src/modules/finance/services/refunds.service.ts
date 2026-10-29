@@ -28,8 +28,10 @@ import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
 import {
   PAYMENT_PROVIDER_PORT,
+  RECORD_AUTHORITY_PORT,
   type PaymentProviderPort,
   type ProviderRefundResult,
+  type RecordAuthorityPort,
 } from '../finance.ports';
 import {
   financeSystem,
@@ -88,6 +90,7 @@ export class RefundsService {
     private readonly exceptions: OperationalExceptions,
     private readonly ledger: LedgerService,
     private readonly policy: FinancePolicyResolver,
+    @Inject(RECORD_AUTHORITY_PORT) private readonly recordAuthority: RecordAuthorityPort,
   ) {}
 
   async load(
@@ -182,6 +185,10 @@ export class RefundsService {
       if (!captured) {
         throw errors.invalidTransition('PaymentAttempt', payment.status, 'refund');
       }
+      // §5.6 / §4.7 invariant 11 (authority matrix row 15): while the legacy system is the refund
+      // writer, no caller — the HTTP route, support's helper or automation — reserves or executes
+      // one here. Checked before anything is reserved or audited.
+      await this.recordAuthority.assertNoLegacyAuthorityInEffect(organizationId, 'refund', trx);
       const operationId = await this.operations.create(trx, {
         organizationId,
         kind: 'finance.refund',

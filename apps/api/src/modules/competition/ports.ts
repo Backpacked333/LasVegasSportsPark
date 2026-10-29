@@ -76,6 +76,20 @@ export interface RosterPort {
     at: Date,
     trx?: Trx,
   ): Promise<EffectiveRosterMember[]>;
+  /**
+   * SPK-AT-002: places the player of a confirmed `join_team` registration on the roster inside the
+   * caller's transaction, re-evaluating eligibility; throws a domain error when the rules refuse.
+   */
+  addRegisteredMember(
+    trx: Trx,
+    input: {
+      organizationId: string;
+      teamEntryId: string;
+      personId: string;
+      enrollmentId: string;
+      correlationId: string | null;
+    },
+  ): Promise<{ membershipId: string; created: boolean }>;
 }
 export const ROSTER_PORT = Symbol('ROSTER_PORT');
 

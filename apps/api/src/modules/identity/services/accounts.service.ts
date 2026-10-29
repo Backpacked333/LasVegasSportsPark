@@ -26,7 +26,7 @@ import {
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
-import { toAccount } from '../identity.shared';
+import { requireStaffLoginAuthority, toAccount } from '../identity.shared';
 
 /**
  * Login accounts (SPK-IAM-002, SPK-AT-025). An account is the link between a provider identity
@@ -69,6 +69,15 @@ export class AccountsService {
         if (person.status !== 'active') {
           throw errors.invalidTransition('Person', person.status, 'link_account');
         }
+        // §4.14, SPK-AT-025: provisioning the login of a staff person needs staff-role authority.
+        await requireStaffLoginAuthority(
+          this.authorization,
+          trx,
+          principal,
+          organizationId,
+          input.personId,
+          this.clock.now(),
+        );
       }
       const id = newId();
       try {
@@ -98,7 +107,12 @@ export class AccountsService {
         afterRevision: 1,
         reason: input.reason ?? null,
         correlationId,
-        details: { operation: 'create', issuer: input.issuer, personId: input.personId ?? null },
+        details: {
+          operation: 'create',
+          issuer: input.issuer,
+          subject: input.subject,
+          personId: input.personId ?? null,
+        },
       });
       if (input.personId) {
         await this.outbox.enqueue(trx, IdentityEvents.accountLinked, {
@@ -143,16 +157,29 @@ export class AccountsService {
         .where('id', '=', id)
         .executeTakeFirst();
       if (!current) throw errors.notFound('account', id);
+      // §4.14, SPK-AT-025: recovering the login of a person who holds a staff membership needs the
+      // authority that assigns staff roles; support recovers customer accounts only. Verification
+      // evidence, rate limits and a second approver remain pending (DEC-018, DEC-091).
+      await requireStaffLoginAuthority(
+        this.authorization,
+        trx,
+        principal,
+        organizationId,
+        current.person_id,
+        this.clock.now(),
+      );
       assertExpectedRevision(input.expectedRevision, current.revision);
+      // Recovery restores only the prior access: a disabled account (disabled by a merge, or by
+      // staff) is not re-activated by pointing it at another provider identity.
+      if (current.status !== 'active') {
+        throw errors.invalidTransition('Account', current.status, 'relink');
+      }
       try {
         await trx
           .updateTable('accounts')
           .set({
             issuer: input.issuer,
             subject: input.subject,
-            status: 'active',
-            disabled_at: null,
-            disabled_reason: null,
             revision: current.revision + 1,
           })
           .where('id', '=', id)
@@ -172,7 +199,14 @@ export class AccountsService {
         afterRevision: current.revision + 1,
         reason: input.reason,
         correlationId,
-        details: { operation: 'relink', previousIssuer: current.issuer, issuer: input.issuer },
+        // The trail names which provider identity received the account (§4.14 audited actions).
+        details: {
+          operation: 'relink',
+          previousIssuer: current.issuer,
+          previousSubject: current.subject,
+          issuer: input.issuer,
+          subject: input.subject,
+        },
       });
       await this.outbox.enqueue(trx, IdentityEvents.accountRelinked, {
         organizationId,

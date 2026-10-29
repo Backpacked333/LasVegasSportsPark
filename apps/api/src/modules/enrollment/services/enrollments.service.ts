@@ -43,6 +43,7 @@ import {
   type Trx,
 } from '../../../kernel';
 import type { OfferingSnapshot } from '../../catalog';
+import { ROSTER_PORT, type RosterPort } from '../../competition';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
@@ -65,6 +66,7 @@ import {
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
 import { CapacityService, type HoldRow } from './capacity.service';
 import { RegistrationEvaluator } from './registration-evaluator';
+import { EnrollmentFacilityScope } from './facility-scope';
 
 export type EnrollmentRow = Selectable<EnrollmentsTable>;
 
@@ -107,6 +109,8 @@ export class EnrollmentsService implements EnrollmentPort {
     private readonly evaluator: RegistrationEvaluator,
     @Inject(FINANCE_POLICY_PORT) private readonly finance: FinancePolicyPort,
     private readonly exceptions: OperationalExceptions,
+    private readonly scope: EnrollmentFacilityScope,
+    @Inject(ROSTER_PORT) private readonly rosters: RosterPort,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -190,6 +194,7 @@ export class EnrollmentsService implements EnrollmentPort {
       type: 'enrollment',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -204,9 +209,18 @@ export class EnrollmentsService implements EnrollmentPort {
     await this.authorization.require(principal, EnrollmentActions.readEnrollment, {
       type: 'enrollment',
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, query.offeringId),
       subjectPersonIds: query.participantPersonId ? [query.participantPersonId] : undefined,
       protected: !isStaffLike(principal),
     });
+    // §4.3, §4.14: facility-scoped staff list only their facilities' registrations.
+    const offerings = await this.scope.listOfferings(
+      principal,
+      EnrollmentActions.readEnrollment,
+      organizationId,
+      query.participantPersonId,
+    );
+    if (offerings?.length === 0) return { items: [], nextCursor: null };
     let q = this.db
       .selectFrom('enrollments')
       .selectAll()
@@ -217,6 +231,7 @@ export class EnrollmentsService implements EnrollmentPort {
     if (query.participantPersonId)
       q = q.where('participant_person_id', '=', query.participantPersonId);
     if (query.offeringId) q = q.where('offering_id', '=', query.offeringId);
+    if (offerings) q = q.where('offering_id', 'in', offerings);
     if (query.status) q = q.where('status', '=', query.status);
     const rows = await q.execute();
     return {
@@ -456,6 +471,57 @@ export class EnrollmentsService implements EnrollmentPort {
    * the place only if it is still free, so a late payment never displaces a valid waitlist offer
    * (its hold counts in `held`) — CAPACITY_UNAVAILABLE otherwise (SPK-AT-006). Replay-safe.
    */
+  /** The team entry a join_team enrollment applied to (its basket line or application). */
+  private async teamEntryOf(
+    trx: Trx,
+    organizationId: string,
+    row: EnrollmentRow,
+  ): Promise<string | null> {
+    if (row.basket_line_id) {
+      const line = await trx
+        .selectFrom('basket_lines')
+        .select('team_entry_id')
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.basket_line_id)
+        .executeTakeFirst();
+      if (line?.team_entry_id) return line.team_entry_id;
+    }
+    if (row.source_application_id) {
+      const application = await trx
+        .selectFrom('applications')
+        .select('team_entry_id')
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.source_application_id)
+        .executeTakeFirst();
+      if (application?.team_entry_id) return application.team_entry_id;
+    }
+    return null;
+  }
+
+  private async placeOnTeam(
+    trx: Trx,
+    organizationId: string,
+    row: EnrollmentRow,
+    options: ConfirmEnrollmentOptions,
+  ): Promise<string | null> {
+    if (row.intent !== 'join_team') return null;
+    const teamEntryId = await this.teamEntryOf(trx, organizationId, row);
+    if (!teamEntryId) {
+      throw errors.resourceConflict('This team registration names no team entry to join.', {
+        code: 'team_entry_missing',
+        enrollmentId: row.id,
+      });
+    }
+    const placed = await this.rosters.addRegisteredMember(trx, {
+      organizationId,
+      teamEntryId,
+      personId: row.participant_person_id,
+      enrollmentId: row.id,
+      correlationId: options.correlationId ?? null,
+    });
+    return placed.membershipId;
+  }
+
   async confirmInTrx(
     trx: Trx,
     organizationId: string,
@@ -524,6 +590,10 @@ export class EnrollmentsService implements EnrollmentPort {
       );
       await this.capacity.acquireCommitted(trx, organizationId, reacquire, { enrollmentId });
     }
+    // SPK-AT-002, §4.11 step 8: a join_team registration is fulfilled by the roster place it paid
+    // for, in this same transaction; a refusal by the competition rules fails the confirmation, so
+    // the money received with incomplete fulfillment stays visible (finance's recovery path).
+    const rosterMembershipId = await this.placeOnTeam(trx, organizationId, row, options);
     await trx
       .updateTable('enrollments')
       .set({
@@ -587,7 +657,11 @@ export class EnrollmentsService implements EnrollmentPort {
       afterRevision: row.revision + 1,
       correlationId: options.correlationId ?? null,
       operationId: options.operationId ?? null,
-      details: { orderRef: options.orderRef ?? null, reacquired: reacquire.length > 0 },
+      details: {
+        orderRef: options.orderRef ?? null,
+        reacquired: reacquire.length > 0,
+        ...(rosterMembershipId ? { rosterMembershipId } : {}),
+      },
     });
     await this.outbox.enqueue(trx, EnrollmentEvents.enrollmentConfirmed, {
       organizationId,
@@ -745,6 +819,7 @@ export class EnrollmentsService implements EnrollmentPort {
       type: 'enrollment',
       id,
       organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
@@ -809,6 +884,7 @@ export class EnrollmentsService implements EnrollmentPort {
         type: 'enrollment',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -873,6 +949,7 @@ export class EnrollmentsService implements EnrollmentPort {
         type: 'enrollment',
         id,
         organizationId,
+        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -1020,13 +1097,23 @@ export class EnrollmentsService implements EnrollmentPort {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, input.commit);
       if (!row) throw errors.protectedNotFound('enrollment');
-      await this.authorization.require(principal, EnrollmentActions.transferEnrollment, {
-        type: 'enrollment',
-        id,
-        organizationId,
-        subjectPersonIds: [row.participant_person_id],
-        protected: true,
-      });
+      // §4.3: a transfer acts at the source and the target offering's facility.
+      await this.scope.requireAt(
+        principal,
+        EnrollmentActions.transferEnrollment,
+        {
+          type: 'enrollment',
+          id,
+          organizationId,
+          subjectPersonIds: [row.participant_person_id],
+          protected: true,
+        },
+        await this.scope.facilitiesOf(
+          organizationId,
+          [row.offering_id, input.targetOfferingId],
+          trx,
+        ),
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (input.targetOfferingId === row.offering_id) {
         throw errors.validation('The target offering must differ from the current one.');

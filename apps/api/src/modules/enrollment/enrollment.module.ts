@@ -4,7 +4,9 @@ import type { EventPayload } from '@sportspark/contracts';
 import { EventHandlerRegistry, lazyPort, runWithTransaction } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
 import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
+import { SESSION_AUDIENCE_IMPL } from '../communications';
 import { IdentityModule } from '../identity';
+import { ClosureImpactContributors, SchedulingModule } from '../scheduling';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
 import { CapacityController } from './controllers/capacity.controller';
@@ -37,11 +39,13 @@ import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
 import { CompetitionFormsCheck } from './services/competition-forms-check';
 import { EnrollmentsService } from './services/enrollments.service';
+import { EnrollmentFacilityScope } from './services/facility-scope';
 import { FamilyCalendarService } from './services/family-calendar.service';
 import { MakeupsService } from './services/makeups.service';
 import { PlacementService } from './services/placement.service';
 import { RegistrationEvaluator } from './services/registration-evaluator';
 import { SessionBookingsService } from './services/session-bookings.service';
+import { SessionParticipants } from './services/session-participants';
 import { TrialsService } from './services/trials.service';
 import { WaitlistService } from './services/waitlist.service';
 
@@ -63,6 +67,7 @@ const providers: Provider[] = [
   },
   RegistrationEvaluator,
   CatalogSessions,
+  EnrollmentFacilityScope,
   CapacityService,
   EnrollmentsService,
   ApplicationsService,
@@ -73,6 +78,9 @@ const providers: Provider[] = [
   TrialsService,
   PlacementService,
   FamilyCalendarService,
+  SessionParticipants,
+  // SPK-AT-009: communications addresses session change notices to the sessions' participants.
+  { provide: SESSION_AUDIENCE_IMPL, useExisting: SessionParticipants },
   { provide: ENROLLMENT_PORT, useExisting: EnrollmentsService },
   { provide: CAPACITY_PORT, useExisting: CapacityService },
   { provide: BASKET_PORT, useExisting: BasketsService },
@@ -95,7 +103,7 @@ const providers: Provider[] = [
  * See README.md.
  */
 @Module({
-  imports: [IdentityModule, CatalogModule, CompetitionModule],
+  imports: [IdentityModule, CatalogModule, CompetitionModule, SchedulingModule],
   providers,
   controllers: [
     ApplicationsController,
@@ -135,9 +143,18 @@ export class EnrollmentModule implements OnModuleInit {
     private readonly waitlist: WaitlistService,
     private readonly bookings: SessionBookingsService,
     private readonly makeups: MakeupsService,
+    private readonly sessionParticipants: SessionParticipants,
+    private readonly impactContributors: ClosureImpactContributors,
   ) {}
 
   onModuleInit(): void {
+    // SPK-SCHED-009, SPK-AT-009: a closure preview names the enrolled and booked participants of
+    // the catalog sessions behind the affected events, and the orders they paid through.
+    this.impactContributors.register(
+      'enrollment.session_participants',
+      (db, organizationId, events) =>
+        this.sessionParticipants.closureImpact(db, organizationId, events),
+    );
     // Handlers run in the dispatcher's transaction; binding it as the active transaction makes every
     // port read (identity authority, catalog lookups) go through it instead of a second connection.
 

@@ -200,7 +200,9 @@ export interface ReconciliationReportsTable {
   status: ReconciliationStatus;
   levels: Json<unknown[]>;
   discrepancy_count: number;
-  required_areas: MigrationTextArray<ReconciliationArea>;
+  // `text[] not null` with no default (migration 1200): required on insert, unlike
+  // policy_references, which defaults to '{}'.
+  required_areas: ColumnType<ReconciliationArea[], ReconciliationArea[], ReconciliationArea[]>;
   approval_status: Generated<ReconciliationApprovalStatus>;
   approval_completed_at: NullableTimestamp;
   superseded_by_report_id: string | null;

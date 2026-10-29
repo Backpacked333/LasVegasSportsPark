@@ -28,6 +28,7 @@ import { NextActions } from './services/next-actions';
 import { TimelineIndexer } from './services/timeline-indexer.service';
 import { TimelineService } from './services/timeline.service';
 import { TodayService } from './services/today.service';
+import { HelperOutcomeDue } from './support.events';
 import { DEFAULT_SUPPORT_POLICY, SUPPORT_POLICY } from './support.policy';
 import { SUPPORT_CASES_PORT } from './support.ports';
 
@@ -80,6 +81,7 @@ export class SupportModule implements OnModuleInit {
   constructor(
     private readonly registry: EventHandlerRegistry,
     private readonly cases: CasesService,
+    private readonly actions: CaseActionsService,
     private readonly indexer: TimelineIndexer,
   ) {}
 
@@ -129,6 +131,14 @@ export class SupportModule implements OnModuleInit {
           await this.indexer.onPersonsMerged(event, ctx);
           await this.cases.onPersonsMerged(ctx.trx, event);
         }),
+      { failureOwner: 'support_operator' },
+    );
+    // §4.7 invariant 12 (support-migration-06): a helper request still `requested` after the
+    // grace period lost its outcome; it becomes `unknown` with an exception the owner works.
+    this.registry.on<EventPayload<typeof HelperOutcomeDue>>(
+      HelperOutcomeDue.type,
+      'support.helper_outcome_overdue',
+      (event, ctx) => runWithTransaction(ctx.trx, () => this.actions.markOverdue(ctx.trx, event)),
       { failureOwner: 'support_operator' },
     );
     // SPK-IAM-005: an escalated disputed-access review becomes an owned support case.

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { CatalogModule } from '../catalog';
-import { FinanceModule } from '../finance';
+import { FinanceModule, RECORD_AUTHORITY_IMPL } from '../finance';
 import { IdentityModule } from '../identity';
 import {
   AuthorityController,
@@ -46,6 +46,8 @@ import { ReconciliationService } from './services/reconciliation.service';
     ImportApplyService,
     ReconciliationService,
     { provide: AUTHORITY_GUARD_PORT, useExisting: AuthorityService },
+    // Finance resolves this at call time to guard its refund command in-process (§5.6).
+    { provide: RECORD_AUTHORITY_IMPL, useExisting: AuthorityService },
     { provide: EXTERNAL_MAPPING_PORT, useExisting: ExternalMappingsService },
     // §5.6 / §4.7 invariant 11: a synchronized copy never becomes an independent writer.
     { provide: APP_INTERCEPTOR, useClass: AuthorityWriteInterceptor },
@@ -60,6 +62,7 @@ import { ReconciliationService } from './services/reconciliation.service';
   exports: [
     MIGRATION_POLICY,
     AUTHORITY_GUARD_PORT,
+    RECORD_AUTHORITY_IMPL,
     EXTERNAL_MAPPING_PORT,
     AuthorityService,
     ExternalMappingsService,

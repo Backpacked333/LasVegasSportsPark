@@ -724,8 +724,10 @@ export const CollectInstallmentBody = withCommandMeta({})
   .openapi('CollectInstallmentRequest');
 export type CollectInstallmentInput = z.infer<typeof CollectInstallmentBody>;
 
+// §4.9: an extension moves the date the customer's stored method is charged, so a stale edit must
+// fail rather than overwrite newer work; the current revision is required.
 export const ExtendInstallmentBody = withCommandMeta({ dueAt: Instant })
-  .extend({ reason: Reason })
+  .extend({ reason: Reason, expectedRevision: Revision })
   .strict()
   .openapi('ExtendInstallmentRequest');
 export type ExtendInstallmentInput = z.infer<typeof ExtendInstallmentBody>;

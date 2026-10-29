@@ -47,6 +47,19 @@ export interface EligibilityInput {
   person: EligibilityPerson;
   /** join_team: the entry applied to. */
   teamEntry?: { id: string; status: string } | null;
+  /**
+   * join_team on an open entry: the competition's own player eligibility for that entry (season
+   * rule set, multi-team restrictions, roster limits, suspensions; SPK-CAP-004, SPK-REG-002), so a
+   * join the competition rules forbid is refused before anything is quoted or charged (SPK-AT-002).
+   */
+  teamEligibility?: {
+    reasons: ReadonlyArray<{
+      code: string;
+      severity: RegistrationEligibilityReason['severity'];
+      message: string;
+      requiredAction: string;
+    }>;
+  } | null;
   /** Session-scoped intents: the session booked. */
   session?: { id: string; status: string; scheduledStart: Date } | null;
 }
@@ -230,6 +243,27 @@ export function evaluateRegistrationEligibility(input: EligibilityInput): Eligib
         message: 'Request placement on another team.',
         offeringId: null,
       });
+    } else if (input.teamEligibility) {
+      const team = input.teamEntry;
+      const competing = input.teamEligibility.reasons.filter(
+        (r) => r.severity === 'blocking' || r.severity === 'unknown',
+      );
+      for (const r of competing) {
+        reasons.push({
+          code: r.code,
+          severity: r.severity,
+          message: r.message,
+          source: { type: 'team_entry', id: team.id },
+          requiredAction: r.requiredAction,
+        });
+      }
+      if (competing.length > 0) {
+        alternatives.push({
+          kind: 'request_placement',
+          message: 'Request placement on another team.',
+          offeringId: null,
+        });
+      }
     }
   }
 

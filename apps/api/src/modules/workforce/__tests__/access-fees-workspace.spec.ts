@@ -328,6 +328,7 @@ describe('time-bounded access, fees and the coach/referee workspace (SPK-STAFF-0
     const afterExport = await post(t, `/v1/fee-submissions/${submitted.body.id}/adjust`, finance, {
       amountMinor: 1,
       reason: 'too late',
+      expectedRevision: exported.body.revision,
     });
     expect(afterExport.body.code).toBe('INVALID_TRANSITION');
     await expectPgError(
@@ -345,6 +346,58 @@ describe('time-bounded access, fees and the coach/referee workspace (SPK-STAFF-0
       .get('/v1/fee-submissions?status=exported')
       .set(finance.header);
     expect(listByFinance.body.items.map((f: { id: string }) => f.id)).toContain(submitted.body.id);
+    t.clock.set('2027-01-16T20:00:00Z');
+  });
+
+  it('§4.9: a fee adjustment requires the current revision; an unversioned or stale adjustment never replaces a newer amount', async () => {
+    const official = await staffMember(t, ['official']);
+    const g = await scheduleFixture(t, world, { date: '2027-01-21' });
+    const created = await post(t, '/v1/assignments', leagueManager, {
+      personId: official.personId,
+      kind: 'official',
+      targetType: 'fixture',
+      targetId: g.fixtureId,
+      role: 'referee',
+      offer: true,
+    });
+    const assignmentId = created.body.assignment.id as string;
+    await post(t, `/v1/assignments/${assignmentId}/accept`, official, {});
+    t.clock.set(new Date(new Date(g.end).getTime() + HOUR));
+    await post(t, `/v1/assignments/${assignmentId}/complete`, leagueManager, {});
+    const submitted = await post(t, '/v1/fee-submissions', official, {
+      assignmentId,
+      rateBasis: { kind: 'per_assignment', rateMinor: 4000 },
+      submittedAmountMinor: 4000,
+      currency: 'USD',
+    });
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(201);
+    const path = `/v1/fee-submissions/${submitted.body.id}/adjust`;
+    // Operator A adjusts from the current screen.
+    const first = await post(t, path, finance, {
+      amountMinor: 3750,
+      reason: 'Rate card',
+      expectedRevision: submitted.body.revision,
+    });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    // Operator B, still on the original screen, sends no revision: refused by the contract...
+    const unversioned = await post(t, path, finance, { amountMinor: 5000, reason: 'Stale screen' });
+    expect(unversioned.status).toBe(400);
+    expect(unversioned.body.code).toBe('VALIDATION_FAILED');
+    // ...or the revision of the screen: refused as stale.
+    const stale = await post(t, path, finance, {
+      amountMinor: 5000,
+      reason: 'Stale screen',
+      expectedRevision: submitted.body.revision,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    const fee = await t.http.get(`/v1/fee-submissions/${submitted.body.id}`).set(finance.header);
+    expect(fee.body).toMatchObject({
+      status: 'adjusted',
+      approvedAmountMinor: 3750,
+      revision: first.body.revision,
+      adjustments: [{ sequence: 1, previousAmountMinor: 4000, adjustedAmountMinor: 3750 }],
+    });
     t.clock.set('2027-01-16T20:00:00Z');
   });
 
