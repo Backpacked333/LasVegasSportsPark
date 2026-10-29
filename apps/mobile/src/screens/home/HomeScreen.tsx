@@ -8,19 +8,31 @@
  * marketing cannot obscure today's activity or an unresolved registration.
  *
  * Sources, all answered by the API under its own authorization: `GET /v1/me` (who the person may
- * view), `GET /v1/me/family-calendar` (next activity), `GET /v1/me/inbox` (changes, actions,
- * invitations, results, renewals), `GET /v1/enrollments?status=pending` per participant and
- * `GET /v1/operations/{id}` (registrations needing something). Each section has its own state; the
+ * view), `GET /v1/me/family-calendar` and `GET /v1/me/fixtures` (the next activity: a session,
+ * booking or fixture, whichever comes first, CMP-02), `GET /v1/me/team-entries` (whose fixture it
+ * is and the opponent), `GET /v1/me/inbox` (changes, actions, invitations, results, renewals; each
+ * notice names the participants it concerns, `subjectPersonIds`), `GET /v1/enrollments?status=
+ * pending` per participant with `pendingReason` (what is outstanding, ENR-02) and
+ * `GET /v1/operations/{id}` (registrations needing something), and `GET /v1/me/registration-
+ * checkouts` (FIN-01), so a checkout in `recovery_required` the person paid for is pinned even
+ * when its enrollment is not listed (another participant, a reinstall), with its outcome screen
+ * (SCR-C-15; SCR-C-40 "interrupted payment found on refresh"). Each section has its own state; the
  * page states the age of what it shows (§4.15) and the SCR-C-40 banner covers connectivity.
- * Fixtures do not appear in the next-activity slot: the API has no customer read of upcoming
- * fixtures across a person's teams (reported in the README).
+ * A fixture read that is not available (NOT_FOUND, ACCESS_DENIED) leaves fixtures out silently;
+ * any other failure is shown in the next-activity section with its code and "Try again".
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
-import { nextActivity } from '../../features/today/calendar';
+import { calendarWindowQuery } from '../../features/today/calendar';
+import { mergeEntries, nextEntry } from '../../features/today/entries';
+import { fixtureCardModel, ownResponse, viewerOnRoster } from '../../features/today/fixture-model';
 import { NextActivityCard } from '../../features/today/NextActivityCard';
-import { noticeSection, type NoticeSection } from '../../features/today/notices';
+import {
+  latestChangeForEvent,
+  noticeSection,
+  type NoticeSection,
+} from '../../features/today/notices';
 import {
   INBOX_PAGE_SIZE,
   SCHEDULE_WINDOW_DAYS,
@@ -28,13 +40,18 @@ import {
   useCalendarWindow,
   useInbox,
   useMe,
+  useMyFixtures,
+  useMyTeams,
   useOfferings,
   usePersonNames,
 } from '../../features/today/queries';
+import { registrationRoutes } from '../../features/registration/routes';
+import { RsvpControl } from '../../features/today/RsvpControl';
 import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
 import { sessionHref, useSessionActivity } from '../../features/today/session-activity';
-import { enrollmentStatus, noticeStatus } from '../../features/today/status';
+import { enrollmentStatus, noticeStatus, RECOVERY_PHRASE } from '../../features/today/status';
 import { displayZone, zoneNotice } from '../../features/today/time';
+import { useApiQuery } from '../../api/useApiQuery';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -48,6 +65,28 @@ import { usePendingRegistrations, type PendingRegistration } from './pending-reg
 
 type InboxItem = Schema<'InboxItem'>;
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
+type FixtureDetail = Schema<'FixtureDetail'>;
+type MyTeamEntry = Schema<'MyTeamEntry'>;
+type Me = Schema<'Me'>;
+type Checkout = Schema<'Checkout'>;
+
+/** The first page of the payer's checkouts, newest first (the same read the registration screens make). */
+const CHECKOUTS_PAGE = 20;
+
+/**
+ * Checkouts in `recovery_required` (§4.11) not already pinned through one of their enrollments:
+ * money was received, the registration is not complete, and the person must not pay again.
+ */
+export function recoveryCheckouts(
+  checkouts: readonly Checkout[],
+  pinnedEnrollmentIds: ReadonlySet<string>,
+): Checkout[] {
+  return checkouts.filter(
+    (c) =>
+      c.status === 'recovery_required' &&
+      !c.enrollmentIds.some((id) => pinnedEnrollmentIds.has(id)),
+  );
+}
 
 /** How many notices each Home section shows before "See all in notifications". */
 const NOTICES_PER_SECTION = 3;
@@ -79,7 +118,14 @@ function openNotice(router: ReturnType<typeof useRouter>, item: InboxItem) {
   router.push({ pathname: '/inbox', params: { open: item.attemptId } } as Href);
 }
 
-function NoticeRows({ items }: { items: InboxItem[] }) {
+/** "For: Sam. " ahead of a notice's text: whom it concerns (SPK-UX-003, `subjectPersonIds`). */
+export function noticeFor(item: InboxItem, names: Map<string, string>): string {
+  const ids = item.subjectPersonIds ?? [];
+  if (ids.length === 0) return '';
+  return `For: ${ids.map((id) => nameOf(names, id)).join(', ')}. `;
+}
+
+function NoticeRows({ items, names }: { items: InboxItem[]; names: Map<string, string> }) {
   const router = useRouter();
   return (
     <View accessibilityRole="list">
@@ -87,7 +133,7 @@ function NoticeRows({ items }: { items: InboxItem[] }) {
         <ListRow
           key={item.attemptId}
           title={item.title}
-          detail={item.body}
+          detail={`${noticeFor(item, names)}${item.body}`}
           status={noticeStatus(item)}
           onPress={() => openNotice(router, item)}
           accessibilityHint="Opens the notice in your notifications"
@@ -112,7 +158,9 @@ function RegistrationRows({
   return (
     <View accessibilityRole="list">
       {rows.map(({ enrollment, operation, checkout }) => {
-        const offeringName = offeringNames.get(enrollment.offeringId) ?? 'Registration';
+        // ENR-02: the enrollment names its offering; older answers fall back to the offering read.
+        const offeringName =
+          enrollment.offering?.name ?? offeringNames.get(enrollment.offeringId) ?? 'Registration';
         return (
           <ListRow
             key={enrollment.id}
@@ -147,6 +195,50 @@ function NextActivitySection({
   );
 }
 
+/** SCR-C-04 for the next fixture: whose it is, opponent, venue, facility clock and RSVP. */
+function NextFixtureSection({
+  fixture,
+  teams,
+  names,
+  me,
+  onReload,
+}: {
+  fixture: FixtureDetail;
+  teams: readonly MyTeamEntry[] | undefined;
+  names: Map<string, string>;
+  me: Me | undefined;
+  onReload: () => void;
+}) {
+  const router = useRouter();
+  const inbox = useInbox();
+  const latest = latestChangeForEvent(inbox.data?.items ?? [], fixture.schedulingEventId);
+  const model = fixtureCardModel({ fixture, teams, names, change: latest?.change ?? null });
+  const own = ownResponse(fixture, me?.principal.personId);
+  const notice = zoneNotice(model.zone, model.start ?? fixture.createdAt);
+  return (
+    <>
+      <NextActivityCard
+        model={model}
+        rsvp={
+          <RsvpControl
+            fixtureId={fixture.id}
+            fixtureStatus={fixture.status}
+            myResponse={own?.state ?? fixture.myResponse ?? null}
+            responseRevision={own?.revision ?? null}
+            onRoster={viewerOnRoster(fixture)}
+            onReload={onReload}
+          />
+        }
+        onOpen={() =>
+          router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
+        }
+        openLabel="View fixture"
+      />
+      {notice ? <Caption>{notice}</Caption> : null}
+    </>
+  );
+}
+
 function HomeContent() {
   const router = useRouter();
   const now = useNow();
@@ -154,10 +246,32 @@ function HomeContent() {
   const me = useMe();
   const inbox = useInbox();
   const calendar = useCalendarWindow(now, SCHEDULE_WINDOW_DAYS, zone.zone);
+  const fixtures = useMyFixtures(calendarWindowQuery(now, 0, SCHEDULE_WINDOW_DAYS, zone.zone));
+  const teams = useMyTeams();
   const registrations = usePendingRegistrations(me.data);
+  const checkouts = useApiQuery({
+    path: '/me/registration-checkouts',
+    request: { query: { limit: CHECKOUTS_PAGE } },
+    enabled: me.data !== undefined,
+  });
 
   const calendarItems = calendar.data?.items ?? [];
-  const next = nextActivity(calendarItems, now);
+  // A fixture list that is not available to this person is left out without comment (§4.10).
+  const fixturesHidden =
+    fixtures.error !== null && presentationForError(fixtures.error) === 'unavailable';
+  const fixtureList = fixturesHidden ? [] : (fixtures.data ?? []);
+  const fixturesSettled = fixtures.data !== undefined || fixtures.error !== null;
+  const next = nextEntry(mergeEntries(calendarItems, fixtureList), now);
+  const nextTeamMembers =
+    next?.type === 'fixture'
+      ? (teams.data ?? [])
+          .filter(
+            (t) =>
+              t.teamEntry.id === next.fixture.home.entryId ||
+              t.teamEntry.id === next.fixture.away?.entryId,
+          )
+          .flatMap((t) => t.members.map((m) => m.personId))
+      : [];
   const allRegistrations = [
     ...registrations.recovery,
     ...registrations.pending,
@@ -165,12 +279,16 @@ function HomeContent() {
   ];
   const names = usePersonNames(
     [
-      ...(next ? [next.personId] : []),
+      ...(next?.type === 'session' ? [next.item.personId] : []),
+      ...nextTeamMembers,
       ...allRegistrations.map((r) => r.enrollment.participantPersonId),
+      ...(inbox.data?.items ?? []).flatMap((i) => i.subjectPersonIds ?? []),
     ],
     me.data,
   );
-  const offerings = useOfferings(allRegistrations.map((r) => r.enrollment.offeringId));
+  const offerings = useOfferings(
+    allRegistrations.filter((r) => !r.enrollment.offering).map((r) => r.enrollment.offeringId),
+  );
   const offeringNames = new Map([...offerings].map(([id, o]) => [id, o.name]));
 
   if (me.data === undefined) {
@@ -192,27 +310,36 @@ function HomeContent() {
     if (!section) continue;
     bySection.set(section, [...(bySection.get(section) ?? []), item]);
   }
+  const unpinnedRecovery = recoveryCheckouts(
+    checkouts.data?.items ?? [],
+    new Set(registrations.recovery.map((r) => r.enrollment.id)),
+  );
   const urgent = bySection.get('urgent') ?? [];
   const nothingAtAll =
     calendar.data !== undefined &&
     inbox.data !== undefined &&
+    fixturesSettled &&
     !registrations.loading &&
     !next &&
     allRegistrations.length === 0 &&
+    unpinnedRecovery.length === 0 &&
     bySection.size === 0;
 
   const updatedAt = oldestUpdate([
     me.updatedAt,
     inbox.updatedAt,
     calendar.updatedAt,
+    fixturesHidden ? null : fixtures.updatedAt,
     registrations.updatedAt,
   ]);
+  const fixturesFailed =
+    fixtures.error !== null && !fixturesHidden && fixtures.data === undefined ? fixtures : null;
 
   return (
     <View testID="home-content">
       <LastUpdated at={updatedAt} now={now} />
 
-      {registrations.recovery.length > 0 ? (
+      {registrations.recovery.length > 0 || unpinnedRecovery.length > 0 ? (
         <Section title="Registration being completed" testID="home-recovery">
           <Caption>
             Do not pay again. Your payment was received and the facility&apos;s team is completing
@@ -224,6 +351,21 @@ function HomeContent() {
             offeringNames={offeringNames}
             testID="home-recovery-row"
           />
+          {unpinnedRecovery.length > 0 ? (
+            <View accessibilityRole="list">
+              {unpinnedRecovery.map((c) => (
+                <ListRow
+                  key={c.id}
+                  title="Registration checkout"
+                  detail={`${c.enrollmentIds.length} registration${c.enrollmentIds.length === 1 ? '' : 's'} being completed`}
+                  status={{ tone: 'warning', label: RECOVERY_PHRASE }}
+                  onPress={() => router.push(registrationRoutes.outcome(c.id) as Href)}
+                  accessibilityHint="Opens what happens next with this checkout"
+                  testID={`home-recovery-checkout-${c.id}`}
+                />
+              ))}
+            </View>
+          ) : null}
         </Section>
       ) : null}
 
@@ -239,7 +381,7 @@ function HomeContent() {
 
       {urgent.length > 0 ? (
         <Section title="Changes affecting you" testID="home-urgent">
-          <NoticeRows items={urgent.slice(0, NOTICES_PER_SECTION)} />
+          <NoticeRows items={urgent.slice(0, NOTICES_PER_SECTION)} names={names} />
         </Section>
       ) : null}
 
@@ -250,14 +392,29 @@ function HomeContent() {
             label="your next activity"
             unavailable={{ description: 'Your schedule is not available right now.' }}
           />
-          {calendar.data !== undefined && next ? (
-            <NextActivitySection item={next} names={names} />
+          {calendar.data !== undefined && next?.type === 'session' ? (
+            <NextActivitySection item={next.item} names={names} />
           ) : null}
-          {calendar.data !== undefined && !next ? (
+          {calendar.data !== undefined && next?.type === 'fixture' ? (
+            <NextFixtureSection
+              fixture={next.fixture}
+              teams={teams.data}
+              names={names}
+              me={me.data}
+              onReload={() => void fixtures.refetch()}
+            />
+          ) : null}
+          {fixturesFailed ? (
+            <View testID="home-fixtures-error">
+              <Caption>Your team fixtures could not be loaded.</Caption>
+              <SectionQueryState read={fixturesFailed} label="your fixtures" />
+            </View>
+          ) : null}
+          {calendar.data !== undefined && fixturesSettled && !next ? (
             <StateView
               variant="empty"
               title="No upcoming activities"
-              description={`Nothing is scheduled for you or your family in the next ${SCHEDULE_WINDOW_DAYS} days.`}
+              description={`Nothing is scheduled for you, your family or your teams in the next ${SCHEDULE_WINDOW_DAYS} days.`}
               actionLabel="Open Discover"
               onAction={() => router.push('/discover')}
             />
@@ -273,7 +430,10 @@ function HomeContent() {
             offeringNames={offeringNames}
             testID="home-registration"
           />
-          <NoticeRows items={(bySection.get('actions') ?? []).slice(0, NOTICES_PER_SECTION)} />
+          <NoticeRows
+            items={(bySection.get('actions') ?? []).slice(0, NOTICES_PER_SECTION)}
+            names={names}
+          />
         </Section>
       ) : null}
       {registrations.inProgress.length > 0 ? (
@@ -295,7 +455,7 @@ function HomeContent() {
         if (items.length === 0) return null;
         return (
           <Section key={s.key} title={s.title} testID={`home-${s.key}`}>
-            <NoticeRows items={items.slice(0, NOTICES_PER_SECTION)} />
+            <NoticeRows items={items.slice(0, NOTICES_PER_SECTION)} names={names} />
           </Section>
         );
       })}

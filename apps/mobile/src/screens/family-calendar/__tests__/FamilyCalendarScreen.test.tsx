@@ -2,7 +2,7 @@
  * SCR-C-19 Family calendar (SPK-YOUTH-007, SPK-IAM-003, SPK-ENTRY-007, SPK-SCHED-008,
  * SPK-UX-008, SPK-UX-009, §4.10, §4.14).
  */
-import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import {
   BOOKING_ITEM,
@@ -13,10 +13,15 @@ import {
   fail,
   me,
   ok,
-  person,
+  names,
+  offering,
+  OFFERING_TWO,
+  fixtureDetail,
+  myTeamEntry,
+  FIXTURE,
   SELF,
 } from '../../../features/today/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, mePermissions } from '../../../testing/test-app';
 import { FamilyCalendarScreen } from '../FamilyCalendarScreen';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
@@ -45,6 +50,8 @@ const OVERLAP = {
   end: '2026-10-24T18:00:00.000Z',
 };
 
+const PICKUP_OFFERING = { ...offering(OFFERING_TWO, 'Adult Pickup Night', null), kind: 'pickup' };
+
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     // The person holds view over two children, but the API includes only one in the calendar.
@@ -61,10 +68,11 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
           ? calendar([SKILLS, SWIM, BOOKING_ITEM], { overlaps: [OVERLAP] })
           : calendar([]),
       ),
-    'GET /people/{id}': (req) =>
-      req.params.id === CHILD
-        ? fakeResponse(200, person(CHILD, 'Sam'))
-        : fakeResponse(404, apiErrorBody('NOT_FOUND')),
+    'GET /person-names': names({ [CHILD]: 'Sam' }),
+    'GET /me/fixtures': ok([]),
+    'GET /me/team-entries': ok([]),
+    'GET /offerings/{id}': (req) =>
+      fakeResponse(200, req.params.id === OFFERING_TWO ? PICKUP_OFFERING : offering()),
     ...overrides,
   };
 }
@@ -165,5 +173,108 @@ describe('SCR-C-19 FamilyCalendarScreen', () => {
     ).toBeOnTheScreen();
     // Week navigation stays usable.
     expect(screen.getByRole('button', { name: 'Next week' })).toBeOnTheScreen();
+  });
+});
+
+describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility clocks', () => {
+  it('SPK-PLACE-004 (DEC-082): a booked pickup session is on the calendar, labelled from its offering', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByRole('button', {
+        name: 'You: Adult Pickup Night, 6:00 PM to 7:30 PM PDT. Pickup session, Booking pending',
+      }),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByRole('button', { name: /^Sam: Junior Skills, 10:00 AM to 11:00 AM PDT\. ▲/ }),
+    ).toBeOnTheScreen();
+  });
+
+  it('DEC-016, DEC-082: with pickup sessions turned off, says so and keeps booked ones listed; nothing to find', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    const section = await screen.findByTestId('family-pickup-sessions');
+    expect(await within(section).findByLabelText('Pickup sessions turned off')).toBeOnTheScreen();
+    expect(
+      within(section).getByText('Pickup sessions already booked stay on this calendar.'),
+    ).toBeOnTheScreen();
+    expect(within(section).getByText(/DEC-016, DEC-082/)).toBeOnTheScreen();
+    expect(within(section).queryByRole('button', { name: 'Find pickup sessions' })).toBeNull();
+    // The booked one is still there.
+    expect(screen.getByRole('button', { name: /^You: Adult Pickup Night/ })).toBeOnTheScreen();
+  });
+
+  it('with pickup sessions turned on, offers finding more in Discover', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /me/permissions': mePermissions({ enabled: ['pickup_sessions'] }) }),
+    });
+    render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Find pickup sessions' }));
+    expect(mockPush).toHaveBeenLastCalledWith('/discover');
+    expect(screen.queryByLabelText('Pickup sessions turned off')).toBeNull();
+  });
+
+  it("CMP-02, SPK-YOUTH-007: a child's team fixture is on the calendar and its overlap with another commitment is marked", async () => {
+    // Saturday 10:30 to 12:00 in Los Angeles: overlaps Sam's 10:00 Junior Skills session.
+    const game = fixtureDetail({
+      scheduledStart: '2026-10-24T17:30:00.000Z',
+      scheduledEnd: '2026-10-24T19:00:00.000Z',
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/fixtures': (req) =>
+          fakeResponse(200, req.query.from === '2026-10-24T07:00:00.000Z' ? [game] : []),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [CHILD] })]),
+      }),
+    });
+    render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`family-fixture-${FIXTURE}`);
+    expect(row).toHaveProp(
+      'accessibilityLabel',
+      'Sam (Lions): Lions vs Tigers, 10:30 AM to 12:00 PM PDT. Main Park, Pitch 3. ▲ Overlaps with Junior Skills (Sam), Swim club (Sam), Scheduled',
+    );
+    expect(
+      screen.getByRole('button', {
+        name: /^Sam: Junior Skills.*Overlaps with Swim club \(Sam\), Lions vs Tigers \(Sam\)/,
+      }),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('3 overlapping commitments this week')).toBeOnTheScreen();
+    // The per-person filter keeps the child's fixture and drops the adult's booking.
+    fireEvent.press(screen.getByRole('radio', { name: 'Sam' }));
+    expect(screen.getByTestId(`family-fixture-${FIXTURE}`)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: /^You: Adult Pickup Night/ })).toBeNull();
+    fireEvent.press(row);
+    expect(mockPush).toHaveBeenLastCalledWith({
+      pathname: '/fixtures/[id]',
+      params: { id: FIXTURE },
+    });
+    expect(app.fake.requests.find((r) => r.route === '/me/fixtures')?.query).toEqual({
+      from: '2026-10-24T07:00:00.000Z',
+      to: '2026-10-31T07:00:00.000Z',
+    });
+  });
+
+  it('SPK-SCHED-008: an activity without a facility zone is on the device clock, and the screen says so', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([calendarItem({ timezone: null })])),
+      }),
+    });
+    render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByText(
+        "Times are in this device's time zone (PDT). The facility's time zone was not given for this.",
+      ),
+    ).toBeOnTheScreen();
+  });
+
+  it('a team fixture read that fails shows its code; the calendar stays', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /me/fixtures': fail(500, 'INTERNAL_ERROR') }),
+    });
+    render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    const failure = await screen.findByTestId('family-fixtures-error');
+    expect(within(failure).getByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(screen.getByTestId('family-day-2026-10-24')).toBeOnTheScreen();
   });
 });

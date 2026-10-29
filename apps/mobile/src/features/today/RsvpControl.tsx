@@ -12,6 +12,11 @@
  *   takes answers INVALID_TRANSITION. Each is shown with its code; nothing is retried blindly.
  * - Answers are for the signed-in person only. Which permission lets a guardian answer for a
  *   child is DEC-090 (pending), so the control does not offer it.
+ * - CMP-04 (§4.9): an existing answer is changed only from the revision the person saw (the
+ *   `responses` revision of `GET /v1/fixtures/{id}`, then the revision the last answer returned),
+ *   sent as `expectedRevision`; STALE_REVISION offers "Reload". A person the fixture read says is
+ *   on no roster (`rosterStatus: null`) is not offered the choices. Answers close at kickoff: the
+ *   API answers INVALID_TRANSITION with `details.code: AVAILABILITY_CLOSED`, shown in those words.
  * - RSVP is neither attendance nor eligibility; the caption says so.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
@@ -32,10 +37,22 @@ export const OFFERED_RSVP_STATES: readonly RsvpState[] = ['available', 'unavaila
 export interface RsvpControlProps {
   fixtureId: string;
   fixtureStatus: FixtureStatus;
-  /** The signed-in person's recorded answer from `GET /v1/fixtures/{id}` (`myResponse`). */
+  /** The signed-in person's recorded answer from `GET /v1/fixtures/{id}` (`responses`). */
   myResponse: RsvpState | null;
+  /** The revision of that answer (CMP-04); null or absent while none is recorded. */
+  responseRevision?: number | null;
+  /** Whether the person is on a roster (`rosterStatus`); null or absent when the read did not say. */
+  onRoster?: boolean | null;
   /** Called after a stale or closed answer so the screen reloads the fixture. */
   onReload?: () => void;
+}
+
+/** `details.code` of the API's refusal of an answer after kickoff (CMP-04). */
+export const AVAILABILITY_CLOSED = 'AVAILABILITY_CLOSED';
+
+function detailsCode(error: ApiError): string | null {
+  const details = error.details as { code?: unknown } | null | undefined;
+  return typeof details?.code === 'string' ? details.code : null;
 }
 
 function rsvpErrorView(error: ApiError, onRetry: () => void, onReload?: () => void) {
@@ -52,28 +69,54 @@ function rsvpErrorView(error: ApiError, onRetry: () => void, onReload?: () => vo
       />
     );
   }
+  if (error.code === 'INVALID_TRANSITION' && detailsCode(error) === AVAILABILITY_CLOSED) {
+    return (
+      <View style={styles.box} testID="rsvp-closed">
+        <StatusBadge tone="neutral" label="Availability closed at kickoff" />
+        <StateView variant="error" error={error} onAction={onReload} />
+      </View>
+    );
+  }
   if (error.code === 'INVALID_TRANSITION' || error.code === 'STALE_REVISION') {
     return <StateView variant="error" error={error} onAction={onReload} />;
   }
   return <StateView variant="error" error={error} onRetry={onRetry} />;
 }
 
-export function RsvpControl({ fixtureId, fixtureStatus, myResponse, onReload }: RsvpControlProps) {
+export function RsvpControl({
+  fixtureId,
+  fixtureStatus,
+  myResponse,
+  responseRevision,
+  onRoster,
+  onReload,
+}: RsvpControlProps) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const rsvp = useApiCommand('post', '/fixtures/{id}/availability', {
-    invalidate: [['api', '/fixtures/{id}']],
+    // The fixture and the lists that carry its answers (Home, Schedule) are read again.
+    invalidate: [
+      ['api', '/fixtures/{id}'],
+      ['api', '/me/fixtures'],
+    ],
   });
   const [lastChoice, setLastChoice] = useState<RsvpState | null>(null);
   const recorded = (rsvp.data?.state as RsvpState | undefined) ?? myResponse ?? null;
-  const open = fixtureAcceptsRsvp(fixtureStatus);
+  const open = fixtureAcceptsRsvp(fixtureStatus) && onRoster !== false;
   const current = rsvpStatus(recorded);
+  // The revision this person last saw: the answer just recorded, else the fixture read's.
+  const expectedRevision = rsvp.data?.revision ?? responseRevision ?? undefined;
 
   const choose = (state: RsvpState) => {
     if (rsvp.isProcessing) return;
     setLastChoice(state);
     // The same answer retried reuses its idempotency key; a different answer is a new intent.
-    void rsvp.submit({ path: { id: fixtureId }, body: { state } }).catch(() => undefined);
+    void rsvp
+      .submit({
+        path: { id: fixtureId },
+        body: expectedRevision === undefined ? { state } : { state, expectedRevision },
+      })
+      .catch(() => undefined);
   };
 
   return (
@@ -112,6 +155,11 @@ export function RsvpControl({ fixtureId, fixtureStatus, myResponse, onReload }: 
             );
           })}
         </View>
+      ) : onRoster === false ? (
+        <Text style={styles.caption} testID="rsvp-not-on-roster">
+          You are not on a roster for this fixture, so there is no answer for you to give. Answering
+          for a child is still being decided (DEC-090).
+        </Text>
       ) : (
         <Text style={styles.caption}>This fixture no longer takes availability answers.</Text>
       )}

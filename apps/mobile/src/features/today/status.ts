@@ -51,13 +51,26 @@ export function checkoutStateOf(
   return null;
 }
 
+type PendingReason = NonNullable<Enrollment['pendingReason']>;
+
+/**
+ * What a pending registration still waits for, in journeys §3 words ("Registration pending:
+ * <reason>", approval, payment or form outstanding, named), from the API's `pendingReason` (ENR-02).
+ */
+export const PENDING_REASON_PHRASES: Readonly<Record<PendingReason, string>> = {
+  approval: 'Registration pending: awaiting approval',
+  payment: 'Registration pending: payment outstanding',
+  forms: 'Registration pending: a form to complete',
+  placement: 'Registration pending: awaiting placement',
+};
+
 /**
  * Enrollment state as the customer sees it (journeys §3). The operation is the enrollment's
  * `lastOperationId` when it could be read; the placement is its placement request when it could
  * be read; `teamName` is the assigned team when known.
  */
 export function enrollmentStatus(
-  enrollment: Pick<Enrollment, 'status'>,
+  enrollment: Pick<Enrollment, 'status'> & { pendingReason?: Enrollment['pendingReason'] },
   options: {
     offeringName?: string | null;
     operation?: Operation | null;
@@ -83,7 +96,11 @@ export function enrollmentStatus(
       ) {
         return { tone: 'pending', label: 'Payment processing' };
       }
-      // The API does not say which requirement is outstanding (approval, payment or a form).
+      // ENR-02: the API names what is outstanding; without a reason the phrase stays general.
+      const reason = enrollment.pendingReason ?? null;
+      if (reason && reason in PENDING_REASON_PHRASES) {
+        return { tone: 'warning', label: PENDING_REASON_PHRASES[reason] };
+      }
       return { tone: 'warning', label: 'Registration pending' };
     }
     case 'confirmed': {

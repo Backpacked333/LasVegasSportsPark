@@ -7,8 +7,12 @@ import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-cl
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   AWAY_ENTRY,
+  CHILD,
+  DENVER,
   eventDetails,
   me,
+  names,
+  SELF,
   SELF_CAPTAIN,
   fail,
   FIXTURE,
@@ -27,6 +31,14 @@ import { FixtureDetailScreen } from '../FixtureDetailScreen';
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
 }));
+
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({
+  ...jest.requireActual('expo-router'),
+  useRouter: () => ({ push: mockPush, replace: jest.fn(), back: jest.fn() }),
+}));
+
+beforeEach(() => mockPush.mockClear());
 
 /** A notice moving the fixture to Pitch 2 on Sunday 10:00 (the fixture's own time). */
 const MOVED = scheduleChange({
@@ -74,7 +86,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(within(card).getByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
     expect(
       await within(card).findByLabelText(
-        'For: Lions. Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Pitch 2',
+        'For: Lions. Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 2',
       ),
     ).toBeOnTheScreen();
     expect(within(card).getByLabelText('Scheduled')).toBeOnTheScreen();
@@ -201,31 +213,44 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     renderFixture({ 'GET /fixtures/{id}/results': ok([result()]) });
     const official = await screen.findByLabelText('Lions 2, Tigers 1. Official');
     expect(official).toBeOnTheScreen();
-    expect(
-      screen.getByText('Disputing a result is not available in the app yet.'),
-    ).toBeOnTheScreen();
+    // SCR-C-29: the captain acting for the side opens dispute submission for that entry.
+    fireEvent.press(await screen.findByRole('button', { name: 'Dispute this result' }));
+    expect(mockPush).toHaveBeenLastCalledWith(`/team/${HOME_ENTRY}/disputes/${FIXTURE}`);
 
     screen.unmount();
     renderFixture({ 'GET /fixtures/{id}/results': ok([result({ status: 'submitted' })]) });
     expect(await screen.findByLabelText('Lions 2, Tigers 1. Provisional')).toBeOnTheScreen();
     expect(screen.getByText(/do not count in the standings until official/)).toBeOnTheScreen();
+    // Only an official result is disputed.
+    expect(screen.queryByRole('button', { name: 'Dispute this result' })).toBeNull();
   });
 
   it('SPK-CAP-003: records an RSVP with an idempotency key; a different answer is a new intent', async () => {
     let state: string | null = null;
+    let revision = 0;
     const app = renderFixture({
-      'GET /fixtures/{id}': () => fakeResponse(200, fixtureDetail({ myResponse: state })),
+      'GET /fixtures/{id}': () =>
+        fakeResponse(
+          200,
+          fixtureDetail({
+            myResponse: state,
+            responses: state
+              ? [{ personId: SELF, state, revision, respondedAt: '2026-10-24T12:00:00.000Z' }]
+              : [],
+          }),
+        ),
       'POST /fixtures/{id}/availability': (req) => {
         state = (req.body as { state: string }).state;
+        revision += 1;
         return fakeResponse(200, {
           id: '0192f1a0-0000-7000-8000-00000000fa01',
           fixtureId: FIXTURE,
           teamEntryId: HOME_ENTRY,
-          personId: 'self',
+          personId: SELF,
           state,
           respondedAt: '2026-10-24T12:00:00.000Z',
           note: null,
-          revision: 1,
+          revision,
         });
       },
     });
@@ -251,7 +276,11 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(await screen.findByText('Answer recorded: Unavailable.')).toBeOnTheScreen();
 
     const posts = app.fake.requests.filter((r) => r.route === '/fixtures/{id}/availability');
-    expect(posts.map((p) => p.body)).toEqual([{ state: 'available' }, { state: 'unavailable' }]);
+    // CMP-04 (§4.9): the first answer names no revision; changing it sends the one it returned.
+    expect(posts.map((p) => p.body)).toEqual([
+      { state: 'available' },
+      { state: 'unavailable', expectedRevision: 1 },
+    ]);
     expect(posts[0]?.headers['idempotency-key']).not.toBe(posts[1]?.headers['idempotency-key']);
     expect(screen.getByText(/not a check-in and does not affect eligibility/)).toBeOnTheScreen();
   });
@@ -362,12 +391,127 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(within(card).getByRole('header', { name: 'Lions (bye)' })).toBeOnTheScreen();
     expect(
       await within(card).findByLabelText(
-        'For: Your team. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Place not shown yet',
+        'For: Your team. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 3',
       ),
     ).toBeOnTheScreen();
     expect(
       await screen.findByText('The rule set summary is shown to team members.'),
     ).toBeOnTheScreen();
-    expect(screen.getByText(/Times are in this device's time zone/)).toBeOnTheScreen();
+    // The venue states its zone (CMP-04): no device-clock caveat.
+    expect(screen.queryByText(/device's time zone/)).toBeNull();
+  });
+
+  it("SPK-SCHED-008: shows the time on the venue's clock; without a venue, on the device clock and says so", async () => {
+    renderFixture({
+      'GET /fixtures/{id}': ok(
+        fixtureDetail({
+          venue: {
+            facilityId: '0192f1a0-0000-7000-8000-00000000b802',
+            facilityName: 'North Complex',
+            timezone: DENVER,
+            resources: [{ id: '0192f1a0-0000-7000-8000-00000000b709', name: 'Field 1' }],
+          },
+        }),
+      ),
+      'GET /me/inbox': inboxPage([]),
+    });
+    expect(
+      await screen.findByLabelText(
+        'For: Lions. Against: Tigers. When: Sun, Oct 25, 11:00 AM to 12:30 PM MDT. Where: North Complex, Field 1',
+      ),
+    ).toBeOnTheScreen();
+
+    screen.unmount();
+    renderFixture({
+      'GET /fixtures/{id}': ok(fixtureDetail({ venue: null })),
+      'GET /me/inbox': inboxPage([]),
+    });
+    expect(
+      await screen.findByLabelText(
+        'For: Lions. Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Place not shown yet',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/Times are in this device's time zone \(PDT\)/)).toBeOnTheScreen();
+  });
+
+  it('SPK-CAP-003 (CMP-04): changing a recorded answer sends its revision; STALE_REVISION offers "Reload"', async () => {
+    const app = renderFixture({
+      'GET /fixtures/{id}': ok(
+        fixtureDetail({
+          responses: [
+            {
+              personId: SELF,
+              state: 'available',
+              revision: 4,
+              respondedAt: '2026-10-23T12:00:00.000Z',
+            },
+          ],
+        }),
+      ),
+      'POST /fixtures/{id}/availability': fail(409, 'STALE_REVISION'),
+    });
+    expect(await screen.findByTestId('rsvp-current')).toHaveProp('accessibilityLabel', 'Available');
+    fireEvent.press(screen.getByRole('radio', { name: 'Unavailable' }));
+    expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeOnTheScreen();
+    expect(app.fake.requests.find((r) => r.route === '/fixtures/{id}/availability')?.body).toEqual({
+      state: 'unavailable',
+      expectedRevision: 4,
+    });
+  });
+
+  it('CMP-04: an answer after kickoff is refused as "Availability closed at kickoff" with "Reload"', async () => {
+    renderFixture({
+      'POST /fixtures/{id}/availability': () =>
+        fakeResponse(
+          409,
+          apiErrorBody('INVALID_TRANSITION', {
+            message: 'Availability for this fixture closed at kickoff.',
+            nextAction: 'reload_current_state',
+            details: { code: 'AVAILABILITY_CLOSED', fixtureId: FIXTURE },
+          }),
+        ),
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Available' }));
+    expect(await screen.findByLabelText('Availability closed at kickoff')).toBeOnTheScreen();
+    expect(screen.getByText('Availability for this fixture closed at kickoff.')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeOnTheScreen();
+  });
+
+  it('a viewer on no roster is not offered answers; answers recorded for a child are shown, not offered (DEC-090)', async () => {
+    const app = renderFixture({
+      'GET /fixtures/{id}': ok(
+        fixtureDetail({
+          rosterStatus: null,
+          responses: [
+            {
+              personId: CHILD,
+              state: 'available',
+              revision: 2,
+              respondedAt: '2026-10-23T12:00:00.000Z',
+            },
+          ],
+        }),
+      ),
+      'GET /person-names': names({ [CHILD]: 'Sam' }),
+    });
+    expect(await screen.findByTestId('rsvp-not-on-roster')).toBeOnTheScreen();
+    expect(screen.queryByRole('radio')).toBeNull();
+    const answers = await screen.findByTestId('fixture-family-answers');
+    expect(await within(answers).findByLabelText('Sam: Available')).toBeOnTheScreen();
+    expect(within(answers).getByText(/\(DEC-090\)/)).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+  });
+
+  it('a player who does not act as captain is not offered a dispute', async () => {
+    renderFixture({
+      'GET /fixtures/{id}/results': ok([result()]),
+      'GET /team-entries/{id}': (req) =>
+        req.params.id === HOME_ENTRY
+          ? fakeResponse(200, teamWorkspace('Lions'))
+          : fakeResponse(404, apiErrorBody('NOT_FOUND')),
+    });
+    expect(await screen.findByLabelText('Lions 2, Tigers 1. Official')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Dispute this result' })).toBeNull();
   });
 });

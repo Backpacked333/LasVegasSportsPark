@@ -3,9 +3,10 @@
  * Every read goes through the typed API client and the TanStack cache under `apiQueryKey`, so the
  * same request made by two screens is one cached response with one receipt time (§4.15 data age).
  *
- * Names of family members are read from `GET /v1/people/{id}`, which the API answers only for
- * people the signed-in person may view (SPK-IAM-003); only the given name is ever displayed
- * (§4.14 child data minimised) and nothing here is logged.
+ * Names of family members come from `GET /v1/person-names` (ID-02, `api/person-names.ts`): names
+ * only, never a date of birth or contact, and only for people the signed-in person may view
+ * (SPK-IAM-003); only the given name is ever displayed (§4.14 child data minimised) and nothing
+ * here is logged.
  */
 import {
   apiQueryKey,
@@ -18,6 +19,7 @@ import {
 } from '@sportspark/api-client';
 import { useQueries } from '@tanstack/react-query';
 import { useMemo } from 'react';
+import { usePersonNames as usePersonNameEntries } from '../../api/person-names';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApi, useApp } from '../../providers/AppProviders';
 import { calendarWindowQuery } from './calendar';
@@ -127,7 +129,8 @@ export const UNNAMED_PERSON = 'Family member';
 
 /**
  * Display names for participants: "You" for the signed-in person, the given name for others the
- * API lets this person read, and a neutral label otherwise (no hint about whom it might be).
+ * API lets this person read (`GET /v1/person-names`, one read per set of ids), and a neutral label
+ * otherwise (no hint about whom it might be).
  */
 export function usePersonNames(personIds: readonly string[], me: Me | undefined) {
   const selfId = me?.principal.personId ?? null;
@@ -135,14 +138,13 @@ export function usePersonNames(personIds: readonly string[], me: Me | undefined)
     () => [...new Set(personIds)].filter((id) => id !== selfId).sort(),
     [personIds, selfId],
   );
-  const requests = useMemo(() => others.map((id) => ({ path: { id } })), [others]);
-  const reads = useApiReads('/people/{id}', requests, useSignedIn() && me !== undefined);
+  const entries = usePersonNameEntries(me !== undefined ? others : []);
   const names = new Map<string, string>();
   if (selfId) names.set(selfId, 'You');
-  others.forEach((id, index) => {
-    const person = reads[index]?.data;
-    names.set(id, person?.givenName ? person.givenName : UNNAMED_PERSON);
-  });
+  for (const id of others) {
+    const entry = entries.get(id);
+    names.set(id, entry?.state === 'ready' ? entry.name.givenName : UNNAMED_PERSON);
+  }
   return names;
 }
 
@@ -161,4 +163,29 @@ export function useOfferings(offeringIds: readonly string[]) {
     if (offering) map.set(id, offering);
   });
   return map;
+}
+
+/** One facility of the organization with its IANA zone and name (`GET /v1/facilities/{id}`, K-04). */
+export function useFacility(facilityId: string | null | undefined) {
+  return useApiQuery({
+    path: '/facilities/{id}',
+    request: { path: { id: facilityId ?? '' } },
+    enabled: useSignedIn() && !!facilityId,
+    // Facility names and zones change rarely; one read serves every card on the screen.
+    staleTime: 10 * 60_000,
+  });
+}
+
+/** The teams the signed-in person and the people they may view are on (`GET /v1/me/team-entries`). */
+export function useMyTeams(enabled = true) {
+  return useApiQuery({ path: '/me/team-entries', enabled: useSignedIn() && enabled });
+}
+
+/** Fixtures of those teams in one window of at most 120 days (`GET /v1/me/fixtures`, CMP-02). */
+export function useMyFixtures(window: { from: string; to: string }, enabled = true) {
+  return useApiQuery({
+    path: '/me/fixtures',
+    request: { query: window },
+    enabled: useSignedIn() && enabled,
+  });
 }

@@ -4,33 +4,48 @@
  * lets them view, day by day, with the next-activity card (SCR-C-04) on top and published changes
  * and cancellations shown as old and new details.
  *
- * - `GET /v1/me/family-calendar` (`from`, `to`) is the source; the API includes only people the
- *   caller currently holds `view` over, so a child without that grant is simply absent.
- * - Later weeks load as further windows; what is already shown stays on screen meanwhile.
+ * - `GET /v1/me/family-calendar` (`from`, `to`) is the source of sessions and bookings; the API
+ *   includes only people the caller currently holds `view` over, so a child without that grant is
+ *   simply absent. `GET /v1/me/fixtures` adds the fixtures of the teams the caller and those
+ *   people are on (CMP-02), and `GET /v1/me/team-entries` says whose team each is.
+ * - Later weeks load as further windows of both reads; what is already shown stays on screen.
  * - Changes come from schedule notices in `GET /v1/me/inbox` (`detailsBefore` / `detailsAfter`,
  *   in the facility's own time zone). A canceled session leaves the calendar; its notice says so.
- * - Times use the facility zone when the API states it and the device zone otherwise, labelled.
- * - Customers never see drafts: the calendar and the notices carry published schedules only.
+ * - SPK-SCHED-008: each activity is grouped into its local day and shown on its own facility's
+ *   clock (calendar item `timezone`, fixture `venue.timezone`); only an activity the API gives no
+ *   zone for is shown on the device clock, and the list says so.
+ * - Customers never see drafts: the calendar, fixtures and notices carry published schedules.
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { groupByDay, mergeCalendars, nextActivity } from '../../features/today/calendar';
+import { calendarWindowQuery, mergeCalendars } from '../../features/today/calendar';
 import { ChangeDetails } from '../../features/today/ChangeDetails';
+import {
+  entryPersonIds,
+  groupEntriesByDay,
+  mergeEntries,
+  nextEntry,
+  type TodayEntry,
+} from '../../features/today/entries';
+import { fixtureCardModel, fixtureTitle } from '../../features/today/fixture-model';
 import { NextActivityCard } from '../../features/today/NextActivityCard';
-import { upcomingScheduleChanges } from '../../features/today/notices';
+import { latestChangeForEvent, upcomingScheduleChanges } from '../../features/today/notices';
 import {
   SCHEDULE_WINDOW_DAYS,
   nameOf,
+  useApiReads,
   useCalendarWindows,
   useInbox,
   useMe,
+  useMyTeams,
   usePersonNames,
+  useSignedIn,
 } from '../../features/today/queries';
 import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
 import { sessionHref, useSessionActivity } from '../../features/today/session-activity';
-import { calendarItemStatus } from '../../features/today/status';
+import { calendarItemStatus, fixtureStatus } from '../../features/today/status';
 import {
   addLocalDays,
   displayZone,
@@ -50,6 +65,8 @@ import { StateView } from '../../ui/StateView';
 import { colors, spacing, type } from '../../ui/theme';
 
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
+type FixtureDetail = Schema<'FixtureDetail'>;
+type MyTeamEntry = Schema<'MyTeamEntry'>;
 
 /**
  * How many windows Schedule loads at most: about a year ahead. A display limit, not a policy;
@@ -77,6 +94,80 @@ function NextCard({ item, participant }: { item: FamilyCalendarItem; participant
   );
 }
 
+function NextFixtureCard({
+  fixture,
+  teams,
+  names,
+}: {
+  fixture: FixtureDetail;
+  teams: readonly MyTeamEntry[] | undefined;
+  names: Map<string, string>;
+}) {
+  const router = useRouter();
+  const inbox = useInbox();
+  const latest = latestChangeForEvent(inbox.data?.items ?? [], fixture.schedulingEventId);
+  const model = fixtureCardModel({ fixture, teams, names, change: latest?.change ?? null });
+  const notice = zoneNotice(model.zone, model.start ?? fixture.createdAt);
+  return (
+    <>
+      <NextActivityCard
+        model={model}
+        onOpen={() =>
+          router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
+        }
+        openLabel="View fixture"
+        testID="schedule-next"
+      />
+      {notice ? <Caption testID="schedule-next-zone">{notice}</Caption> : null}
+    </>
+  );
+}
+
+/** One row of the day list: a session or booking, or a fixture of one of the viewer's teams. */
+function EntryRow({
+  entry,
+  teams,
+  names,
+}: {
+  entry: TodayEntry;
+  teams: readonly MyTeamEntry[] | undefined;
+  names: Map<string, string>;
+}) {
+  const router = useRouter();
+  const z = entry.zone.zone;
+  const time = `${formatTime(entry.start, z)} to ${formatTime(entry.end, z)} ${zoneAbbreviation(entry.start, z)}`;
+  if (entry.type === 'session') {
+    const item = entry.item;
+    const href = sessionHref(item);
+    return (
+      <ListRow
+        title={item.title}
+        detail={`${time}. For: ${nameOf(names, item.personId)}`}
+        status={calendarItemStatus(item)}
+        onPress={href ? () => router.push(href as Href) : undefined}
+        accessibilityHint={href ? 'Opens the activity' : undefined}
+        testID={`schedule-item-${item.id}`}
+      />
+    );
+  }
+  const fixture = entry.fixture;
+  const card = fixtureCardModel({ fixture, teams, names, change: null });
+  return (
+    <ListRow
+      title={fixtureTitle(fixture)}
+      detail={[`${time}. For: ${card.participant}`, card.location ? `At: ${card.location}` : null]
+        .filter(Boolean)
+        .join('. ')}
+      status={fixtureStatus(fixture.status)}
+      onPress={() =>
+        router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
+      }
+      accessibilityHint="Opens the fixture"
+      testID={`schedule-fixture-${fixture.id}`}
+    />
+  );
+}
+
 function ScheduleContent() {
   const router = useRouter();
   const now = useNow();
@@ -84,10 +175,36 @@ function ScheduleContent() {
   const [windows, setWindows] = useState(1);
   const me = useMe();
   const inbox = useInbox();
+  const teams = useMyTeams();
   const reads = useCalendarWindows(now, windows, SCHEDULE_WINDOW_DAYS, zone.zone);
+  const firstFrom = calendarWindowQuery(now, 0, SCHEDULE_WINDOW_DAYS, zone.zone).from;
+  const fixtureRequests = useMemo(
+    () =>
+      Array.from({ length: windows }, (_, index) => ({
+        query: calendarWindowQuery(new Date(firstFrom), index, SCHEDULE_WINDOW_DAYS, zone.zone),
+      })),
+    [firstFrom, windows, zone.zone],
+  );
+  const fixtureReads = useApiReads('/me/fixtures', fixtureRequests, useSignedIn());
   const loaded = reads.flatMap((r) => (r.data ? [r.data] : []));
   const calendar = mergeCalendars(loaded);
-  const names = usePersonNames(calendar?.participantPersonIds ?? [], me.data);
+  // A fixture list that is not available to this person is left out without comment (§4.10).
+  const fixtures = fixtureReads.flatMap((r) =>
+    r.data && !(r.error && presentationForError(r.error) === 'unavailable') ? r.data : [],
+  );
+  const fixtureFailure = fixtureReads.find(
+    (r) => r.data === undefined && r.error && presentationForError(r.error) !== 'unavailable',
+  );
+  const entries = mergeEntries(calendar?.items ?? [], fixtures).filter(
+    (e) => new Date(e.end).getTime() > now.getTime(),
+  );
+  const names = usePersonNames(
+    [
+      ...(calendar?.participantPersonIds ?? []),
+      ...entries.flatMap((e) => entryPersonIds(e, teams.data)),
+    ],
+    me.data,
+  );
   const first = reads[0];
 
   if (!first || first.data === undefined || !calendar) {
@@ -100,8 +217,7 @@ function ScheduleContent() {
     );
   }
 
-  const items = calendar.items.filter((i) => new Date(i.end).getTime() > now.getTime());
-  const next = nextActivity(items, now);
+  const next = nextEntry(entries, now);
   const changes = upcomingScheduleChanges(inbox.data?.items ?? [], now);
   const familyShared = calendar.participantPersonIds.length > 1;
   const shownUntil = addLocalDays(
@@ -109,14 +225,20 @@ function ScheduleContent() {
     loaded.length * SCHEDULE_WINDOW_DAYS,
     zone.zone,
   );
-  const groups = groupByDay(items, zone.zone);
-  const notice = zoneNotice(zone, now);
+  const groups = groupEntriesByDay(entries);
+  // Only activities the API gave no facility zone for are on the device clock: say so then.
+  const deviceClock = entries.find((e) => !e.zone.facility);
+  const notice = deviceClock ? zoneNotice(deviceClock.zone, deviceClock.start) : null;
   const later = reads.slice(1).find((r) => r.data === undefined);
 
   return (
     <View testID="schedule-content">
       <LastUpdated
-        at={oldestUpdate([...reads.map((r) => r.updatedAt), inbox.updatedAt])}
+        at={oldestUpdate([
+          ...reads.map((r) => r.updatedAt),
+          ...fixtureReads.map((r) => r.updatedAt),
+          inbox.updatedAt,
+        ])}
         now={now}
       />
       {notice ? <Caption testID="zone-notice">{`In the list below: ${notice}`}</Caption> : null}
@@ -134,8 +256,19 @@ function ScheduleContent() {
 
       {next ? (
         <Section title="Next activity">
-          <NextCard item={next} participant={nameOf(names, next.personId)} />
+          {next.type === 'session' ? (
+            <NextCard item={next.item} participant={nameOf(names, next.item.personId)} />
+          ) : (
+            <NextFixtureCard fixture={next.fixture} teams={teams.data} names={names} />
+          )}
         </Section>
+      ) : null}
+
+      {fixtureFailure ? (
+        <View testID="schedule-fixtures-error">
+          <Caption>Your team fixtures could not be loaded.</Caption>
+          <SectionQueryState read={fixtureFailure} label="your fixtures" />
+        </View>
       ) : null}
 
       {familyShared ? (
@@ -161,21 +294,9 @@ function ScheduleContent() {
         groups.map((group) => (
           <Section key={group.key} title={group.heading} testID={`day-${group.key}`}>
             <View accessibilityRole="list">
-              {group.items.map((item) => {
-                const href = sessionHref(item);
-                const time = `${formatTime(item.start, zone.zone)} to ${formatTime(item.end, zone.zone)} ${zoneAbbreviation(item.start, zone.zone)}`;
-                return (
-                  <ListRow
-                    key={item.id}
-                    title={item.title}
-                    detail={`${time}. For: ${nameOf(names, item.personId)}`}
-                    status={calendarItemStatus(item)}
-                    onPress={href ? () => router.push(href as Href) : undefined}
-                    accessibilityHint={href ? 'Opens the activity' : undefined}
-                    testID={`schedule-item-${item.id}`}
-                  />
-                );
-              })}
+              {group.entries.map((entry) => (
+                <EntryRow key={entry.id} entry={entry} teams={teams.data} names={names} />
+              ))}
             </View>
           </Section>
         ))

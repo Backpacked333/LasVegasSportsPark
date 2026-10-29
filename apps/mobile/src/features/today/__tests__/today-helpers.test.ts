@@ -15,6 +15,15 @@ import {
 } from '../calendar';
 import { changeSummary } from '../ChangeDetails';
 import {
+  fixtureEntry,
+  fixtureOverlaps,
+  groupEntriesByDay,
+  mergeEntries,
+  nextEntry,
+  sessionEntry,
+} from '../entries';
+import { joinNames, mySide, ownResponse, venueLocation, viewerOnRoster } from '../fixture-model';
+import {
   latestChangeForEvent,
   noticeSection,
   parseEventDetails,
@@ -33,18 +42,28 @@ import {
 } from '../status';
 import {
   addLocalDays,
+  daysInWindow,
   displayZone,
   formatRange,
   formatWhen,
   localDayKey,
+  sharedZone,
   startOfLocalDay,
   zoneNotice,
+  zoneOf,
 } from '../time';
 import {
+  AWAY_ENTRY,
   BOOKING_ITEM,
   calendar,
   calendarItem,
+  CHILD,
+  DENVER,
   EVENT,
+  fixtureDetail,
+  HOME_ENTRY,
+  myTeamEntry,
+  SELF,
   eventDetails,
   LA,
   notice,
@@ -91,8 +110,36 @@ describe('SPK-SCHED-008 facility-local time', () => {
     expect(displayZone('Not/AZone')).toEqual({ zone: LA, facility: false });
     expect(zoneNotice(displayZone(LA), NOW)).toBeNull();
     expect(zoneNotice(displayZone(null), NOW)).toBe(
-      "Times are in this device's time zone (PDT). The facility's time zone is not provided to the app yet.",
+      "Times are in this device's time zone (PDT). The facility's time zone was not given for this.",
     );
+  });
+
+  it('takes the first facility zone the API gives, in order of preference', () => {
+    expect(zoneOf(null, undefined, DENVER, LA)).toEqual({ zone: DENVER, facility: true });
+    expect(zoneOf('Bad/Zone', LA)).toEqual({ zone: LA, facility: true });
+    expect(zoneOf(null, undefined)).toEqual({ zone: LA, facility: false });
+    expect(sharedZone([LA, LA, null])).toBe(LA);
+    expect(sharedZone([LA, DENVER])).toBeNull();
+    expect(sharedZone([])).toBeNull();
+  });
+
+  it('lays out the local days a window touches, one more when it was cut on another clock', () => {
+    const from = new Date('2026-10-24T07:00:00.000Z');
+    const to = new Date('2026-10-31T07:00:00.000Z');
+    expect(daysInWindow(from, to, LA).map((d) => localDayKey(d, LA))).toEqual([
+      '2026-10-24',
+      '2026-10-25',
+      '2026-10-26',
+      '2026-10-27',
+      '2026-10-28',
+      '2026-10-29',
+      '2026-10-30',
+    ]);
+    // Cut at Los Angeles midnight, laid out on the Denver clock: Oct 24 01:00 MDT to Oct 31 01:00.
+    const denver = daysInWindow(from, to, DENVER).map((d) => localDayKey(d, DENVER));
+    expect(denver[0]).toBe('2026-10-24');
+    expect(denver.at(-1)).toBe('2026-10-31');
+    expect(denver).toHaveLength(8);
   });
 });
 
@@ -126,6 +173,26 @@ describe('SPK-UX-004 status vocabulary (journeys.md section 3)', () => {
         .label,
     ).toBe('Payment returned. Registration was not completed.');
     expect(enrollmentStatus({ status: 'pending' }).label).toBe('Registration pending');
+    // ENR-02: the outstanding requirement is named (journeys §3 "Registration pending: <reason>").
+    expect(enrollmentStatus({ status: 'pending', pendingReason: 'approval' }).label).toBe(
+      'Registration pending: awaiting approval',
+    );
+    expect(enrollmentStatus({ status: 'pending', pendingReason: 'payment' }).label).toBe(
+      'Registration pending: payment outstanding',
+    );
+    expect(enrollmentStatus({ status: 'pending', pendingReason: 'forms' }).label).toBe(
+      'Registration pending: a form to complete',
+    );
+    expect(enrollmentStatus({ status: 'pending', pendingReason: 'placement' }).label).toBe(
+      'Registration pending: awaiting placement',
+    );
+    // A checkout in recovery still wins over a reason.
+    expect(
+      enrollmentStatus(
+        { status: 'pending', pendingReason: 'payment' },
+        { operation: operation('recovery_required') as never },
+      ).label,
+    ).toBe('Payment received. We are completing your registration.');
     expect(
       enrollmentStatus(
         { status: 'confirmed' },
@@ -258,5 +325,109 @@ describe('SPK-YOUTH-007 calendar windows', () => {
     expect(overlapIndex(merged as FamilyCalendar).get(a.id as string)).toEqual([b.id]);
     expect(nextActivity(merged?.items ?? [], new Date('2026-10-24T17:30:00.000Z'))?.id).toBe(a.id);
     expect(nextActivity(merged?.items ?? [], new Date('2026-10-25T03:00:00.000Z'))).toBeNull();
+  });
+});
+
+type FixtureDetail = Schema<'FixtureDetail'>;
+type MyTeamEntry = Schema<'MyTeamEntry'>;
+type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
+const asFixture = (v: unknown) => v as FixtureDetail;
+const asTeams = (v: unknown[]) => v as MyTeamEntry[];
+
+describe('CMP-02 / SPK-SCHED-008 sessions and fixtures in one list', () => {
+  const game = asFixture(
+    fixtureDetail({
+      scheduledStart: '2026-10-24T17:30:00.000Z',
+      scheduledEnd: '2026-10-24T19:00:00.000Z',
+      venue: { facilityId: 'f', facilityName: 'North Complex', timezone: DENVER, resources: [] },
+    }),
+  );
+  const item = calendarItem() as FamilyCalendarItem;
+  const teams = asTeams([myTeamEntry({ members: [CHILD] })]);
+
+  it('orders sessions and fixtures by time, each on its own facility clock', () => {
+    const entries = mergeEntries(
+      [item, item],
+      [game, asFixture(fixtureDetail({ scheduledStart: null, scheduledEnd: null }))],
+    );
+    expect(entries.map((e) => e.type)).toEqual(['session', 'fixture']);
+    expect(entries[0]?.zone).toEqual({ zone: LA, facility: true });
+    expect(entries[1]?.zone).toEqual({ zone: DENVER, facility: true });
+    expect(fixtureEntry(asFixture(fixtureDetail({ scheduledStart: null })))).toBeNull();
+    expect(sessionEntry(calendarItem({ timezone: null }) as FamilyCalendarItem).zone.facility).toBe(
+      false,
+    );
+  });
+
+  it('the next entry skips what ended and fixtures that will not be played', () => {
+    const canceled = asFixture(
+      fixtureDetail({
+        status: 'canceled',
+        scheduledStart: '2026-10-24T13:00:00.000Z',
+        scheduledEnd: '2026-10-24T14:00:00.000Z',
+      }),
+    );
+    const entries = mergeEntries([item], [canceled, game]);
+    expect(nextEntry(entries, NOW)?.type).toBe('session');
+    expect(nextEntry(entries, new Date('2026-10-24T18:30:00.000Z'))?.type).toBe('fixture');
+    expect(nextEntry(entries, new Date('2026-10-25T00:00:00.000Z'))).toBeNull();
+  });
+
+  it('groups by local day on each facility clock', () => {
+    const late = asFixture(
+      fixtureDetail({
+        // 11:30 PM Saturday in Los Angeles is Sunday 00:30 in Denver.
+        scheduledStart: '2026-10-25T06:30:00.000Z',
+        scheduledEnd: '2026-10-25T07:30:00.000Z',
+        venue: { facilityId: 'f', facilityName: 'North Complex', timezone: DENVER, resources: [] },
+      }),
+    );
+    const days = groupEntriesByDay(mergeEntries([item], [late]));
+    expect(days.map((d) => [d.key, d.heading])).toEqual([
+      ['2026-10-24', 'Sat, Oct 24'],
+      ['2026-10-25', 'Sun, Oct 25'],
+    ]);
+  });
+
+  it('SPK-YOUTH-007: marks a fixture overlapping another commitment of the same person only', () => {
+    const entries = mergeEntries([item], [game]);
+    expect(fixtureOverlaps(entries, teams)).toEqual([
+      { ids: [entries[0]?.id, entries[1]?.id], personIds: [CHILD] },
+    ]);
+    // The adult's team plays at the same time as the child's session: not the same person.
+    expect(fixtureOverlaps(entries, asTeams([myTeamEntry({ members: [SELF] })]))).toEqual([]);
+  });
+});
+
+describe('SCR-C-04 fixture card helpers (CMP-02, CMP-04)', () => {
+  it("finds the viewer's side from their team entries", () => {
+    const fixture = asFixture(fixtureDetail());
+    expect(
+      mySide(fixture, asTeams([myTeamEntry({ entryId: AWAY_ENTRY, teamName: 'Tigers' })]))?.side,
+    ).toBe('away');
+    expect(mySide(fixture, asTeams([myTeamEntry({ entryId: HOME_ENTRY })]))?.side).toBe('home');
+    expect(mySide(fixture, asTeams([]))).toBeNull();
+    expect(mySide(fixture, undefined)).toBeNull();
+  });
+
+  it("names the venue and pitches, the viewer's own answer and whether they are on a roster", () => {
+    const fixture = asFixture(
+      fixtureDetail({
+        responses: [
+          { personId: CHILD, state: 'unavailable', revision: 1, respondedAt: null },
+          { personId: SELF, state: 'available', revision: 3, respondedAt: null },
+        ],
+      }),
+    );
+    expect(venueLocation(fixture.venue)).toBe('Main Park, Pitch 3');
+    expect(venueLocation(fixture.venue, ['Pitch 2'])).toBe('Main Park, Pitch 2');
+    expect(venueLocation(null)).toBeNull();
+    expect(ownResponse(fixture, SELF)?.revision).toBe(3);
+    expect(ownResponse(fixture, null)).toBeNull();
+    expect(viewerOnRoster(fixture)).toBe(true);
+    expect(viewerOnRoster(asFixture(fixtureDetail({ rosterStatus: null })))).toBe(false);
+    expect(viewerOnRoster(asFixture({ ...fixtureDetail(), rosterStatus: undefined }))).toBeNull();
+    expect(joinNames(['You'])).toBe('You');
+    expect(joinNames(['You', 'Sam', 'Jo'])).toBe('You, Sam and Jo');
   });
 });

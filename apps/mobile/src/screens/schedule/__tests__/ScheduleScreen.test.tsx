@@ -2,8 +2,8 @@
  * SCR-C-18 Schedule (SPK-UX-002, SPK-SCHED-007, SPK-SCHED-008, SPK-COMMS-005, SPK-YOUTH-007,
  * SPK-UX-008, SPK-UX-009, §4.10, §4.15).
  */
-import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   BOOKING,
   BOOKING_ITEM,
@@ -17,7 +17,12 @@ import {
   me,
   ok,
   offering,
-  person,
+  names,
+  facility,
+  fixtureDetail,
+  myTeamEntry,
+  DENVER,
+  FIXTURE,
   scheduleChange,
   SELF,
   session,
@@ -54,10 +59,10 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
           ? calendar([calendarItem(), BOOKING_ITEM])
           : calendar([LATER]),
       ),
-    'GET /people/{id}': (req) =>
-      req.params.id === CHILD
-        ? fakeResponse(200, person(CHILD, 'Sam'))
-        : fakeResponse(404, apiErrorBody('NOT_FOUND')),
+    'GET /person-names': names({ [CHILD]: 'Sam' }),
+    'GET /facilities/{id}': ok(facility()),
+    'GET /me/fixtures': ok([]),
+    'GET /me/team-entries': ok([]),
     'GET /offerings/{id}': ok(offering()),
     'GET /offerings/{id}/sessions': ok([session()]),
     'GET /enrollments/{id}': ok(enrollment()),
@@ -84,12 +89,11 @@ describe('SCR-C-18 ScheduleScreen', () => {
         name: 'Adult Pickup Night, 6:00 PM to 7:30 PM PDT. For: You, Booking pending',
       }),
     ).toBeOnTheScreen();
-    expect(screen.getByTestId('zone-notice')).toHaveTextContent(
-      "In the list below: Times are in this device's time zone (PDT). The facility's time zone is not provided to the app yet.",
-    );
-    // The next-activity card (SCR-C-04) sits on top, with its own zone caption (SPK-SCHED-008).
+    // Every item states its facility's zone (ENR-02): no device-clock caveat anywhere.
+    expect(screen.queryByTestId('zone-notice')).toBeNull();
+    // The next-activity card (SCR-C-04) sits on top, on the facility clock too (SPK-SCHED-008).
     expect(await screen.findByTestId('schedule-next')).toBeOnTheScreen();
-    expect(await screen.findByTestId('schedule-next-zone')).toHaveTextContent(/time zone/);
+    expect(screen.queryByTestId('schedule-next-zone')).toBeNull();
     const request = app.fake.requests.find((r) => r.route === '/me/family-calendar');
     expect(request?.query).toEqual({
       from: '2026-10-24T07:00:00.000Z',
@@ -202,6 +206,81 @@ describe('SCR-C-18 ScheduleScreen', () => {
     now = new Date('2026-10-24T13:00:00.000Z');
     act(() => app.sources.setReachable(false));
     expect(screen.getByText(/Showing information from 1 hour ago\./)).toBeOnTheScreen();
+    expect(screen.getByTestId('day-2026-10-24')).toBeOnTheScreen();
+  });
+});
+
+describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008)', () => {
+  /** Lions vs Tigers on Sunday 10:00 in Denver (16:00Z), after the Saturday activities. */
+  const AWAY_GAME = fixtureDetail({
+    scheduledStart: '2026-10-25T16:00:00.000Z',
+    scheduledEnd: '2026-10-25T17:30:00.000Z',
+    venue: {
+      facilityId: '0192f1a0-0000-7000-8000-00000000b802',
+      facilityName: 'North Complex',
+      timezone: DENVER,
+      resources: [{ id: '0192f1a0-0000-7000-8000-00000000b709', name: 'Field 1' }],
+    },
+  });
+
+  it("lists the fixtures of the family's teams by day, on the venue's clock, and opens them", async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/fixtures': (req) =>
+          fakeResponse(200, req.query.from === '2026-10-24T07:00:00.000Z' ? [AWAY_GAME] : []),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [CHILD] })]),
+      }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    const sunday = await screen.findByTestId('day-2026-10-25');
+    expect(within(sunday).getByRole('header', { name: 'Sun, Oct 25' })).toBeOnTheScreen();
+    const row = await within(sunday).findByRole('button', {
+      name: 'Lions vs Tigers, 10:00 AM to 11:30 AM MDT. For: Sam (Lions). At: North Complex, Field 1, Scheduled',
+    });
+    fireEvent.press(row);
+    expect(mockPush).toHaveBeenLastCalledWith({
+      pathname: '/fixtures/[id]',
+      params: { id: FIXTURE },
+    });
+    expect(screen.queryByTestId('zone-notice')).toBeNull();
+    // The fixtures read follows the calendar's window.
+    expect(app.fake.requests.find((r) => r.route === '/me/fixtures')?.query).toEqual({
+      from: '2026-10-24T07:00:00.000Z',
+      to: '2026-11-21T08:00:00.000Z',
+    });
+  });
+
+  it('later windows read fixtures for the same range as the calendar', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Show the following 28 days' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/me/fixtures').map((r) => r.query.from),
+      ).toEqual(['2026-10-24T07:00:00.000Z', '2026-11-21T08:00:00.000Z']),
+    );
+  });
+
+  it('an activity the API gives no zone for is on the device clock, and the list says so', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([calendarItem({ timezone: null })])),
+      }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByTestId('zone-notice')).toHaveTextContent(
+      "In the list below: Times are in this device's time zone (PDT). The facility's time zone was not given for this.",
+    );
+  });
+
+  it('a fixture read that fails shows its code and "Try again"; the calendar stays', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /me/fixtures': fail(503, 'INTEGRATION_UNAVAILABLE') }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    const failure = await screen.findByTestId('schedule-fixtures-error');
+    expect(within(failure).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(within(failure).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.getByTestId('day-2026-10-24')).toBeOnTheScreen();
   });
 });
