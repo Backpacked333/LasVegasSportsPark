@@ -24,8 +24,12 @@ export const PLACEMENT = '0192f1a0-0000-7000-8000-00000000e201';
 export const FIXTURE = '0192f1a0-0000-7000-8000-00000000f101';
 export const HOME_ENTRY = '0192f1a0-0000-7000-8000-00000000f201';
 export const AWAY_ENTRY = '0192f1a0-0000-7000-8000-00000000f202';
+export const FACILITY = '0192f1a0-0000-7000-8000-00000000b801';
+export const PITCH_3 = '0192f1a0-0000-7000-8000-00000000b703';
 
 export const LA = 'America/Los_Angeles';
+/** A facility on another clock than the test device (America/Los_Angeles), to prove whose zone is used. */
+export const DENVER = 'America/Denver';
 const AT = '2026-10-20T12:00:00.000Z';
 
 export const ok = (body: unknown): FakeHandler => ({ status: 200, body });
@@ -84,6 +88,43 @@ export function me(authorities: { subjectPersonId: string; permissions: string[]
 
 export const GUARDIAN_OF_CHILD = [{ subjectPersonId: CHILD, permissions: ['view', 'register'] }];
 
+/** `GET /v1/person-names` (ID-02): names only, for the ids asked that the map knows. */
+export function names(known: Record<string, string>): FakeHandler {
+  return (req) => {
+    const ids = (req.query.ids ?? '').split(',').filter(Boolean);
+    return fakeResponse(200, {
+      items: ids.flatMap((id) =>
+        known[id]
+          ? [
+              {
+                personId: id,
+                canonicalPersonId: id,
+                givenName: known[id],
+                familyName: 'Morgan',
+                displayName: `${known[id]} Morgan`,
+                kind: id === SELF ? 'adult' : 'child',
+              },
+            ]
+          : [],
+      ),
+    });
+  };
+}
+
+/** `GET /v1/facilities/{id}` (K-04): the facility with its IANA zone. */
+export function facility(overrides: Record<string, unknown> = {}) {
+  return {
+    id: FACILITY,
+    slug: 'main-park',
+    name: 'Main Park',
+    timezone: LA,
+    status: 'active',
+    address: null,
+    inStaffScope: null,
+    ...overrides,
+  };
+}
+
 export function person(id: string, givenName: string, kind: 'adult' | 'child' = 'child') {
   return {
     id,
@@ -114,6 +155,9 @@ export function calendarItem(overrides: Record<string, unknown> = {}) {
     start: '2026-10-24T17:00:00.000Z',
     end: '2026-10-24T18:00:00.000Z',
     status: 'confirmed',
+    // ENR-02: where it happens and the zone its local times are shown in.
+    facilityId: FACILITY,
+    timezone: LA,
     ...overrides,
   };
 }
@@ -154,7 +198,8 @@ export function offering(
   return {
     id,
     programId: '0192f1a0-0000-7000-8000-00000000b901',
-    facilityId: '0192f1a0-0000-7000-8000-00000000b801',
+    facilityId: FACILITY,
+    facility: { id: FACILITY, name: 'Main Park', timezone: LA },
     name,
     description: 'Ball skills for younger players.',
     kind: 'term',
@@ -232,6 +277,16 @@ export function enrollment(overrides: Record<string, unknown> = {}) {
     transferredToEnrollmentId: null,
     transferredFromEnrollmentId: null,
     completedAt: null,
+    offering: {
+      id: OFFERING,
+      name: 'Junior Skills',
+      kind: 'term',
+      startsOn: '2026-09-01',
+      endsOn: '2026-12-15',
+      facilityId: FACILITY,
+      timezone: LA,
+    },
+    pendingReason: null,
     revision: 2,
     createdAt: AT,
     updatedAt: AT,
@@ -287,6 +342,8 @@ export function notice(overrides: Record<string, unknown> = {}) {
     readAt: null,
     acknowledgedAt: null,
     supersededByNotificationId: null,
+    subjectPersonIds: [],
+    revision: 1,
     createdAt: '2026-10-24T11:00:00.000Z',
     ...overrides,
   };
@@ -344,7 +401,37 @@ export function fixtureDetail(overrides: Record<string, unknown> = {}) {
       availability: { available: 3, unavailable: 0, tentative: 1, noResponse: 6 },
     },
     myResponse: null,
+    // CMP-04: the venue from the scheduling event, the viewer's roster status and the answers
+    // they may see.
+    venue: {
+      facilityId: FACILITY,
+      facilityName: 'Main Park',
+      timezone: LA,
+      resources: [{ id: PITCH_3, name: 'Pitch 3' }],
+    },
+    rosterStatus: 'active',
+    responses: [],
     ...overrides,
+  };
+}
+
+/** A row of `GET /v1/me/team-entries` (CMP-02): the entry, its team and the viewer's members. */
+export function myTeamEntry(
+  overrides: { entryId?: string; teamName?: string; members?: string[] } = {},
+) {
+  const entryId = overrides.entryId ?? HOME_ENTRY;
+  return {
+    teamEntry: { id: entryId, status: 'approved' },
+    teamName: overrides.teamName ?? 'Lions',
+    seasonId: '0192f1a0-0000-7000-8000-00000000f301',
+    seasonName: 'Fall 2026',
+    divisionName: 'Division 2',
+    members: (overrides.members ?? [SELF]).map((personId) => ({
+      personId,
+      roles: ['member'],
+      rosterStatus: 'active',
+    })),
+    nextFixture: null,
   };
 }
 
@@ -379,6 +466,15 @@ export function teamWorkspace(name = 'Lions', roles: unknown[] = []) {
     pendingInvitations: [],
     pendingJoinRequests: [],
     upcomingFixtures: [],
+    viewer: {
+      roles: (roles as { personId?: string; role?: string }[])
+        .filter((r) => r.personId === SELF)
+        .map((r) => r.role),
+      actingAsCaptain: (roles as { personId?: string; role?: string }[]).some(
+        (r) => r.personId === SELF && r.role === 'captain',
+      ),
+      availableActions: [],
+    },
   };
 }
 

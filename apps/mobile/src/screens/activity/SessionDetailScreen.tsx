@@ -11,6 +11,8 @@
  * - The card (SCR-C-04) shows participant, activity, place, time, status in journeys.md
  *   vocabulary (payment processing, awaiting placement and confirmed apart), and the latest
  *   change with old and new details. A canceled session says so with the reason.
+ * - Times are on the facility clock: the enrollment's `offering.timezone` (ENR-02), else the
+ *   facility of the offering (`GET /v1/facilities/{id}`), which also names the place.
  * - Arrival guidance is POL-046 (Operations, pending).
  */
 import { presentationForError, type Schema } from '@sportspark/api-client';
@@ -65,10 +67,12 @@ function refOf(
       sessionId,
       enrollmentId: enrollment.id,
       sessionBookingId: null,
-      title: 'Activity',
+      title: enrollment.offering?.name ?? 'Activity',
       start: '',
       end: '',
       status: enrollment.status,
+      facilityId: enrollment.offering?.facilityId ?? null,
+      timezone: enrollment.offering?.timezone ?? null,
     };
   }
   return null;

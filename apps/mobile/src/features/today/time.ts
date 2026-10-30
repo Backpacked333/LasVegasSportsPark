@@ -2,10 +2,12 @@
  * Facility-local time display for the today screens (SPK-SCHED-008: "Store event instants in UTC
  * and retain the facility's IANA timezone for scheduling and display").
  *
- * The API gives instants in UTC. It states the facility's time zone only inside schedule-change
- * notices (`EventDetails.timezone`); family calendar items and fixtures carry no zone (reported as
- * an API gap). So a screen renders in the facility zone when the API told it, and otherwise in the
- * device's zone, says so, and always prints the zone abbreviation next to the time: a time is
+ * The API gives instants in UTC with the facility's IANA zone next to them: family calendar items
+ * (`timezone`, ENR-02), fixtures (`venue.timezone`, CMP-04), offerings (`facility.timezone`),
+ * enrollments (`offering.timezone`), schedule notices (`EventDetails.timezone`) and
+ * `GET /v1/facilities/{id}` (K-04). A screen renders in the facility zone the API states for that
+ * record (`zoneOf`), and only where none is given (an item without a facility) falls back to the
+ * device's zone and says so. The zone abbreviation is always printed next to the time: a time is
  * never shown without saying which clock it is on.
  *
  * Wording is deterministic for a given zone; nothing here reads the system clock.
@@ -35,6 +37,26 @@ export function isValidTimeZone(zone: string): boolean {
 export function displayZone(facilityZone?: string | null): DisplayZone {
   if (facilityZone && isValidTimeZone(facilityZone)) return { zone: facilityZone, facility: true };
   return { zone: deviceTimeZone(), facility: false };
+}
+
+/**
+ * The first valid facility zone among the API's answers, in order of preference (the newest
+ * schedule notice, the record itself, its facility), otherwise the device's zone (SPK-SCHED-008).
+ */
+export function zoneOf(...candidates: readonly (string | null | undefined)[]): DisplayZone {
+  for (const zone of candidates) {
+    if (zone && isValidTimeZone(zone)) return { zone, facility: true };
+  }
+  return displayZone(null);
+}
+
+/**
+ * The single facility zone shared by every zone given (one facility, or several on one clock), or
+ * null when there is none or they differ. Screens that lay out whole days use it.
+ */
+export function sharedZone(zones: readonly (string | null | undefined)[]): string | null {
+  const valid = [...new Set(zones.filter((z): z is string => !!z && isValidTimeZone(z)))];
+  return valid.length === 1 ? (valid[0] ?? null) : null;
 }
 
 /** ICU separates "AM" with a narrow no-break space; screens and tests use plain spaces. */
@@ -151,5 +173,19 @@ export function formatRange(startIso: string, endIso: string, zone: string): str
 /** The one-line explanation shown wherever times are on the device's clock (SPK-SCHED-008). */
 export function zoneNotice(display: DisplayZone, sample: string | Date): string | null {
   if (display.facility) return null;
-  return `Times are in this device's time zone (${zoneAbbreviation(sample, display.zone)}). The facility's time zone is not provided to the app yet.`;
+  return `Times are in this device's time zone (${zoneAbbreviation(sample, display.zone)}). The facility's time zone was not given for this.`;
+}
+
+/**
+ * The local days in `zone` that a window [from, to) touches, in order: seven for a week on the
+ * facility clock, one more when the window was cut on another clock, so nothing in it is hidden.
+ */
+export function daysInWindow(from: Date, to: Date, zone: string): Date[] {
+  const days: Date[] = [];
+  let day = startOfLocalDay(from, zone);
+  while (day.getTime() < to.getTime() && days.length < 400) {
+    days.push(day);
+    day = addLocalDays(day, 1, zone);
+  }
+  return days;
 }
