@@ -216,7 +216,8 @@ personId, kind, trx?)` for enrollment (WRK-03, IF-34). All of them skip retired 
 
 ## Events (`workforce.events.ts`)
 
-`workforce.assignment_changed` (every transition and retime), `workforce.assignment_uncovered`,
+`workforce.assignment_changed` (every transition and retime; a change that moved the assignment
+carries its previous times), `workforce.assignment_uncovered`,
 `workforce.temporary_access_changed`, `workforce.availability_changed`,
 `workforce.qualification_changed`, `workforce.requirement_changed`, `workforce.fee_submitted`,
 `workforce.fee_decided`, `workforce.fees_exported`. Payloads carry identifiers and instants only.
@@ -299,16 +300,30 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
   true when the person holds an accepted or completed assignment of the kind on any session of the
   offering (`assignments.offering_id`), reading through the passed or active transaction;
   proposed and offered never count; retired requirements are skipped. Tests: same file.
-- **WRK-04 assignment notices** (SPK-COMMS-002 `assignment_offer`, SPK-STAFF-002, IF-22): handler
-  `workforce.assignment_offer_notice` on this module's own `workforce.assignment_changed` composes
-  and queues, in the handler's transaction, an `assignment_offer` notice (operational, not
-  protected, addressed to the assignee by id, subject `assignment`) with `sourceEventId` = the
-  event id: on a move into `offered` while the offer still stands, and on the withdrawal of an
-  accepted assignment by anyone but the assignee (staff, a replacement, a follow-up or a
-  retirement). The text names the role, slot, activity, facility and the facility-local time with
-  its zone. A replay composes nothing (the dispatcher's consumption record; the notices' unique
-  source-event key). Offer deadlines and reminders are not added (pending DEC-011). Tests:
+- **WRK-04 assignment notices** (SPK-COMMS-002 assignment offer, schedule change and
+  cancellation, SPK-COMMS-005, SPK-STAFF-002, IF-22): handler `workforce.assignment_offer_notice`
+  on this module's own `workforce.assignment_changed` composes and queues, in the handler's
+  transaction, one notice (operational, not protected, addressed to the assignee by id, subject
+  `assignment`) with `sourceEventId` = the event id:
+  - `assignment_offer` on a move into `offered` while the offer still stands;
+  - `schedule_changed` when an offered or accepted assignment moves with its activity (a retime
+    keeps the status; the event's `previousScheduledStart`/`previousScheduledEnd` carry the old
+    times): the text gives the new and the previous time, and `detailsBefore`/`detailsAfter` hold
+    both (facility, zone, slot, start, end). A delivery whose times are no longer the
+    assignment's (it moved again since) composes nothing: the newer move's event tells the current
+    time;
+  - `cancellation` on the withdrawal of an accepted assignment by anyone but the assignee (staff, a
+    replacement, a follow-up, a retirement, or a move into a conflict, whose notice names the
+    accepted time and the activity's new time). Being a superseding kind, it suppresses an unsent
+    move notice about the assignment and points a sent one at itself (SPK-COMMS-005).
+
+  The slot, facility and times are read from the assignment row in the handler's transaction,
+  never from the payload, so a late delivery never states a time that no longer holds (§4.12).
+  The text names the role, slot, activity, facility and the facility-local time with its zone. A
+  replay composes nothing (the dispatcher's consumption record; the notices' unique source-event
+  key). Offer deadlines and reminders are not added (pending DEC-011). Tests:
   `__tests__/assignment-notices.spec.ts`.
+
 - **WRK-05 person merges** (SPK-IAM-007, SPK-STAFF-001, §4.2, IF-21, IF-09): no assignment,
   qualification or availability row is rewritten. Qualification checks (proposals, acceptance,
   readiness, unqualified flagging, replacement candidates) and availability reads expand the person

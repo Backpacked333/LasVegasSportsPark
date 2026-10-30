@@ -15,7 +15,11 @@ import {
  * contacts and fee notes never travel in events.
  */
 export const WorkforceEvents = {
-  /** Every assignment transition (communications notifies the assignee of offers and changes). */
+  /**
+   * Every assignment transition and retime. This module's own handler
+   * `workforce.assignment_offer_notice` tells the assignee of offers, of moves of an offered or
+   * accepted assignment and of withdrawals of accepted work (WRK-04, SPK-COMMS-002/005).
+   */
   assignmentChanged: defineEvent(
     'workforce.assignment_changed',
     z.object({
@@ -34,6 +38,13 @@ export const WorkforceEvents = {
       scheduledEnd: z.iso.datetime(),
       replacesAssignmentId: z.uuid().nullable(),
       reason: z.string().nullable(),
+      /**
+       * SPK-COMMS-005: the assignment's times before this change, set when the change moved it (a
+       * retime following its activity, which keeps the status, or a withdrawal because the new
+       * time conflicts); null otherwise. Optional only for events enqueued before the field.
+       */
+      previousScheduledStart: z.iso.datetime().nullable().optional(),
+      previousScheduledEnd: z.iso.datetime().nullable().optional(),
     }),
   ),
   /** A required slot became uncovered inside the escalation window (SPK-STAFF-003, SPK-AT-012). */
