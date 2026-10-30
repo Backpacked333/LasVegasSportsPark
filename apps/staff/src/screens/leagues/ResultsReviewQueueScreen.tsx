@@ -4,19 +4,24 @@
  * published bracket or a game already played, and the seasons a publication left with unscheduled
  * fixtures (remaining obligations with owner and deadline). Each task links to the record it is
  * about; acknowledging or closing a task never changes that record (handled on the Today
- * workspace). The API has no list of submitted results across fixtures yet, so results awaiting
- * publication are reached from a season's fixtures.
+ * workspace). Results awaiting publication are listed per season
+ * (`GET /v1/seasons/{id}/result-revisions?status=submitted`, CMP-05), newest first, with "Load
+ * more" so nothing is silently cut off; each links to the fixture's results screen.
  */
 import { formatAge, type Schema } from '@sportspark/api-client';
+import { useState } from 'react';
 import { Link } from 'react-router';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
+import { SelectField } from '../../features/competition/fields';
 import { useNow } from '../../providers/AppProviders';
 import { formatInstant } from '../../features/competition/format';
 import { LeaguesNav } from '../../features/competition/nav';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { StateView } from '../../ui/StateView';
+import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { RESULT_REVIEW_CATEGORY } from './ResultsReviewScreen';
+import { ResultRevisionRow } from './SeasonResultsScreen';
 
 type OperationalException = Schema<'OperationalException'>;
 
@@ -78,6 +83,59 @@ function TaskRow({ task, now }: { task: OperationalException; now: Date }) {
   );
 }
 
+function SubmittedForSeason({ seasonId }: { seasonId: string }) {
+  const submitted = useApiPages({
+    path: '/seasons/{id}/result-revisions',
+    request: { path: { id: seasonId }, query: { status: 'submitted', limit: 25 } },
+  });
+  return (
+    <>
+      <QueryBoundary
+        query={submitted}
+        label="submitted results"
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'Nothing submitted',
+          description: 'Results submitted in this season and awaiting publication appear here.',
+        }}
+        unavailableOffline={['publishing and returning results']}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Submitted results">
+            {items.map((revision) => (
+              <ResultRevisionRow key={revision.id} revision={revision} />
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={submitted} label="submitted results" />
+    </>
+  );
+}
+
+/** SPK-RESULT-001: submitted revisions of one season await publication or return. */
+function SubmittedResults() {
+  const [seasonId, setSeasonId] = useState('');
+  const seasons = useApiQuery({ path: '/seasons', staleTime: 5 * 60_000 });
+  return (
+    <section aria-labelledby="submitted-title" className="panel">
+      <h3 id="submitted-title">Submitted results awaiting publication</h3>
+      <SelectField
+        label="Season"
+        value={seasonId}
+        onChange={setSeasonId}
+        options={(seasons.data ?? []).map((s) => ({ value: s.id, label: s.name }))}
+        hint={seasons.error ? `Seasons could not be loaded (${seasons.error.code}).` : undefined}
+      />
+      {seasonId ? (
+        <SubmittedForSeason key={seasonId} seasonId={seasonId} />
+      ) : (
+        <p className="caption">Choose a season to see its submitted results.</p>
+      )}
+    </section>
+  );
+}
+
 export function ResultsReviewQueueScreen() {
   const now = useNow();
   const tasks = useApiQuery({
@@ -88,11 +146,7 @@ export function ResultsReviewQueueScreen() {
     <section aria-labelledby="review-queue-title">
       <h2 id="review-queue-title">Result review tasks</h2>
       <LeaguesNav />
-      <StateView
-        variant="unavailable"
-        title="Submitted results across fixtures: not available yet"
-        description="The API lists result revisions per fixture only. Open a season's fixtures to review and publish submitted results."
-      />
+      <SubmittedResults />
       <QueryBoundary
         query={tasks}
         label="review tasks"

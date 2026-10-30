@@ -9,16 +9,21 @@ import { describe, expect, it } from 'vitest';
 import { createTestApp } from '../../../testing/test-app';
 import {
   ID,
+  bracketNode,
   created,
   fail,
   fixtureDetail,
   ok,
   operation,
   page,
-  person,
+  personNames,
   resultRevision,
   reviewTask,
+  ruleSet,
+  ruleSetContent,
+  season,
   standings,
+  venue,
 } from '../../../features/competition/__tests__/fixtures';
 
 const official = resultRevision({
@@ -274,7 +279,7 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
     const app = createTestApp({
       routes: {
         ...routes([withCards]),
-        'GET /people/{id}': ok(person(ID.person, 'Robin', 'Reyes')),
+        'GET /person-names': personNames({ [ID.person]: ['Robin', 'Reyes', 'adult'] }),
         'POST /fixtures/{id}/results': created(correction),
       },
     });
@@ -386,6 +391,112 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
   });
 });
 
+describe('SCR-S-11 shootout winner of a drawn bracket game (CMP-10, SPK-COMP-001)', () => {
+  const shootoutRules = ruleSet({ content: ruleSetContent({ tiebreak: { playoff: 'shootout' } }) });
+  const bracketRoutes = (rules = shootoutRules) => ({
+    ...routes([]),
+    'GET /seasons/{id}': ok(season()),
+    'GET /rule-sets/{id}': ok(rules),
+    'GET /seasons/{id}/bracket-nodes': ok([bracketNode({ fixtureId: ID.fixture })]),
+  });
+
+  async function enterDraw(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: 'Enter the result' }));
+    const form = screen.getByRole('form', { name: 'Submit a result' });
+    await user.selectOptions(within(form).getByLabelText(/^Classification/), 'completed');
+    await user.type(within(form).getByLabelText(/^Red score/), '2');
+    await user.type(within(form).getByLabelText(/^Blue score/), '2');
+    return form;
+  }
+
+  it('offers the shootout winner for a drawn bracket game, nothing preselected, and sends it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...bracketRoutes(),
+        'POST /fixtures/{id}/results': created(
+          resultRevision({ homeScore: 2, awayScore: 2, shootoutWinnerEntryId: ID.entryBlue }),
+        ),
+      },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    const form = await enterDraw(user);
+    const winner = await within(form).findByLabelText(/^Shootout winner/);
+    expect(winner).toHaveValue('');
+    await user.selectOptions(winner, ID.entryBlue);
+    await user.click(within(form).getByRole('button', { name: 'Submit the result for review' }));
+    await within(form).findByText('Revision 1 submitted');
+    expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+      classification: 'completed',
+      homeScore: 2,
+      awayScore: 2,
+      shootoutWinnerEntryId: ID.entryBlue,
+    });
+  });
+
+  it('shows the API’s SHOOTOUT_NOT_ALLOWED refusal on the field', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...bracketRoutes(),
+        'POST /fixtures/{id}/results': fail(400, 'VALIDATION_FAILED', 'correct_input', {
+          message: 'A shootout does not decide this game under its rule set.',
+          details: { code: 'SHOOTOUT_NOT_ALLOWED', fixtureId: ID.fixture },
+        }),
+      },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    const form = await enterDraw(user);
+    await user.selectOptions(await within(form).findByLabelText(/^Shootout winner/), ID.entryRed);
+    await user.click(within(form).getByRole('button', { name: 'Submit the result for review' }));
+    expect(await within(form).findByText(/Leave the shootout winner empty/)).toBeInTheDocument();
+    expect((await within(form).findAllByText(/VALIDATION_FAILED/)).length).toBeGreaterThan(0);
+  });
+
+  it('offers no shootout for a league game or a rule set that decides draws another way', async () => {
+    const user = userEvent.setup();
+    const league = createTestApp({
+      routes: {
+        ...bracketRoutes(),
+        'GET /seasons/{id}/bracket-nodes': ok([bracketNode({ fixtureId: ID.fixture2 })]),
+      },
+    });
+    render(league.at(`/leagues/fixtures/${ID.fixture}/results`));
+    const form = await enterDraw(user);
+    await waitFor(() =>
+      expect(league.fake.requests.some((r) => r.route === '/seasons/{id}/bracket-nodes')).toBe(
+        true,
+      ),
+    );
+    expect(within(form).queryByLabelText(/^Shootout winner/)).toBeNull();
+  });
+
+  it('says how a drawn bracket game is decided when the rule set names a replay', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: bracketRoutes(
+        ruleSet({ content: ruleSetContent({ tiebreak: { playoff: 'replay' } }) }),
+      ),
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    const form = await enterDraw(user);
+    expect(await within(form).findByTestId('no-shootout')).toHaveTextContent(/decided by a replay/);
+    expect(within(form).queryByLabelText(/^Shootout winner/)).toBeNull();
+  });
+
+  it('shows the shootout winner on the revision', async () => {
+    const app = createTestApp({
+      routes: routes([
+        resultRevision({ homeScore: 1, awayScore: 1, shootoutWinnerEntryId: ID.entryRed }),
+      ]),
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    expect(await screen.findByTestId(`shootout-${ID.result1}`)).toHaveTextContent(
+      'Shootout won by Red',
+    );
+  });
+});
+
 describe('SCR-S-11 ResultsReviewQueueScreen (SPK-AT-014, SPK-FIX-002)', () => {
   it('lists open correction reviews and incomplete seasons with links to their records', async () => {
     const app = createTestApp({
@@ -420,7 +531,7 @@ describe('SCR-S-11 ResultsReviewQueueScreen (SPK-AT-014, SPK-FIX-002)', () => {
     expect(within(seasons).getByText('2 fixture(s) still unscheduled.')).toBeInTheDocument();
     expect(screen.queryByText('Unrelated')).toBeNull();
     expect(
-      screen.getByText('Submitted results across fixtures: not available yet'),
+      screen.getByRole('heading', { name: 'Submitted results awaiting publication' }),
     ).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/exceptions')?.query).toMatchObject({
       queue: 'league_manager',
@@ -435,5 +546,148 @@ describe('SCR-S-11 ResultsReviewQueueScreen (SPK-AT-014, SPK-FIX-002)', () => {
     });
     render(app.at('/leagues/results-review'));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+});
+
+describe('SCR-S-11 submitted results across fixtures (CMP-05, SPK-RESULT-001)', () => {
+  it('lists a season’s submitted revisions with their fixture and a link to publish', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /exceptions': ok(page([])),
+        'GET /seasons': ok([season()]),
+        'GET /seasons/{id}/result-revisions': ok(page([correction], 'more-results')),
+        'GET /fixtures/{id}': ok(fixtureDetail({ venue: venue() })),
+      },
+    });
+    render(app.at('/leagues/results-review'));
+    expect(await screen.findByText('Choose a season to see its submitted results.')).toBeVisible();
+    await user.selectOptions(await screen.findByLabelText(/^Season/), ID.season);
+    const list = await screen.findByRole('list', { name: 'Submitted results' });
+    expect(await within(list).findByText('Red v Blue, revision 2')).toBeInTheDocument();
+    expect(within(list).getByText('Result submitted')).toBeInTheDocument();
+    expect(within(list).getByText(/Red 2 – 2 Blue/)).toBeInTheDocument();
+    expect(within(list).getByRole('link', { name: 'Review and publish' })).toHaveAttribute(
+      'href',
+      `/leagues/fixtures/${ID.fixture}/results`,
+    );
+    const read = app.fake.requests.find((r) => r.route === '/seasons/{id}/result-revisions');
+    expect(read?.query.status).toBe('submitted');
+    expect(screen.getByRole('button', { name: 'Load more submitted results' })).toBeVisible();
+  });
+});
+
+describe('SCR-S-11 SeasonResultsScreen (CMP-05, SPK-RESULT-004)', () => {
+  const superseded = resultRevision({
+    status: 'superseded',
+    publishedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'L. Manager' },
+    publishedAt: '2026-11-08T09:00:00.000Z',
+    supersededAt: '2026-11-09T09:00:00.000Z',
+    supersededByRevisionId: ID.result2,
+  });
+  const replacing = resultRevision({
+    id: ID.result2,
+    revisionNo: 2,
+    status: 'official',
+    supersedesRevisionId: ID.result1,
+    reason: 'Scorer corrected after video review.',
+    publishedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'L. Manager' },
+    publishedAt: '2026-11-09T09:00:00.000Z',
+  });
+
+  it('keeps the history: superseded and correcting revisions with actor, reason and time', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': ok(page([replacing, superseded])),
+        'GET /fixtures/{id}': ok(fixtureDetail()),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/results`));
+    const list = await screen.findByRole('list', { name: 'Result revisions' });
+    const items = within(list).getAllByRole('listitem');
+    expect(within(items[0] as HTMLElement).getByText('Result official')).toBeInTheDocument();
+    expect(
+      within(items[0] as HTMLElement).getByText(/Scorer corrected after video review/),
+    ).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText('Result superseded')).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText(/Superseded .* by revision/)).toBeVisible();
+    expect(within(items[1] as HTMLElement).getByText(/published by L. Manager/)).toBeVisible();
+  });
+
+  it('filters by status, shows the empty state, and a refused read as not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': ok(page([])),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/results`));
+    expect(await screen.findByRole('heading', { name: 'No result revisions' })).toBeVisible();
+    await user.selectOptions(screen.getByLabelText('Result status'), 'submitted');
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some(
+          (r) => r.route === '/seasons/{id}/result-revisions' && r.query.status === 'submitted',
+        ),
+      ).toBe(true),
+    );
+
+    const denied = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': fail(
+          403,
+          'ACCESS_DENIED',
+          'contact_support_or_request_access',
+        ),
+      },
+    });
+    render(denied.at(`/leagues/seasons/${ID.season}/results`));
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+
+  it('tells a fixture that failed to load apart from one that is not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': ok(page([replacing])),
+        'GET /fixtures/{id}': fail(500, 'INTERNAL_ERROR', 'retry_later'),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/results`));
+    const list = await screen.findByRole('list', { name: 'Result revisions' });
+    expect(
+      await within(list).findByText(/Fixture could not load \(INTERNAL_ERROR\)/),
+    ).toBeInTheDocument();
+    expect(within(list).queryByText(/Fixture not available/)).toBeNull();
+    app.fake.set('GET /fixtures/{id}', ok(fixtureDetail()));
+    await user.click(within(list).getByRole('button', { name: 'Try loading the fixture again' }));
+    expect(await within(list).findByText(/Red v Blue, revision 2/)).toBeInTheDocument();
+
+    const hidden = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': ok(page([replacing])),
+        'GET /fixtures/{id}': fail(404, 'NOT_FOUND', 'verify_reference'),
+      },
+    });
+    render(hidden.at(`/leagues/seasons/${ID.season}/results`));
+    expect(await screen.findByText(/Fixture not available, revision 2/)).toBeInTheDocument();
+    expect(screen.queryByText(/could not load/)).toBeNull();
+  });
+
+  it('shows the API error code with Try again when the list fails', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': fail(500, 'INTERNAL_ERROR', 'retry_later'),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/results`));
+    expect((await screen.findAllByText(/INTERNAL_ERROR/)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeVisible();
   });
 });

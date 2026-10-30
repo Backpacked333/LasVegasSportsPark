@@ -37,11 +37,6 @@ export const PENDING = {
     decisions: ['DEC-010', 'DEC-063'],
     owner: 'League manager/operator; Operations',
   },
-  tournaments: {
-    subject: 'Tournament use by the complex',
-    decisions: ['DEC-078'],
-    owner: 'Product owner',
-  },
   placementModel: {
     subject: 'The placement model and the placement fields approved for collection',
     decisions: ['DEC-031', 'DEC-051'],

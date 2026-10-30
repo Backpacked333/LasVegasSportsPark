@@ -21,6 +21,9 @@ export function LeaguesNav() {
           <NavLink to="/leagues/results-review">Result review tasks</NavLink>
         </li>
         <li>
+          <NavLink to="/leagues/disputes">Disputes</NavLink>
+        </li>
+        <li>
           <NavLink to="/leagues/discipline">Discipline</NavLink>
         </li>
       </ul>
@@ -57,6 +60,9 @@ export function SeasonLinks({ seasonId }: { seasonId: string }) {
         </li>
         <li>
           <NavLink to={`/leagues/seasons/${seasonId}/fixtures`}>Fixtures and readiness</NavLink>
+        </li>
+        <li>
+          <NavLink to={`/leagues/seasons/${seasonId}/results`}>Result revisions</NavLink>
         </li>
         <li>
           <NavLink to={`/leagues/seasons/${seasonId}/standings`}>Standings and brackets</NavLink>

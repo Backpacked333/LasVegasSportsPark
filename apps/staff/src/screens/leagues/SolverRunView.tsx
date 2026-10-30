@@ -5,10 +5,12 @@
  * upgrades or infers an outcome. The input snapshot (rule-set version, search settings, dry run) is
  * shown with the outcome. A partial result lists the remaining obligations with owner and deadline
  * (partial completion state); a proposal stays a scheduling draft until published elsewhere.
+ * A run of a specification with compressed play (CMP-15) reports, per facility-local day, the
+ * games proposed, the most games running at once and the official assignments they need.
  */
 import type { Schema } from '@sportspark/api-client';
 import { Link } from 'react-router';
-import { formatInstant, shortRef } from '../../features/competition/format';
+import { formatDateOnly, formatInstant, shortRef } from '../../features/competition/format';
 import {
   COMPLETENESS_ISSUE,
   FAIRNESS_PREFERENCE,
@@ -179,6 +181,34 @@ export function SolverRunView({
           </div>
         ) : null}
       </section>
+
+      {explanation.dailyDemand && explanation.dailyDemand.length > 0 ? (
+        <div className="table-scroll">
+          <table className="data-table">
+            <caption>Demand per facility-local day</caption>
+            <thead>
+              <tr>
+                <th scope="col">Day</th>
+                <th scope="col">Games</th>
+                <th scope="col">Most games at once</th>
+                <th scope="col">Official assignments</th>
+                <th scope="col">Most officials at once</th>
+              </tr>
+            </thead>
+            <tbody>
+              {explanation.dailyDemand.map((day) => (
+                <tr key={day.date}>
+                  <td>{formatDateOnly(day.date)}</td>
+                  <td>{day.games}</td>
+                  <td>{day.peakConcurrentGames}</td>
+                  <td>{day.officialAssignments ?? 'Officials per game not stated'}</td>
+                  <td>{day.peakConcurrentOfficials ?? 'Not stated'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
 
       {games.length > 0 ? (
         <div className="table-scroll">

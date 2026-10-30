@@ -48,6 +48,8 @@ describe('SCR-S-16 TeamEntryReviewScreen (SPK-COMP-004)', () => {
       'href',
       `/teams/entries/${ID.entryRed}/roster`,
     );
+    // CMP-01: the entry carries its team's name; no per-team read.
+    expect(app.fake.requests.some((r) => r.route === '/teams/{id}')).toBe(false);
   });
 
   it('never presents approved as paid or roster-complete', async () => {

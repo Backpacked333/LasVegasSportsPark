@@ -211,6 +211,34 @@ export const APPEAL_SUMMARY: Record<Schema<'AppealStatusSummary'>, string> = {
   denied: 'Appeal denied',
 };
 
+/** AppealMachine states (§4.6); the appeal procedure itself is pending DEC-010. */
+export const APPEAL_STATUS: Labels<Schema<'AppealStatus'>> = {
+  submitted: { tone: 'info', label: 'submitted' },
+  under_review: { tone: 'pending', label: 'under_review' },
+  granted: { tone: 'success', label: 'granted' },
+  denied: { tone: 'neutral', label: 'denied' },
+  withdrawn: { tone: 'neutral', label: 'withdrawn' },
+};
+
+export const DECISION_STATUS: Labels<Schema<'DisciplinaryDecisionStatus'>> = {
+  issued: { tone: 'warning', label: 'issued' },
+  overturned: { tone: 'neutral', label: 'overturned' },
+};
+
+export const DECISION_KIND: Record<Schema<'DisciplinaryDecisionKind'>, string> = {
+  no_action: 'No action',
+  warning: 'Warning',
+  suspension: 'Suspension',
+  other: 'Other decision',
+};
+
+/** ProgressionRecommendation states (ENR-14): a draft is not visible to the family until shared. */
+export const RECOMMENDATION_STATUS: Labels<Schema<'ProgressionRecommendation'>['status']> = {
+  draft: { tone: 'pending', label: 'draft' },
+  shared: { tone: 'success', label: 'shared' },
+  withdrawn: { tone: 'neutral', label: 'withdrawn' },
+};
+
 export const INCIDENT_STATUS: Labels<Schema<'IncidentStatus'>> = {
   open: { tone: 'info', label: 'open' },
   under_review: { tone: 'pending', label: 'under_review' },

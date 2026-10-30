@@ -7,6 +7,8 @@ import type { ReactElement } from 'react';
 import { Route } from 'react-router';
 import { CompetitionScreen } from '../../screens/leagues/CompetitionScreen';
 import { DisciplineScreen } from '../../screens/leagues/DisciplineScreen';
+import { DisputesScreen } from '../../screens/leagues/DisputesScreen';
+import { DivisionPoolsScreen, PoolScreen } from '../../screens/leagues/PoolsScreen';
 import { FixtureDisputesScreen } from '../../screens/leagues/FixtureDisputesScreen';
 import { FixtureGenerationScreen } from '../../screens/leagues/FixtureGenerationScreen';
 import { FixtureScreen } from '../../screens/leagues/FixtureScreen';
@@ -20,6 +22,7 @@ import { LeaguesScreen } from '../../screens/leagues/LeaguesScreen';
 import { ResultsReviewQueueScreen } from '../../screens/leagues/ResultsReviewQueueScreen';
 import { ResultsReviewScreen } from '../../screens/leagues/ResultsReviewScreen';
 import { RuleSetsScreen } from '../../screens/leagues/RuleSetsScreen';
+import { SeasonResultsScreen } from '../../screens/leagues/SeasonResultsScreen';
 import { SeasonScreen } from '../../screens/leagues/SeasonScreen';
 import { StandingsScreen } from '../../screens/leagues/StandingsScreen';
 import { PlacementBoardScreen } from '../../screens/teams/PlacementBoardScreen';
@@ -33,12 +36,16 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/leagues', <LeaguesScreen />],
   ['/leagues/rule-sets', <RuleSetsScreen />],
   ['/leagues/results-review', <ResultsReviewQueueScreen />],
+  ['/leagues/disputes', <DisputesScreen />],
   ['/leagues/discipline', <DisciplineScreen />],
   ['/leagues/discipline/incidents/:incidentId', <IncidentScreen />],
   ['/leagues/competitions/:competitionId', <CompetitionScreen />],
   ['/leagues/seasons/:seasonId', <SeasonScreen />],
   ['/leagues/seasons/:seasonId/fixtures', <FixturesScreen />],
+  ['/leagues/seasons/:seasonId/results', <SeasonResultsScreen />],
   ['/leagues/seasons/:seasonId/standings', <StandingsScreen />],
+  ['/leagues/divisions/:divisionId/pools', <DivisionPoolsScreen />],
+  ['/leagues/pools/:poolId', <PoolScreen />],
   ['/leagues/divisions/:divisionId/fixture-generation', <FixtureGenerationScreen />],
   ['/leagues/fixture-specifications/:specificationId', <FixtureSpecificationScreen />],
   ['/leagues/solver-runs/:runId', <SolverRunScreen />],

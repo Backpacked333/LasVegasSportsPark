@@ -5,8 +5,10 @@
  * rule-set version it was computed under, when, and how many official results it derives from;
  * every tie on points shows how it was decided, step by step. Bracket nodes show where each side
  * comes from (seed, winner of, loser of, bye); a node touched by an open correction review task is
- * "under review" (recovery required). Tournament use is pending DEC-078; brackets are shown as the
- * API holds them.
+ * "under review" (recovery required). An unpublished node's seeded slots are filled from final
+ * division or pool standings (CMP-10, CMP-15, SeedFromStandings.tsx). Tournament pools are behind
+ * the organization's tournaments capability (DEC-016, DEC-078; PoolsScreen.tsx); brackets are
+ * shown as the API holds them. Team names come with each node and table row (CMP-01).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -15,16 +17,16 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError } from '../../features/competition/CommandError';
-import { keys, PendingNote, useRefetch } from '../../features/competition/feedback';
+import { keys, useRefetch } from '../../features/competition/feedback';
 import { SelectField } from '../../features/competition/fields';
 import { formatInstant, shortRef } from '../../features/competition/format';
 import { humanizeCode } from '../../features/competition/labels';
 import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
-import { EntryName, useSeasonEntries } from '../../features/competition/names';
-import { PENDING } from '../../features/competition/pending';
+import { EntryName, useSeasonEntries, type EntryNames } from '../../features/competition/names';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { RESULT_REVIEW_CATEGORY } from './ResultsReviewScreen';
+import { SeedNode } from './SeedFromStandings';
 
 type Standings = NonNullable<Schema<'Standings'>>;
 type BracketNode = Schema<'BracketNode'>;
@@ -37,7 +39,22 @@ const OUTCOME_TEXT: Record<Schema<'TiebreakExplanation'>['steps'][number]['outco
   unresolved: 'left the tie unresolved',
 };
 
-function StandingsTable({ standings }: { standings: Standings }) {
+/** A league or pool table (SPK-RESULT-003); the pool screen shows its own with this. */
+export function StandingsTable({
+  standings,
+  caption = 'Standings',
+}: {
+  standings: Pick<
+    Standings,
+    | 'rows'
+    | 'tiebreakExplanations'
+    | 'ruleSetId'
+    | 'ruleSetVersion'
+    | 'computedAt'
+    | 'sourceResultIds'
+  > & { id?: string | null };
+  caption?: string;
+}) {
   const names = new Map(standings.rows.map((r) => [r.teamEntryId, r.teamName]));
   const nameOf = (id: string) => names.get(id);
   return (
@@ -46,13 +63,15 @@ function StandingsTable({ standings }: { standings: Standings }) {
         Rule set version {standings.ruleSetVersion} ({shortRef(standings.ruleSetId)}) · computed{' '}
         {formatInstant(standings.computedAt)} · from {standings.sourceResultIds.length} official{' '}
         {standings.sourceResultIds.length === 1 ? 'result' : 'results'}
-        {standings.id
-          ? ` · standings revision ${shortRef(standings.id)}`
-          : ' · live computation (no stored revision yet)'}
+        {standings.id === undefined
+          ? ''
+          : standings.id
+            ? ` · standings revision ${shortRef(standings.id)}`
+            : ' · live computation (no stored revision yet)'}
       </p>
       <div className="table-scroll">
         <table className="data-table">
-          <caption>Standings</caption>
+          <caption>{caption}</caption>
           <thead>
             <tr>
               <th scope="col">Position</th>
@@ -199,10 +218,12 @@ function Bracket({
   seasonId,
   divisionId,
   entries,
+  divisions,
 }: {
   seasonId: string;
   divisionId: string;
-  entries: ReadonlyMap<string, { teamId: string }>;
+  entries: EntryNames;
+  divisions: readonly { value: string; label: string }[];
 }) {
   const nodes = useApiQuery({
     path: '/seasons/{id}/bracket-nodes',
@@ -225,7 +246,6 @@ function Bracket({
   return (
     <section className="panel" aria-labelledby="bracket-title">
       <h3 id="bracket-title">Bracket</h3>
-      <PendingNote decision={PENDING.tournaments} />
       {reviews.error ? (
         <p className="caption">
           Review tasks could not be checked ({reviews.error.code}), so whether a node is under
@@ -262,15 +282,34 @@ function Bracket({
                         <span className="row-title">{node.name ?? `Slot ${node.slot}`}</span>
                         <span>
                           {sourceText(node.sourceRule.home, nodeName)}:{' '}
-                          <EntryName entryId={node.homeEntryId} teamIdOf={entries} />
+                          <EntryName
+                            entryId={node.homeEntryId}
+                            teamIdOf={entries}
+                            name={node.homeTeamName}
+                          />
                         </span>
                         <span>
                           {sourceText(node.sourceRule.away, nodeName)}:{' '}
-                          <EntryName entryId={node.awayEntryId} teamIdOf={entries} />
+                          <EntryName
+                            entryId={node.awayEntryId}
+                            teamIdOf={entries}
+                            name={node.awayTeamName}
+                          />
                         </span>
                         {node.winnerEntryId ? (
                           <span>
-                            Winner: <EntryName entryId={node.winnerEntryId} teamIdOf={entries} />
+                            Winner:{' '}
+                            <EntryName
+                              entryId={node.winnerEntryId}
+                              teamIdOf={entries}
+                              name={
+                                node.winnerEntryId === node.homeEntryId
+                                  ? node.homeTeamName
+                                  : node.winnerEntryId === node.awayEntryId
+                                    ? node.awayTeamName
+                                    : null
+                              }
+                            />
                           </span>
                         ) : null}
                         <span>
@@ -298,7 +337,14 @@ function Bracket({
                           Publishing waits until the review tasks can be checked.
                         </p>
                       ) : !node.published ? (
-                        <PublishNode node={node} />
+                        <div className="actions">
+                          <SeedNode
+                            node={node}
+                            divisions={divisions}
+                            teamName={(id) => teamNameOf(id, entries)}
+                          />
+                          <PublishNode node={node} />
+                        </div>
                       ) : null}
                     </li>
                   ))}
@@ -311,11 +357,16 @@ function Bracket({
   );
 }
 
+function teamNameOf(entryId: string, entries: EntryNames): string {
+  return entries.get(entryId)?.teamName ?? `Entry ${shortRef(entryId)}`;
+}
+
 export function StandingsScreen() {
   const { seasonId = '' } = useParams();
   const [divisionId, setDivisionId] = useState('');
   const divisions = useApiQuery({ path: '/divisions', request: { query: { seasonId } } });
   const { byId } = useSeasonEntries(seasonId);
+  const divisionOptions = (divisions.data ?? []).map((d) => ({ value: d.id, label: d.name }));
   const standings = useApiQuery({
     path: '/seasons/{id}/standings',
     request: { path: { id: seasonId }, query: { ...(divisionId ? { divisionId } : {}) } },
@@ -329,9 +380,16 @@ export function StandingsScreen() {
         label="Division"
         value={divisionId}
         onChange={setDivisionId}
-        options={(divisions.data ?? []).map((d) => ({ value: d.id, label: d.name }))}
+        options={divisionOptions}
         placeholder="Whole season"
       />
+      {divisionId ? (
+        <p>
+          <Link to={`/leagues/divisions/${divisionId}/pools`}>
+            Tournament pools of this division
+          </Link>
+        </p>
+      ) : null}
       <section className="panel" aria-labelledby="table-title">
         <h3 id="table-title">League table</h3>
         <p className="caption">
@@ -349,7 +407,12 @@ export function StandingsScreen() {
           {(data) => (data ? <StandingsTable standings={data} /> : null)}
         </QueryBoundary>
       </section>
-      <Bracket seasonId={seasonId} divisionId={divisionId} entries={byId} />
+      <Bracket
+        seasonId={seasonId}
+        divisionId={divisionId}
+        entries={byId}
+        divisions={divisionOptions}
+      />
     </section>
   );
 }

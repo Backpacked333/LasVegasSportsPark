@@ -3,10 +3,15 @@
  * submitting role, fixture, submission window, reason, evidence references, reviewer, decision,
  * publication consequences, appeal handling; SPK-UX-008). Review moves follow DisputeMachine with
  * `expectedRevision`; a decision names its outcome, publication consequence and reason, checked
- * here before sending and again by the API. The dispute and appeal procedure is pending DEC-010.
+ * here before sending and again by the API. League administration records a withdrawal through
+ * the review command; a staff member who submitted the dispute withdraws it with a reason
+ * (`POST /v1/disputes/{id}/withdraw`, CMP-12). The dispute and appeal procedure is pending
+ * DEC-010. The card and its actions are shared with the season-wide list (DisputesScreen).
+ * Submission, protest-window and decision times are shown in the venue's time zone when the
+ * fixture has one (SPK-SCHED-008); otherwise in the device's zone, named.
  */
 import type { Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -22,7 +27,7 @@ import {
   humanizeCode,
 } from '../../features/competition/labels';
 import { LeaguesNav } from '../../features/competition/nav';
-import { EntryName, useSeasonEntries } from '../../features/competition/names';
+import { EntryName, useSeasonEntries, type EntryNames } from '../../features/competition/names';
 import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -37,11 +42,73 @@ const CONSEQUENCE_OPTIONS = Object.entries(PUBLICATION_CONSEQUENCE).map(([value,
   label,
 }));
 
-function DisputeActions({ dispute }: { dispute: Dispute }) {
-  const decide = useApiCommand('post', '/disputes/{id}/decide', {
-    invalidate: keys('/fixtures/{id}/disputes', '/disputes/{id}'),
-  });
-  const reload = useRefetch(['/fixtures/{id}/disputes']);
+const DISPUTE_KEYS = keys('/fixtures/{id}/disputes', '/disputes/{id}', '/disputes');
+
+/** CMP-12: the submitter withdraws their own dispute with a reason (kept in the audit record). */
+function WithdrawOwnDispute({ dispute }: { dispute: Dispute }) {
+  const withdraw = useApiCommand('post', '/disputes/{id}/withdraw', { invalidate: DISPUTE_KEYS });
+  const reload = useRefetch(['/fixtures/{id}/disputes', '/disputes']);
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const submit = () => {
+    if (!reason.trim()) {
+      setError('Give the reason for withdrawing the dispute.');
+      return;
+    }
+    setError(null);
+    void withdraw
+      .submit({
+        path: { id: dispute.id },
+        body: { expectedRevision: dispute.revision, reason: reason.trim() },
+      })
+      .catch(() => undefined);
+  };
+  if (!open) {
+    return (
+      <Button variant="secondary" onClick={() => setOpen(true)}>
+        Withdraw my dispute
+      </Button>
+    );
+  }
+  return (
+    <form
+      className="form"
+      noValidate
+      aria-label="Withdraw my dispute"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
+      <TextAreaField label="Reason" required value={reason} onChange={setReason} error={error} />
+      <div className="actions">
+        <CommandButton type="submit" variant="secondary" busy={withdraw.isProcessing}>
+          Withdraw the dispute
+        </CommandButton>
+        <Button variant="secondary" onClick={() => setOpen(false)}>
+          Keep the dispute
+        </Button>
+      </div>
+      {withdraw.status === 'success' && withdraw.data ? (
+        <SuccessNote>{`Dispute ${withdraw.data.status}`}</SuccessNote>
+      ) : null}
+      <CommandError
+        error={withdraw.error}
+        onRetry={submit}
+        onReload={() => {
+          withdraw.reset();
+          reload();
+        }}
+      />
+    </form>
+  );
+}
+
+export function DisputeActions({ dispute }: { dispute: Dispute }) {
+  const me = useApiQuery({ path: '/me', staleTime: 5 * 60_000 });
+  const decide = useApiCommand('post', '/disputes/{id}/decide', { invalidate: DISPUTE_KEYS });
+  const reload = useRefetch(['/fixtures/{id}/disputes', '/disputes']);
   const [mode, setMode] = useState<'decide' | 'withdraw' | null>(null);
   const [decision, setDecision] = useState('');
   const [consequence, setConsequence] = useState('');
@@ -77,6 +144,9 @@ function DisputeActions({ dispute }: { dispute: Dispute }) {
       .catch(() => undefined);
   };
 
+  const myPersonId = me.data?.principal.personId ?? null;
+  const submittedByMe = myPersonId !== null && dispute.submittedBy.personId === myPersonId;
+
   if (dispute.status === 'decided' || dispute.status === 'withdrawn') {
     return dispute.publicationConsequence === 'correction_required' ? (
       <Link to={`/leagues/fixtures/${dispute.fixtureId}/results?disputeId=${dispute.id}`}>
@@ -99,10 +169,13 @@ function DisputeActions({ dispute }: { dispute: Dispute }) {
         <Button variant="secondary" onClick={() => setMode('decide')}>
           Decide
         </Button>
-        <Button variant="secondary" onClick={() => setMode('withdraw')}>
-          Record withdrawal
-        </Button>
+        {submittedByMe ? null : (
+          <Button variant="secondary" onClick={() => setMode('withdraw')}>
+            Record withdrawal
+          </Button>
+        )}
       </div>
+      {submittedByMe ? <WithdrawOwnDispute dispute={dispute} /> : null}
       {mode === 'decide' ? (
         <form
           className="form"
@@ -175,12 +248,18 @@ function DisputeActions({ dispute }: { dispute: Dispute }) {
   );
 }
 
-function DisputeCard({
+export function DisputeCard({
   dispute,
   entries,
+  fixtureLabel,
+  timeZone,
 }: {
   dispute: Dispute;
-  entries: ReadonlyMap<string, { teamId: string }>;
+  entries: EntryNames;
+  /** The fixture the dispute is about, on lists that span fixtures. */
+  fixtureLabel?: ReactNode;
+  /** The fixture venue's IANA time zone (SPK-SCHED-008); the device zone, named, until known. */
+  timeZone?: string | null;
 }) {
   const badge = DISPUTE_STATUS[dispute.status];
   return (
@@ -189,6 +268,7 @@ function DisputeCard({
         <span className="row-title" id={`dispute-${dispute.id}`}>
           Dispute {shortRef(dispute.id)}
         </span>
+        {fixtureLabel ? <span>{fixtureLabel}</span> : null}
         <StatusBadge tone={badge.tone} label={`Dispute ${badge.label}`} />
         <dl className="facets">
           <div>
@@ -205,11 +285,11 @@ function DisputeCard({
           </div>
           <div>
             <dt>Submitted</dt>
-            <dd>{formatInstant(dispute.submittedAt)}</dd>
+            <dd>{formatInstant(dispute.submittedAt, timeZone)}</dd>
           </div>
           <div>
             <dt>Submission window closed</dt>
-            <dd>{formatInstant(dispute.submissionDeadlineAt)}</dd>
+            <dd>{formatInstant(dispute.submissionDeadlineAt, timeZone)}</dd>
           </div>
           <div>
             <dt>Disputed result</dt>
@@ -223,7 +303,7 @@ function DisputeCard({
             <dt>Decision</dt>
             <dd>
               {dispute.decision
-                ? `${humanizeCode(dispute.decision)} ${formatInstant(dispute.decidedAt)}`
+                ? `${humanizeCode(dispute.decision)} ${formatInstant(dispute.decidedAt, timeZone)}`
                 : 'Not decided'}
             </dd>
           </div>
@@ -290,7 +370,12 @@ export function FixtureDisputesScreen() {
         {(data) => (
           <ul className="list" aria-label="Disputes">
             {data.map((dispute) => (
-              <DisputeCard key={dispute.id} dispute={dispute} entries={byId} />
+              <DisputeCard
+                key={dispute.id}
+                dispute={dispute}
+                entries={byId}
+                timeZone={fixture.data?.venue?.timezone ?? null}
+              />
             ))}
           </ul>
         )}

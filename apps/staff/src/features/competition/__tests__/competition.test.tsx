@@ -8,7 +8,7 @@ import { ApiError } from '@sportspark/api-client';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { FACILITY_A, createTestApp } from '../../../testing/test-app';
+import { FACILITY_A, createTestApp, mePermissions } from '../../../testing/test-app';
 import { fieldErrorsOf, reasonsOf } from '../CommandError';
 import {
   FIXTURE_STATUS,
@@ -18,7 +18,20 @@ import {
   TEAM_ENTRY_STATUS,
   humanizeCode,
 } from '../labels';
-import { ID, TEAM_ROUTES, competition, division, ok, ruleSet, season, teamEntry } from './fixtures';
+import {
+  ID,
+  TEAM_ROUTES,
+  bracketNode,
+  competition,
+  division,
+  ok,
+  page,
+  pool,
+  poolStandings,
+  ruleSet,
+  season,
+  teamEntry,
+} from './fixtures';
 
 function apiError(code: string, details?: unknown) {
   return new ApiError({
@@ -196,6 +209,48 @@ describe('accessible names on every control (SPK-UX-009)', () => {
     await user.click(within(form).getByRole('button', { name: 'Add a blackout' }));
     await user.click(within(form).getByRole('button', { name: 'Add a preference' }));
     await within(form).findByLabelText('Field 1');
+    expectEveryControlNamed(form);
+  });
+
+  it('names every control of the seeding, pool and suspension-subject forms', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({
+          enabled: ['tournaments'],
+          actions: ['identity.lookup_person'],
+        }),
+        'GET /pools/{id}': ok(pool()),
+        'GET /pools/{id}/standings': ok(poolStandings()),
+        'GET /divisions/{id}': ok(division()),
+        'GET /team-entries': ok([teamEntry({ status: 'approved', divisionId: ID.division })]),
+        'GET /seasons/{id}/bracket-nodes': ok([bracketNode({ published: false })]),
+      },
+    });
+    render(app.at(`/leagues/pools/${ID.pool}`));
+    expectEveryControlNamed(
+      await screen.findByRole('form', { name: 'Place an entry in the pool' }),
+    );
+    await user.click(await screen.findByRole('button', { name: 'Seed Final from standings' }));
+    expectEveryControlNamed(screen.getByRole('form', { name: 'Seed Final from standings' }));
+  });
+
+  it('names every control of the suspension proposal with person search', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['identity.lookup_person'] }),
+        'GET /incidents': ok([]),
+        'GET /suspensions': ok([]),
+        'GET /competitions': ok([competition()]),
+        'GET /disciplinary-decisions': ok(page([])),
+        'GET /appeals': ok(page([])),
+      },
+    });
+    render(app.at('/leagues/discipline'));
+    await user.click(await screen.findByRole('button', { name: 'Propose a suspension' }));
+    const form = screen.getByRole('form', { name: 'Propose a suspension' });
+    await within(form).findByLabelText(/^Suspended person: find by name/);
     expectEveryControlNamed(form);
   });
 });

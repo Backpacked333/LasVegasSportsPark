@@ -9,6 +9,10 @@
  * nothing and opens a management review task; the reviewing manager then publishes it against
  * that task. Standings recalculate on publication; the publication's operation is shown, and an
  * operation in `recovery_required` is the recovery state.
+ *
+ * A drawn game of a bracket node names its shootout winner (CMP-10, SPK-COMP-001) when the
+ * season's rule set says `tiebreak.playoff: shootout`; nothing is preselected, it may stay empty
+ * (the bracket then waits), and the API's SHOOTOUT_NOT_ALLOWED refusal is shown on the field.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -44,6 +48,62 @@ type Revision = Schema<'ResultRevision'>;
 type Fixture = Schema<'FixtureDetail'>;
 type Classification = Schema<'ResultClassification'>;
 type PublishOutcome = Schema<'PublishResultOutcome'>;
+type Playoff = 'shootout' | 'replay' | 'league_decision';
+
+/** CMP-10: whether a drawn result of this fixture may name a shootout winner. */
+interface ShootoutContext {
+  /** The fixture is a bracket node's game. */
+  inBracket: boolean;
+  /** The rule set's `tiebreak.playoff`: null when it states none; undefined until it is read. */
+  playoff: Playoff | null | undefined;
+}
+
+const PLAYOFF_LABEL: Record<Playoff, string> = {
+  shootout: 'a shootout',
+  replay: 'a replay',
+  league_decision: 'a league decision',
+};
+
+function useShootout(fixture: Fixture | undefined): ShootoutContext {
+  const seasonId = fixture?.seasonId ?? '';
+  const nodes = useApiQuery({
+    path: '/seasons/{id}/bracket-nodes',
+    request: { path: { id: seasonId } },
+    enabled: !!fixture,
+    staleTime: 60_000,
+  });
+  const season = useApiQuery({
+    path: '/seasons/{id}',
+    request: { path: { id: seasonId } },
+    enabled: !!fixture,
+    staleTime: 5 * 60_000,
+  });
+  const ruleSet = useApiQuery({
+    path: '/rule-sets/{id}',
+    request: { path: { id: season.data?.ruleSetId ?? '' } },
+    enabled: !!season.data,
+    staleTime: 5 * 60_000,
+  });
+  return {
+    inBracket: !!fixture && (nodes.data ?? []).some((n) => n.fixtureId === fixture.id),
+    playoff: ruleSet.data ? (ruleSet.data.content.tiebreak?.playoff ?? null) : undefined,
+  };
+}
+
+function isShootoutRefusal(error: ApiError | null): boolean {
+  return (
+    error?.code === 'VALIDATION_FAILED' &&
+    (error.details as { code?: unknown } | undefined)?.code === 'SHOOTOUT_NOT_ALLOWED'
+  );
+}
+
+function sideName(fixture: Fixture, entryId: string): string {
+  return entryId === fixture.home.entryId
+    ? fixture.home.teamName
+    : entryId === fixture.away?.entryId
+      ? fixture.away.teamName
+      : 'another team';
+}
 
 export const RESULT_REVIEW_CATEGORY = 'competition.result_correction_review';
 
@@ -285,12 +345,14 @@ function ResultForm({
   mode,
   base,
   disputeId,
+  shootout,
   onDone,
 }: {
   fixture: Fixture;
   mode: ResultFormMode;
   base: Revision | null;
   disputeId: string | null;
+  shootout: ShootoutContext;
   onDone?: () => void;
 }) {
   const submitResult = useApiCommand('post', '/fixtures/{id}/results', { invalidate: RESULT_KEYS });
@@ -300,6 +362,8 @@ function ResultForm({
   const [home, setHome] = useState(base?.homeScore !== null && base ? String(base.homeScore) : '');
   const [away, setAway] = useState(base?.awayScore !== null && base ? String(base.awayScore) : '');
   const [forfeiting, setForfeiting] = useState(base?.forfeitingEntryId ?? '');
+  // The revision it replaces may have named one; otherwise nothing is preselected (CMP-10).
+  const [shootoutWinner, setShootoutWinner] = useState(base?.shootoutWinnerEntryId ?? '');
   const [minutePlayed, setMinutePlayed] = useState(
     base?.details.abandonment ? String(base.details.abandonment.minutePlayed) : '',
   );
@@ -320,6 +384,21 @@ function ResultForm({
   const needsScores = classification === 'completed' || classification === 'forfeit';
   const needsReason = mode === 'correction';
   const answersDispute = mode === 'correction' && disputeId !== null;
+  const typedHome = home.trim() ? parseWholeNumber(home) : null;
+  const typedAway = away.trim() ? parseWholeNumber(away) : null;
+  const drawn =
+    classification === 'completed' &&
+    typedHome !== null &&
+    typedAway !== null &&
+    typedHome === typedAway &&
+    !!fixture.away;
+  // Offered for a bracket game unless the rule set is known to decide draws another way; the
+  // API still refuses with SHOOTOUT_NOT_ALLOWED when its rule set does not allow one.
+  const shootoutOffered =
+    drawn &&
+    shootout.inBracket &&
+    (shootout.playoff === undefined || shootout.playoff === 'shootout');
+  const shootoutRefused = isShootoutRefusal(command.error);
 
   const submit = () => {
     const next: Record<string, string> = {};
@@ -344,6 +423,7 @@ function ResultForm({
       ...(needsScores && homeScore !== null ? { homeScore } : {}),
       ...(needsScores && awayScore !== null ? { awayScore } : {}),
       ...(classification === 'forfeit' ? { forfeitingEntryId: forfeiting } : {}),
+      ...(shootoutOffered && shootoutWinner ? { shootoutWinnerEntryId: shootoutWinner } : {}),
       ...(classification === 'abandoned' && minute !== null
         ? { abandonment: { minutePlayed: minute, reason: abandonReason.trim() } }
         : {}),
@@ -366,12 +446,7 @@ function ResultForm({
     { value: fixture.home.entryId, label: fixture.home.teamName },
     ...(fixture.away ? [{ value: fixture.away.entryId, label: fixture.away.teamName }] : []),
   ];
-  const teamOf = (entryId: string) =>
-    entryId === fixture.home.entryId
-      ? fixture.home.teamName
-      : entryId === fixture.away?.entryId
-        ? fixture.away.teamName
-        : 'another team';
+  const teamOf = (entryId: string) => sideName(fixture, entryId);
   const label =
     mode === 'resubmit'
       ? 'Resubmit the returned result'
@@ -418,6 +493,27 @@ function ResultForm({
             error={err('awayScore')}
           />
         </div>
+      ) : null}
+      {shootoutOffered ? (
+        <SelectField
+          label="Shootout winner"
+          value={shootoutWinner}
+          onChange={setShootoutWinner}
+          options={sides}
+          placeholder="No shootout winner recorded"
+          error={
+            shootoutRefused
+              ? 'A shootout does not decide this game under its rule set. Leave the shootout winner empty.'
+              : err('shootoutWinnerEntryId')
+          }
+          hint="A drawn playoff game decided by a shootout names the side that won it. Leave it empty and the bracket waits."
+        />
+      ) : drawn && shootout.inBracket && shootout.playoff !== undefined ? (
+        <p className="caption" data-testid="no-shootout">
+          {shootout.playoff
+            ? `Under this rule set a drawn playoff game is decided by ${PLAYOFF_LABEL[shootout.playoff]}, not on this result; the bracket waits.`
+            : 'This rule set states no way to decide a drawn playoff game; the bracket waits for a league decision.'}
+        </p>
       ) : null}
       {classification === 'forfeit' ? (
         <SelectField
@@ -508,11 +604,13 @@ function RevisionCard({
   fixture,
   hasOfficial,
   reviewTaskId,
+  shootout,
 }: {
   revision: Revision;
   fixture: Fixture;
   hasOfficial: boolean;
   reviewTaskId: string | null;
+  shootout: ShootoutContext;
 }) {
   const badge = RESULT_STATUS[revision.status];
   const [resubmitting, setResubmitting] = useState(false);
@@ -545,6 +643,11 @@ function RevisionCard({
               : ''}
           </span>
         ) : null}
+        {revision.shootoutWinnerEntryId ? (
+          <span data-testid={`shootout-${revision.id}`}>
+            Shootout won by {sideName(fixture, revision.shootoutWinnerEntryId)}
+          </span>
+        ) : null}
         {revision.details.abandonment ? (
           <span className="caption">
             Abandoned at minute {revision.details.abandonment.minutePlayed}:{' '}
@@ -575,6 +678,7 @@ function RevisionCard({
               mode="resubmit"
               base={revision}
               disputeId={null}
+              shootout={shootout}
               onDone={() => setResubmitting(false)}
             />
           ) : null}
@@ -616,6 +720,7 @@ export function ResultsReviewScreen() {
     request: { path: { id: fixtureId } },
   });
   const tasks = useReviewTasks();
+  const shootout = useShootout(fixture.data);
   const [entering, setEntering] = useState(false);
   return (
     <section aria-labelledby="results-title">
@@ -669,6 +774,7 @@ export function ResultsReviewScreen() {
                       fixture={fixtureData}
                       hasOfficial={hasOfficial && revision.status !== 'official'}
                       reviewTaskId={reviewTaskFor(tasks.items, revision.id)}
+                      shootout={shootout}
                     />
                   ))}
                 </ul>
@@ -697,6 +803,7 @@ export function ResultsReviewScreen() {
                       mode={hasOfficial ? 'correction' : 'new'}
                       base={official}
                       disputeId={disputeId}
+                      shootout={shootout}
                     />
                   ) : null}
                 </section>

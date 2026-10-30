@@ -67,3 +67,47 @@ export function orderIssues<T extends { severity: keyof typeof SEVERITY_ORDER }>
 ): T[] {
   return [...issues].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
 }
+
+type ReadinessCounts = Schema<'ReadinessCounts'>;
+
+/**
+ * A row of the season readiness summary (`GET /v1/seasons/{id}/readiness`, CMP-01): counts only.
+ * The same rules as one fixture's explanation apply: unknown evidence, offline, a failed refresh
+ * or an evaluation older than the stale threshold never read as ready; blocked and warning stay.
+ */
+export function effectiveCounts(
+  counts: ReadinessCounts,
+  context: {
+    now: Date;
+    evaluatedAt: string;
+    staleThresholdMs: number | null;
+    offline: boolean;
+    refreshFailed: boolean;
+  },
+): EffectiveReadiness {
+  if (counts.status !== 'ready') return { status: counts.status, downgradeReason: null };
+  if (counts.unknownCount > 0) {
+    return {
+      status: 'unknown',
+      downgradeReason: 'Some evidence is unknown, so this fixture is not shown as ready.',
+    };
+  }
+  if (context.offline || context.refreshFailed) {
+    return {
+      status: 'unknown',
+      downgradeReason: 'Readiness cannot be confirmed offline or after a failed refresh.',
+    };
+  }
+  const evaluated = new Date(context.evaluatedAt).getTime();
+  if (
+    context.staleThresholdMs !== null &&
+    Number.isFinite(evaluated) &&
+    context.now.getTime() - evaluated > context.staleThresholdMs
+  ) {
+    return {
+      status: 'unknown',
+      downgradeReason: 'The last evaluation is older than the stale threshold. Re-evaluate.',
+    };
+  }
+  return { status: 'ready', downgradeReason: null };
+}
