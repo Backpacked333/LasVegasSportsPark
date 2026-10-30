@@ -15,9 +15,14 @@ import type { CapabilityId } from '@sportspark/api-client';
 import { usePermissions } from '../../../api/permissions';
 import { StateView } from '../../../ui/StateView';
 
-/** The enrollment actions behind these screens (apps/api enrollment.actions.ts). */
+/**
+ * The actions behind these screens (apps/api enrollment.actions.ts; the staff coverage of a
+ * booking is the workforce read, workforce.actions.ts).
+ */
 export const ACTIONS = {
   readBooking: 'enrollment.read_booking',
+  readSessionBooking: 'enrollment.read_session_booking',
+  viewAssignments: 'workforce.view_assignments',
   requestBooking: 'enrollment.request_booking',
   decideBooking: 'enrollment.decide_booking',
   readPackage: 'enrollment.read_package_entitlement',

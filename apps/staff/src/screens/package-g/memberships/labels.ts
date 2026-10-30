@@ -26,3 +26,14 @@ export const SUSPENSION_STATUS: Record<
   active: { tone: 'warning', label: 'active' },
   ended: { tone: 'neutral', label: 'ended' },
 };
+
+/** A session booking's state (SessionBookingMachine): pending, confirmed, canceled, expired. */
+export const SESSION_BOOKING_STATUS: Record<
+  Schema<'SessionBookingStatus'>,
+  { tone: StatusTone; label: string }
+> = {
+  pending: { tone: 'pending', label: 'pending' },
+  confirmed: { tone: 'success', label: 'confirmed' },
+  canceled: { tone: 'neutral', label: 'canceled' },
+  expired: { tone: 'neutral', label: 'expired' },
+};

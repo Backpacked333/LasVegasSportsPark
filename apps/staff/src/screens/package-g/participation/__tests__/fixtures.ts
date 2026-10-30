@@ -38,6 +38,10 @@ export const REVERSAL_ID = '0192f1a0-0000-7000-8000-0000000002d3';
 export const SESSION_BOOKING_ID = '0192f1a0-0000-7000-8000-0000000002e1';
 export const SESSION_ID = '0192f1a0-0000-7000-8000-0000000002e2';
 export const SUSPENSION_ID = '0192f1a0-0000-7000-8000-0000000002f1';
+export const EVENT_ID = '0192f1a0-0000-7000-8000-0000000003a1';
+export const REQUIREMENT_ID = '0192f1a0-0000-7000-8000-0000000003b1';
+export const ASSIGNMENT_ID = '0192f1a0-0000-7000-8000-0000000003c1';
+export const HOST_ID = '0192f1a0-0000-7000-8000-0000000000b3';
 export const CORRELATION = 'corr-pg-1';
 
 export const ok = (body: unknown): FakeHandler => ({ status: 200, body });
@@ -109,10 +113,87 @@ export function partyBooking(overrides: Partial<Schema<'Booking'>> = {}): Schema
       accessConditions: null,
       hostResponsibilities: 'The host runs games and serves cake.',
     },
+    // Reserved: the occurrence has its scheduling event, which carries the staff requirements.
+    occurrences: [
+      {
+        start: '2026-11-02T02:00:00.000Z',
+        end: '2026-11-02T03:00:00.000Z',
+        eventId: EVENT_ID,
+        resources: [{ id: RESOURCE_A, name: 'Pitch 1' }],
+      },
+    ],
+    // The API sets both when the booking is held, before any payment, and keeps them after.
     basketId: BASKET_ID,
     enrollmentId: ENROLLMENT_ID,
     ...overrides,
   });
+}
+
+/** `GET /assignment-requirements` of a party event: one host, `accepted` of them accepted. */
+export function hostRequirement(
+  coverage: Partial<Schema<'RequirementCoverage'>> = {},
+): Schema<'AssignmentRequirement'> {
+  return {
+    id: REQUIREMENT_ID,
+    facilityId: FACILITY_A,
+    targetType: 'event',
+    targetId: EVENT_ID,
+    offeringId: null,
+    kind: 'supervisor',
+    role: 'party_host',
+    requiredCount: 1,
+    mustBeAccepted: true,
+    requiredQualifications: ['first_aid'],
+    coverage: { accepted: 0, offered: 0, proposed: 0, uncoveredSlots: [1], ...coverage },
+    revision: 1,
+    createdAt: '2026-10-20T17:00:00.000Z',
+  };
+}
+
+/** One host assignment on the party event, in the staff list shape. */
+export function hostAssignment(
+  overrides: Partial<Schema<'StaffAssignment'>> = {},
+): Schema<'StaffAssignment'> {
+  return {
+    id: ASSIGNMENT_ID,
+    facilityId: FACILITY_A,
+    personId: HOST_ID,
+    kind: 'supervisor',
+    targetType: 'event',
+    targetId: EVENT_ID,
+    offeringId: null,
+    schedulingEventId: EVENT_ID,
+    targetTitle: 'Birthday party package',
+    role: 'party_host',
+    slot: 1,
+    engagement: 'regular',
+    status: 'accepted',
+    scheduledStart: '2026-11-02T02:00:00.000Z',
+    scheduledEnd: '2026-11-02T03:00:00.000Z',
+    turnaroundMinutes: 0,
+    committedUntil: '2026-11-02T03:00:00.000Z',
+    replacesAssignmentId: null,
+    offeredAt: '2026-10-21T17:00:00.000Z',
+    respondedAt: '2026-10-21T18:00:00.000Z',
+    acceptedAt: '2026-10-21T18:00:00.000Z',
+    declinedAt: null,
+    declineReason: null,
+    withdrawnAt: null,
+    withdrawnReason: null,
+    completedAt: null,
+    access: {
+      status: 'not_applicable',
+      staffMembershipId: null,
+      from: null,
+      until: null,
+      active: false,
+    },
+    revision: 2,
+    createdAt: '2026-10-21T17:00:00.000Z',
+    updatedAt: '2026-10-21T18:00:00.000Z',
+    availableActions: [],
+    ...overrides,
+  };
 }
 
 export function offering(
@@ -258,6 +339,7 @@ export function personNames(names: Record<string, [given: string, family: string
 export const NAMES = personNames({
   [BOOKER_ID]: ['Rosa', 'Diaz'],
   [MEMBER_ID]: ['Ken', 'Ito'],
+  [HOST_ID]: ['Sam', 'Lee'],
 });
 
 /** Reads every booking screen makes besides the booking itself. */
@@ -303,6 +385,9 @@ export function catalogRoutes(): Record<string, FakeHandler> {
         name: request.params.id === RESOURCE_A ? 'Pitch 1' : 'Pitch 2',
       }),
     'GET /assets/{id}': ok({ id: ASSET_ID, name: 'Bouncy castle' }),
+    // Staff coverage of a booking's events (workforce reads); nothing declared unless a test says.
+    'GET /assignment-requirements': ok([]),
+    'GET /assignments': page([]),
   };
 }
 

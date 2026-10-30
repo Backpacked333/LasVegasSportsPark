@@ -12,7 +12,11 @@
  *   day (the party's length is the package's; a rental's is typed, 15 to 1440 minutes). Only times
  *   where enough resources are free are offered, and exactly the offering's number of resources
  *   must be chosen: everything is reserved together or not at all (partial completion is not
- *   permitted). The API checks every repetition again; RESOURCE_CONFLICT lists what is taken.
+ *   permitted). The API checks every repetition again; RESOURCE_CONFLICT lists what is taken, and
+ *   "Check free times again" clears the refused time and resources so a time that is still free
+ *   must be chosen. A start or resource no longer in the latest free times is never sent.
+ * - On a day when the clocks go back, two starts share a wall-clock time; each is labelled with
+ *   its zone abbreviation (for example 01:00 PDT and 01:00 PST) so the instant is unambiguous.
  * - New bookings need the capability on (DEC-076, DEC-077); the form is not offered while off.
  */
 import { useMemo, useState } from 'react';
@@ -24,6 +28,7 @@ import {
   localTimeOf,
   startOfLocalDay,
   weekdayOfLocalDate,
+  zoneName,
 } from '../../../features/schedule-facilities/time';
 import { useApp } from '../../../providers/AppProviders';
 import { Button } from '../../../ui/Button';
@@ -107,6 +112,21 @@ function startTimes(availability: Availability): string[] {
 
 function freeAt(availability: Availability, start: string) {
   return availability.resources.filter((r) => r.freeIntervals.some((s) => s.start === start));
+}
+
+/**
+ * "18:00", or "01:00 PDT" and "01:00 PST" when two starts share a wall-clock time (the hour the
+ * clocks go back, SPK-SCHED-008).
+ */
+function startLabels(starts: readonly string[], timeZone: string): Map<string, string> {
+  const local = starts.map((s) => localTimeOf(s, timeZone));
+  return new Map(
+    starts.map((s, index) => {
+      const time = local[index] as string;
+      const repeated = local.filter((t) => t === time).length > 1;
+      return [s, repeated ? `${time} ${zoneName(s, timeZone)}` : time];
+    }),
+  );
 }
 
 export function NewBooking({ kind }: { kind: BookingKind }) {
@@ -198,10 +218,19 @@ export function NewBooking({ kind }: { kind: BookingKind }) {
     const next: Record<string, string> = {};
     if (!offering) next.offeringId = `Choose the ${words.one} offering.`;
     if (!booker) next.bookerPersonId = 'Choose who the booking is for.';
+    if (!date) next.date = 'Choose the date.';
     if (kind === 'rental' && !lengthValid) next.end = 'Enter a length from 15 to 1440 minutes.';
-    if (!start) next.start = 'Choose a free start time.';
-    const needed = availability.data?.resourceCount ?? 0;
-    if (start && resourceIds.length !== needed) {
+    // Only a start and resources the latest free times still offer are sent.
+    const free = availability.data;
+    const offered = free ? startTimes(free) : [];
+    if (!start || !offered.includes(start)) next.start = 'Choose a free start time.';
+    const needed = free?.resourceCount ?? 0;
+    const freeIds = free && start ? freeAt(free, start).map((r) => r.resourceId) : [];
+    if (
+      start &&
+      !next.start &&
+      (resourceIds.length !== needed || resourceIds.some((id) => !freeIds.includes(id)))
+    ) {
       next.resourceIds = `Choose exactly ${plural(needed, 'resource')}.`;
     }
     if (kind === 'party' && !/^\d+$/.test(guests)) next.guestCount = 'Enter the number of guests.';
@@ -299,6 +328,7 @@ export function NewBooking({ kind }: { kind: BookingKind }) {
                 setResourceIds([]);
               }}
               hint="The facility's local date; free times are shown for that day."
+              error={fieldError('date')}
             />
             {kind === 'rental' ? (
               <TextField
@@ -326,107 +356,110 @@ export function NewBooking({ kind }: { kind: BookingKind }) {
                 }}
                 unavailableOffline={['booking']}
               >
-                {(a) => (
-                  <>
-                    <fieldset
-                      className="field fieldset"
-                      aria-invalid={fieldError('start') ? true : undefined}
-                    >
-                      <legend>
-                        Start ({a.timezone}, {a.durationMinutes} minutes)
-                        <span className="field-required"> (required)</span>
-                      </legend>
-                      {startTimes(a).map((s) => (
-                        <label key={s} className="choice">
-                          <input
-                            type="radio"
-                            name="booking-start"
-                            checked={start === s}
-                            onChange={() => {
-                              setStart(s);
-                              const free = freeAt(a, s);
-                              setResourceIds(
-                                free.length === a.resourceCount
-                                  ? free.map((r) => r.resourceId)
-                                  : [],
-                              );
-                            }}
-                          />
-                          {localTimeOf(s, a.timezone)}
-                        </label>
-                      ))}
-                      {fieldError('start') ? (
-                        <span className="error-text">{fieldError('start')}</span>
-                      ) : null}
-                    </fieldset>
-                    {start ? (
-                      <fieldset className="field fieldset">
+                {(a) => {
+                  const labels = startLabels(startTimes(a), a.timezone);
+                  return (
+                    <>
+                      <fieldset
+                        className="field fieldset"
+                        aria-invalid={fieldError('start') ? true : undefined}
+                      >
                         <legend>
-                          Resources: exactly {plural(a.resourceCount, 'resource')}, reserved
-                          together
+                          Start ({a.timezone}, {a.durationMinutes} minutes)
+                          <span className="field-required"> (required)</span>
                         </legend>
-                        {freeAt(a, start).map((r) => (
-                          <label key={r.resourceId} className="choice">
+                        {startTimes(a).map((s) => (
+                          <label key={s} className="choice">
                             <input
-                              type="checkbox"
-                              checked={resourceIds.includes(r.resourceId)}
-                              onChange={(event) =>
-                                setResourceIds((ids) =>
-                                  event.target.checked
-                                    ? [...ids, r.resourceId]
-                                    : ids.filter((id) => id !== r.resourceId),
-                                )
-                              }
+                              type="radio"
+                              name="booking-start"
+                              checked={start === s}
+                              onChange={() => {
+                                setStart(s);
+                                const free = freeAt(a, s);
+                                setResourceIds(
+                                  free.length === a.resourceCount
+                                    ? free.map((r) => r.resourceId)
+                                    : [],
+                                );
+                              }}
                             />
-                            {r.name ?? `Resource ${r.resourceId.slice(0, 8)}`}
+                            {labels.get(s)}
                           </label>
                         ))}
-                        {fieldError('resourceIds') ? (
-                          <span className="error-text">{fieldError('resourceIds')}</span>
+                        {fieldError('start') ? (
+                          <span className="error-text">{fieldError('start')}</span>
                         ) : null}
                       </fieldset>
-                    ) : null}
-                    {kind === 'rental' && start ? (
-                      <fieldset className="field fieldset">
-                        <legend>Repeat</legend>
-                        <label className="choice">
-                          <input
-                            type="checkbox"
-                            checked={repeat}
-                            onChange={(event) => setRepeat(event.target.checked)}
-                          />
-                          Repeat weekly on{' '}
-                          {WEEKDAY_NAMES[weekdayOfLocalDate(date)] ?? 'the same day'}s
-                        </label>
-                        {repeat ? (
-                          <>
-                            <SelectField
-                              label="How often"
-                              required
-                              value={repeatEvery}
-                              onChange={setRepeatEvery}
-                              placeholder="Choose"
-                              options={[1, 2, 3, 4].map((n) => ({
-                                value: String(n),
-                                label: n === 1 ? 'Every week' : `Every ${n} weeks`,
-                              }))}
-                              error={fieldError('recurrence')}
+                      {start ? (
+                        <fieldset className="field fieldset">
+                          <legend>
+                            Resources: exactly {plural(a.resourceCount, 'resource')}, reserved
+                            together
+                          </legend>
+                          {freeAt(a, start).map((r) => (
+                            <label key={r.resourceId} className="choice">
+                              <input
+                                type="checkbox"
+                                checked={resourceIds.includes(r.resourceId)}
+                                onChange={(event) =>
+                                  setResourceIds((ids) =>
+                                    event.target.checked
+                                      ? [...ids, r.resourceId]
+                                      : ids.filter((id) => id !== r.resourceId),
+                                  )
+                                }
+                              />
+                              {r.name ?? `Resource ${r.resourceId.slice(0, 8)}`}
+                            </label>
+                          ))}
+                          {fieldError('resourceIds') ? (
+                            <span className="error-text">{fieldError('resourceIds')}</span>
+                          ) : null}
+                        </fieldset>
+                      ) : null}
+                      {kind === 'rental' && start ? (
+                        <fieldset className="field fieldset">
+                          <legend>Repeat</legend>
+                          <label className="choice">
+                            <input
+                              type="checkbox"
+                              checked={repeat}
+                              onChange={(event) => setRepeat(event.target.checked)}
                             />
-                            <TextField
-                              label="Number of occurrences"
-                              type="number"
-                              required
-                              value={count}
-                              onChange={setCount}
-                              hint="2 to 52, including the first; the API checks every one."
-                              error={fieldError('recurrence.count')}
-                            />
-                          </>
-                        ) : null}
-                      </fieldset>
-                    ) : null}
-                  </>
-                )}
+                            Repeat weekly on{' '}
+                            {WEEKDAY_NAMES[weekdayOfLocalDate(date)] ?? 'the same day'}s
+                          </label>
+                          {repeat ? (
+                            <>
+                              <SelectField
+                                label="How often"
+                                required
+                                value={repeatEvery}
+                                onChange={setRepeatEvery}
+                                placeholder="Choose"
+                                options={[1, 2, 3, 4].map((n) => ({
+                                  value: String(n),
+                                  label: n === 1 ? 'Every week' : `Every ${n} weeks`,
+                                }))}
+                                error={fieldError('recurrence')}
+                              />
+                              <TextField
+                                label="Number of occurrences"
+                                type="number"
+                                required
+                                value={count}
+                                onChange={setCount}
+                                hint="2 to 52, including the first; the API checks every one."
+                                error={fieldError('recurrence.count')}
+                              />
+                            </>
+                          ) : null}
+                        </fieldset>
+                      ) : null}
+                    </>
+                  );
+                }}
               </QueryBoundary>
             ) : null}
             {kind === 'party' ? (
@@ -456,7 +489,10 @@ export function NewBooking({ kind }: { kind: BookingKind }) {
               error={create.error}
               onRetry={submit}
               onReload={() => {
+                // The refused time may be gone: staff choose again from the fresh free times.
                 create.reset();
+                setStart('');
+                setResourceIds([]);
                 void availability.refetch();
               }}
               reloadLabel="Check free times again"

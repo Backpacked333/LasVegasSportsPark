@@ -115,14 +115,28 @@ function PackageOfferings() {
   );
 }
 
-function SessionOfRedemption({ id, zone }: { id: string; zone: string | null }) {
+/**
+ * The session a credit was used for, in the session's own facility zone: a package's eligible
+ * sessions may be at another facility than the package offering (SPK-SCHED-008). Until (or
+ * unless) that offering is readable the time is shown in UTC and says so.
+ */
+function SessionOfRedemption({ id }: { id: string }) {
   const booking = useApiQuery({
     path: '/session-bookings/{id}',
     request: { path: { id } },
     staleTime: 60_000,
   });
-  if (booking.data) {
+  const sessionOffering = useApiQuery({
+    path: '/offerings/{id}',
+    request: { path: { id: booking.data?.offeringId ?? '' } },
+    enabled: booking.data !== undefined,
+    staleTime: 5 * 60_000,
+  });
+  // The zone is known once the session's offering read settles (read or refused).
+  const zoneSettled = sessionOffering.data !== undefined || sessionOffering.error !== null;
+  if (booking.data && zoneSettled) {
     const b = booking.data;
+    const zone = sessionOffering.data?.facility.timezone ?? null;
     return (
       <span>
         {formatRange(b.scheduledStart, b.scheduledEnd, zone)}, booking {b.status}
@@ -250,7 +264,7 @@ function Redemptions({
               {formatInstant(r.redeemedAt, zone)}
               {r.reason ? `: ${r.reason}` : ''}
             </span>
-            <SessionOfRedemption id={r.sessionBookingId} zone={zone} />
+            <SessionOfRedemption id={r.sessionBookingId} />
             {r.kind === 'redeem' && reversed.has(r.id) ? (
               <span className="caption">Reversed; the credit was returned.</span>
             ) : null}

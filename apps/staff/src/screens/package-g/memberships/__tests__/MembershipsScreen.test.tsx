@@ -5,7 +5,9 @@
  * member's suspension entered in facility time and ended with its revision (SUSPENSION_OVERLAP),
  * an included session booked with the membership (MEMBERSHIP_SESSIONS_USED), renewal into a
  * basket with nothing charged until checkout (CAPABILITY_DISABLED reads turned off), permission
- * restrictions and the not-found presentation.
+ * restrictions and the not-found presentation. The sessions booked with the membership (each in
+ * its own offering's zone), a partly filled "until" said at the field, and "Try again" after no
+ * answer resending the suspension with the same key and body (§4.9).
  */
 import {
   capabilityDisabledBody,
@@ -39,6 +41,7 @@ const ACTIONS = [
   'enrollment.manage_membership_suspension',
   'enrollment.renew_membership',
   'enrollment.book_session',
+  'enrollment.read_session_booking',
 ];
 
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
@@ -51,6 +54,7 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
     ]),
     'GET /enrollments': page([enrollment()]),
     'GET /enrollments/{id}': ok(enrollment()),
+    'GET /session-bookings': ok([]),
     ...extra,
   };
 }
@@ -318,6 +322,17 @@ describe('SCR-S-53 Memberships', () => {
   });
 
   it('while memberships are off, renewal and included sessions are not offered; suspensions stay available', async () => {
+    const on = createTestApp({ routes: routes() });
+    const first = render(on.at(DETAIL));
+    // The booking button needs what the membership includes, read from its definition.
+    const includesOn = (await screen.findByRole('heading', { name: 'What it includes' }))
+      .parentElement as HTMLElement;
+    expect(await within(includesOn).findByText(/2 sessions per week/)).toBeInTheDocument();
+    expect(
+      within(includesOn).getByRole('button', { name: 'Book an included session…' }),
+    ).toBeInTheDocument();
+    first.unmount();
+
     const app = createTestApp({
       routes: routes({ 'GET /me/permissions': mePermissions({ actions: ACTIONS }) }),
     });
@@ -325,6 +340,9 @@ describe('SCR-S-53 Memberships', () => {
     expect(
       await screen.findByText('Renewals are not taken while memberships are turned off.'),
     ).toBeInTheDocument();
+    const includes = screen.getByRole('heading', { name: 'What it includes' })
+      .parentElement as HTMLElement;
+    expect(await within(includes).findByText(/2 sessions per week/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Book an included session…' })).toBeNull();
     expect(screen.getByRole('form', { name: 'Suspend the membership' })).toBeInTheDocument();
     expect(
@@ -362,5 +380,121 @@ describe('SCR-S-53 Memberships', () => {
     });
     render(other.at(DETAIL));
     expect(await screen.findByText('This enrollment is not a membership.')).toBeInTheDocument();
+  });
+  it('lists the sessions booked with the membership, each in its own offering’s zone, and what a cancellation did', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /session-bookings': ok([
+          sessionBooking({
+            entitlementBasis: 'membership',
+            membershipEnrollmentId: MEMBERSHIP_ENROLLMENT_ID,
+            packageEntitlementId: null,
+          }),
+          sessionBooking({
+            id: '0192f1a0-0000-7000-8000-0000000002e9',
+            status: 'canceled',
+            entitlementBasis: 'membership',
+            membershipEnrollmentId: MEMBERSHIP_ENROLLMENT_ID,
+            packageEntitlementId: null,
+            creditDisposition: 'returned',
+            scheduledStart: '2026-10-24T01:00:00.000Z',
+            scheduledEnd: '2026-10-24T02:30:00.000Z',
+          }),
+          // A package booking of the same member is not this membership's.
+          sessionBooking({ id: '0192f1a0-0000-7000-8000-0000000002ea' }),
+        ]),
+      }),
+    });
+    render(app.at(DETAIL));
+    const list = await screen.findByRole('list', { name: 'Sessions booked with this membership' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(await within(list).findAllByText('Friday pickup')).toHaveLength(2);
+    expect(within(list).getByText(/Fri, Oct 16, 18:00 to 19:30 PDT/)).toBeInTheDocument();
+    expect(within(list).getByText('canceled')).toBeInTheDocument();
+    expect(within(list).getByText('credit returned')).toBeInTheDocument();
+    expect(
+      app.fake.requests.find((r) => r.route === '/session-bookings' && r.method === 'GET')?.query,
+    ).toEqual({ participantPersonId: MEMBER_ID });
+    expect(
+      screen.getByText(/the count used against each period's limit and earlier suspensions/),
+    ).toBeInTheDocument();
+  });
+
+  it('no session booked with the membership reads empty; without the read permission it is not available to you', async () => {
+    const app = createTestApp({ routes: routes() });
+    const first = render(app.at(DETAIL));
+    expect(await screen.findByText('No session booked with this membership')).toBeInTheDocument();
+    first.unmount();
+    const noRead = createTestApp({
+      routes: routes({
+        'GET /me/permissions': mePermissions({
+          enabled: ['memberships'],
+          actions: ACTIONS.filter((a) => a !== 'enrollment.read_session_booking'),
+        }),
+      }),
+    });
+    render(noRead.at(DETAIL));
+    expect(
+      await screen.findByText(/Reading session bookings is not available to you/),
+    ).toHaveTextContent('enrollment.read_session_booking');
+    expect(noRead.fake.requests.some((r) => r.route === '/session-bookings')).toBe(false);
+  });
+
+  it('a partly filled "Suspended until" is said at its field and nothing is sent', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: routes() });
+    render(app.at(DETAIL));
+    const form = await screen.findByRole('form', { name: 'Suspend the membership' });
+    setLocal(
+      within(form).getByRole('group', { name: 'Suspended from (America/Los_Angeles)' }),
+      '2026-11-10',
+      '00:00',
+    );
+    const until = within(form).getByRole('group', {
+      name: 'Suspended until (optional; leave empty until ended) (America/Los_Angeles)',
+    });
+    fireEvent.change(within(until).getByLabelText('Date'), { target: { value: '2026-11-20' } });
+    await user.type(within(form).getByLabelText(/^Reason for suspending/), 'Injury');
+    await user.click(within(form).getByRole('button', { name: 'Suspend the membership' }));
+    expect(within(until).getByRole('alert')).toHaveTextContent('Enter a date and a time.');
+    expect(within(until).getByLabelText('Time')).toHaveAttribute('aria-invalid', 'true');
+    expect(
+      app.fake.requests.some((r) => r.route === '/enrollments/{id}/membership-suspensions'),
+    ).toBe(false);
+  });
+
+  it('§4.9: a suspension after a lost connection reads "Outcome not known yet"; Try again resends the same key and body', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /enrollments/{id}/membership-suspensions': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('connection dropped');
+          return fakeResponse(201, suspension());
+        },
+      }),
+    });
+    render(app.at(DETAIL));
+    const form = await screen.findByRole('form', { name: 'Suspend the membership' });
+    setLocal(
+      within(form).getByRole('group', { name: 'Suspended from (America/Los_Angeles)' }),
+      '2026-11-10',
+      '00:00',
+    );
+    await user.type(within(form).getByLabelText(/^Reason for suspending/), 'Injury');
+    await user.click(within(form).getByRole('button', { name: 'Suspend the membership' }));
+    const unknown = await within(form).findByTestId('state-outcome-unknown');
+    expect(within(unknown).getByText('Outcome not known yet')).toBeInTheDocument();
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(
+      await screen.findByRole('list', { name: 'Suspensions recorded here' }),
+    ).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter(
+      (r) => r.route === '/enrollments/{id}/membership-suspensions',
+    );
+    expect(second?.body).toEqual({ from: '2026-11-10T08:00:00.000Z', reason: 'Injury' });
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 });

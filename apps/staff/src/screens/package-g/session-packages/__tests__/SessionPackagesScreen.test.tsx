@@ -4,7 +4,9 @@
  * credits, expiry in facility time and filters, the redemption history with the session and what a
  * cancellation did with the credit, reversal with a reason (REDEMPTION_ALREADY_REVERSED), a
  * redemption that lost the race for the last credit (PACKAGE_CREDITS_EXHAUSTED), the package
- * definitions read-only, permission restrictions and the empty state.
+ * definitions read-only, permission restrictions and the empty state. A redeemed session at
+ * another facility is shown in that facility's zone, and "Try again" after no answer resends a
+ * reversal or a redemption with the same key and body (§4.9).
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -23,6 +25,7 @@ import {
   apiError,
   entitlement,
   entitlementRoutes,
+  offering,
   ok,
   packageOffering,
   page,
@@ -319,5 +322,106 @@ describe('SCR-S-54 Session packages', () => {
       await screen.findByText(/Reading session packages is not available to you/),
     ).toHaveTextContent('enrollment.read_package_entitlement');
     expect(noRole.fake.requests.some((r) => r.route === '/package-entitlements')).toBe(false);
+  });
+  it('SPK-SCHED-008: a session redeemed at another facility is shown in that facility’s zone', async () => {
+    const user = userEvent.setup();
+    const base = entitlementRoutes()['GET /offerings/{id}'] as Extract<
+      FakeHandler,
+      (...args: never[]) => unknown
+    >;
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}': (request) =>
+          request.params.id === PICKUP_OFFERING_ID
+            ? fakeResponse(200, {
+                ...offering({
+                  id: PICKUP_OFFERING_ID,
+                  kind: 'pickup',
+                  name: 'Friday pickup (east)',
+                  facility: {
+                    id: '0192f1a0-0000-7000-8000-00000000fa09',
+                    name: 'East Park',
+                    timezone: 'America/New_York',
+                  },
+                }),
+                staff: null,
+              })
+            : base(request),
+      }),
+    });
+    render(app.at(PATH));
+    const item = await packageItem();
+    await user.click(within(item).getByRole('button', { name: 'Show redemptions (1)' }));
+    const redemptions = within(item).getByRole('list', { name: 'Redemptions' });
+    // 01:00 UTC is 21:00 in New York (EDT); the package offering's zone would say 18:00 PDT.
+    expect(
+      await within(redemptions).findByText(/Fri, Oct 16, 21:00 to 22:30 EDT, booking confirmed/),
+    ).toBeInTheDocument();
+    expect(within(redemptions).queryByText(/18:00 to 19:30 PDT/)).toBeNull();
+  });
+
+  it('§4.9: a reversal after a lost connection reads "Outcome not known yet"; Try again resends the same key and body', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /package-redemptions/{id}/reverse': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('connection dropped');
+          return fakeResponse(200, entitlement({ redeemedCount: 2, remainingCredits: 8 }));
+        },
+      }),
+    });
+    render(app.at(PATH));
+    const item = await packageItem();
+    await user.click(within(item).getByRole('button', { name: 'Show redemptions (1)' }));
+    await user.click(within(item).getByRole('button', { name: /^Reverse the redemption of/ }));
+    const form = within(item).getByRole('form', { name: /^Reverse the redemption of/ });
+    await user.type(within(form).getByLabelText(/^Reason for reversing/), 'Session canceled');
+    await user.click(within(form).getByRole('button', { name: 'Reverse the redemption' }));
+    const unknown = await within(form).findByTestId('state-outcome-unknown');
+    expect(within(unknown).getByText('Outcome not known yet')).toBeInTheDocument();
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(await within(item).findByText('Credit returned: 8 credits left')).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter(
+      (r) => r.route === '/package-redemptions/{id}/reverse',
+    );
+    expect(second?.body).toEqual({ reason: 'Session canceled' });
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('§4.9: a redemption after a lost connection is retried with the same key, so one credit is used once', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}/sessions': ok([session()]),
+        'POST /session-bookings': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('connection dropped');
+          return fakeResponse(201, sessionBooking());
+        },
+      }),
+    });
+    render(app.at(PATH));
+    const item = await packageItem();
+    await user.click(within(item).getByRole('button', { name: 'Book a session with a credit…' }));
+    const form = within(item).getByRole('form', { name: 'Book a session with a credit' });
+    await user.click(await within(form).findByRole('radio', { name: 'Friday pickup' }));
+    await user.click(
+      await within(form).findByRole('radio', { name: /Fri, Oct 30, 18:00 to 19:30 PDT/ }),
+    );
+    await user.click(within(form).getByRole('button', { name: 'Book the session' }));
+    const unknown = await within(form).findByTestId('state-outcome-unknown');
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(
+      await within(item).findByText('Session booked (confirmed); one credit used'),
+    ).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter(
+      (r) => r.method === 'POST' && r.route === '/session-bookings',
+    );
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 });

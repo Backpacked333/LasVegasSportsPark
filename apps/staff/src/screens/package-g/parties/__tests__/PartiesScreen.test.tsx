@@ -4,7 +4,11 @@
  * cancellation of a paid party with the previewed consequence bound to the command
  * (acceptedConsequence, CONSEQUENCE_CHANGED and Preview again), a held party whose checkout is in
  * progress (no cancellation offered, the outcome never assumed), the party package's definition
- * read-only (length, guest limit, equipment, host), and booking a party with its guests.
+ * read-only (length, guest limit, equipment, host), and booking a party with its guests. The staff
+ * coverage of the party's event (requirements, uncovered host slot, accepted host by name), the
+ * payment never called paid for a hold that ended, a held party whose checkout finished or cannot
+ * be checked (no cancellation offered), the basket re-read before the cancel is sent, and "Try
+ * again" after no answer resending the same idempotency key and body (§4.9).
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -15,6 +19,7 @@ import {
   BASKET_ID,
   BOOKER_ID,
   ENROLLMENT_ID,
+  EVENT_ID,
   PARTY_BOOKING_ID,
   PARTY_DEFINITION_ID,
   PARTY_OFFERING_ID,
@@ -23,6 +28,8 @@ import {
   booking,
   bookingTerms,
   catalogRoutes,
+  hostAssignment,
+  hostRequirement,
   offering,
   ok,
   page,
@@ -33,6 +40,7 @@ const ACTIONS = [
   'enrollment.read_booking',
   'enrollment.request_booking',
   'enrollment.decide_booking',
+  'workforce.view_assignments',
 ];
 
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
@@ -107,15 +115,38 @@ describe('SCR-S-52 Parties', () => {
 
   it('SPK-COND-003: a paid party waits for its host and is never shown as confirmed', async () => {
     const app = createTestApp({
-      routes: routes({ 'GET /enrollments/{id}/cancellation-preview': ok(preview()) }),
+      routes: routes({
+        'GET /enrollments/{id}/cancellation-preview': ok(preview()),
+        // The host was offered the slot but has not accepted: offered never counts as covered.
+        'GET /assignment-requirements': ok([hostRequirement({ offered: 1 })]),
+        'GET /assignments': page([hostAssignment({ status: 'offered', acceptedAt: null })]),
+      }),
     });
     render(app.at(DETAIL));
     const staffing = await screen.findByRole('group', { name: 'Staffing' });
     expect(within(staffing).getByText('Waiting for staff')).toBeInTheDocument();
     expect(within(staffing).getByText(/including the host/)).toBeInTheDocument();
+    const host = await within(staffing).findByRole('list', { name: 'Staff requirements' });
+    expect(within(host).getByText(/Supervisor: 1 party host/)).toBeInTheDocument();
+    expect(within(host).getByText('1 slot uncovered')).toBeInTheDocument();
     expect(
-      within(staffing).getByRole('link', { name: 'Staff assignments and coverage' }),
+      within(host).getByText(
+        /Offered 1 and proposed 0 do not count as covered\. Uncovered: slot 1\./,
+      ),
+    ).toBeInTheDocument();
+    expect(await within(host).findByText('Nobody has accepted yet.')).toBeInTheDocument();
+    expect(within(host).queryByText(/Sam Lee/)).toBeNull();
+    expect(
+      within(staffing).getByRole('link', {
+        name: 'Assign or replace staff in Staff assignments and coverage',
+      }),
     ).toHaveAttribute('href', '/staff');
+    const coverageRead = app.fake.requests.find((r) => r.route === '/assignment-requirements');
+    expect(coverageRead?.query).toEqual({ targetType: 'event', targetId: EVENT_ID });
+    expect(app.fake.requests.find((r) => r.route === '/assignments')?.query).toMatchObject({
+      targetType: 'event',
+      targetId: EVENT_ID,
+    });
     expect(screen.getByText('Waiting for staff acceptance')).toBeInTheDocument();
     expect(screen.queryByText('confirmed', { selector: '.badge-label' })).toBeNull();
     const facts = screen.getByLabelText('Party booking');
@@ -209,11 +240,7 @@ describe('SCR-S-52 Parties', () => {
     const app = createTestApp({
       routes: routes({
         'GET /bookings/{id}': ok(
-          partyBooking({
-            status: 'held',
-            outstanding: ['payment', 'staffing'],
-            enrollmentId: null,
-          }),
+          partyBooking({ status: 'held', outstanding: ['payment', 'staffing'] }),
         ),
         'GET /baskets/{id}': ok({ id: BASKET_ID, status: 'checking_out' }),
       }),
@@ -237,9 +264,7 @@ describe('SCR-S-52 Parties', () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
-        'GET /bookings/{id}': ok(
-          partyBooking({ status: 'held', outstanding: ['payment'], enrollmentId: null }),
-        ),
+        'GET /bookings/{id}': ok(partyBooking({ status: 'held', outstanding: ['payment'] })),
         'GET /baskets/{id}': ok({ id: BASKET_ID, status: 'held' }),
         'POST /bookings/{id}/cancel': ok(partyBooking({ status: 'canceled', outstanding: [] })),
       }),
@@ -296,11 +321,7 @@ describe('SCR-S-52 Parties', () => {
         }),
         'POST /bookings': {
           status: 201,
-          body: partyBooking({
-            status: 'held',
-            outstanding: ['payment', 'staffing'],
-            enrollmentId: null,
-          }),
+          body: partyBooking({ status: 'held', outstanding: ['payment', 'staffing'] }),
         },
       }),
     });
@@ -406,5 +427,219 @@ describe('SCR-S-52 Parties', () => {
     expect(
       within(form).getAllByText('This package takes at most 20 guests.').length,
     ).toBeGreaterThan(0);
+  });
+  it('SPK-STAFF-002: a confirmed party names the host who accepted, by name', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings/{id}': ok(partyBooking({ status: 'confirmed', outstanding: [] })),
+        'GET /enrollments/{id}/cancellation-preview': ok(preview()),
+        'GET /assignment-requirements': ok([hostRequirement({ accepted: 1, uncoveredSlots: [] })]),
+        'GET /assignments': page([
+          hostAssignment(),
+          // A withdrawn earlier offer is history, never shown as who staffs it.
+          hostAssignment({
+            id: '0192f1a0-0000-7000-8000-0000000003c2',
+            personId: BOOKER_ID,
+            status: 'withdrawn',
+          }),
+        ]),
+      }),
+    });
+    render(app.at(DETAIL));
+    const staffing = await screen.findByRole('group', { name: 'Staffing' });
+    expect(within(staffing).getByText('Staffed')).toBeInTheDocument();
+    const coverage = await within(staffing).findByRole('list', { name: 'Staff requirements' });
+    expect(within(coverage).getByText('Covered')).toBeInTheDocument();
+    expect(await within(coverage).findByText('Accepted: Sam Lee (slot 1)')).toBeInTheDocument();
+    expect(within(coverage).queryByText(/Rosa Diaz/)).toBeNull();
+    expect(
+      within(staffing).getByRole('article', { name: /^Staff for Sun, Nov 1, 18:00 to 19:00 PST/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('staff coverage without workforce.view_assignments reads not available to you, and a refused read is not available', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': mePermissions({
+          enabled: ['parties'],
+          actions: ACTIONS.filter((a) => a !== 'workforce.view_assignments'),
+        }),
+        'GET /enrollments/{id}/cancellation-preview': ok(preview()),
+      }),
+    });
+    const first = render(app.at(DETAIL));
+    const staffing = await screen.findByRole('group', { name: 'Staffing' });
+    expect(within(staffing).getByTestId('state-unavailable')).toHaveTextContent(
+      'Staff coverage is not available to you at this facility',
+    );
+    expect(within(staffing).getByTestId('state-unavailable')).toHaveTextContent(
+      'workforce.view_assignments',
+    );
+    expect(app.fake.requests.some((r) => r.route === '/assignment-requirements')).toBe(false);
+    first.unmount();
+
+    const refused = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}/cancellation-preview': ok(preview()),
+        'GET /assignment-requirements': apiError(403, 'ACCESS_DENIED'),
+        'GET /assignments': apiError(403, 'ACCESS_DENIED'),
+      }),
+    });
+    render(refused.at(DETAIL));
+    const article = await screen.findByRole('article', { name: /^Staff for / });
+    expect(await within(article).findByTestId('state-unavailable')).toHaveTextContent(
+      'Not available',
+    );
+  });
+
+  it('SPK-PAY-007: a hold that expired is never shown as paid, though its enrollment is linked', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings/{id}': ok(
+          partyBooking({ status: 'expired', outstanding: [], endReason: 'hold_expired' }),
+        ),
+      }),
+    });
+    render(app.at(DETAIL));
+    const payment = await screen.findByRole('group', { name: 'Payment' });
+    expect(payment).toHaveTextContent('The hold ended before it was paid; nothing was charged.');
+    expect(payment).not.toHaveTextContent(/Paid/);
+    expect(within(payment).getByRole('link', { name: /^enrollment / })).toHaveAttribute(
+      'href',
+      `/registrations/enrollments/${ENROLLMENT_ID}`,
+    );
+    expect(screen.queryByRole('form', { name: 'Cancel the party' })).toBeNull();
+  });
+
+  it('a paid party says it is paid through its enrollment', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /enrollments/{id}/cancellation-preview': ok(preview()) }),
+    });
+    render(app.at(DETAIL));
+    expect(await screen.findByRole('group', { name: 'Payment' })).toHaveTextContent(
+      'Paid through its enrollment',
+    );
+  });
+
+  it('a held party whose checkout finished offers no cancellation and reloads the booking', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings/{id}': () => {
+          reads += 1;
+          return fakeResponse(200, partyBooking({ status: 'held', outstanding: ['payment'] }));
+        },
+        'GET /baskets/{id}': ok({ id: BASKET_ID, status: 'fulfilled' }),
+      }),
+    });
+    render(app.at(DETAIL));
+    const finished = await screen.findByRole('group', { name: 'Checkout finished' });
+    expect(within(finished).getByText('Checkout finished (basket fulfilled)')).toBeInTheDocument();
+    expect(within(finished).getByText(/the payment may have completed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing has been paid/)).toBeNull();
+    expect(screen.queryByRole('form', { name: 'Cancel the party' })).toBeNull();
+    const before = reads;
+    await user.click(within(finished).getByRole('button', { name: 'Reload the booking' }));
+    await waitFor(() => expect(reads).toBeGreaterThan(before));
+  });
+
+  it('a held party whose basket cannot be read offers no cancellation, since a checkout may be in progress', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings/{id}': ok(partyBooking({ status: 'held', outstanding: ['payment'] })),
+        'GET /baskets/{id}': apiError(404, 'NOT_FOUND'),
+      }),
+    });
+    render(app.at(DETAIL));
+    const unknown = await screen.findByRole('group', { name: 'Checkout state unknown' });
+    expect(unknown).toHaveTextContent('canceling is not offered');
+    expect(
+      within(unknown).getByRole('link', { name: 'Open the checkout in assisted registration' }),
+    ).toHaveAttribute('href', `/registrations/assisted/${BASKET_ID}`);
+    expect(screen.queryByRole('form', { name: 'Cancel the party' })).toBeNull();
+  });
+
+  it('the basket is read again before the cancel is sent: a checkout that started meanwhile stops it', async () => {
+    const user = userEvent.setup();
+    let basketReads = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings/{id}': ok(partyBooking({ status: 'held', outstanding: ['payment'] })),
+        'GET /baskets/{id}': () => {
+          basketReads += 1;
+          return fakeResponse(200, {
+            id: BASKET_ID,
+            status: basketReads === 1 ? 'held' : 'checking_out',
+          });
+        },
+        'POST /bookings/{id}/cancel': ok(partyBooking({ status: 'canceled', outstanding: [] })),
+      }),
+    });
+    render(app.at(DETAIL));
+    const form = await screen.findByRole('form', { name: 'Cancel the party' });
+    await user.type(within(form).getByLabelText(/^Reason for canceling/), 'Changed plans');
+    await user.click(within(form).getByRole('button', { name: 'Cancel the party' }));
+    expect(await screen.findByRole('group', { name: 'Checkout in progress' })).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: 'Cancel the party' })).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/bookings/{id}/cancel')).toBe(false);
+  });
+
+  it('CHECKOUT_IN_PROGRESS: a cancel the API refuses during checkout reads in words with Reload the booking', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings/{id}': ok(partyBooking({ status: 'held', outstanding: ['payment'] })),
+        'GET /baskets/{id}': ok({ id: BASKET_ID, status: 'held' }),
+        'POST /bookings/{id}/cancel': apiError(409, 'RESOURCE_CONFLICT', {
+          message: 'A checkout of this booking is in progress.',
+          nextAction: 'reload_current_state',
+          details: { code: 'CHECKOUT_IN_PROGRESS' },
+        }),
+      }),
+    });
+    render(app.at(DETAIL));
+    const form = await screen.findByRole('form', { name: 'Cancel the party' });
+    await user.type(within(form).getByLabelText(/^Reason for canceling/), 'Changed plans');
+    await user.click(within(form).getByRole('button', { name: 'Cancel the party' }));
+    expect(
+      await within(form).findByText('Error code: RESOURCE_CONFLICT. Reference: corr-pg-1'),
+    ).toBeInTheDocument();
+    expect(
+      within(form).getByText(/a payment may be on its way, so nothing was canceled/),
+    ).toBeInTheDocument();
+    expect(within(form).getByRole('button', { name: 'Reload the booking' })).toBeInTheDocument();
+  });
+
+  it('§4.9: after no answer the cancel reads "Outcome not known yet" and Try again resends the same key and body', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}/cancellation-preview': ok(preview('none')),
+        'POST /bookings/{id}/cancel': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('connection dropped');
+          return fakeResponse(200, partyBooking({ status: 'canceled', outstanding: [] }));
+        },
+      }),
+    });
+    render(app.at(DETAIL));
+    const form = await screen.findByRole('form', { name: 'Cancel the party' });
+    await user.type(within(form).getByLabelText(/^Reason for canceling/), 'Family emergency');
+    await user.click(within(form).getByRole('button', { name: 'Cancel the party' }));
+    const unknown = await within(form).findByTestId('state-outcome-unknown');
+    expect(within(unknown).getByText('Outcome not known yet')).toBeInTheDocument();
+    expect(screen.queryByText(/^Canceled: now/)).toBeNull();
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Canceled: now canceled')).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter((r) => r.route === '/bookings/{id}/cancel');
+    expect(second?.body).toEqual(first?.body);
+    expect(first?.body).toEqual({
+      reason: 'Family emergency',
+      expectedRevision: 3,
+      acceptedConsequence: { kind: 'none', amountMinor: null, currency: null },
+    });
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 });

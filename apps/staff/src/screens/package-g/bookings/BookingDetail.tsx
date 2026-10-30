@@ -7,9 +7,14 @@
  * acceptance), every occurrence with its resources in the booking's facility zone (SPK-SCHED-008),
  * guests and equipment, the terms the booking was made under (confirmation mode, access
  * conditions, host responsibilities, and the approved version's deposit and buffers), the payment
- * (held basket, continued in assisted registration; an unknown outcome is never shown as paid),
- * the staffing state (a party is `awaiting_staff` until its host accepts), and the commands the
- * state allows: approve or decline a request, cancel with its bound consequence.
+ * (held basket, continued in assisted registration; "paid" only for the states that follow a
+ * payment, `awaiting_staff`, `confirmed` and `completed`, never for an expired, declined or
+ * canceled booking whose enrollment was created at hold time; an unknown outcome is never shown as
+ * paid), the staffing (a party is `awaiting_staff` until its host accepts) with each occurrence's
+ * staff requirements, uncovered slots and accepted assignees from the workforce coverage reads
+ * (`GET /v1/assignment-requirements` and `GET /v1/assignments`, target the occurrence's event;
+ * SPK-STAFF-002: proposed and offered never count as covered), and the commands the state allows:
+ * approve or decline a request, cancel with its bound consequence.
  */
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
@@ -26,6 +31,7 @@ import { AssetName, JoinedList, PersonNameView } from '../participation/names';
 import { ApproveBooking, DeclineBooking } from './BookingDecision';
 import { BookingTermsView, CONFIRMATION_WORDS } from './BookingTermsView';
 import { CancelBooking } from './CancelBooking';
+import { StaffCoverage } from './StaffCoverage';
 import {
   BOOKING_STATUS,
   CAN,
@@ -52,6 +58,7 @@ function Occurrences({ booking }: { booking: Booking }) {
 
 function StaffingState({ booking }: { booking: Booking }) {
   const waitingForStaff = booking.outstanding.includes('staffing');
+  const coverage = <StaffCoverage booking={booking} />;
   if (booking.status === 'awaiting_staff') {
     return (
       <div role="group" aria-label="Staffing">
@@ -61,7 +68,7 @@ function StaffingState({ booking }: { booking: Booking }) {
           {booking.kind === 'party' ? ', including the host,' : ''} is accepted. If it starts
           unstaffed, the scheduler is alerted.
         </p>
-        <Link to="/staff">Staff assignments and coverage</Link>
+        {coverage}
       </div>
     );
   }
@@ -70,7 +77,7 @@ function StaffingState({ booking }: { booking: Booking }) {
       <div role="group" aria-label="Staffing">
         <StatusBadge tone="pending" label="Staff not yet accepted" />
         <p>Required staff have not all accepted yet; payment alone will not confirm it.</p>
-        <Link to="/staff">Staff assignments and coverage</Link>
+        {coverage}
       </div>
     );
   }
@@ -78,11 +85,19 @@ function StaffingState({ booking }: { booking: Booking }) {
     return (
       <div role="group" aria-label="Staffing">
         <StatusBadge tone="success" label="Staffed" />
+        {coverage}
       </div>
     );
   }
   return null;
 }
+
+/** BookingMachine states reached only through a payment (pay_covered, pay_uncovered). */
+const PAID_STATES: ReadonlySet<Booking['status']> = new Set([
+  'awaiting_staff',
+  'confirmed',
+  'completed',
+]);
 
 function Payment({ booking }: { booking: Booking }) {
   if (booking.status === 'held' && booking.basketId) {
@@ -99,20 +114,31 @@ function Payment({ booking }: { booking: Booking }) {
       </div>
     );
   }
-  if (booking.enrollmentId) {
+  if (!booking.enrollmentId) return null;
+  const enrollment = (
+    <Link to={`/registrations/enrollments/${booking.enrollmentId}`}>
+      enrollment {shortRef(booking.enrollmentId)}
+    </Link>
+  );
+  // The enrollment is created when the booking is held, before any payment, and kept when the
+  // hold expires or the booking ends: only the states after payment say "paid" (SPK-PAY-007).
+  if (PAID_STATES.has(booking.status)) {
     return (
       <div role="group" aria-label="Payment">
-        <p>
-          Paid through its enrollment:{' '}
-          <Link to={`/registrations/enrollments/${booking.enrollmentId}`}>
-            enrollment {shortRef(booking.enrollmentId)}
-          </Link>
-          .
-        </p>
+        <p>Paid through its enrollment: {enrollment}.</p>
       </div>
     );
   }
-  return null;
+  return (
+    <div role="group" aria-label="Payment">
+      <p>
+        {booking.status === 'expired'
+          ? 'The hold ended before it was paid; nothing was charged.'
+          : 'Whether anything was paid or refunded is shown on its registration.'}{' '}
+        Its registration: {enrollment}.
+      </p>
+    </div>
+  );
 }
 
 function Detail({ booking }: { booking: Booking }) {

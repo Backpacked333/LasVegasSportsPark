@@ -4,7 +4,10 @@
  * the turned-off notice with the list still readable, request-mode approval (expected revision,
  * idempotency key, RESOURCE_CONFLICT keeps it requested, CAPABILITY_DISABLED reads turned off),
  * decline with a reason, permission restrictions, not-found presentation, the offerings' booking
- * terms and definitions read-only, and booking a rental for a customer from free times.
+ * terms and definitions read-only, and booking a rental for a customer from free times. "Try
+ * again" after no answer (a lost connection, or a real timeout of the client's 20 seconds) resends
+ * the same idempotency key and body (§4.9); a date is required at its field; after a conflict the
+ * refused time is cleared; a fall-back day's repeated wall-clock starts carry their zone.
  */
 import {
   apiErrorBody,
@@ -15,7 +18,7 @@ import {
 } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, mePermissions } from '../../../../testing/test-app';
 import {
   BOOKER_ID,
@@ -53,6 +56,53 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
 }
 
 const DETAIL = `/schedule/rentals/${BOOKING_ID}`;
+
+const ROSA = {
+  id: BOOKER_ID,
+  givenName: 'Rosa',
+  familyName: 'Diaz',
+  kind: 'adult',
+  status: 'active',
+  matchedOn: 'name',
+};
+
+/** One free hour of Pitch 1 at each start (one resource needed). */
+function freeTimes(starts: string[], resourceCount = 1) {
+  return {
+    offeringId: offering().id,
+    timezone: 'America/Los_Angeles',
+    durationMinutes: 60,
+    resourceCount,
+    resources: [
+      {
+        resourceId: RESOURCE_A,
+        name: 'Pitch 1',
+        freeIntervals: starts.map((start) => ({
+          start,
+          end: new Date(Date.parse(start) + 3_600_000).toISOString(),
+        })),
+      },
+    ],
+  };
+}
+
+/** Fills the new-rental form up to (not including) the start time. */
+async function fillRental(user: ReturnType<typeof userEvent.setup>, date = '2026-11-02') {
+  const form = await screen.findByRole('form', { name: 'New rental' });
+  await user.selectOptions(within(form).getByLabelText(/^Offering/), offering().id);
+  await user.type(within(form).getByLabelText('Booked for: name or exact email or phone'), 'Rosa');
+  await user.click(within(form).getByRole('button', { name: 'Search' }));
+  await user.click(await within(form).findByRole('button', { name: 'Choose Rosa Diaz' }));
+  fireEvent.change(within(form).getByLabelText(/^Date \(America\/Los_Angeles\)/), {
+    target: { value: date },
+  });
+  await user.type(within(form).getByLabelText(/^Length in minutes/), '60');
+  return form;
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('SCR-S-51 Rentals', () => {
   it('DEC-016: opens from the Schedule navigation turned off by default, naming DEC-016 and DEC-076, with existing rentals still listed', async () => {
@@ -550,5 +600,181 @@ describe('SCR-S-51 Rentals', () => {
       await screen.findByText(/New rentals are not taken while rentals are turned off/),
     ).toBeInTheDocument();
     expect(screen.queryByRole('form', { name: 'New rental' })).toBeNull();
+  });
+  it('§4.9: approval after a lost connection reads "Outcome not known yet"; Try again resends the same key and body', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /bookings/{id}/approve': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('connection dropped');
+          return fakeResponse(200, booking({ status: 'held', outstanding: ['payment'] }));
+        },
+      }),
+    });
+    render(app.at(DETAIL));
+    const decision = await screen.findByRole('group', { name: 'Approve the rental' });
+    await user.click(within(decision).getByRole('button', { name: 'Approve the rental' }));
+    const unknown = await within(decision).findByTestId('state-outcome-unknown');
+    expect(within(unknown).getByText('Outcome not known yet')).toBeInTheDocument();
+    expect(within(unknown).getByText('Error code: NETWORK_UNAVAILABLE')).toBeInTheDocument();
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Approved: now held')).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter((r) => r.route === '/bookings/{id}/approve');
+    expect(second?.body).toEqual({ expectedRevision: 3 });
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('§4.9: a decline that timed out (no answer within the client timeout) is retried with the same key', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /bookings/{id}/decline': () => {
+          calls += 1;
+          // The first attempt never answers; the client gives up after its timeout.
+          if (calls === 1) return new Promise<Response>(() => undefined);
+          return fakeResponse(200, booking({ status: 'declined', outstanding: [], revision: 4 }));
+        },
+      }),
+    });
+    // Let an unanswered request end when the client aborts it, as a real fetch does.
+    app.services.fetch = (input, init) =>
+      new Promise<Response>((resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        app.fake.fetch(input, init).then(resolve, reject);
+      });
+    render(app.at(DETAIL));
+    await user.click(await screen.findByRole('button', { name: 'Decline the request…' }));
+    const form = screen.getByRole('form', { name: 'Decline the rental request' });
+    await user.type(within(form).getByLabelText(/^Reason for declining/), 'Pitch resurfacing');
+    await user.click(within(form).getByRole('button', { name: 'Decline the request' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    const unknown = await within(form).findByTestId('state-outcome-unknown');
+    expect(within(unknown).getByText('Error code: TIMEOUT')).toBeInTheDocument();
+    expect(within(unknown).getByText(/No answer arrived in time/)).toBeInTheDocument();
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Declined: now declined')).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter((r) => r.route === '/bookings/{id}/decline');
+    expect(second?.body).toEqual({ reason: 'Pitch resurfacing', expectedRevision: 3 });
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('§4.9: a new rental after a lost connection is retried with the same key and body, never booked twice', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings': page([offering()]),
+        'GET /people': page([ROSA]),
+        'GET /offerings/{id}/booking-availability': ok(freeTimes(['2026-11-03T02:00:00.000Z'])),
+        'POST /bookings': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('connection dropped');
+          return fakeResponse(201, booking({ status: 'requested' }));
+        },
+      }),
+    });
+    render(app.at('/schedule/rentals/new'));
+    const form = await fillRental(user);
+    await user.click(await within(form).findByRole('radio', { name: '18:00' }));
+    await user.click(within(form).getByRole('button', { name: 'Book the rental' }));
+    const unknown = await within(form).findByTestId('state-outcome-unknown');
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/Now requested: Waiting for approval/)).toBeInTheDocument();
+    const [first, second] = app.fake.requests.filter(
+      (r) => r.method === 'POST' && r.route === '/bookings',
+    );
+    expect(second?.body).toEqual(first?.body);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('SPK-UX-008: Book without a date says so at the date field', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'GET /offerings': page([offering()]), 'GET /people': page([ROSA]) }),
+    });
+    render(app.at('/schedule/rentals/new'));
+    const form = await screen.findByRole('form', { name: 'New rental' });
+    await user.selectOptions(within(form).getByLabelText(/^Offering/), offering().id);
+    await user.click(within(form).getByRole('button', { name: 'Book the rental' }));
+    const date = within(form).getByLabelText(/^Date \(America\/Los_Angeles\)/);
+    expect(date).toHaveAttribute('aria-invalid', 'true');
+    expect(date).toHaveAccessibleDescription(/Choose the date\./);
+    expect(app.fake.requests.some((r) => r.method === 'POST' && r.route === '/bookings')).toBe(
+      false,
+    );
+  });
+
+  it('after a conflict, "Check free times again" clears the refused time, so it is never sent again', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings': page([offering()]),
+        'GET /people': page([ROSA]),
+        'GET /offerings/{id}/booking-availability': () => {
+          reads += 1;
+          // 18:00 was taken meanwhile; only 19:00 is still free.
+          return fakeResponse(
+            200,
+            freeTimes(
+              reads === 1
+                ? ['2026-11-03T02:00:00.000Z', '2026-11-03T03:00:00.000Z']
+                : ['2026-11-03T03:00:00.000Z'],
+            ),
+          );
+        },
+        'POST /bookings': apiError(409, 'RESOURCE_CONFLICT', {
+          message: 'The requested time is not free.',
+          nextAction: 'resolve_conflict',
+          details: {
+            conflicts: [{ occurrenceStart: '2026-11-03T02:00:00.000Z', resourceId: RESOURCE_A }],
+          },
+        }),
+      }),
+    });
+    render(app.at('/schedule/rentals/new'));
+    const form = await fillRental(user);
+    await user.click(await within(form).findByRole('radio', { name: '18:00' }));
+    await user.click(within(form).getByRole('button', { name: 'Book the rental' }));
+    await user.click(await within(form).findByRole('button', { name: 'Check free times again' }));
+    await waitFor(() => expect(within(form).queryByRole('radio', { name: '18:00' })).toBeNull());
+    expect(within(form).getByRole('radio', { name: '19:00' })).not.toBeChecked();
+    expect(within(form).queryByRole('checkbox', { name: 'Pitch 1' })).toBeNull();
+    await user.click(within(form).getByRole('button', { name: 'Book the rental' }));
+    expect(await within(form).findByText('Choose a free start time.')).toBeInTheDocument();
+    expect(
+      app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/bookings'),
+    ).toHaveLength(1);
+  });
+
+  it('SPK-SCHED-008: on the day the clocks go back, the two 01:00 starts are told apart by their zone', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings': page([offering()]),
+        'GET /people': page([ROSA]),
+        'GET /offerings/{id}/booking-availability': ok(
+          freeTimes(['2026-11-01T08:00:00.000Z', '2026-11-01T09:00:00.000Z']),
+        ),
+        'POST /bookings': { status: 201, body: booking({ status: 'requested' }) },
+      }),
+    });
+    render(app.at('/schedule/rentals/new'));
+    const form = await fillRental(user, '2026-11-01');
+    expect(await within(form).findByRole('radio', { name: '01:00 PDT' })).toBeInTheDocument();
+    await user.click(within(form).getByRole('radio', { name: '01:00 PST' }));
+    await user.click(within(form).getByRole('button', { name: 'Book the rental' }));
+    expect(await screen.findByText(/Now requested/)).toBeInTheDocument();
+    expect(
+      app.fake.requests.find((r) => r.method === 'POST' && r.route === '/bookings')?.body,
+    ).toMatchObject({ start: '2026-11-01T09:00:00.000Z', end: '2026-11-01T10:00:00.000Z' });
   });
 });

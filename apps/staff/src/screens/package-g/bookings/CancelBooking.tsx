@@ -5,9 +5,15 @@
  * capability switch (DEC-016).
  *
  * - requested: nothing is reserved or paid, so nothing is released or charged.
- * - held: canceling releases the reservation, its hold and the basket. While the basket is in
- *   checkout a payment may be on its way, so cancellation is not offered until the checkout
- *   settles (the outcome is never assumed); a basket the viewer cannot read is said so.
+ * - held: canceling releases the reservation, its hold and the basket, and is offered only while
+ *   the basket shows nothing was paid (`open`, `held`, or ended unpaid: `expired`, `released`,
+ *   `abandoned`). The basket (`GET /v1/baskets/{id}`) is read again right before the cancel is
+ *   sent. While it is `checking_out` a payment may be on its way; once it is `fulfilled` or
+ *   `partially_fulfilled` the payment completed and the booking moves on asynchronously (the
+ *   enrollment's confirmation), so in both cases cancellation is not offered and "Reload the
+ *   booking" reads it again. A basket the viewer cannot read leaves the checkout state unknown,
+ *   so cancellation is not offered either (the outcome is never assumed). The API does not yet
+ *   refuse this itself (README API issue 3); its CHECKOUT_IN_PROGRESS answer is shown in words.
  * - awaiting_staff or confirmed (paid): the enrollment's cancellation preview
  *   (`GET /v1/enrollments/{id}/cancellation-preview`) shows the refund, credit or charge as the API
  *   computed it; a consequence other than "none" needs the customer's acceptance, and the previewed
@@ -37,6 +43,24 @@ import { BOOKING_STATUS, KIND_WORDS, type Booking } from './labels';
 
 type Consequence = Schema<'FinancialConsequence'>;
 type AcceptedConsequence = Schema<'AcceptedConsequence'>;
+type BasketStatus = Schema<'BasketStatus'>;
+
+const BASKET_KEY = ['api', '/baskets/{id}'] as const;
+
+/** Basket states in which nothing was paid, so a held booking may be canceled (SPK-PAY-007). */
+const UNPAID_BASKET: ReadonlySet<BasketStatus> = new Set([
+  'open',
+  'held',
+  'expired',
+  'released',
+  'abandoned',
+]);
+
+/**
+ * Checked right before the cancel is sent: null to send, or why nothing was sent (the caller's
+ * view also re-renders from the fresh read).
+ */
+type BeforeSend = () => Promise<string | null>;
 
 export const CONSEQUENCE_KIND: Record<
   Consequence['kind'],
@@ -77,6 +101,7 @@ function CancelForm({
   onDone,
   onPreviewAgain,
   reasonState,
+  beforeSend,
 }: {
   booking: Booking;
   /** The consequence the customer accepted, as previewed; sent with a paid booking. */
@@ -86,19 +111,34 @@ function CancelForm({
   onPreviewAgain?: () => void;
   /** Kept by the caller when the form remounts for a new preview (the typed reason stays). */
   reasonState?: [string, (value: string) => void];
+  beforeSend?: BeforeSend;
 }) {
   const { online } = useApp();
-  const reload = useReloadBooking();
+  const queryClient = useQueryClient();
+  const reloadBooking = useReloadBooking();
+  const reload = () => {
+    reloadBooking();
+    void queryClient.invalidateQueries({ queryKey: BASKET_KEY });
+  };
   const cancel = useApiCommand('post', '/bookings/{id}/cancel', {
-    invalidate: [...BOOKING_KEYS, ['api', '/enrollments/{id}/cancellation-preview']],
+    invalidate: [...BOOKING_KEYS, BASKET_KEY, ['api', '/enrollments/{id}/cancellation-preview']],
   });
+  const [checking, setChecking] = useState(false);
+  const [notSent, setNotSent] = useState<string | null>(null);
   const ownReason = useState('');
   const [reason, setReason] = reasonState ?? ownReason;
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [acceptedByCustomer, setAcceptedByCustomer] = useState(false);
   const words = KIND_WORDS[booking.kind];
-  const send = () =>
-    void cancel
+  const send = async () => {
+    if (beforeSend) {
+      setChecking(true);
+      const problem = await beforeSend();
+      setChecking(false);
+      setNotSent(problem);
+      if (problem) return;
+    }
+    await cancel
       .submit({
         path: { id: booking.id },
         body: {
@@ -109,6 +149,7 @@ function CancelForm({
       })
       .then((done) => onDone(`Canceled: now ${BOOKING_STATUS[done.status].label}`))
       .catch(() => undefined);
+  };
   const code = detailCode(cancel.error);
   const consequenceChanged =
     code === 'CONSEQUENCE_CHANGED' || code === 'CONSEQUENCE_ACCEPTANCE_REQUIRED';
@@ -124,7 +165,7 @@ function CancelForm({
           return;
         }
         setReasonError(null);
-        send();
+        void send();
       }}
     >
       <TextAreaField
@@ -148,20 +189,26 @@ function CancelForm({
       <div className="pg-actions">
         <Button
           type="submit"
-          busy={cancel.isProcessing}
+          busy={cancel.isProcessing || checking}
           disabled={!online || (needsAcceptance === true && !acceptedByCustomer)}
         >
           Cancel the {words.one}
         </Button>
       </div>
       {!online ? <p className="caption">Canceling needs a connection.</p> : null}
+      {notSent ? (
+        <p className="error-text" role="alert">
+          {notSent}
+        </p>
+      ) : null}
       <CommandProblem
         error={cancel.error}
-        onRetry={send}
+        onRetry={() => void send()}
         onReload={() => {
           cancel.reset();
           reload();
         }}
+        reloadLabel="Reload the booking"
       />
       {consequenceChanged && onPreviewAgain ? (
         <div className="pg-actions">
@@ -243,6 +290,22 @@ function CancelPaid({
   );
 }
 
+function ReloadBookingButton() {
+  const queryClient = useQueryClient();
+  const reload = useReloadBooking();
+  return (
+    <Button
+      variant="secondary"
+      onClick={() => {
+        reload();
+        void queryClient.invalidateQueries({ queryKey: BASKET_KEY });
+      }}
+    >
+      Reload the booking
+    </Button>
+  );
+}
+
 function CancelHeld({
   booking,
   basketId,
@@ -254,7 +317,21 @@ function CancelHeld({
 }) {
   const basket = useApiQuery({ path: '/baskets/{id}', request: { path: { id: basketId } } });
   const checkout = `/registrations/assisted/${basketId}`;
-  if (basket.data?.status === 'checking_out') {
+  const status = basket.data?.status;
+  // The basket is read again right before sending: a checkout that started since the last read
+  // stops the cancel, and this view re-renders from the fresh state.
+  const beforeSend: BeforeSend = async () => {
+    const fresh = await basket.refetch();
+    // A failed re-read keeps the old data: the checkout state is then unknown, so nothing is sent.
+    if (fresh.error) {
+      return `Whether a checkout is in progress could not be checked (${fresh.error.code}), so nothing was canceled.`;
+    }
+    // `refetch` resolves with the cached ApiResponse; the basket is its `data`.
+    const freshStatus = fresh.data?.data.status;
+    if (freshStatus && UNPAID_BASKET.has(freshStatus)) return null;
+    return 'The checkout state changed since it was read, so nothing was canceled.';
+  };
+  if (status === 'checking_out') {
     return (
       <div role="group" aria-label="Checkout in progress">
         <StatusBadge tone="warning" label="Checkout in progress" />
@@ -263,34 +340,60 @@ function CancelHeld({
           outcome is not assumed.
         </p>
         <Link to={checkout}>Open the checkout in assisted registration</Link>
+        <div className="pg-actions">
+          <ReloadBookingButton />
+        </div>
       </div>
     );
   }
-  if (basket.data) {
+  if (status === 'fulfilled' || status === 'partially_fulfilled') {
+    return (
+      <div role="group" aria-label="Checkout finished">
+        <StatusBadge tone="info" label={`Checkout finished (basket ${status})`} />
+        <p>
+          The checkout finished, so the payment may have completed; the booking is updated from the
+          checkout&apos;s outcome. Canceling is not offered until the booking shows its new state; a
+          paid booking is then canceled with its refund or charge shown first.
+        </p>
+        <Link to={checkout}>Open the checkout in assisted registration</Link>
+        <div className="pg-actions">
+          <ReloadBookingButton />
+        </div>
+      </div>
+    );
+  }
+  if (basket.data && status && UNPAID_BASKET.has(status)) {
     return (
       <>
         <p>
           Nothing has been paid. Canceling releases the reservation, its hold and the basket (basket{' '}
-          {basket.data.status}).
+          {status}).
         </p>
-        <CancelForm booking={booking} onDone={onDone} />
+        <CancelForm booking={booking} onDone={onDone} beforeSend={beforeSend} />
       </>
     );
   }
   if (basket.error) {
     const presentation = presentationForError(basket.error);
     return (
-      <>
+      <div role="group" aria-label="Checkout state unknown">
         {presentation === 'unavailable' ? (
           <p>
-            The basket is not available to you, so whether a checkout is in progress cannot be seen
-            here. If one is, a payment may be on its way.
+            The basket is not available to you, so whether a checkout is in progress cannot be
+            checked here. A payment may be on its way, so canceling is not offered; the checkout is
+            handled in assisted registration.
           </p>
         ) : (
-          <StateView variant="error" error={basket.error} onRetry={() => void basket.refetch()} />
+          <>
+            <p>
+              Whether a checkout is in progress cannot be checked until the basket is read, so
+              canceling is not offered yet.
+            </p>
+            <StateView variant="error" error={basket.error} onRetry={() => void basket.refetch()} />
+          </>
         )}
-        {presentation === 'unavailable' ? <CancelForm booking={booking} onDone={onDone} /> : null}
-      </>
+        <Link to={checkout}>Open the checkout in assisted registration</Link>
+      </div>
     );
   }
   return <StateView variant="loading" label="the payment state" />;

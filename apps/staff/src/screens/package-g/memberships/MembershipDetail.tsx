@@ -12,9 +12,14 @@
  * - Renew (`POST /v1/enrollments/{id}/renew`): the chosen membership offering (none preselected) is
  *   added to a basket; nothing is charged until checkout, which continues in assisted registration
  *   where an unknown payment outcome is recovered, never shown as paid.
+ * - Sessions booked with the membership: the member's session bookings
+ *   (`GET /v1/session-bookings?participantPersonId=`, `enrollment.read_session_booking`) that name
+ *   this membership, each in its own offering's facility zone, with what a cancellation did with
+ *   the session. The client lists them and counts nothing against the period's limit; the API
+ *   applies the limit when a session is booked (MEMBERSHIP_SESSIONS_USED).
  * - Cancel or transfer: SCR-S-27, with its previewed consequence.
  *
- * The API has no staff read of a membership's term dates, sessions used per period or earlier
+ * The API has no staff read of a membership's term dates, its usage per period or earlier
  * suspensions (only the customer's `GET /v1/me/memberships`), so this page lists the suspensions
  * recorded here and says what it cannot show. Renewal and bookings need the `memberships` switch
  * (DEC-016, DEC-072); member pricing is not built (POL-038, DEC-007).
@@ -43,18 +48,20 @@ import { BookCoveredSession } from '../participation/BookCoveredSession';
 import { CommandProblem, validationPath } from '../participation/CommandProblem';
 import { membershipBenefit } from '../participation/definition';
 import { DefinitionBody } from '../participation/DefinitionView';
-import { formatInstant, formatMoney } from '../participation/format';
-import { PersonNameView } from '../participation/names';
+import { formatInstant, formatMoney, formatRange } from '../participation/format';
+import { OfferingName, PersonNameView } from '../participation/names';
 import {
   ACTIONS,
   NotAvailableToYou,
   useActionAllowed,
   useCapabilityOn,
 } from '../participation/permission';
-import { ENROLLMENT_STATUS, SUSPENSION_STATUS } from './labels';
+import { CREDIT_DISPOSITION } from '../session-packages/labels';
+import { ENROLLMENT_STATUS, SESSION_BOOKING_STATUS, SUSPENSION_STATUS } from './labels';
 
 type Enrollment = Schema<'Enrollment'>;
 type Suspension = Schema<'MembershipSuspension'>;
+type SessionBooking = Schema<'SessionBooking'>;
 
 const ENROLLMENT_KEY = ['api', '/enrollments/{id}'] as const;
 
@@ -238,6 +245,8 @@ function Suspensions({ enrollment, zone }: { enrollment: Enrollment; zone: strin
             value={until}
             onChange={setUntil}
             timeZone={shownZone}
+            // Optional, but once either part is filled both are needed: say so after a submit.
+            showErrors={attempted && (until.date !== '' || until.time !== '')}
           />
           {local.until || serverPath === 'until' ? (
             <p className="error-text">{local.until ?? suspend.error?.message}</p>
@@ -262,6 +271,69 @@ function Suspensions({ enrollment, zone }: { enrollment: Enrollment; zone: strin
         <p>Only a confirmed membership can be suspended.</p>
       )}
     </>
+  );
+}
+
+function BookedSession({ booking }: { booking: SessionBooking }) {
+  // Each session in its own offering's facility zone (the membership may cover other facilities).
+  const offering = useApiQuery({
+    path: '/offerings/{id}',
+    request: { path: { id: booking.offeringId } },
+    staleTime: 5 * 60_000,
+  });
+  const status = SESSION_BOOKING_STATUS[booking.status];
+  return (
+    <li>
+      <span className="row-text">
+        <span>
+          <StatusBadge tone={status.tone} label={status.label} />{' '}
+          <OfferingName id={booking.offeringId} />:{' '}
+          {formatRange(
+            booking.scheduledStart,
+            booking.scheduledEnd,
+            offering.data?.facility.timezone ?? null,
+          )}
+        </span>
+        {booking.creditDisposition ? (
+          <span className="caption">{CREDIT_DISPOSITION[booking.creditDisposition]}</span>
+        ) : null}
+      </span>
+    </li>
+  );
+}
+
+function SessionsBooked({ enrollment }: { enrollment: Enrollment }) {
+  const allowed = useActionAllowed(ACTIONS.readSessionBooking, enrollment.offering?.facilityId);
+  const bookings = useApiQuery({
+    path: '/session-bookings',
+    request: { query: { participantPersonId: enrollment.participantPersonId } },
+    enabled: allowed,
+  });
+  if (!allowed) {
+    return (
+      <NotAvailableToYou what="Reading session bookings" action={ACTIONS.readSessionBooking} />
+    );
+  }
+  const own = (list: readonly SessionBooking[]) =>
+    list.filter((b) => b.membershipEnrollmentId === enrollment.id);
+  return (
+    <QueryBoundary
+      query={bookings}
+      label="the sessions booked with this membership"
+      isEmpty={(list) => own(list).length === 0}
+      empty={{
+        title: 'No session booked with this membership',
+        description: 'Sessions booked with the membership are listed here.',
+      }}
+    >
+      {(list) => (
+        <ul className="list" aria-label="Sessions booked with this membership">
+          {own(list).map((b) => (
+            <BookedSession key={b.id} booking={b} />
+          ))}
+        </ul>
+      )}
+    </QueryBoundary>
   );
 }
 
@@ -404,8 +476,9 @@ function Detail({ enrollment }: { enrollment: Enrollment }) {
         ]}
       />
       <p className="caption">
-        The term dates, sessions used per period and earlier suspensions are not readable from the
-        staff API (only the customer&apos;s own view has them), so they are not shown here.
+        The term dates, the count used against each period&apos;s limit and earlier suspensions are
+        not readable from the staff API (only the customer&apos;s own view has them), so they are
+        not shown here; the sessions booked with the membership are listed below.
       </p>
       <section className="pg-panel" aria-labelledby="member-includes">
         <h4 id="member-includes">What it includes</h4>
@@ -434,6 +507,10 @@ function Detail({ enrollment }: { enrollment: Enrollment }) {
             onReload={() => void queryClient.invalidateQueries({ queryKey: ENROLLMENT_KEY })}
           />
         ) : null}
+      </section>
+      <section className="pg-panel" aria-labelledby="member-sessions">
+        <h4 id="member-sessions">Sessions booked with the membership</h4>
+        <SessionsBooked enrollment={enrollment} />
       </section>
       <section className="pg-panel" aria-labelledby="member-suspensions">
         <h4 id="member-suspensions">Suspensions</h4>
