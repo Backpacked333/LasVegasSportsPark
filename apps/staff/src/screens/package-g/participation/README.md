@@ -73,7 +73,8 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
   booking moves on asynchronously), or when the basket cannot be read, cancellation is not offered
   and "Reload the booking" or the checkout link is. The API now refuses the first two too (409
   `CHECKOUT_IN_PROGRESS` and `BOOKING_CONFIRMATION_PENDING`, fixed during stage-4 integration;
-  `partially_fulfilled` stays client-side only); its answer is shown in words.
+  `partially_fulfilled` stays client-side only); both answers are shown in words with "Reload the
+  booking" (**Verified**, `../parties/__tests__/PartiesScreen.test.tsx`).
 
 ## API issues found (not fixed here)
 
