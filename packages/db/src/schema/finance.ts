@@ -410,6 +410,8 @@ export interface PaymentRefundablesTable {
   captured_minor: MinorUnits;
   refunded_minor: GeneratedMinor;
   reserved_minor: GeneratedMinor;
+  /** MONEY-02 (0612): what a compensation credit took from these funds; only accumulates. */
+  compensated_minor: GeneratedMinor;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

@@ -398,6 +398,7 @@ export class CheckoutFinalizer {
         `Compensation: ${error.code}`,
         actor,
         correlationId,
+        'automatic',
       );
     }
   }
@@ -416,7 +417,10 @@ export class CheckoutFinalizer {
       checkout.payment_attempt_id,
     );
     const available =
-      refundable.captured_minor - refundable.refunded_minor - refundable.reserved_minor;
+      refundable.captured_minor -
+      refundable.refunded_minor -
+      refundable.reserved_minor -
+      refundable.compensated_minor;
     if (available <= 0) throw errors.refundPending({ checkoutId: checkout.id });
     const refund = await this.refunds.reserveInTrx(trx, {
       organizationId: checkout.organization_id,
@@ -431,21 +435,80 @@ export class CheckoutFinalizer {
     await this.updateRecovery(trx, checkout, { plan: 'refund', refundAttemptId: refund.id });
   }
 
+  /**
+   * Compensates an unfulfilled checkout with a credit (SPK-AT-006, SPK-PAY-009). MONEY-02
+   * (SPK-PAY-008, §4.7 invariant 6): the credit gives back what was received and not already
+   * returned. Per captured payment of the order that is captured less refunded less what an
+   * earlier compensation took; a cash or external tender counts as received. The credited part
+   * of each payment is consumed from its refundable funds (`compensated_minor`, 0612), so a
+   * later refund can only return what is left. While a refund of one of those payments is still
+   * reserved (requested, in flight or unknown) the amount is not known: staff get REFUND_PENDING,
+   * and the automatic path leaves the checkout in recovery for staff (its exception is raised).
+   */
   private async compensateWithCredit(
     trx: Trx,
     checkout: CheckoutRow,
     reason: string,
     actor: Principal,
     correlationId: string | null,
+    mode: 'staff' | 'automatic' = 'staff',
   ): Promise<void> {
     const organizationId = checkout.organization_id;
     const receipts = await trx
       .selectFrom('receipts')
-      .select(['amount_minor', 'currency'])
+      .select(['id', 'amount_minor', 'currency', 'payment_attempt_id'])
       .where('organization_id', '=', organizationId)
       .where('order_id', '=', checkout.order_id)
+      .orderBy('received_at')
+      .orderBy('id')
       .execute();
-    const amount = receipts.reduce((acc, r) => acc + r.amount_minor, 0);
+    const attemptIds = receipts
+      .map((r) => r.payment_attempt_id)
+      .filter((id): id is string => id !== null);
+    const refundables =
+      attemptIds.length === 0
+        ? []
+        : await trx
+            .selectFrom('payment_refundables')
+            .selectAll()
+            .where('organization_id', '=', organizationId)
+            .where('payment_attempt_id', 'in', attemptIds)
+            .orderBy('payment_attempt_id')
+            .forUpdate()
+            .execute();
+    const pending = refundables.find((r) => r.reserved_minor > 0);
+    if (pending) {
+      if (mode === 'automatic') return;
+      throw errors.refundPending({
+        paymentAttemptId: pending.payment_attempt_id,
+        reservedMinor: pending.reserved_minor,
+      });
+    }
+    const byAttempt = new Map(refundables.map((r) => [r.payment_attempt_id, r]));
+    const consumed: Array<{ paymentAttemptId: string; amountMinor: number }> = [];
+    let amount = 0;
+    for (const receipt of receipts) {
+      const funds = receipt.payment_attempt_id ? byAttempt.get(receipt.payment_attempt_id) : null;
+      if (!funds) {
+        amount += receipt.amount_minor;
+        continue;
+      }
+      const left = funds.captured_minor - funds.refunded_minor - funds.compensated_minor;
+      if (left <= 0) continue;
+      amount += left;
+      consumed.push({ paymentAttemptId: funds.payment_attempt_id, amountMinor: left });
+    }
+    for (const take of consumed) {
+      await trx
+        .updateTable('payment_refundables')
+        .set((eb) => ({
+          compensated_minor: eb('compensated_minor', '+', take.amountMinor),
+          revision: eb('revision', '+', 1),
+        }))
+        .where('organization_id', '=', organizationId)
+        .where('payment_attempt_id', '=', take.paymentAttemptId)
+        .executeTakeFirstOrThrow();
+    }
     const currency = receipts[0]?.currency;
     let creditId: string | null = null;
     if (amount > 0 && currency) {

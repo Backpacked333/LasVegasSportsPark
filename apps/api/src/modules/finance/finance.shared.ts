@@ -266,7 +266,9 @@ export function toRefundable(row: RefundableRow): Refundable {
     capturedMinor: row.captured_minor,
     refundedMinor: row.refunded_minor,
     reservedMinor: row.reserved_minor,
-    availableMinor: row.captured_minor - row.refunded_minor - row.reserved_minor,
+    // MONEY-02: funds a compensation credit took are no longer refundable.
+    availableMinor:
+      row.captured_minor - row.refunded_minor - row.reserved_minor - row.compensated_minor,
     currency: row.currency,
   };
 }

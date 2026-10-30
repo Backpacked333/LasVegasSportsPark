@@ -1,6 +1,7 @@
 import { errors } from '@sportspark/contracts';
+import { pgErrorCode } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { UnitOfWork } from '../../../kernel';
+import { UnitOfWork, databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createPolicyVersionFixture } from '../../catalog';
 import { ENROLLMENT_PORT, EnrollmentsService, type EnrollmentPort } from '../../enrollment';
@@ -24,6 +25,16 @@ import {
  * the place being gone (a definitive failure compensated per policy, SPK-AT-006).
  */
 const flaky = { failures: 0, kind: 'crash' as 'crash' | 'domain' | 'capacity' };
+
+async function refusedBy(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    const c = databaseConstraintOf(error);
+    return c ? `${c.code}:${c.constraint ?? ''}` : (pgErrorCode(error) ?? String(error));
+  }
+  throw new Error('expected the database to refuse the statement');
+}
 
 function flakyEnrollmentPort(real: EnrollmentsService): EnrollmentPort {
   return new Proxy(real, {
@@ -273,6 +284,108 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
       10_000,
     );
     await drain(t);
+  });
+
+  it('SPK-PAY-008, §4.7 invariant 6 (MONEY-02): a credit compensation gives back only what was not refunded, and consumes it, so nothing is returned twice', async () => {
+    flaky.kind = 'domain';
+    flaky.failures = 1;
+    const checkout = await paidCheckout(10_000);
+    expect(checkout.status).toBe('recovery_required');
+    const attemptId = (checkout['payment'] as { id: string }).id;
+    const partial = await post(t, `/v1/payments/${attemptId}/refunds`, finance.header, {
+      amountMinor: 4_000,
+      reason: 'Partial goodwill refund',
+    });
+    expect(partial.body.status).toBe('succeeded');
+    const compensated = await post(
+      t,
+      `/v1/registration-checkouts/${checkout.id}/compensate`,
+      finance.header,
+      { method: 'credit', reason: 'Family accepted a credit for the rest' },
+    );
+    expect(compensated.status, JSON.stringify(compensated.body)).toBe(201);
+    const credit = await t.http
+      .get(`/v1/credits/${compensated.body.recovery.creditId as string}`)
+      .set(parent.header);
+    expect(credit.body).toMatchObject({ sourceKind: 'compensation', originalMinor: 6_000 });
+    // The payment shows nothing left to refund, and a further refund is refused.
+    const payment = await t.http.get(`/v1/payments/${attemptId}`).set(finance.header);
+    expect(payment.body.refundableMinor).toBe(0);
+    const again = await post(t, `/v1/payments/${attemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'Refund the rest too',
+    });
+    expect(again.status).toBe(409);
+    expect(again.body.details).toMatchObject({
+      code: 'REFUND_EXCEEDS_REFUNDABLE',
+      availableMinor: 0,
+    });
+    // The database refuses it whoever writes it, and never gives compensated funds back.
+    const refundableRow = () =>
+      t.db
+        .selectFrom('payment_refundables')
+        .selectAll()
+        .where('payment_attempt_id', '=', attemptId)
+        .executeTakeFirstOrThrow();
+    expect(await refundableRow()).toMatchObject({
+      captured_minor: 10_000,
+      refunded_minor: 4_000,
+      compensated_minor: 6_000,
+    });
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ reserved_minor: 1 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      ),
+    ).toBe('23514:payment_refundables_within_captured');
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ compensated_minor: 0 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      ),
+    ).toBe('23514:payment_refundables_compensated_accumulate');
+    await drain(t);
+  });
+
+  it('SPK-PAY-008 (MONEY-02): a credit compensation waits while a refund of the payment is still reserved', async () => {
+    flaky.kind = 'domain';
+    flaky.failures = 1;
+    const checkout = await paidCheckout(8_000);
+    const attemptId = (checkout['payment'] as { id: string }).id;
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        trx
+          .updateTable('payment_refundables')
+          .set({ reserved_minor: 3_000 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      );
+    const refused = await post(
+      t,
+      `/v1/registration-checkouts/${checkout.id}/compensate`,
+      finance.header,
+      { method: 'credit', reason: 'Family accepted a credit' },
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('REFUND_PENDING');
+    const still = await t.http.get(`/v1/registration-checkouts/${checkout.id}`).set(finance.header);
+    expect(still.body.status).toBe('recovery_required');
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        trx
+          .updateTable('payment_refundables')
+          .set({ reserved_minor: 0 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      );
   });
 
   it('SPK-PAY-009 / §4.11 step 10: compensating a checkout paid entirely with a credit gives the credit back', async () => {

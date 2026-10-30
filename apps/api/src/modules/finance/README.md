@@ -77,7 +77,8 @@ carry `revision` and `touch_updated_at`.
   `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
   and reference; one reversal per journal, entry and redemption.
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
-  (`refunded + reserved <= captured`); captured is fixed and refunded only accumulates.
+  (`refunded + reserved + compensated <= captured`, `0612`); captured is fixed, refunded and
+  compensated (what a compensation credit took, MONEY-02) only accumulate.
 - **§4.7 invariant 7 / SPK-PAY-009:** `remaining_minor >= 0`, `remaining <= original`, and a
   deferred constraint trigger keeps `remaining = original - redeemed + reversed`, so a balance is
   never overwritten.
@@ -217,7 +218,11 @@ contribution's amount and status, never a player's payment or method.
   (checkout, order fulfillment, operation) with exception `finance.fulfillment_incomplete`; a place
   taken by a waitlist offer is never displaced; definitive failures are compensated per the refund
   policy the order recorded (refund by default; a version approved after the quote does not
-  apply, SPK-PAY-002), others wait for staff `recover` or `compensate`. Completing a compensation
+  apply, SPK-PAY-002), others wait for staff `recover` or `compensate`. A compensation credit is
+  what was received and not already returned (per captured payment: captured less refunded; a cash
+  tender in full) and consumes those refundable funds, so a later refund is refused beyond what is
+  left; while a refund of the payment is still reserved staff get `REFUND_PENDING` and the
+  automatic credit path leaves the checkout in recovery (MONEY-02). Completing a compensation
   restores the credits redeemed at checkout (booked refunds → credits payable, the receivable is
   not reopened) and cancels the installment plan, its scheduled installments and open obligations.
 - **Refunds (SPK-PAY-008, SPK-AT-007):** reserved by conditional UPDATE before execution; of two

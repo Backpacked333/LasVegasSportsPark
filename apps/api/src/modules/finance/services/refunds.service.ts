@@ -225,12 +225,16 @@ export class RefundsService {
       }))
       .where('organization_id', '=', input.organizationId)
       .where('payment_attempt_id', '=', input.paymentAttemptId)
-      .where(sql<boolean>`refunded_minor + reserved_minor + ${input.amountMinor} <= captured_minor`)
+      .where(
+        sql<boolean>`refunded_minor + reserved_minor + compensated_minor + ${input.amountMinor} <= captured_minor`,
+      )
       .returningAll()
       .executeTakeFirst();
     if (!reserved) {
       const current = await this.refundable(trx, input.organizationId, input.paymentAttemptId);
-      const unreserved = current.captured_minor - current.refunded_minor;
+      // MONEY-02: what a compensation credit took is neither refundable nor pending.
+      const unreserved =
+        current.captured_minor - current.refunded_minor - current.compensated_minor;
       if (current.reserved_minor > 0 && input.amountMinor <= unreserved) {
         // The funds exist but a pending (possibly unknown) refund holds them (SPK-PAY-008).
         throw errors.refundPending({

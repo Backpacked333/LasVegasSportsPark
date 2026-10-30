@@ -670,6 +670,7 @@ export class PosSalesService {
             'payment_refundables.captured_minor as captured',
             'payment_refundables.refunded_minor as refunded',
             'payment_refundables.reserved_minor as reserved',
+            'payment_refundables.compensated_minor as compensated',
           ])
           .where('pos_tenders.organization_id', '=', organizationId)
           .where('pos_tenders.sale_id', '=', sale.id)
@@ -679,7 +680,12 @@ export class PosSalesService {
           .execute();
         const chosen =
           candidates.find(
-            (c) => Number(c.captured) - Number(c.refunded) - Number(c.reserved) >= amount,
+            (c) =>
+              Number(c.captured) -
+                Number(c.refunded) -
+                Number(c.reserved) -
+                Number(c.compensated) >=
+              amount,
           ) ?? candidates[0];
         if (!chosen?.payment_attempt_id) {
           throw errors.resourceConflict('No captured card payment of this sale can be refunded.', {
