@@ -106,6 +106,38 @@ export function cancelBasis(booking: Pick<Booking, 'status'>): CancelBasis | nul
   }
 }
 
+export type BasketStatus = Schema<'BasketStatus'>;
+
+/**
+ * Where a held booking's payment stands, from its basket's status (`GET /v1/baskets/{id}`). A
+ * booking moves from `held` to paid only when the API delivers the enrollment's confirmation
+ * (outbox), so a booking can still read `held` after its checkout completed:
+ * - `unpaid`: `open` or `held`; nothing has been charged and canceling releases the basket;
+ * - `paying`: `checking_out`; a payment may be on its way, its outcome is not known yet;
+ * - `paid`: `fulfilled` or `partially_fulfilled`; a payment went through and the booking is being
+ *   updated (never "nothing charged", and the hold-release cancellation is not offered);
+ * - `ended`: `expired`, `released` or `abandoned`; the hold ended without a payment and the
+ *   booking is being updated.
+ */
+export type HoldPayment = 'unpaid' | 'paying' | 'paid' | 'ended';
+
+export function holdPaymentOf(status: BasketStatus): HoldPayment {
+  switch (status) {
+    case 'open':
+    case 'held':
+      return 'unpaid';
+    case 'checking_out':
+      return 'paying';
+    case 'fulfilled':
+    case 'partially_fulfilled':
+      return 'paid';
+    case 'expired':
+    case 'released':
+    case 'abandoned':
+      return 'ended';
+  }
+}
+
 /** Why a booking ended, in words; the API's own reason text is shown as written. */
 export function endReasonText(reason: string | null): string | null {
   if (!reason) return null;

@@ -99,11 +99,50 @@ export function suspensionText(suspension: MembershipSuspension, zone: string): 
     : `Suspended from ${from} until the front desk ends it`;
 }
 
-export function membershipStatus(membership: Membership, now: Date): Status {
+/**
+ * The last local day a term includes. The API's `termEndsAt` is exclusive: the local midnight after
+ * the offering's last day (offering-dated terms) or the confirmation instant plus the term length;
+ * the day it falls on is not part of the term unless the term ends later that day.
+ */
+export function lastTermDay(termEndsAt: string, zone: string): string {
+  const end = new Date(termEndsAt).getTime();
+  if (Number.isNaN(end)) return termEndsAt;
+  return formatDayIn(new Date(end - 1).toISOString(), zone);
+}
+
+/** Where `now` stands against the API's term (null bounds: the API could not set one). */
+export type TermPhase = 'unknown' | 'not_started' | 'in_term' | 'ended';
+
+export function termPhase(
+  membership: Pick<Membership, 'termStartsAt' | 'termEndsAt'>,
+  now: Date,
+): TermPhase {
+  if (!membership.termStartsAt || !membership.termEndsAt) return 'unknown';
+  if (now.getTime() < new Date(membership.termStartsAt).getTime()) return 'not_started';
+  if (now.getTime() >= new Date(membership.termEndsAt).getTime()) return 'ended';
+  return 'in_term';
+}
+
+/**
+ * SPK-COND-001: "Membership active" only inside the term the API states. A confirmed membership
+ * whose term the API could not set books nothing (POL-038), so it never reads active.
+ */
+export function membershipStatus(membership: Membership, now: Date, zone: string): Status {
   switch (membership.status) {
     case 'pending':
       return { tone: 'pending', label: 'Membership pending' };
     case 'confirmed': {
+      const phase = termPhase(membership, now);
+      if (phase === 'unknown') {
+        return { tone: 'warning', label: 'Term not available: ask the front desk' };
+      }
+      if (phase === 'not_started') {
+        return {
+          tone: 'info',
+          label: `Starts ${formatDayIn(membership.termStartsAt as string, zone)}`,
+        };
+      }
+      if (phase === 'ended') return { tone: 'neutral', label: 'Term ended' };
       const suspended = activeSuspension(membership, now);
       if (suspended) return { tone: 'warning', label: 'Membership suspended' };
       return { tone: 'success', label: 'Membership active' };
@@ -117,9 +156,50 @@ export function membershipStatus(membership: Membership, now: Date): Status {
   }
 }
 
+/** "Jan 1, 2026 to Dec 31, 2026": the first and the last local day the term includes. */
 export function termText(membership: Membership, zone: string): string {
   if (membership.termStartsAt && membership.termEndsAt) {
-    return `${formatDayIn(membership.termStartsAt, zone)} to ${formatDayIn(membership.termEndsAt, zone)}`;
+    return `${formatDayIn(membership.termStartsAt, zone)} to ${lastTermDay(membership.termEndsAt, zone)}`;
   }
   return membership.status === 'pending' ? 'Set when the membership is confirmed' : 'Not available';
+}
+
+/**
+ * Whether to offer booking a session with the membership's included sessions (ENR-12): confirmed,
+ * inside its term, not suspended now, and including sessions of named activities. The API decides
+ * on submit (period limits, the session's own term and suspension checks); this only avoids
+ * offering what it would certainly refuse.
+ */
+export function membershipBookable(membership: Membership, now: Date): boolean {
+  const attendance = membership.attendance;
+  if (membership.status !== 'confirmed' || !attendance) return false;
+  if (attendance.mode === 'none') return false;
+  const applies = attendance.appliesTo;
+  if (!applies || applies.offeringIds.length + applies.programIds.length === 0) return false;
+  return termPhase(membership, now) === 'in_term' && activeSuspension(membership, now) === null;
+}
+
+/** Whether a session starting at `start` falls inside the membership's term (start inclusive). */
+export function inTerm(membership: Pick<Membership, 'termStartsAt' | 'termEndsAt'>, start: string) {
+  return termPhase(membership, new Date(start)) === 'in_term';
+}
+
+/** Why the API refused a membership booking, in the customer's words (ENR-12). */
+export function membershipBookingRefusal(code: string | null): string | null {
+  switch (code) {
+    case 'MEMBERSHIP_SESSIONS_USED':
+      return 'Not available: every session this membership includes for that period is used';
+    case 'MEMBERSHIP_NOT_ACTIVE':
+      return 'Not available: this membership is not active';
+    case 'MEMBERSHIP_SUSPENDED':
+      return 'Not available: the membership is suspended at that time';
+    case 'OUTSIDE_MEMBERSHIP_TERM':
+      return 'Not available: that session is outside the membership term';
+    case 'MEMBERSHIP_INCLUDES_NO_SESSIONS':
+      return 'Not available: this membership includes no sessions';
+    case 'MEMBERSHIP_BENEFIT_UNKNOWN':
+      return 'Not available: what this membership includes cannot be read. Ask the front desk.';
+    default:
+      return null;
+  }
 }

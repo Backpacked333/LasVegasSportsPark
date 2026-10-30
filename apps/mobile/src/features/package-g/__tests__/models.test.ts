@@ -12,6 +12,7 @@ import {
   cancelBasis,
   conflictsOf,
   endReasonText,
+  holdPaymentOf,
   isCancellable,
   outstandingText,
   paymentText,
@@ -20,9 +21,14 @@ import {
 import {
   activeSuspension,
   attendanceText,
+  inTerm,
+  lastTermDay,
+  membershipBookable,
+  membershipBookingRefusal,
   membershipStatus,
   periodLabel,
   suspensionText,
+  termText,
   usageText,
 } from '../membership-model';
 import { receiptStatus, returnText } from '../receipt-model';
@@ -71,6 +77,18 @@ describe('booking model (SPK-COND-003, ENR-13)', () => {
     expect(cancelBasis({ status: 'completed' })).toBeNull();
     expect(endReasonText('not_decided')).toBe('The request was not decided before its start time.');
     expect(endReasonText('Moving the party')).toBe('Moving the party');
+  });
+
+  it("a held booking's basket says where its payment stands: only open or held is unpaid", () => {
+    expect(holdPaymentOf('open')).toBe('unpaid');
+    expect(holdPaymentOf('held')).toBe('unpaid');
+    expect(holdPaymentOf('checking_out')).toBe('paying');
+    // The checkout completed: never "nothing charged", even while the booking still reads held.
+    expect(holdPaymentOf('fulfilled')).toBe('paid');
+    expect(holdPaymentOf('partially_fulfilled')).toBe('paid');
+    expect(holdPaymentOf('expired')).toBe('ended');
+    expect(holdPaymentOf('released')).toBe('ended');
+    expect(holdPaymentOf('abandoned')).toBe('ended');
   });
 
   it('free times: later than now, with at least the number of resources one booking reserves', () => {
@@ -135,17 +153,95 @@ describe('membership model (SPK-COND-001, ENR-12)', () => {
   it('a suspension in force makes the membership read "suspended", in the facility zone', () => {
     const suspended = membership({ suspensions: [suspension()] });
     expect(activeSuspension(suspended, TEST_NOW)?.id).toBe(G.suspension);
-    expect(membershipStatus(suspended, TEST_NOW)).toEqual({
+    expect(membershipStatus(suspended, TEST_NOW, ZONE)).toEqual({
       tone: 'warning',
       label: 'Membership suspended',
     });
-    expect(membershipStatus(membership(), TEST_NOW).label).toBe('Membership active');
+    expect(membershipStatus(membership(), TEST_NOW, ZONE).label).toBe('Membership active');
     expect(suspensionText(suspension(), ZONE)).toBe(
       'Suspended from Oct 20, 2026 until Nov 3, 2026',
     );
     expect(suspensionText(suspension({ until: null }), ZONE)).toBe(
       'Suspended from Oct 20, 2026 until the front desk ends it',
     );
+  });
+});
+
+describe('membership term (SPK-COND-001, POL-038)', () => {
+  it("the term's end is the last local day it includes: the API's termEndsAt is exclusive", () => {
+    // Offering 2026-01-01 to 2026-12-31: the API stores the local midnight after Dec 31.
+    expect(termText(membership(), ZONE)).toBe('Jan 1, 2026 to Dec 31, 2026');
+    expect(lastTermDay('2027-01-01T08:00:00.000Z', ZONE)).toBe('Dec 31, 2026');
+    // A term counted from confirmation ends at that instant: its day is still included.
+    expect(lastTermDay('2026-10-31T21:23:00.000Z', ZONE)).toBe('Oct 31, 2026');
+    expect(termText(membership({ termStartsAt: null, termEndsAt: null }), ZONE)).toBe(
+      'Not available',
+    );
+    expect(
+      termText(membership({ status: 'pending', termStartsAt: null, termEndsAt: null }), ZONE),
+    ).toBe('Set when the membership is confirmed');
+    expect(inTerm(membership(), '2026-12-31T23:00:00.000Z')).toBe(true);
+    expect(inTerm(membership(), '2027-01-01T08:00:00.000Z')).toBe(false);
+  });
+
+  it('"Membership active" only inside the term; no term, not started and ended each say so', () => {
+    const labels = [
+      membershipStatus(membership(), TEST_NOW, ZONE),
+      membershipStatus(membership({ termStartsAt: null, termEndsAt: null }), TEST_NOW, ZONE),
+      membershipStatus(
+        membership({
+          termStartsAt: '2027-01-01T08:00:00.000Z',
+          termEndsAt: '2028-01-01T08:00:00.000Z',
+        }),
+        TEST_NOW,
+        ZONE,
+      ),
+      membershipStatus(
+        membership({
+          termStartsAt: '2025-01-01T08:00:00.000Z',
+          termEndsAt: '2026-01-01T08:00:00.000Z',
+        }),
+        TEST_NOW,
+        ZONE,
+      ),
+    ];
+    expect(labels).toEqual([
+      { tone: 'success', label: 'Membership active' },
+      { tone: 'warning', label: 'Term not available: ask the front desk' },
+      { tone: 'info', label: 'Starts Jan 1, 2027' },
+      { tone: 'neutral', label: 'Term ended' },
+    ]);
+  });
+
+  it('ENR-12: booking with a membership is offered only inside its term, unsuspended, with named activities', () => {
+    expect(membershipBookable(membership(), TEST_NOW)).toBe(true);
+    expect(membershipBookable(membership({ suspensions: [suspension()] }), TEST_NOW)).toBe(false);
+    expect(membershipBookable(membership({ termStartsAt: null }), TEST_NOW)).toBe(false);
+    expect(membershipBookable(membership({ status: 'pending' }), TEST_NOW)).toBe(false);
+    expect(membershipBookable(membership({ attendance: null }), TEST_NOW)).toBe(false);
+    expect(
+      membershipBookable(
+        membership({ attendance: { mode: 'none', limit: null, appliesTo: null } }),
+        TEST_NOW,
+      ),
+    ).toBe(false);
+    expect(
+      membershipBookable(
+        membership({
+          attendance: {
+            mode: 'unlimited',
+            limit: null,
+            appliesTo: { offeringIds: [], programIds: [] },
+          },
+        }),
+        TEST_NOW,
+      ),
+    ).toBe(false);
+    expect(membershipBookingRefusal('MEMBERSHIP_SESSIONS_USED')).toBe(
+      'Not available: every session this membership includes for that period is used',
+    );
+    expect(membershipBookingRefusal('OUTSIDE_MEMBERSHIP_TERM')).toMatch(/outside the membership/);
+    expect(membershipBookingRefusal('SOMETHING_ELSE')).toBeNull();
   });
 });
 

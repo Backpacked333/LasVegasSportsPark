@@ -3,7 +3,9 @@
  * §4.14, SPK-SCHED-008, SPK-UX-008): what each membership includes exactly as its entitlement
  * states, sessions used per period, suspensions, the term in the facility's zone, whose it is;
  * renewal only at checkout and only while the switch is on (no target preselected, nothing charged
- * here); readable while off; errors with their code; not available.
+ * here); "active" only inside the term (its end the last local day it includes); booking a session
+ * with the included sessions (ENR-12, one key per intent); cancellation through the enrollment,
+ * never gated; readable while off; errors with their code; not available.
  */
 import {
   apiErrorBody,
@@ -21,10 +23,12 @@ import {
   basket,
   G,
   membership,
+  membershipSessionBooking,
   offering,
   ok,
   page,
   peopleRoutes,
+  seasonSessions,
   suspension,
   switchesOn,
 } from '../../../features/package-g/__tests__/fixtures';
@@ -56,6 +60,13 @@ const NEXT_YEAR = offering({
   startsOn: '2027-01-01',
   endsOn: '2027-12-31',
 });
+const SEASON = offering({
+  id: G.season,
+  kind: 'season',
+  name: 'Open play season',
+  startsOn: '2026-09-01',
+  endsOn: '2027-06-30',
+});
 const CLOSED = offering({
   id: G.membershipOffering,
   kind: 'membership',
@@ -68,7 +79,15 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
     ...peopleRoutes(),
     ...switchesOn('memberships'),
     'GET /me/memberships': ok(page([membership(), CHILD_MEMBERSHIP])),
-    'GET /offerings/{id}': ok(offering({ id: G.membershipOffering, kind: 'membership' })),
+    'GET /offerings/{id}': (req) =>
+      fakeResponse(
+        200,
+        req.params.id === G.season
+          ? SEASON
+          : offering({ id: G.membershipOffering, kind: 'membership' }),
+      ),
+    'GET /offerings/{id}/sessions': ok(seasonSessions()),
+    'POST /session-bookings': { status: 201, body: membershipSessionBooking() },
     'GET /offerings': ok(page([NEXT_YEAR, CLOSED])),
     'POST /enrollments/{id}/renew': ok(basket({ id: G.basketNew, status: 'open' })),
     ...overrides,
@@ -83,6 +102,28 @@ function renderScreen(r: Record<string, FakeHandler> = routes()) {
 
 const renewals = (app: ReturnType<typeof createTestApp>) =>
   app.fake.requests.filter((r) => r.route === '/enrollments/{id}/renew');
+const bookings = (app: ReturnType<typeof createTestApp>) =>
+  app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/session-bookings');
+
+/** Opens the booking form on my membership and chooses the season's next session in the term. */
+async function chooseIncludedSession() {
+  const mine = await screen.findByTestId(`membership-${G.membership}`);
+  fireEvent.press(
+    within(mine).getByRole('button', { name: 'Book a session with this membership' }),
+  );
+  fireEvent.press(
+    await screen.findByRole('radio', { name: 'Open play season, Sep 1, 2026 to Jun 30, 2027' }),
+  );
+  fireEvent.press(
+    await screen.findByRole('radio', { name: 'Open play, Tue, Oct 27, 6:00 PM to 7:00 PM PDT' }),
+  );
+}
+
+async function bookWithMembership() {
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: 'Book with this membership' }));
+  });
+}
 
 describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
   afterEach(settleApps);
@@ -209,6 +250,140 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
     ).toBeOnTheScreen();
     expect(await screen.findByTestId(`membership-${G.membership}`)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Renew' })).toBeNull();
+  });
+
+  it('"Membership active" only inside the term; a membership without a term never reads active', async () => {
+    renderScreen(
+      routes({
+        'GET /me/memberships': ok(
+          page([
+            membership({ termStartsAt: null, termEndsAt: null }),
+            membership({
+              enrollmentId: G.membershipChild,
+              participantPersonId: G.child,
+              termStartsAt: '2027-01-01T08:00:00.000Z',
+              termEndsAt: '2028-01-01T08:00:00.000Z',
+            }),
+          ]),
+        ),
+      }),
+    );
+    const mine = await screen.findByTestId(`membership-${G.membership}`);
+    expect(within(mine).getByLabelText('Term not available: ask the front desk')).toBeOnTheScreen();
+    expect(within(mine).getByLabelText('Term: Not available')).toBeOnTheScreen();
+    expect(within(mine).queryByLabelText('Membership active')).toBeNull();
+    // Without a term it books nothing (POL-038), so booking is not offered.
+    expect(
+      within(mine).queryByRole('button', { name: 'Book a session with this membership' }),
+    ).toBeNull();
+    const child = screen.getByTestId(`membership-${G.membershipChild}`);
+    expect(await within(child).findByLabelText('Starts Jan 1, 2027')).toBeOnTheScreen();
+    expect(
+      await within(child).findByLabelText('Term: Jan 1, 2027 to Dec 31, 2027'),
+    ).toBeOnTheScreen();
+  });
+
+  it('cancellation goes to the enrollment with its opaque id, and stays offered while the switch is off (DEC-016)', async () => {
+    renderScreen(routes(switchesOn()));
+    const mine = await screen.findByTestId(`membership-${G.membership}`);
+    fireEvent.press(within(mine).getByRole('button', { name: 'Cancel this membership' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/enrollments/${G.membership}/cancel`);
+    expect(
+      within(mine).queryByRole('button', { name: 'Book a session with this membership' }),
+    ).toBeNull();
+  });
+
+  it('ENR-12: books a session inside the term with the included sessions, one key, in the facility zone', async () => {
+    const app = renderScreen();
+    await chooseIncludedSession();
+    // A past session and one after the term ends are not offered.
+    expect(screen.getAllByRole('radio', { name: /^Open play,/ })).toHaveLength(1);
+    expect(
+      screen.getByText('Only the activities this membership names are listed.'),
+    ).toBeOnTheScreen();
+    await bookWithMembership();
+    expect(await screen.findByTestId(`membership-booked-${G.membership}`)).toBeOnTheScreen();
+    expect(screen.getByLabelText('Booked')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Session: Tue, Oct 27, 6:00 PM to 7:00 PM PDT')).toBeOnTheScreen();
+    expect(
+      screen.getByText('It counts toward the sessions this membership includes for that period.'),
+    ).toBeOnTheScreen();
+    const [sent] = bookings(app);
+    expect(sent?.body).toEqual({
+      offeringId: G.season,
+      sessionId: G.sessionNext,
+      participantPersonId: G.self,
+      membershipEnrollmentId: G.membership,
+    });
+    expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
+    // The usage is read again after the booking.
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/memberships')).toHaveLength(2),
+    );
+  });
+
+  it('every included session of the period used is "not available" with its code, and nothing else is claimed', async () => {
+    renderScreen(
+      routes({
+        'POST /session-bookings': {
+          status: 409,
+          body: apiErrorBody('RESOURCE_CONFLICT', {
+            details: { code: 'MEMBERSHIP_SESSIONS_USED', periodKey: 'month:2026-10', limit: 8 },
+          }),
+        },
+      }),
+    );
+    await chooseIncludedSession();
+    await bookWithMembership();
+    const refused = await screen.findByTestId('membership-booking-refused');
+    expect(
+      within(refused).getByLabelText(
+        'Not available: every session this membership includes for that period is used',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      within(refused).getByText('Error code: RESOURCE_CONFLICT (MEMBERSHIP_SESSIONS_USED)'),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Book with this membership' })).toBeDisabled();
+    expect(screen.queryByLabelText('Booked')).toBeNull();
+  });
+
+  it('§4.9: with no answer, "Check again" repeats the same booking with the same idempotency key', async () => {
+    let attempts = 0;
+    const app = renderScreen(
+      routes({
+        'POST /session-bookings': () => {
+          attempts += 1;
+          if (attempts === 1) throw new TypeError('Network request failed');
+          return fakeResponse(201, membershipSessionBooking());
+        },
+      }),
+    );
+    await chooseIncludedSession();
+    await bookWithMembership();
+    expect(await screen.findByLabelText('No answer yet')).toBeOnTheScreen();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByTestId(`membership-booked-${G.membership}`)).toBeOnTheScreen();
+    const [first, second] = bookings(app);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+    expect(second?.body).toEqual(first?.body);
+  });
+
+  it('CAPABILITY_DISABLED on a membership booking is turned off with its code', async () => {
+    renderScreen(
+      routes({
+        'POST /session-bookings': {
+          status: 403,
+          body: capabilityDisabledBody('memberships', ['DEC-016', 'DEC-072']),
+        },
+      }),
+    );
+    await chooseIncludedSession();
+    await bookWithMembership();
+    expect(await screen.findByLabelText('Memberships turned off')).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: ACCESS_DENIED \(CAPABILITY_DISABLED\)/)).toBeOnTheScreen();
   });
 
   it('shows the API error code with "Try again"; a refused read is "not available"; none is the empty state', async () => {

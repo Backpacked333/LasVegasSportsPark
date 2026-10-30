@@ -29,7 +29,7 @@ import {
   rentalAvailability,
   switchesOn,
 } from '../../../features/package-g/__tests__/fixtures';
-import { mePermissions } from '../../../testing/test-app';
+import { mePermissions, TEST_NOW } from '../../../testing/test-app';
 import { BookingFlowScreen } from '../BookingFlowScreen';
 
 const mockRouter = createRouterMock();
@@ -170,6 +170,66 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
     fireEvent.press(screen.getByRole('button', { name: 'Go to basket' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${G.basket}`);
+  });
+
+  it('§4.9: with no answer, "Check again" repeats the same booking with the same idempotency key and body', async () => {
+    let attempts = 0;
+    const app = renderFlow(
+      rentalRoutes({
+        'POST /bookings': () => {
+          attempts += 1;
+          if (attempts === 1) throw new TypeError('Network request failed');
+          return fakeResponse(200, booking());
+        },
+      }),
+    );
+    await chooseRentalHour();
+    await press('Book now');
+    expect(await screen.findByLabelText('No answer yet')).toBeOnTheScreen();
+    expect(screen.queryByTestId('booking-outcome')).toBeNull();
+    await press('Check again');
+    expect(await screen.findByTestId('booking-outcome')).toBeOnTheScreen();
+    const [first, second] = posts(app);
+    expect(posts(app)).toHaveLength(2);
+    expect(first?.headers['idempotency-key']).toMatch(/^key-/);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+    expect(second?.body).toEqual(first?.body);
+  });
+
+  it('SPK-UX-008: free times read earlier stay listed offline under the offline notice with their age, and booking is disabled', async () => {
+    const app = renderFlow(rentalRoutes());
+    await chooseRentalHour();
+    act(() => app.sources.setReachable(false));
+    const when = screen.getByTestId('booking-when');
+    expect(await within(when).findByLabelText('You are offline')).toBeOnTheScreen();
+    expect(within(when).getByText(/^Showing information from /)).toBeOnTheScreen();
+    expect(within(when).getByText('Needs a connection: Booking.')).toBeOnTheScreen();
+    expect(within(when).getByRole('radio', { name: TEN_AM })).toBeOnTheScreen();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Book now' })).toBeDisabled());
+    expect(screen.getByText('Booking needs a connection.')).toBeOnTheScreen();
+    expect(posts(app)).toHaveLength(0);
+  });
+
+  it('SPK-UX-008: free times older than the stale threshold say they may be out of date, with their age', async () => {
+    let clock = TEST_NOW;
+    const app = createTestApp({
+      routes: rentalRoutes(),
+      config: { staleDataThresholdMs: 60_000 },
+      now: () => clock,
+    });
+    render(<BookingFlowScreen offeringId={G.rental} />, { wrapper: app.wrapper });
+    await chooseRentalHour();
+    const when = screen.getByTestId('booking-when');
+    // Fresh: only its age.
+    expect(within(when).getByTestId('last-updated')).toBeOnTheScreen();
+    expect(within(when).queryByLabelText('This information may be out of date')).toBeNull();
+    clock = new Date(TEST_NOW.getTime() + 120_000);
+    fireEvent.press(screen.getByRole('radio', { name: ELEVEN_AM }));
+    expect(
+      await within(when).findByLabelText('This information may be out of date'),
+    ).toBeOnTheScreen();
+    expect(within(when).getByText(/^Showing information from 2 min/)).toBeOnTheScreen();
+    expect(within(when).getByRole('radio', { name: ELEVEN_AM })).toBeChecked();
   });
 
   it('SPK-COND-003 request mode: a party request holds nothing, states its guests, and the deposit-before-approval question stays pending', async () => {

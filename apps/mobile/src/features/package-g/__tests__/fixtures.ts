@@ -6,7 +6,7 @@
  */
 import type { CapabilityId, Schema } from '@sportspark/api-client';
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { IDS as MONEY_IDS, me } from '../../money/testing/fixtures';
+import { IDS as MONEY_IDS, me, sessionBooking } from '../../money/testing/fixtures';
 import { TEST_NOW, TEST_SESSION, mePermissions } from '../../../testing/test-app';
 
 export const ZONE = 'America/Los_Angeles';
@@ -38,6 +38,10 @@ export const G = {
   sale: '0192f1a0-0000-7000-8000-00000000fa01',
   saleB: '0192f1a0-0000-7000-8000-00000000fa02',
   policy: '0192f1a0-0000-7000-8000-00000000fb01',
+  sessionPast: '0192f1a0-0000-7000-8000-00000000fd01',
+  sessionNext: '0192f1a0-0000-7000-8000-00000000fd02',
+  sessionAfterTerm: '0192f1a0-0000-7000-8000-00000000fd03',
+  sessionBooking: '0192f1a0-0000-7000-8000-00000000fd11',
 } as const;
 
 export const ok = (body: unknown) => ({ status: 200, body });
@@ -235,7 +239,7 @@ export function membership(overrides: Partial<Schema<'Membership'>> = {}): Schem
     offeringName: 'Adult membership 2026',
     status: 'confirmed',
     termStartsAt: '2026-01-01T08:00:00.000Z',
-    termEndsAt: '2026-12-31T08:00:00.000Z',
+    termEndsAt: '2027-01-01T08:00:00.000Z',
     attendance: {
       mode: 'included_sessions',
       limit: { count: 8, period: 'month', weekStartsOn: null },
@@ -342,3 +346,53 @@ export function peopleRoutes(): Record<string, FakeHandler> {
 export const switchesOn = (...enabled: CapabilityId[]) => ({
   'GET /me/permissions': mePermissions({ enabled }),
 });
+
+/** A session of the season offering a membership includes (`GET /offerings/{id}/sessions`). */
+export function seasonSession(
+  id: string,
+  scheduledStart: string,
+  overrides: Partial<Schema<'OfferingSession'>> = {},
+): Schema<'OfferingSession'> {
+  return {
+    id,
+    offeringId: G.season,
+    sequence: 3,
+    title: 'Open play',
+    scheduledStart,
+    scheduledEnd: new Date(new Date(scheduledStart).getTime() + 3_600_000).toISOString(),
+    schedulingEventId: null,
+    capacityOverride: null,
+    status: 'scheduled',
+    canceledAt: null,
+    cancelReason: null,
+    revision: 1,
+    createdAt: T,
+    ...overrides,
+  };
+}
+
+/** Before the clock, inside the term (Oct 27, 6 PM PDT), and after the term ends (Jan 5, 2027). */
+export function seasonSessions(): Schema<'OfferingSession'>[] {
+  return [
+    seasonSession(G.sessionPast, '2026-10-20T01:00:00.000Z'),
+    seasonSession(G.sessionNext, '2026-10-28T01:00:00.000Z'),
+    seasonSession(G.sessionAfterTerm, '2027-01-06T02:00:00.000Z'),
+  ];
+}
+
+/** The session booking the API answers for a membership booking (ENR-12). */
+export function membershipSessionBooking(): Schema<'SessionBooking'> {
+  return sessionBooking({
+    id: G.sessionBooking,
+    offeringId: G.season,
+    sessionId: G.sessionNext,
+    kind: 'session',
+    makeupEntitlementId: null,
+    entitlementBasis: 'membership',
+    packageEntitlementId: null,
+    membershipEnrollmentId: G.membership,
+    creditDisposition: null,
+    scheduledStart: '2026-10-28T01:00:00.000Z',
+    scheduledEnd: '2026-10-28T02:00:00.000Z',
+  }) as unknown as Schema<'SessionBooking'>;
+}

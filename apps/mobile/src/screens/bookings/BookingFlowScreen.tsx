@@ -34,11 +34,12 @@
  * "Link not available" without a request.
  *
  * States: loading; ready; empty (no free time that day); validation failure (field messages, input
- * kept); permission restriction (not available); turned off; offline (booking disabled, "Needs a
- * connection"); processing (busy); no answer ("Check again", same key); success (request sent, or
- * held with "Go to basket").
+ * kept); permission restriction (not available); turned off; offline or stale (free times read
+ * earlier stay listed under the offline or stale notice with the time they were read; booking
+ * disabled offline, "Needs a connection"); processing (busy); no answer ("Check again", same
+ * key); success (request sent, or held with "Go to basket").
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
+import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -82,10 +83,11 @@ import {
   zoneAbbreviation,
   type DisplayZone,
 } from '../../features/today/time';
-import { useConnectivity, useNow } from '../../providers/AppProviders';
+import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { CapabilityGate } from '../../ui/CapabilityGate';
+import { LastUpdated } from '../../ui/LastUpdated';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
@@ -210,6 +212,7 @@ function BookingForm({
   terms: BookingTerms;
 }) {
   const now = useNow();
+  const { services } = useApp();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const zone = displayZone(offering.facility.timezone);
@@ -319,6 +322,28 @@ function BookingForm({
   };
 
   const dayLabel = `${formatDay(dayStart, zone.zone)} (${zoneAbbreviation(dayStart, zone.zone)})`;
+  // SPK-UX-008, §4.15: free times read earlier are shown with their age while offline, after a
+  // failed refresh or once older than the stale threshold; booking needs a fresh connection.
+  const staleThreshold = services.config.staleDataThresholdMs;
+  const timesStale =
+    staleThreshold !== null &&
+    availability.updatedAt !== null &&
+    now.getTime() - availability.updatedAt.getTime() > staleThreshold;
+  const refreshFailed =
+    availability.error !== null && presentationForError(availability.error) === 'offline';
+  const timesNotice =
+    offline || refreshFailed || timesStale ? (
+      <StateView
+        variant="offline-stale"
+        offline={offline || refreshFailed}
+        updatedAt={availability.updatedAt}
+        now={now}
+        unavailableActions={['Booking']}
+        onRetry={() => void availability.refetch()}
+      />
+    ) : (
+      <LastUpdated at={availability.updatedAt} now={now} />
+    );
 
   return (
     <View>
@@ -379,30 +404,36 @@ function BookingForm({
             <StateView variant="loading" label="free times" />
           )
         ) : times.length === 0 ? (
-          <StateView
-            variant="empty"
-            title="No free time this day"
-            description="Try a later day."
-            actionLabel="Later day"
-            onAction={() => changeDay(1)}
-          />
+          <>
+            {timesNotice}
+            <StateView
+              variant="empty"
+              title="No free time this day"
+              description="Try a later day."
+              actionLabel="Later day"
+              onAction={() => changeDay(1)}
+            />
+          </>
         ) : (
-          <View accessibilityRole="radiogroup" accessibilityLabel="Start time">
-            {times.map((t) => (
-              <ChoiceRow
-                key={t.start}
-                mode="radio"
-                label={formatRange(t.start, t.end, zone.zone)}
-                detail={`${t.resources.length} free: ${t.resources.map((r) => resourceName(r.name)).join(', ')}`}
-                checked={start === t.start}
-                onPress={() => {
-                  setStart(t.start);
-                  setChosen([]);
-                  setErrors((e) => ({ ...e, time: undefined }));
-                }}
-              />
-            ))}
-          </View>
+          <>
+            {timesNotice}
+            <View accessibilityRole="radiogroup" accessibilityLabel="Start time">
+              {times.map((t) => (
+                <ChoiceRow
+                  key={t.start}
+                  mode="radio"
+                  label={formatRange(t.start, t.end, zone.zone)}
+                  detail={`${t.resources.length} free: ${t.resources.map((r) => resourceName(r.name)).join(', ')}`}
+                  checked={start === t.start}
+                  onPress={() => {
+                    setStart(t.start);
+                    setChosen([]);
+                    setErrors((e) => ({ ...e, time: undefined }));
+                  }}
+                />
+              ))}
+            </View>
+          </>
         )}
         {errors.time ? (
           <Text style={styles.error} accessibilityRole="alert">

@@ -6,9 +6,14 @@
  *
  * The consequence depends on what the booking holds:
  * - a request holds nothing: it is withdrawn, nothing was reserved or charged;
- * - a held booking holds time and an unpaid basket: both are released. While its basket is in
- *   checkout a payment may be on its way, so cancelling is not offered until the payment outcome
- *   is known (the basket shows it); the hold's basket (`GET /v1/baskets/{id}`) is read for that;
+ * - a held booking holds time and an unpaid basket: both are released. The hold's basket
+ *   (`GET /v1/baskets/{id}`) says where its payment stands (`holdPaymentOf`), and the release is
+ *   offered only while it is unpaid (`open` or `held`), on a fresh read: the panel waits for its
+ *   own read (never the cached one) and confirm reads it again, sending nothing unless it is still
+ *   unpaid. In checkout a payment may be on its way; once the checkout completed (`fulfilled`,
+ *   `partially_fulfilled`) the booking is paid but may still read `held` until the API records it,
+ *   so nothing says "nothing charged" and no release is offered (the booking is read again); a
+ *   hold that already ended (`expired`, `released`, `abandoned`) has nothing left to release;
  * - a paid booking ends through its enrollment's cancellation: the money consequence is the API's
  *   `GET /v1/enrollments/{id}/cancellation-preview`, acknowledged by the customer and sent as
  *   `acceptedConsequence`. It is read again at confirm time; if it changed, nothing is sent and the
@@ -38,6 +43,7 @@ import {
   bookingStatus,
   cancelBasis,
   detailCode,
+  holdPaymentOf,
   type Booking,
 } from '../../features/package-g/booking-model';
 import { registrationRoutes } from '../../features/registration/routes';
@@ -169,6 +175,16 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
       setReasonError('Enter a reason for canceling.');
       return;
     }
+    if (basis === 'hold' && booking.basketId !== null) {
+      // Never on the cached basket: read it again, and send only if it is still unpaid.
+      setChecking(true);
+      const reread = await basket.refetch();
+      setChecking(false);
+      // A failed read is shown in the panel above, with its code and "Try again".
+      if (reread.error) return;
+      const fresh = reread.data?.data;
+      if (!fresh || holdPaymentOf(fresh.status) !== 'unpaid') return;
+    }
     if (basis === 'paid') {
       if (!acknowledged) return;
       setChecking(true);
@@ -200,38 +216,71 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
       consequence = (
         <Body>The time held for you is released. Nothing has been charged for this booking.</Body>
       );
+    } else if (basket.error) {
+      consequence = <QueryErrorView error={basket.error} onRetry={() => void basket.refetch()} />;
     } else if (basket.data === undefined) {
-      consequence = basket.error ? (
-        <QueryErrorView error={basket.error} onRetry={() => void basket.refetch()} />
-      ) : (
-        <StateView variant="loading" label="whether a payment is on its way" />
-      );
-    } else if (basket.data.status === 'checking_out') {
-      const basketId = booking.basketId;
-      consequence = (
-        <View testID="cancel-payment-in-progress">
-          <StatusBadge tone="warning" label="A payment for this booking may be on its way" />
-          <Body>
-            Canceling is not offered while the basket is being paid. Open the basket to see the
-            payment outcome first, and do not pay again.
-          </Body>
-          <ButtonRow>
-            <Button
-              label="Open the basket"
-              variant="secondary"
-              onPress={() => router.push(registrationRoutes.basket(basketId))}
-            />
-          </ButtonRow>
-        </View>
-      );
+      consequence = <StateView variant="loading" label="whether a payment is on its way" />;
     } else {
-      ready = true;
-      consequence = (
-        <Body>
-          The time held for you is released and your basket is emptied. Nothing has been charged for
-          this booking.
-        </Body>
-      );
+      const basketId = booking.basketId;
+      const payment = holdPaymentOf(basket.data.status);
+      if (payment === 'paying') {
+        consequence = (
+          <View testID="cancel-payment-in-progress">
+            <StatusBadge tone="warning" label="A payment for this booking may be on its way" />
+            <Body>
+              Canceling is not offered while the basket is being paid. Open the basket to see the
+              payment outcome first, and do not pay again.
+            </Body>
+            <ButtonRow>
+              <Button
+                label="Open the basket"
+                variant="secondary"
+                onPress={() => router.push(registrationRoutes.basket(basketId))}
+              />
+            </ButtonRow>
+          </View>
+        );
+      } else if (payment === 'paid') {
+        consequence = (
+          <View testID="cancel-payment-received">
+            <StatusBadge tone="info" label="Payment received: this booking is being updated" />
+            <Body>
+              The basket's checkout completed, so there is no hold to release. Once this booking
+              shows it is paid, canceling it shows the refund or credit it would give.
+            </Body>
+            <ButtonRow>
+              <Button
+                label="Check again"
+                variant="secondary"
+                onPress={() => {
+                  onReload();
+                  void basket.refetch();
+                }}
+                accessibilityHint="Reads this booking again"
+              />
+            </ButtonRow>
+          </View>
+        );
+      } else if (payment === 'ended') {
+        consequence = (
+          <View testID="cancel-hold-ended">
+            <StatusBadge tone="neutral" label="The time held for this booking was released" />
+            <Body>There is nothing left to cancel. This booking updates shortly.</Body>
+          </View>
+        );
+      } else {
+        // Only on the panel's own read: a cached basket may be out of date (a checkout started).
+        ready = !basket.isFetching;
+        consequence = (
+          <View testID="cancel-hold-release">
+            <Body>
+              The time held for you is released and your basket is emptied. Nothing has been charged
+              for this booking.
+            </Body>
+            {basket.isFetching ? <Caption>Checking that no payment has started…</Caption> : null}
+          </View>
+        );
+      }
     }
   } else if (booking.enrollmentId === null) {
     consequence = (

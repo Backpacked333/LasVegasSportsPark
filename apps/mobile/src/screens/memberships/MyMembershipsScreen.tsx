@@ -9,27 +9,37 @@
  * status, its term in the facility's time zone (through its offering, SPK-SCHED-008), exactly
  * what attendance it includes and where (or that it cannot be shown: nothing is assumed), the
  * sessions used in each period with the period's limit, and its suspensions (arranged by the front
- * desk: the API has no customer command for them). A confirmed membership can be renewed at
- * checkout (`RenewMembership`) while the switch is on.
+ * desk: the API has no customer command for them). "Membership active" only inside the term the
+ * API states: before it the start day, after it "Term ended", and a confirmed membership without a
+ * term reads "Term not available" (it books nothing, POL-038). The term's end is the last local
+ * day it includes (the API's `termEndsAt` is exclusive). While the switch is on, a confirmed
+ * membership can be renewed at checkout (`RenewMembership`) and, inside its term with sessions of
+ * named activities, used to book a session (`BookWithMembership`, `POST /v1/session-bookings`
+ * with `membershipEnrollmentId`, ENR-12). A pending or confirmed membership links to its
+ * enrollment's cancellation (`/enrollments/{id}/cancel`, SCR-C-33: the API's cancellation preview
+ * and command), never gated by the switch (cancellations keep working while it is off, DEC-016).
  *
  * Behind `CapabilityGate` for `memberships` (DEC-016, DEC-072) with `whenOff="notice"`: existing
  * memberships stay readable while the switch is off; renewal is a new commitment and is offered
- * only while it is on (the API refuses it with CAPABILITY_DISABLED otherwise). Membership terms and
+ * and booking with a membership are new commitments, offered only while it is on (the API refuses
+ * them with CAPABILITY_DISABLED otherwise). Membership terms and
  * member pricing stay pending (POL-038, DEC-007); no price is shown here.
  *
  * States: loading; empty ("No memberships", with Discover); ready; error with the code and "Try
  * again"; permission restriction (not available); offline or stale (cached with its age, renewal
- * needs a connection); turned off (notice above the list).
+ * and booking need a connection); turned off (notice above the list, no renewal or booking).
  */
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
+import { moneyRoutes } from '../../features/money/routes';
 import { Body, ButtonRow, Caption, Field } from '../../features/money/ui';
 import {
   appliesToText,
   attendanceText,
+  membershipBookable,
   membershipStatus,
   suspensionText,
   termText,
@@ -48,6 +58,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
+import { BookWithMembership } from './BookWithMembership';
 import { RenewMembership } from './RenewMembership';
 
 export const MEMBERSHIPS_STILL_AVAILABLE = 'Memberships you already hold stay available here.';
@@ -65,11 +76,14 @@ function MembershipCard({
   membership: Membership;
   zone: DisplayZone;
   forWhom: string;
+  /** The API reports `memberships` on: renewal and booking are new commitments (DEC-016). */
   canRenew: boolean;
 }) {
+  const router = useRouter();
   const now = useNow();
   const [renewing, setRenewing] = useState(false);
-  const status = membershipStatus(membership, now);
+  const status = membershipStatus(membership, now, zone.zone);
+  const cancellable = membership.status === 'pending' || membership.status === 'confirmed';
   const applies = appliesToText(membership.attendance);
   const included = membership.attendance?.mode === 'included_sessions';
   const notice = zoneNotice(zone, membership.createdAt);
@@ -128,6 +142,20 @@ function MembershipCard({
             />
           </ButtonRow>
         )
+      ) : null}
+      <BookWithMembership
+        membership={membership}
+        canStart={canRenew && membershipBookable(membership, now)}
+      />
+      {cancellable ? (
+        <ButtonRow>
+          <Button
+            label="Cancel this membership"
+            variant="secondary"
+            onPress={() => router.push(moneyRoutes.cancel(membership.enrollmentId))}
+            accessibilityHint="Shows what canceling would change before anything is sent"
+          />
+        </ButtonRow>
       ) : null}
     </View>
   );

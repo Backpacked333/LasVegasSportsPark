@@ -6,7 +6,7 @@
  * the previewed money consequence); one idempotency key per intent; NOT_FOUND is not available.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   cancellationPreview,
   consequence,
@@ -145,8 +145,142 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
       await screen.findByLabelText('A payment for this booking may be on its way'),
     ).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
-    fireEvent.press(screen.getByRole('button', { name: 'Open the basket' }));
+    // The hold itself says the payment is in progress and never asks to pay again.
+    expect(
+      screen.getByLabelText('Payment in progress: open the basket for its outcome'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    fireEvent.press(
+      within(screen.getByTestId('cancel-payment-in-progress')).getByRole('button', {
+        name: 'Open the basket',
+      }),
+    );
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${G.basket}`);
+  });
+
+  it.each(['held', 'open'] as const)(
+    'a held booking with an unpaid (%s) basket: canceling releases the hold and the basket, sending the reason, expectedRevision and one key',
+    async (status) => {
+      const app = renderDetail({
+        'GET /bookings/{id}': ok(booking({ revision: 3 })),
+        'GET /baskets/{id}': ok(basket({ status })),
+        'POST /bookings/{id}/cancel': ok(
+          booking({ status: 'canceled', outstanding: [], revision: 4, endReason: 'Plans changed' }),
+        ),
+      });
+      await openCancel();
+      expect(
+        await screen.findByText(
+          'The time held for you is released and your basket is emptied. Nothing has been charged for this booking.',
+        ),
+      ).toBeOnTheScreen();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeEnabled(),
+      );
+      await confirmCancel();
+      expect(await screen.findByTestId('booking-canceled')).toBeOnTheScreen();
+      expect(screen.getByText('Everything this booking held has been released.')).toBeOnTheScreen();
+      expect(screen.getByLabelText('Canceled')).toBeOnTheScreen();
+      const sent = cancels(app);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.params.id).toBe(G.booking);
+      expect(sent[0]?.body).toEqual({ reason: 'Plans changed', expectedRevision: 3 });
+      expect(sent[0]?.headers['idempotency-key']).toMatch(/^key-/);
+    },
+  );
+
+  it('a held booking whose basket checkout already completed is never "nothing charged": no release is offered and the booking is read again', async () => {
+    const app = renderDetail({
+      'GET /bookings/{id}': ok(booking()),
+      'GET /baskets/{id}': ok(basket({ status: 'fulfilled', holdExpiresAt: null })),
+    });
+    expect(
+      await screen.findByLabelText('Payment received: this booking is being updated'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('Pay to confirm')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    // The booking reads `held` until the API records the payment: it is read again once.
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/bookings/{id}')).toHaveLength(2),
+    );
+    await openCancel();
+    expect(await screen.findByTestId('cancel-payment-received')).toBeOnTheScreen();
+    expect(screen.queryByText(/Nothing has been charged/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
+    await confirmCancel();
+    expect(cancels(app)).toHaveLength(0);
+    // Read again once per outcome, never in a loop.
+    await settleApps();
+    expect(app.fake.requests.filter((r) => r.route === '/bookings/{id}')).toHaveLength(2);
+  });
+
+  it('a held booking whose hold already ended has nothing left to cancel', async () => {
+    const app = renderDetail({
+      'GET /bookings/{id}': ok(booking()),
+      'GET /baskets/{id}': ok(basket({ status: 'expired', holdExpiresAt: null })),
+    });
+    expect(
+      await screen.findByLabelText('The time held for this booking was released'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    await openCancel();
+    expect(await screen.findByTestId('cancel-hold-ended')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
+    expect(cancels(app)).toHaveLength(0);
+  });
+
+  it('the cancel panel never acts on the cached basket: it waits for its own read, reads again at confirm, and sends nothing once a checkout started', async () => {
+    let reads = 0;
+    let release: (() => void) | null = null;
+    const app = renderDetail({
+      'GET /bookings/{id}': ok(booking()),
+      'GET /baskets/{id}': () => {
+        reads += 1;
+        if (reads === 1) return fakeResponse(200, basket());
+        if (reads === 2) {
+          return new Promise<Response>((resolve) => {
+            release = () => resolve(fakeResponse(200, basket()));
+          });
+        }
+        return fakeResponse(200, basket({ status: 'checking_out' }));
+      },
+    });
+    expect(await screen.findByRole('button', { name: 'Go to basket' })).toBeOnTheScreen();
+    await openCancel();
+    // The cached basket says `held`, but the panel's own read has not answered yet.
+    expect(await screen.findByText('Checking that no payment has started…')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
+    await waitFor(() => expect(release).not.toBeNull());
+    await act(async () => {
+      release?.();
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeEnabled(),
+    );
+    // A checkout starts meanwhile: the confirm-time read finds it and nothing is sent.
+    await confirmCancel();
+    expect(
+      await screen.findByLabelText('A payment for this booking may be on its way'),
+    ).toBeOnTheScreen();
+    expect(reads).toBe(3);
+    expect(cancels(app)).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
+  });
+
+  it('a failed basket read blocks the release and shows its code with "Try again"', async () => {
+    const app = renderDetail({
+      'GET /bookings/{id}': ok(booking()),
+      'GET /baskets/{id}': {
+        status: 503,
+        body: apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-b' }),
+      },
+    });
+    await openCancel();
+    expect(
+      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-b/),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
+    expect(cancels(app)).toHaveLength(0);
   });
 
   it('SPK-REG-010: a paid booking shows the previewed money consequence and sends it as acceptedConsequence', async () => {
@@ -299,6 +433,14 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
     });
     expect(await screen.findByTestId('state-unavailable')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Cancel this booking' })).toBeNull();
+  });
+
+  it('without a session it asks to sign in and reads nothing (§4.13)', async () => {
+    const app = createTestApp({ session: null });
+    render(<BookingDetailScreen bookingId={G.booking} />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeOnTheScreen();
+    expect(screen.queryByText('Your session ended')).toBeNull();
+    expect(app.fake.requests).toHaveLength(0);
   });
 
   it('a malformed booking id is "Link not available" without a request', async () => {
