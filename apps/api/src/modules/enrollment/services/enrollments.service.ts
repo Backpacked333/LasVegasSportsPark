@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   EnrollmentMachine,
+  PUBLIC_PUBLICATION_STATES,
   SessionBookingMachine,
   errors,
   newId,
@@ -47,6 +49,7 @@ import type { OfferingSnapshot } from '../../catalog';
 import { ROSTER_PORT, type RosterPort } from '../../competition';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
+import { INTENT_CAPABILITIES } from '../enrollment.policy';
 import {
   FINANCE_POLICY_PORT,
   type ConfirmEnrollmentOptions,
@@ -1182,6 +1185,40 @@ export class EnrollmentsService implements EnrollmentPort {
     );
     if (targetOfferingId === row.offering_id) {
       throw errors.validation('The target offering must differ from the current one.');
+    }
+    // K-12/DEC-016, SPK-COND-001..003: a membership, session package, rental or party carries a
+    // lifecycle a transfer does not move (term start, credits issued and revoked, the booking's
+    // reservation), and a new one is a commitment behind its capability switch. Transfer rules for
+    // them are not decided (DEC-009): refuse rather than confirm a target with none of it.
+    if (INTENT_CAPABILITIES[row.intent]) {
+      throw errors.resourceConflict(
+        'A membership, session package, rental or party is not transferred; cancel it and buy or book the new one.',
+        { code: 'NOT_TRANSFERABLE', intent: row.intent },
+      );
+    }
+    // §4.10/§4.14: a customer moves only into an offering the public catalog shows. An unpublished
+    // target answers NOT_FOUND before any of its facts (name, dates, price, capacity, waitlist)
+    // are computed, as registration options do; staff who may transfer at the target's facility
+    // on their role see it.
+    const target = await this.evaluator
+      .snapshot(trx, organizationId, targetOfferingId)
+      .catch((error: unknown) => {
+        if (DomainError.is(error) && error.code === 'NOT_FOUND') {
+          throw errors.protectedNotFound('offering');
+        }
+        throw error;
+      });
+    if (!PUBLIC_PUBLICATION_STATES.includes(target.offering.publicationState)) {
+      const staffMayTransfer =
+        isStaffLike(principal) &&
+        (
+          await this.authorization.decide(principal, EnrollmentActions.transferEnrollment, {
+            type: 'enrollment',
+            organizationId,
+            facilityId: target.offering.facilityId,
+          })
+        ).allowed;
+      if (!staffMayTransfer) throw errors.protectedNotFound('offering');
     }
   }
 

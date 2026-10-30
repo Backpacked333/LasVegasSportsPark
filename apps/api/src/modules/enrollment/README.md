@@ -16,7 +16,7 @@ Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 
 SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
 **Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
-`0500` to `0509`; `0503` came from the review stage)
+`0500` to `0515`; `0503` came from the review stage, `0510` to `0515` from the stage-5 review)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
@@ -219,8 +219,10 @@ Payloads carry identifiers only (§4.14).
   other household's application blocks while it is under review or has a pending or confirmed
   enrollment; an accepted one whose line was released, removed or abandoned does not (the one
   entitlement is guaranteed by `enrollments_equivalent_active_idx`: the first hold wins). A
-  household reuses its own accepted application (its approval or override). **Verified**,
-  `__tests__/registration-integrity.spec.ts`.
+  household reuses its own accepted application (its approval or override). Trial participations
+  hide a customer registrant the same way (`registeredBy` redacted, `assistedByPersonId` null) on
+  `GET /me/trial-participations`, `GET /trial-participations/{id}` and the command responses.
+  **Verified**, `__tests__/registration-integrity.spec.ts`, `__tests__/customer-lists.spec.ts`.
 - **Checkout ownership (§4.11, SPK-PAY-007):** while a basket is `checking_out`, `release` and
   the cancel of its pending enrollments answer 409 `CHECKOUT_IN_PROGRESS` (with the `orderRef`);
   finance ends it through `finishCheckout('abandoned')` once no attempt can still capture.
@@ -238,7 +240,11 @@ Payloads carry identifiers only (§4.14).
   result and the `enrollment_transferred` payload, and a non-`none` consequence opens an
   operational exception for `finance_operator` (`enrollment.transfer_consequence_pending`) until
   DEC-009 decides how finance settles it. **Verified**, `__tests__/transfer-consequence.spec.ts`.
-  Cancellation has the same preview (`cancellation-preview`).
+  Cancellation has the same preview (`cancellation-preview`). A membership, session package,
+  rental or party (the intents behind a capability switch) is not transferred: preview and commit
+  answer 409 `NOT_TRANSFERABLE`, because a transfer moves none of their lifecycle (term, credits,
+  reservation) and their transfer rules are DEC-009; cancel and buy or book the new one.
+  **Verified**, `memberships.spec.ts`, `session-packages.spec.ts`.
 - **Placement (SPK-PLACE-002/003):** candidates and proposals reserve nothing; assignment
   re-evaluates eligibility, holds a place in every team-entry roster pool configured for the team
   (the same pools a `join_team` registration naming the team holds, SPK-REG-005; **Verified**,
@@ -287,8 +293,10 @@ PostgreSQL) unless marked **proposed** or **pending**.
 
 - `GET /v1/enrollments/{id}/transfer-preview` (read only). Cancel and transfer bind the previewed
   consequence: `acceptedConsequence` must match the current one (`CONSEQUENCE_ACCEPTANCE_REQUIRED`,
-  `CONSEQUENCE_CHANGED`); `commit: false` and `acceptConsequence` are deprecated.
-  `__tests__/transfer-consequence.spec.ts`, `registration-commands.spec.ts`.
+  `CONSEQUENCE_CHANGED`); `commit: false` and `acceptConsequence` are deprecated. A target the
+  public catalog does not show (draft, unpublished) answers protected NOT_FOUND to anyone but staff
+  who transfer at its facility, before any of its facts are computed (§4.10, as registration
+  options do). `__tests__/transfer-consequence.spec.ts`, `registration-commands.spec.ts`.
 - `POST /v1/waitlist-entries/{id}/offer` (program administration): offers the place to the next in
   queue only (`NOT_NEXT_IN_QUEUE` names who is), `CAPACITY_UNAVAILABLE` without a free place;
   the same offer payload as the generator.
@@ -321,14 +329,14 @@ A disabled capability refuses new commitments with 403 `ACCESS_DENIED`, `details
 follow-ups and payment outcomes never check it. Policy values (prices, expiry, credit return,
 benefits, terms, deposits) are configuration in the catalog; nothing here supplies a default.
 
-| Capability          | Decision                            | Gated here                                                                               | Migration  | Tests                                                       |
-| ------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------- |
-| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`)                                       | —          | `package-g-foundation.spec.ts`                              |
-| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal                                           | 0505, 0507 | `package-g-foundation.spec.ts`, `memberships.spec.ts`       |
-| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506 | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
-| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508       | `bookings.spec.ts`                                          |
-| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508       | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
-| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509       | `youth-progression.spec.ts`                                 |
+| Capability          | Decision                            | Gated here                                                                               | Migration        | Tests                                                       |
+| ------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------- |
+| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`)                                       | —                | `package-g-foundation.spec.ts`                              |
+| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal                                           | 0505, 0507, 0513 | `package-g-foundation.spec.ts`, `memberships.spec.ts`       |
+| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506       | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
+| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508, 0512, 0514 | `bookings.spec.ts`                                          |
+| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508, 0512, 0514 | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
+| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511, 0515  | `youth-progression.spec.ts`                                 |
 
 Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
 `startCheckout`) re-checks every live line's capability before any payment attempt ("DEC-016:
@@ -365,7 +373,10 @@ mirrored by a database transition guard.
   periods never overlap: exclusion constraint), renewal (`POST /v1/enrollments/{id}/renew` adds a
   linked membership line; nothing is charged until checkout), job `enrollment.membership_lifecycle`
   (completes ended terms, ends elapsed suspensions, one `renewal_opportunity` notice when the
-  definition sets `renewal.noticeLeadDays`), `GET /v1/me/memberships`.
+  definition sets `renewal.noticeLeadDays`; a membership not due yet records when it becomes due,
+  `renewal_notice_due_at` (0513), and is not re-read before then, so memberships that are never
+  due cannot keep a due one out of the batch; a lead changed on the definition later applies from
+  that recorded instant), `GET /v1/me/memberships`.
 - **Rentals and parties (ENR-13, SPK-COND-003).** `POST /v1/bookings` validates the offering's
   approved booking terms (`BOOKING_TERMS_REQUIRED`), its resources (exact count from the allowed
   set), guests (party) and equipment (`EQUIPMENT_UNAVAILABLE` through `ASSET_DIRECTORY_PORT`).
@@ -378,11 +389,36 @@ mirrored by a database transition guard.
   `enrollment.booking_awaiting_staff` (owner `scheduler`); `workforce.assignment_changed`
   re-evaluates both ways. Hold expiry expires an unpaid booking and cancels its events; cancel
   releases what the state holds (a paid booking through the enrollment cancellation with the
-  accepted consequence); a held booking whose basket is in checkout answers 409
+  accepted consequence) and withdraws the staffing of exactly the occurrences it cancels: an
+  occurrence that already started keeps its events, requirements and accepted assignments, so the
+  work done can still be completed (SPK-SCHED-007); a held booking whose basket is in checkout answers 409
   `CHECKOUT_IN_PROGRESS`, and one whose basket is already paid but not yet confirmed 409
-  `BOOKING_CONFIRMATION_PENDING`, before anything is written (§4.11). Job `enrollment.booking_lifecycle` (failure owner `scheduler`):
-  undecided requests expire at their start, an unstaffed booking that starts raises the critical
-  `enrollment.booking_started_unstaffed`, ended bookings complete. Reads:
+  `BOOKING_CONFIRMATION_PENDING`, before anything is written (§4.11). A booking follows its
+  scheduling events (handler `enrollment.booking_follow_event` on every `scheduling.event_changed`
+  but `created`, failure owner `scheduler`; the events are re-read, so a late or replayed change
+  gives the same answer whenever it is handled): when none of its occurrences takes place any more
+  (a closure, any cancellation) it is `canceled`, a held basket is released, its staffing
+  exceptions are settled and, when money was taken or is moving,
+  `enrollment.booking_canceled_by_schedule` (owner `finance_operator`) names the enrollment and the
+  order so the consequence is decided under DEC-009 instead of executed. Every lost occurrence of a
+  continuing booking, whether lost before or after its start, has its declared staffing withdrawn
+  (requirements retired, as when the booking itself cancels it) and raises
+  `enrollment.booking_occurrence_canceled` once (a resolved one is not raised again); the lifecycle
+  job does the same before it completes a booking whose change notice is still on its way. The
+  booking then lists only the occurrences that take place, each with its event and the resources
+  scheduling holds for it, so `firstStart`, `lastEnd` and `occurrences` agree: a move or resize
+  moves its times and a relocation (SPK-SCHED-009) names the new field on that occurrence and in
+  the booking's resources, audited as `enrollment.booking_follow_schedule`; a lost occurrence is
+  named in that audit and in its exception (marking it in the Booking response is a contract and
+  client change, not made). When the booking's enrollment is cancelled while still pending (hold
+  expiry, an abandoned checkout, a cancelled hold) nothing was paid, and both money exceptions are
+  settled. A closure
+  preview names the booker (`via: booking`) and the order a paid booking went through, and the
+  booker is in the event's notice audience (`SESSION_AUDIENCE_IMPL`). Job
+  `enrollment.booking_lifecycle` (failure owner `scheduler`): undecided requests expire at their
+  start, an unstaffed booking that starts raises the critical `enrollment.booking_started_unstaffed`
+  once per unstaffed episode (`started_unstaffed_at`, 0514; covered again clears it), ended
+  bookings complete, and a booking whose every occurrence was cancelled is never completed. Reads:
   `GET /v1/offerings/{id}/booking-availability`, `/v1/me/bookings`, `/v1/bookings/{id}` (booker or
   staff; anyone else NOT_FOUND), `/v1/bookings` (staff). `BOOKING_QUERY_IMPL` is provided (IF-36).
 - **Youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006; owner Proposed).** Approved
@@ -391,11 +427,27 @@ mirrored by a database transition guard.
   value off the scale. Program managers, or a coach accepted on the offering (IF-34), author
   assessments of enrolled participants; a program manager other than the author approves them
   (`assessments_reviewer_differs`): family rows are published, staff-only rows recorded, both then
-  immutable (a correction is a new row). `GET /v1/me/youth-feedback` shows only published family
-  feedback and shared recommendations, never staff or review notes; one `youth_feedback` notice per
-  published assessment or shared recommendation carries no staff content.
-  `GET /v1/participants/{personId}/assessments` is the staff view. A recommendation stores the
-  read-only eligibility of the recommended offering and never holds capacity.
+  immutable; while submitted, the content the reviewer approves is fixed too
+  (`assessments_submitted_content_fixed`, 0511). A correction is a new row
+  (`correctsAssessmentId`) that requires `reason` (§4.9; stored as `correctionReason`, refused by
+  `assessments_correction_reason` without one, and audited with the corrected id); an assessment
+  has at most one live correction (`assessments_one_live_correction_idx`, 409 `ALREADY_CORRECTED`),
+  so a later correction corrects the correction. A correction corrects the same observation: the
+  same participant and offering, a template of the same program, the same skill area and the same
+  visibility (400 `CORRECTION_MISMATCH`, also on edit and review; `assessments_correction_match`,
+  0515), and an assessment of another offering answers as one that does not exist; another
+  author's live draft is not named to a coach (409 `ALREADY_CORRECTED` with
+  `correctedByAssessmentId: null`). `GET /v1/me/youth-feedback` shows only published family
+  feedback that no published family correction replaces, and shared recommendations,
+  never staff or review notes; one `youth_feedback` notice per published assessment or shared
+  recommendation carries no staff content. A shared recommendation's content is fixed and a
+  withdrawn one never changes (`progression_recommendations_content_fixed`, 0511). **Verified**,
+  `__tests__/youth-progression.spec.ts`.
+  `GET /v1/participants/{personId}/assessments` is the staff view: a program manager sees the
+  offerings in their facility scope and gets an empty page when nothing is visible, whatever exists
+  at other facilities; a coach sees offerings they are accepted on, and NOT_FOUND otherwise (§4.10).
+  A recommendation stores the read-only eligibility of the recommended offering and never holds
+  capacity.
 
 ### Test doubles (`__tests__/stage3-doubles.ts`)
 

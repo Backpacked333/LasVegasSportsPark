@@ -194,6 +194,22 @@ export function redactWaitlistEntry(
   return { ...entry, payerPersonId: null };
 }
 
+/**
+ * SPK-AT-004, §4.14: another authorized adult who may read a child's trial does not learn which
+ * adult booked it. Staff, the registrant and the participant themself see the registrant; a
+ * staff registrant (an assisted booking) stays visible, as on the sibling records.
+ */
+export function redactTrialParticipation(
+  principal: Principal,
+  trial: TrialParticipation,
+): TrialParticipation {
+  if (seesPrivateFacts(principal, [trial.registeredBy.personId, trial.participantPersonId])) {
+    return trial;
+  }
+  if (trial.registeredBy.kind === 'staff') return trial;
+  return { ...trial, registeredBy: REDACTED_ACTOR, assistedByPersonId: null };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Keyset pages (§4.5, ENR-01/02): newest first on (created_at desc, id desc). The cursor carries
 // created_at as the database's own text so microseconds survive the round trip.

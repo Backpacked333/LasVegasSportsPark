@@ -36,6 +36,7 @@ import {
   actorSnapshot,
   isStaffLike,
   organizationOf,
+  redactTrialParticipation,
   resolveCustomerPayer,
   toTrialParticipation,
   type Reader,
@@ -227,7 +228,10 @@ export class TrialsService {
           participantPersonId: person.id,
         },
       });
-      return toTrialParticipation((await this.load(trx, organizationId, id))!);
+      return redactTrialParticipation(
+        principal,
+        toTrialParticipation((await this.load(trx, organizationId, id))!),
+      );
     });
   }
 
@@ -243,7 +247,7 @@ export class TrialsService {
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return toTrialParticipation(row);
+    return redactTrialParticipation(principal, toTrialParticipation(row));
   }
 
   // -------------------------------------------------------------------------------------------
@@ -342,7 +346,10 @@ export class TrialsService {
           convertedBasketId: row.converted_basket_id,
         },
       });
-      return toTrialParticipation((await this.load(trx, organizationId, id))!);
+      return redactTrialParticipation(
+        principal,
+        toTrialParticipation((await this.load(trx, organizationId, id))!),
+      );
     });
   }
 
@@ -524,7 +531,10 @@ export class TrialsService {
       });
       const basket = await this.baskets.getBasket(organizationId, opened.basket.id, trx);
       return {
-        trial: toTrialParticipation((await this.load(trx, organizationId, id))!),
+        trial: redactTrialParticipation(
+          principal,
+          toTrialParticipation((await this.load(trx, organizationId, id))!),
+        ),
         basket: basket!,
       };
     });

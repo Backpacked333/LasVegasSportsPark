@@ -22,6 +22,7 @@ import {
   keysetPage,
   organizationOf,
   redactApplication,
+  redactTrialParticipation,
   redactWaitlistEntry,
   toApplication,
   toTrialParticipation,
@@ -161,6 +162,9 @@ export class MyRegistrationsService {
     if (query.status) q = q.where('status', '=', query.status);
     if (cursor) q = q.where(beforeCursor('trial_participations', cursor));
     const page = keysetPage(await q.execute(), query.limit);
-    return { items: page.rows.map(toTrialParticipation), nextCursor: page.nextCursor };
+    return {
+      items: page.rows.map((row) => redactTrialParticipation(principal, toTrialParticipation(row))),
+      nextCursor: page.nextCursor,
+    };
   }
 }

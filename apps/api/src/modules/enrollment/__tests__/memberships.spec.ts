@@ -5,7 +5,7 @@ import { createTestApp, type TestApp } from '../../../testing';
 import { createOfferingSessionFixture, createPolicyVersionFixture } from '../../catalog';
 import { EntryModule } from '../../entry';
 import { EnrollmentModule } from '../enrollment.module';
-import { MEMBERSHIP_LIFECYCLE_JOB } from '../services/enrollment-jobs';
+import { EnrollmentJobs, MEMBERSHIP_LIFECYCLE_JOB } from '../services/enrollment-jobs';
 import { adultOffering, membershipOffering } from './package-g-support';
 import { withStage3Doubles } from './stage3-doubles';
 import {
@@ -167,6 +167,54 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
       membershipEnrollmentId: limited.enrollmentId,
     });
     expect(outside.status).toBe(422);
+  });
+
+  it('K-12 / DEC-016 / SPK-COND-001: a membership is not transferred, even with the switch off, so no termless membership is confirmed', async () => {
+    const member = await adult(t);
+    const { enrollmentId } = await join(member, includedWeekly(2));
+    const other = await membershipOffering(t, includedWeekly(2), {
+      startsOn: '2026-11-01',
+      endsOn: '2027-01-31',
+    });
+    await acknowledge(t, other, member.personId, member.personId);
+    const before = await t.db
+      .selectFrom('enrollments')
+      .select(['status', 'revision', 'membership_starts_at'])
+      .where('id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(before.status).toBe('confirmed');
+    await t.disableCapability('memberships');
+    try {
+      const refused = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, member.header, {
+        targetOfferingId: other.offeringId,
+        expectedRevision: before.revision,
+        commit: true,
+      });
+      expect(refused.status).toBe(409);
+      expect(refused.body.details).toMatchObject({
+        code: 'NOT_TRANSFERABLE',
+        intent: 'membership',
+      });
+    } finally {
+      await t.enableCapability('memberships');
+    }
+    const preview = await t.http
+      .get(`/v1/enrollments/${enrollmentId}/transfer-preview?targetOfferingId=${other.offeringId}`)
+      .set(frontDesk.header);
+    expect(preview.status).toBe(409);
+    expect(preview.body.details.code).toBe('NOT_TRANSFERABLE');
+    const created = await t.db
+      .selectFrom('enrollments')
+      .select('id')
+      .where('transferred_from_enrollment_id', '=', enrollmentId)
+      .execute();
+    expect(created).toEqual([]);
+    const after = await t.db
+      .selectFrom('enrollments')
+      .select(['status', 'revision', 'membership_starts_at'])
+      .where('id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(after).toEqual(before);
   });
 
   it('SPK-COND-001: an active membership without a session booking does not admit at check-in', async () => {
@@ -430,5 +478,69 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
     expect(
       new Date(row.membership_ends_at!).getTime() - new Date(row.membership_starts_at!).getTime(),
     ).toBe(30 * DAY);
+  });
+
+  it('SPK-COND-001 / SPK-COMMS-002 / §4.12: memberships that are never due a notice do not starve a due one', async () => {
+    const withLead = (noticeLeadDays: number | null) => ({
+      attendance: { mode: 'none' },
+      term: { kind: 'offering_dates' },
+      renewal: { noticeLeadDays },
+    });
+    // Three memberships whose definition asks for no notice end before the one that is due.
+    const blockers: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      blockers.push(
+        (
+          await join(await adult(t), withLead(null), {
+            startsOn: '2026-11-01',
+            endsOn: '2026-11-28',
+          })
+        ).enrollmentId,
+      );
+    }
+    const due = await join(await adult(t), withLead(30), {
+      startsOn: '2026-11-01',
+      endsOn: '2026-12-15',
+    });
+    const later = await join(await adult(t), withLead(30), {
+      startsOn: '2026-11-01',
+      endsOn: '2027-03-31',
+    });
+    const jobs = t.app.get(EnrollmentJobs);
+    // A small batch (2) makes the blockers fill it; the job takes passes as the runner does.
+    const run = async () => {
+      let result = { processed: 0, remaining: 1 };
+      for (let pass = 0; pass < 20 && result.remaining > 0; pass += 1) {
+        result = await jobs.membershipLifecycle({ now: t.clock.now(), batchSize: 2 });
+      }
+    };
+    const noticesOf = (enrollmentId: string) =>
+      t.db
+        .selectFrom('notifications')
+        .select('id')
+        .where('kind', '=', 'renewal_opportunity')
+        .where('subject_id', '=', enrollmentId)
+        .execute();
+    t.clock.set(new Date('2026-11-20T12:00:00Z'));
+    try {
+      await run();
+      expect(await noticesOf(due.enrollmentId)).toHaveLength(1);
+      expect(await noticesOf(later.enrollmentId)).toHaveLength(0);
+      const rows = await t.db
+        .selectFrom('enrollments')
+        .select(['id', 'renewal_notice_due_at', 'membership_ends_at', 'renewal_notice_at'])
+        .where('id', 'in', [...blockers, later.enrollmentId])
+        .execute();
+      for (const row of rows) {
+        expect(row.renewal_notice_at).toBeNull();
+        const endsAt = new Date(row.membership_ends_at!).getTime();
+        // Never due during the term: settled at its end. Not due yet: due at the lead.
+        expect(new Date(row.renewal_notice_due_at!).getTime()).toBe(
+          row.id === later.enrollmentId ? endsAt - 30 * DAY : endsAt,
+        );
+      }
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
   });
 });

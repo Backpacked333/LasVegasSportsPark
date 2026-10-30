@@ -11,6 +11,7 @@ import {
   type CreateBookingInput,
   type DeclineBookingInput,
   type EligibilityResult,
+  type Event as SchedulingEvent,
   type ListBookingsQuery,
   type ListMyBookingsQuery,
   type Page,
@@ -96,6 +97,13 @@ import { RegistrationEvaluator, type Evaluation } from './registration-evaluator
 
 export type BookingRow = Selectable<BookingsTable>;
 type BookingKind = BookingRow['kind'];
+
+/**
+ * One stored occurrence. A booking written at request or creation stores its times; once it has
+ * followed its scheduling events (ASYNC-01) each occurrence also names its event and the resources
+ * scheduling holds for it, which can differ per occurrence after a relocation (SPK-SCHED-009).
+ */
+type StoredOccurrence = { start: string; end: string; eventId?: string; resourceIds?: string[] };
 
 /** Everything a booking reserves, derived from the offering's definition, terms and the request. */
 interface BookingPlan {
@@ -933,7 +941,11 @@ export class BookingsService implements BookingQueryPort {
     });
   }
 
-  /** Cancels the booking's future events and withdraws their staffing requirements. */
+  /**
+   * Cancels the booking's future events and withdraws the staffing of exactly those occurrences.
+   * An occurrence that already started keeps its identity and its staffing facts (SPK-SCHED-007,
+   * §4.6): its accepted assignments stay accepted so the work done can still be completed and paid.
+   */
   private async releaseReservations(
     organizationId: string,
     row: BookingRow,
@@ -943,22 +955,33 @@ export class BookingsService implements BookingQueryPort {
     if (row.scheduling_event_ids.length === 0) return;
     const system = this.system(organizationId);
     const now = this.clock.now();
+    const canceled = new Set<string>();
     if (row.scheduling_series_id) {
-      await this.events.cancelEventSeries(system, row.scheduling_series_id, {
+      const result = await this.events.cancelEventSeries(system, row.scheduling_series_id, {
         reason,
         fromInstant: now.toISOString(),
         correlationId,
       });
-    } else {
-      for (const eventId of row.scheduling_event_ids) {
-        const event = await this.events.getEvent(system, eventId);
-        if (event.status === 'canceled' || new Date(event.scheduledStart) <= now) continue;
-        await this.events.cancelEvent(system, eventId, { reason, correlationId });
+      for (const eventId of result.canceledEventIds) canceled.add(eventId);
+    }
+    for (const eventId of row.scheduling_event_ids) {
+      if (canceled.has(eventId)) continue;
+      const event = await this.events.getEvent(system, eventId);
+      if (event.status === 'canceled') {
+        // Cancelled earlier (a closure), before or after its start: it took no place, so its
+        // staffing goes too (ASYNC-01; withdrawing is idempotent).
+        canceled.add(eventId);
+        continue;
       }
+      if (new Date(event.scheduledStart) <= now) continue;
+      // A future occurrence cancelled now: its staffing goes with it.
+      await this.events.cancelEvent(system, eventId, { reason, correlationId });
+      canceled.add(eventId);
     }
     const staffing = row.staffing as unknown as StaffingRequirement[];
     if (staffing.length > 0) {
       for (const eventId of row.scheduling_event_ids) {
+        if (!canceled.has(eventId)) continue;
         await this.staffing.withdrawRequirements(system, {
           targetType: 'event',
           targetId: eventId,
@@ -1053,11 +1076,15 @@ export class BookingsService implements BookingQueryPort {
   // Staffing coverage and follow-ups (handlers)
   // -------------------------------------------------------------------------------------------
 
-  /** Whether every mandatory staff slot of every event is held by an accepted assignee. */
+  /**
+   * Whether every mandatory staff slot of every occurrence still taking place is held by an
+   * accepted assignee. A cancelled occurrence (a closure, ASYNC-01) needs no staff.
+   */
   async covered(trx: Trx | undefined, row: BookingRow): Promise<boolean> {
     const staffing = row.staffing as unknown as StaffingRequirement[];
     if (staffing.length === 0) return true;
-    for (const eventId of row.scheduling_event_ids) {
+    const { live } = await this.currentEvents(row);
+    for (const eventId of live.map((e) => e.id)) {
       const roles = await this.coverage.coverage(row.organization_id, 'event', eventId, trx);
       for (const requirement of staffing) {
         const role = roles.find((r) => r.role === requirement.role);
@@ -1077,7 +1104,14 @@ export class BookingsService implements BookingQueryPort {
     const status = BookingMachine.next(row.status, event);
     await trx
       .updateTable('bookings')
-      .set({ status, ...extra, revision: row.revision + 1 })
+      .set({
+        status,
+        ...extra,
+        // ASYNC-10: a booking covered again starts a new episode; a later loss of staff after its
+        // start is raised anew by the lifecycle job.
+        ...(status === 'confirmed' ? { started_unstaffed_at: null } : {}),
+        revision: row.revision + 1,
+      })
       .where('organization_id', '=', row.organization_id)
       .where('id', '=', row.id)
       .where('revision', '=', row.revision)
@@ -1140,12 +1174,18 @@ export class BookingsService implements BookingQueryPort {
     if (!covered) await this.raiseAwaitingStaff(trx, after);
   }
 
-  /** enrollment.enrollment_canceled of a booking's enrollment (hold expiry or cancellation). */
+  /**
+   * enrollment.enrollment_canceled of a booking's enrollment (hold expiry, an abandoned checkout or
+   * a cancellation). An enrollment cancelled while still pending was never paid: the money
+   * questions the schedule raised for the booking (a lost occurrence, a cancellation during
+   * checkout) no longer stand, so they are settled, also for a booking the schedule already ended.
+   */
   async onEnrollmentCanceled(
     trx: Trx,
     organizationId: string,
     enrollmentId: string,
     reason: string,
+    previousStatus: string,
     correlationId: string | null,
   ): Promise<void> {
     const row = await trx
@@ -1155,15 +1195,25 @@ export class BookingsService implements BookingQueryPort {
       .where('enrollment_id', '=', enrollmentId)
       .forUpdate()
       .executeTakeFirst();
-    if (!row || !['held', 'awaiting_staff', 'confirmed'].includes(row.status)) return;
-    const event: BookingEvent =
-      row.status === 'held' && reason === 'hold_expired' ? 'expire' : 'cancel';
-    await this.transition(trx, row, event, correlationId, {
-      ended_at: this.clock.now(),
-      end_reason: reason,
-    });
-    await this.releaseReservations(organizationId, row, reason, correlationId);
-    await this.settle(trx, organizationId, 'enrollment.booking_awaiting_staff', row.id, event);
+    if (!row) return;
+    if (['held', 'awaiting_staff', 'confirmed'].includes(row.status)) {
+      const event: BookingEvent =
+        row.status === 'held' && reason === 'hold_expired' ? 'expire' : 'cancel';
+      await this.transition(trx, row, event, correlationId, {
+        ended_at: this.clock.now(),
+        end_reason: reason,
+      });
+      await this.releaseReservations(organizationId, row, reason, correlationId);
+      await this.settle(trx, organizationId, 'enrollment.booking_awaiting_staff', row.id, event);
+    }
+    if (previousStatus === 'pending') {
+      for (const category of [
+        'enrollment.booking_occurrence_canceled',
+        'enrollment.booking_canceled_by_schedule',
+      ]) {
+        await this.settle(trx, organizationId, category, row.id, `ended unpaid (${reason})`);
+      }
+    }
   }
 
   /** workforce.assignment_changed on a booking event: re-evaluates staffing both ways. */
@@ -1184,6 +1234,11 @@ export class BookingsService implements BookingQueryPort {
       .forUpdate()
       .execute();
     for (const row of rows) {
+      if ((await this.currentEvents(row)).live.length === 0) {
+        // Nothing of it takes place any more: it follows its events, not its staffing (ASYNC-01).
+        await this.followEvents(trx, row, null, null, correlationId);
+        continue;
+      }
       const covered = await this.covered(trx, row);
       if (row.status === 'awaiting_staff' && covered) {
         await this.transition(trx, row, 'cover', correlationId);
@@ -1212,7 +1267,12 @@ export class BookingsService implements BookingQueryPort {
       .where((eb) =>
         eb.or([
           eb.and([eb('status', '=', 'requested'), eb('first_start', '<=', now)]),
-          eb.and([eb('status', '=', 'awaiting_staff'), eb('first_start', '<=', now)]),
+          // ASYNC-10: an unstaffed booking is due once per episode, not on every run to its end.
+          eb.and([
+            eb('status', '=', 'awaiting_staff'),
+            eb('first_start', '<=', now),
+            eb('started_unstaffed_at', 'is', null),
+          ]),
           eb.and([eb('status', 'in', ['confirmed', 'awaiting_staff']), eb('last_end', '<=', now)]),
         ]),
       )
@@ -1232,10 +1292,27 @@ export class BookingsService implements BookingQueryPort {
       await this.settle(trx, organizationId, 'enrollment.booking_request_pending', id, 'expired');
       return true;
     }
-    if (
-      (row.status === 'confirmed' || row.status === 'awaiting_staff') &&
-      new Date(row.last_end) <= now
-    ) {
+    const ongoing = row.status === 'confirmed' || row.status === 'awaiting_staff';
+    const ended = ongoing && new Date(row.last_end) <= now;
+    const events =
+      ongoing && (ended || new Date(row.first_start) <= now) ? await this.currentEvents(row) : null;
+    if (events && events.live.length === 0) {
+      // ASYNC-01: every occurrence was cancelled (a closure); it is never recorded as completed
+      // or as started without its staff. It follows its events, even if their change notice has
+      // not been handled yet.
+      await this.followEvents(trx, row, null, null, null);
+      return true;
+    }
+    if (ended && events) {
+      // ASYNC-01: the booking ends with its events as scheduling holds them, even if their change
+      // notice has not been handled yet: a later move keeps it going, and every lost occurrence
+      // has its owner before the booking completes.
+      const liveEnd = Math.max(...events.live.map((e) => Date.parse(e.scheduledEnd)));
+      if (liveEnd > now.getTime()) {
+        await this.followEvents(trx, row, null, null, null);
+        return true;
+      }
+      await this.ownLosses(trx, row, events.canceled, null, null);
       await this.transition(trx, row, 'complete', null);
       await this.settle(trx, organizationId, 'enrollment.booking_awaiting_staff', id, 'completed');
       if (row.enrollment_id) {
@@ -1258,8 +1335,12 @@ export class BookingsService implements BookingQueryPort {
       }
       return true;
     }
-    if (row.status === 'awaiting_staff' && new Date(row.first_start) <= now) {
-      const raised = await this.exceptions.raise(trx, {
+    if (
+      row.status === 'awaiting_staff' &&
+      new Date(row.first_start) <= now &&
+      !row.started_unstaffed_at
+    ) {
+      await this.exceptions.raise(trx, {
         organizationId,
         facilityId: row.facility_id,
         category: 'enrollment.booking_started_unstaffed',
@@ -1271,9 +1352,308 @@ export class BookingsService implements BookingQueryPort {
         dedupeKey: `booking_started_unstaffed:${row.id}`,
         details: { bookingId: row.id, eventIds: row.scheduling_event_ids },
       });
-      return !raised.deduplicated;
+      // Raised (or already open) for this episode: the job does not raise it again, even after
+      // a scheduler resolves it, until the booking is covered and loses its staff again.
+      await trx
+        .updateTable('bookings')
+        .set({ started_unstaffed_at: now })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.id)
+        .execute();
+      return true;
     }
     return false;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Following the scheduling events (ASYNC-01, SPK-SCHED-009, SPK-COND-003, §4.12)
+  // -------------------------------------------------------------------------------------------
+
+  /** The booking's scheduling events as scheduling holds them now. */
+  private async currentEvents(
+    row: BookingRow,
+  ): Promise<{ live: SchedulingEvent[]; canceled: SchedulingEvent[] }> {
+    const system = this.system(row.organization_id);
+    const live: SchedulingEvent[] = [];
+    const canceled: SchedulingEvent[] = [];
+    for (const eventId of row.scheduling_event_ids) {
+      const event = await this.events.getEvent(system, eventId);
+      (event.status === 'canceled' ? canceled : live).push(event);
+    }
+    return { live, canceled };
+  }
+
+  /**
+   * scheduling.event_changed of an event a live booking reserves (handler
+   * `enrollment.booking_follow_event`). The events are read as they are now, so a late or
+   * replayed change re-derives the same answer whenever it is handled (§4.12): a booking none of
+   * whose occurrences takes place is cancelled; every lost occurrence of a continuing one has its
+   * staffing withdrawn and an owned exception, whether it was lost before or after its start; a
+   * moved, resized or relocated occurrence (SPK-SCHED-009) moves the booking's times and
+   * resources. Only the creation notice of the booking's own events carries nothing to follow.
+   */
+  async onSchedulingEventChanged(
+    trx: Trx,
+    organizationId: string,
+    payload: { eventId: string; change: string; reason: string | null; closureId: string | null },
+    correlationId: string | null,
+  ): Promise<void> {
+    if (payload.change === 'created') return;
+    const rows = await trx
+      .selectFrom('bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where(sql<boolean>`scheduling_event_ids @> array[${payload.eventId}]::uuid[]`)
+      .where('status', 'in', ['held', 'awaiting_staff', 'confirmed'])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    for (const row of rows) {
+      await this.followEvents(trx, row, payload.reason, payload.closureId, correlationId);
+    }
+  }
+
+  private async followEvents(
+    trx: Trx,
+    row: BookingRow,
+    reason: string | null,
+    closureId: string | null,
+    correlationId: string | null,
+  ): Promise<void> {
+    const organizationId = row.organization_id;
+    const { live, canceled } = await this.currentEvents(row);
+    if (live.length === 0) {
+      await this.endBySchedule(trx, row, reason, closureId, correlationId);
+      return;
+    }
+    let current = row;
+    // The booking shows what still takes place: its live occurrences in time order, each with its
+    // event and the resources scheduling holds for it now (a move, resize or relocation,
+    // SPK-SCHED-009), so firstStart, lastEnd, occurrences and resources always agree. A lost
+    // occurrence leaves the list; it is named in the audit below and in its owned exception.
+    const ordered = [...live].sort(
+      (a, b) =>
+        Date.parse(a.scheduledStart) - Date.parse(b.scheduledStart) || a.id.localeCompare(b.id),
+    );
+    const firstStart = new Date(Math.min(...ordered.map((e) => Date.parse(e.scheduledStart))));
+    const lastEnd = new Date(Math.max(...ordered.map((e) => Date.parse(e.scheduledEnd))));
+    const occurrences: StoredOccurrence[] = ordered.map((e) => ({
+      start: iso(e.scheduledStart),
+      end: iso(e.scheduledEnd),
+      eventId: e.id,
+      resourceIds: [...e.resourceIds],
+    }));
+    const resourceIds = [...new Set(ordered.flatMap((e) => e.resourceIds))];
+    // Compared field by field: jsonb does not keep key order, so a replay that changes nothing
+    // writes nothing.
+    const shape = (list: StoredOccurrence[]) =>
+      JSON.stringify(
+        list.map((o) => [iso(o.start), iso(o.end), o.eventId ?? null, o.resourceIds ?? null]),
+      );
+    if (
+      firstStart.getTime() !== new Date(row.first_start).getTime() ||
+      lastEnd.getTime() !== new Date(row.last_end).getTime() ||
+      shape(occurrences) !== shape(row.occurrences as unknown as StoredOccurrence[]) ||
+      resourceIds.join(',') !== row.resource_ids.join(',')
+    ) {
+      await trx
+        .updateTable('bookings')
+        .set({
+          first_start: firstStart,
+          last_end: lastEnd,
+          occurrences: json(occurrences),
+          resource_ids: resourceIds,
+          revision: row.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.id)
+        .where('revision', '=', row.revision)
+        .execute();
+      current = (await this.load(trx, organizationId, row.id))!;
+      await this.audit.record(trx, {
+        organizationId,
+        actor: this.system(organizationId),
+        action: 'enrollment.booking_follow_schedule',
+        targetType: 'booking',
+        targetId: row.id,
+        beforeRevision: row.revision,
+        afterRevision: current.revision,
+        reason,
+        correlationId,
+        details: {
+          firstStart: firstStart.toISOString(),
+          lastEnd: lastEnd.toISOString(),
+          previousResourceIds: row.resource_ids,
+          resourceIds,
+          canceledEventIds: canceled.map((e) => e.id),
+        },
+      });
+      await this.changed(trx, current, correlationId);
+    }
+    await this.ownLosses(trx, current, canceled, reason, closureId);
+    // Coverage is re-read without the cancelled occurrences.
+    if (current.status === 'awaiting_staff' && (await this.covered(trx, current))) {
+      await this.transition(trx, current, 'cover', correlationId);
+      await this.settle(
+        trx,
+        organizationId,
+        'enrollment.booking_awaiting_staff',
+        current.id,
+        'staffed',
+      );
+    }
+  }
+
+  /**
+   * Every cancelled occurrence of a live booking, whenever the cancellation is handled (before
+   * or after the occurrence's start, on time or replayed): its declared staffing is withdrawn
+   * (idempotent, as when the booking itself cancels it, so coverage and reports no longer count
+   * it) and its money, a DEC-009 decision, has an owner instead of a silent partial charge. The
+   * exception is raised once per occurrence: one a finance operator already resolved is not
+   * raised again by a later change of the booking.
+   */
+  private async ownLosses(
+    trx: Trx,
+    row: BookingRow,
+    canceled: SchedulingEvent[],
+    reason: string | null,
+    closureId: string | null,
+  ): Promise<void> {
+    if (canceled.length === 0) return;
+    const organizationId = row.organization_id;
+    const system = this.system(organizationId);
+    const staffing = row.staffing as unknown as StaffingRequirement[];
+    const raised = new Set(
+      (
+        await this.exceptions.list(
+          organizationId,
+          {
+            category: 'enrollment.booking_occurrence_canceled',
+            affectedType: 'booking',
+            affectedId: row.id,
+            limit: 200,
+          },
+          trx,
+        )
+      ).items.map((e) => e.dedupe_key),
+    );
+    for (const event of canceled) {
+      const why = reason ?? event.cancelReason ?? 'The occurrence was canceled by the schedule.';
+      if (staffing.length > 0) {
+        await this.staffing.withdrawRequirements(system, {
+          targetType: 'event',
+          targetId: event.id,
+          reason: why,
+        });
+      }
+      const dedupeKey = `booking_occurrence_canceled:${row.id}:${event.id}`;
+      if (raised.has(dedupeKey)) continue;
+      await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: row.facility_id,
+        category: 'enrollment.booking_occurrence_canceled',
+        severity: 'high',
+        title: `An occurrence of a ${row.kind} was canceled by the schedule`,
+        affectedType: 'booking',
+        affectedId: row.id,
+        ownerQueue: row.enrollment_id ? 'finance_operator' : 'scheduler',
+        dedupeKey,
+        details: await this.moneyFacts(trx, row, {
+          eventId: event.id,
+          closureId,
+          reason: why,
+          occurrenceStart: iso(event.scheduledStart),
+          occurrenceEnd: iso(event.scheduledEnd),
+          canceledAt: event.canceledAt,
+        }),
+      });
+    }
+  }
+
+  /** None of the booking's occurrences takes place: it is cancelled and its money has an owner. */
+  private async endBySchedule(
+    trx: Trx,
+    row: BookingRow,
+    reason: string | null,
+    closureId: string | null,
+    correlationId: string | null,
+  ): Promise<void> {
+    const organizationId = row.organization_id;
+    const system = this.system(organizationId);
+    const endReason = reason ?? 'Every occurrence was canceled by the schedule.';
+    await this.transition(trx, row, 'cancel', correlationId, {
+      ended_at: this.clock.now(),
+      end_reason: endReason,
+    });
+    await this.releaseReservations(organizationId, row, endReason, correlationId);
+    // Money taken or moving: a held basket is released; a checkout under way or a paid booking
+    // is an owned exception naming the order and the enrollment, so the consequence is decided
+    // under DEC-009 rather than executed here.
+    let moneyAtStake = row.status !== 'held';
+    if (row.status === 'held' && row.basket_id) {
+      const basket = await this.baskets.load(trx, organizationId, row.basket_id, true);
+      if (basket?.status === 'held') {
+        await this.baskets.releaseInTrx(
+          trx,
+          organizationId,
+          basket,
+          endReason,
+          system,
+          correlationId,
+          'released',
+        );
+      } else if (basket && ['checking_out', 'fulfilled'].includes(basket.status)) {
+        moneyAtStake = true;
+      }
+    }
+    for (const category of [
+      'enrollment.booking_request_pending',
+      'enrollment.booking_awaiting_staff',
+      'enrollment.booking_started_unstaffed',
+      'enrollment.booking_occurrence_canceled',
+    ]) {
+      await this.settle(trx, organizationId, category, row.id, 'canceled by the schedule');
+    }
+    if (moneyAtStake) {
+      await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: row.facility_id,
+        category: 'enrollment.booking_canceled_by_schedule',
+        severity: 'high',
+        title: `A paid ${row.kind} was canceled by the schedule; its money needs a decision`,
+        affectedType: 'booking',
+        affectedId: row.id,
+        ownerQueue: 'finance_operator',
+        dedupeKey: `booking_canceled_by_schedule:${row.id}`,
+        details: await this.moneyFacts(trx, row, { eventId: null, closureId, reason: endReason }),
+      });
+    }
+  }
+
+  /** The money facts an owned exception names: enrollment, order and booker (DEC-009). */
+  private async moneyFacts(
+    trx: Trx,
+    row: BookingRow,
+    extra: {
+      eventId: string | null;
+      closureId: string | null;
+      reason: string | null;
+      [fact: string]: unknown;
+    },
+  ): Promise<Record<string, unknown>> {
+    const enrollment = row.enrollment_id
+      ? await this.enrollments.load(trx, row.organization_id, row.enrollment_id)
+      : undefined;
+    return {
+      bookingId: row.id,
+      bookerPersonId: row.booker_person_id,
+      enrollmentId: row.enrollment_id,
+      enrollmentStatus: enrollment?.status ?? null,
+      orderRef: enrollment?.order_ref ?? null,
+      basketId: row.basket_id,
+      eventIds: row.scheduling_event_ids,
+      ...extra,
+    };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1293,17 +1673,23 @@ export class BookingsService implements BookingQueryPort {
     )?.timezone;
     const names = new Map<string, string | null>();
     const system = this.system(organizationId);
-    for (const resourceId of row.resource_ids) {
+    const occurrences = row.occurrences as unknown as StoredOccurrence[];
+    for (const resourceId of new Set([
+      ...row.resource_ids,
+      ...occurrences.flatMap((o) => o.resourceIds ?? []),
+    ])) {
       names.set(resourceId, await this.resourceName(system, resourceId));
     }
-    const occurrences = row.occurrences as unknown as Array<{ start: string; end: string }>;
+    // Occurrences stored before the booking followed its events name no event: matched by start.
     const eventsByStart = new Map<number, string>();
-    for (const eventId of row.scheduling_event_ids) {
-      try {
-        const event = await this.events.getEvent(system, eventId);
-        eventsByStart.set(new Date(event.scheduledStart).getTime(), event.id);
-      } catch {
-        // an event this booking no longer reaches reads as unreserved
+    if (occurrences.some((o) => !o.eventId)) {
+      for (const eventId of row.scheduling_event_ids) {
+        try {
+          const event = await this.events.getEvent(system, eventId);
+          eventsByStart.set(new Date(event.scheduledStart).getTime(), event.id);
+        } catch {
+          // an event this booking no longer reaches reads as unreserved
+        }
       }
     }
     const covered = row.status === 'held' ? await this.covered(trx, row) : null;
@@ -1322,8 +1708,11 @@ export class BookingsService implements BookingQueryPort {
       occurrences: occurrences.map((o) => ({
         start: iso(o.start),
         end: iso(o.end),
-        eventId: eventsByStart.get(new Date(o.start).getTime()) ?? null,
-        resources: row.resource_ids.map((id) => ({ id, name: names.get(id) ?? null })),
+        eventId: o.eventId ?? eventsByStart.get(new Date(o.start).getTime()) ?? null,
+        resources: (o.resourceIds ?? row.resource_ids).map((id) => ({
+          id,
+          name: names.get(id) ?? null,
+        })),
       })),
       guestCount: row.guest_count,
       equipmentAssetIds: row.equipment_asset_ids,

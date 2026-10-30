@@ -405,6 +405,8 @@ export const AssessmentSchema = z
     reviewNote: z.string().nullable(),
     reviewedAt: Instant.nullable(),
     correctsAssessmentId: z.uuid().nullable(),
+    /** Why the correction was made (set exactly on a correction, §4.9). */
+    correctionReason: z.string().nullable(),
     revision: Revision,
     createdAt: Instant,
     updatedAt: Instant,
@@ -422,9 +424,17 @@ export const CreateAssessmentBody = withCommandMeta({
   comments: z.string().trim().min(1).max(4000).optional(),
   staffNote: z.string().trim().min(1).max(4000).optional(),
   visibility: AssessmentVisibilitySchema,
-  /** A correction of a published or recorded assessment (a new row). */
+  /**
+   * A correction of a published or recorded assessment that no other live correction replaces
+   * (a new row). A correction requires `reason` (§4.9).
+   */
   correctsAssessmentId: z.uuid().optional(),
-}).openapi('CreateAssessmentRequest');
+})
+  .refine((v) => !v.correctsAssessmentId || !!v.reason, {
+    message: 'a correction says why',
+    path: ['reason'],
+  })
+  .openapi('CreateAssessmentRequest');
 export type CreateAssessmentInput = z.infer<typeof CreateAssessmentBody>;
 
 export const UpdateAssessmentBody = withCommandMeta({

@@ -125,16 +125,15 @@ export class EnrollmentJobs implements OnModuleInit {
         processed += 1;
       }
     }
-    // Candidates are re-read each run until their notice is composed or their term ends.
+    // Candidates are the never-evaluated and the due (ASYNC-03): a membership not due yet records
+    // its due instant and leaves the set until then, so it never holds the batch.
     const candidates = await this.memberships.renewalCandidates(now, batchSize);
+    full ||= candidates.length === batchSize;
     for (const row of candidates) {
-      if (
-        await this.uow.run(({ trx }) =>
-          this.memberships.renewalNoticeIfDue(trx, row.organization_id, row.id),
-        )
-      ) {
-        processed += 1;
-      }
+      const outcome = await this.uow.run(({ trx }) =>
+        this.memberships.renewalNoticeIfDue(trx, row.organization_id, row.id),
+      );
+      if (outcome !== 'skipped') processed += 1;
     }
     return { processed, remaining: full && processed > 0 ? 1 : 0 };
   }
