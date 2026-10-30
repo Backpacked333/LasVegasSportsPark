@@ -263,7 +263,9 @@ contribution's amount and status, never a player's payment or method.
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
 `finance.policy.ts` (`DEFAULT_FINANCE_POLICY`), overridable by approved catalog policy versions of
-kind `installment` / `overpayment` / `refund` with key `finance` (the quote records which applied):
+kind `installment` / `overpayment` / `refund` with key `finance` (the quote records which applied,
+and for an installment version every term it leaves out as `installment.<term>: engineering
+default <value>`, MONEY-08):
 quote validity 15 minutes, never past the hold (POL-013, DEC-007); abandoned checkout aborted five
 minutes after its hold expiry; overpayment held as credit pending approval (POL-015, DEC-008);
 compensation of an unfulfillable paid checkout by refund (POL-009, DEC-009); installments enabled,
@@ -530,7 +532,10 @@ outcome recording and reconciliation are never gated.
   `installmentPolicyVersionId`); asking for another count is refused (`BOOKING_DEPOSIT_PLAN_FIXED`),
   mixing bookings with different plans is refused (`BOOKING_DEPOSIT_PLANS_DIFFER`), and a missing
   or incomplete policy refuses the quote (`BOOKING_DEPOSIT_POLICY_MISSING`,
-  `BOOKING_DEPOSIT_POLICY_INCOMPLETE`) instead of assuming a default. Whether such a booking may be
+  `BOOKING_DEPOSIT_POLICY_INCOMPLETE`) instead of assuming a default. The collection terms a
+  deposit version may leave out (retry attempts and interval, notice lead time) take the
+  engineering default, and the quote records each one taken in its `policies.defaults`
+  (`installment.<term>: engineering default <value>`, MONEY-08). Whether such a booking may be
   paid in full instead is not answered by the terms (**Pending decision**, POL-040). Found and
   verified by `apps/api/src/__tests__/journeys/spk-cond-003-rentals.spec.ts`.
 - `docs/api/openapi.json` and the API client are regenerated (the parity test passes); the

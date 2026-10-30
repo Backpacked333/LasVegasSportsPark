@@ -280,10 +280,15 @@ export class QuotesService {
         });
       }
       plan = { kind: 'installments', count: deposit.count, intervalDays: deposit.intervalDays };
+      // The deposit version replaces the organization's installment policy: its own defaults
+      // (the collection terms it leaves out, MONEY-08) replace the replaced version's.
       resolved.references = {
         ...resolved.references,
         installmentPolicyVersionId: deposit.policyVersionId,
-        defaults: resolved.references.defaults.filter((d) => !d.startsWith('installment:')),
+        defaults: [
+          ...resolved.references.defaults.filter((d) => !d.startsWith('installment')),
+          ...deposit.defaults,
+        ],
       };
     } else {
       assertRequestedPlan();

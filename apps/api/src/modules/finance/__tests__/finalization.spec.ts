@@ -7,6 +7,7 @@ import { createPolicyVersionFixture } from '../../catalog';
 import { ENROLLMENT_PORT, EnrollmentsService, type EnrollmentPort } from '../../enrollment';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import { CheckoutFinalizer } from '../services/checkout-finalizer.service';
+import { FinancePolicyResolver } from '../services/finance-policy.resolver';
 import { createCreditFixture } from '../testing/finance-fixtures';
 import {
   adult,
@@ -532,5 +533,44 @@ describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with 
     });
     expect(credited.body).toMatchObject({ status: 'compensated', recovery: { plan: 'credit' } });
     await drain(t);
+  });
+  it('SPK-PAY-002, SPK-PAY-006 (MONEY-08): a term an approved installment or deposit version leaves out is recorded as the engineering default it falls back to', async () => {
+    const resolver = t.app.get(FinancePolicyResolver);
+    const depositKey = `party-deposit-${Date.now()}`;
+    await createPolicyVersionFixture(t, {
+      kind: 'installment',
+      key: depositKey,
+      content: { installments: 2, intervalDays: 14 },
+    });
+    const deposit = await resolver.bookingDeposit(t.organizationId, depositKey, t.clock.now());
+    expect(deposit).toMatchObject({ count: 2, intervalDays: 14 });
+    expect(deposit.defaults).toEqual([
+      'installment.retryMaxAttempts: engineering default 3 (POL-016, DEC-008)',
+      'installment.retryIntervalHours: engineering default 72 (POL-016, DEC-008)',
+      'installment.noticeDaysBefore: engineering default 3 (POL-016, DEC-008)',
+    ]);
+    // An organization installment policy that states only some terms: the quote says which
+    // terms are defaults, not that the whole approved version applies.
+    await createPolicyVersionFixture(t, {
+      kind: 'installment',
+      key: 'finance',
+      version: 9,
+      content: { retryMaxAttempts: 4, maxInstallments: 3 },
+    });
+    const quote = await installmentQuote();
+    const policies = quote['policies'] as {
+      installmentPolicyVersionId: string;
+      defaults: string[];
+    };
+    expect(policies.installmentPolicyVersionId).toEqual(expect.any(String));
+    expect(policies.defaults).toEqual(
+      expect.arrayContaining([
+        'installment.intervalDays: engineering default 30 (POL-016, DEC-008)',
+        'installment.retryIntervalHours: engineering default 72 (POL-016, DEC-008)',
+        'installment.noticeDaysBefore: engineering default 3 (POL-016, DEC-008)',
+      ]),
+    );
+    expect(policies.defaults.some((d) => d.startsWith('installment.retryMaxAttempts'))).toBe(false);
+    expect(policies.defaults.some((d) => d.startsWith('installment:'))).toBe(false);
   });
 });
