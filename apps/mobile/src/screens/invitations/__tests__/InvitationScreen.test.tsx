@@ -437,7 +437,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
       wrapper: app.wrapper,
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
-    fireEvent.press(await screen.findByRole('button', { name: 'Try again' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(calls).toBe(2));
     expect(posts(app).map((r) => r.headers['idempotency-key'])).toEqual([
       'key-00000001',
@@ -503,7 +503,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull();
   });
 
-  it('§4.9: "Try again" on a decline resends the same request, revision included, under the same key after the read refreshed', async () => {
+  it('§4.9: "Check again" on a decline resends the same request, revision included, under the same key after the read refreshed', async () => {
     let reads = 0;
     let declines = 0;
     const app = familyApp({
@@ -535,7 +535,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
       await app.queryClient.invalidateQueries({ queryKey: ['api', '/me/invitations/{id}'] });
     });
     expect(await screen.findByLabelText(/^Open until .*29/)).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     expect(await screen.findByTestId('invitation-declined')).toBeOnTheScreen();
     const sent = posts(app);
     expect(sent.map((r) => r.body)).toEqual([
@@ -545,7 +545,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     expect(sent.map((r) => r.headers['idempotency-key'])).toEqual(['key-00000001', 'key-00000001']);
   });
 
-  it('a failed decline offers no "Try again" once the read shows the invitation closed', async () => {
+  it('a failed decline offers no "Check again" once the read shows the invitation closed', async () => {
     let reads = 0;
     const app = familyApp({
       'GET /me/invitations/{id}': () => {
@@ -565,12 +565,12 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
     fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
-    expect(await screen.findByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeOnTheScreen();
     await act(async () => {
       await app.queryClient.invalidateQueries({ queryKey: ['api', '/me/invitations/{id}'] });
     });
     expect(await screen.findByLabelText('Declined')).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
     expect(screen.queryByText(/INTEGRATION_UNAVAILABLE/)).toBeNull();
   });
 
@@ -801,7 +801,7 @@ describe('SCR-C-17 InvitationScreen (team)', () => {
     expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
   });
 
-  it('§4.9: "Try again" on a team decline resends the revision read when the decline started', async () => {
+  it('§4.9: "Check again" on a team decline resends the revision read when the decline started', async () => {
     let reads = 0;
     let declines = 0;
     const app = teamApp({
@@ -831,7 +831,7 @@ describe('SCR-C-17 InvitationScreen (team)', () => {
       await app.queryClient.invalidateQueries({ queryKey: ['api', '/team-invitations/{id}'] });
     });
     expect(await screen.findByLabelText(/^Open until .*29/)).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     expect(await screen.findByTestId('invitation-declined')).toBeOnTheScreen();
     expect(posts(app).map((r) => r.body)).toEqual([
       { expectedRevision: 3 },

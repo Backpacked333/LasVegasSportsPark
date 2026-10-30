@@ -13,8 +13,8 @@ SPK-UX-002, SPK-UX-007, §4.12, DEC-016, DEC-080)
 
 **Migration range:** `packages/db/migrations/0800_entry_*.sql` … `0899` (this module uses `0800`,
 `0801` offline batch request fingerprint, `0802` departure records the visit's person, `0803`
-activity reference checks, `0804` release grant, `0805` access hardware, `0880` organization-scoped
-kernel keys)
+activity reference checks, `0804` release grant, `0805` access hardware, `0806` device registrant
+key, `0880` organization-scoped kernel keys)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`, `AUTHORITY_LOOKUP_PORT` for the online pickup
 check, `HouseholdsService`, `PeopleService`, `RelationshipAuthority.authoritiesOf` for pass
@@ -36,7 +36,7 @@ below are **verified** unless marked **proposed**, **pending** (an operator deci
 The stage-3 work (ENT-01 to ENT-05) calls identity's ID-01 and ID-09 members. On a branch without
 the identity stage-3 work those members answer their declared `declaredNotImplemented` error, so
 18 entry tests (names, merge expansion, verified releases, collector checks) need the identity work
-merged; with it, the whole entry suite (17 files, 117 tests) passes on PGlite and on PostgreSQL.
+merged; with it, the whole entry suite (17 files, 124 tests) passes on PGlite and on PostgreSQL.
 
 ## Requirements
 
@@ -45,7 +45,7 @@ merged; with it, the whole entry suite (17 files, 117 tests) passes on PGlite an
 | SPK-ENTRY-001 separate records                      | `visits`, `session_checkins`, `attendance_observations`, `departures`, `release_records` are separate tables; no command writes another's record implicitly                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `arrival.spec.ts` (SPK-AT-015 counts each table), `occupancy-hardware.spec.ts`                                                                    |
 | SPK-ENTRY-002 opaque pass                           | 256-bit random reference (`spp_…`), stored only as SHA-256; issue returns it once; no id, name or household in it, nor in audit or events                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `arrival.spec.ts` ("a pass is an opaque random reference …"), `entry-schema.spec.ts`                                                              |
 | SPK-ENTRY-003 / SPK-AT-015 selection, nobody marked | `POST /passes/scan` returns the people and today's sessions (`recorded: "nothing"`); arrivals and check-ins are separate commands for the selected people and sessions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `arrival.spec.ts` ("SPK-AT-015 / SPK-ENTRY-003 …")                                                                                                |
-| SPK-ENTRY-004 actionable issues                     | every check is an issue with severity and next action; blocking issues hold the check-in (database refuses admission); unrelated balance informational unless the facility policy blocks (DEC-056)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `arrival.spec.ts`, `balance-policy.spec.ts`, `entry-schema.spec.ts`                                                                               |
+| SPK-ENTRY-004 actionable issues                     | every check is an issue with severity and next action; blocking issues hold the check-in (database refuses admission); unrelated balance informational unless the facility policy blocks (DEC-056); balance issues and their obligation reach staff only: the assigned coach or official and a customer get no balance issue, and `desk_review_required` (no reference) for a blocking one (AUTHZ-PRIVACY-01, SPK-UX-007, §4.14)                                                                                                                                                                                                                                                                                                                      | `arrival.spec.ts`, `balance-policy.spec.ts`, `entry-schema.spec.ts`                                                                               |
 | SPK-ENTRY-005 corrections keep actor, time, reason  | corrections are new rows (`corrects_observation_id`, `correction_reason`, own `recorded_by` and `received_at`); originals are append-only; one correction per observation (chains)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `attendance.spec.ts`, `entry-schema.spec.ts`                                                                                                      |
 | SPK-ENTRY-006 visitor categories                    | participant, guardian, spectator, staff, contractor (and `unclassified` for hardware); unregistered visitors are described with a party size; a participant is always a person; check-in never creates an enrollment                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `arrival.spec.ts`, `entry-schema.spec.ts`                                                                                                         |
 | SPK-ENTRY-007 / SPK-AT-016 pickup                   | `collect` checked online at the moment of release; held permissions recorded as evidence; pay or view never authorize; denial or escalation raises an operational exception; every listed field is a column. A child on a participant visit, or with a live session check-in, leaves only through a release whatever the visit category (a turnstile `unclassified` or a `spectator` arrival included; DEC-075 pending); an assigned coach releases only a child taking part in the activity (else NOT_FOUND) and is told only whether `collect` is held                                                                                                                                                                                              | `releases.spec.ts`, `entry-schema.spec.ts`                                                                                                        |
@@ -83,15 +83,15 @@ merged; with it, the whole entry suite (17 files, 117 tests) passes on PGlite an
 | `offline_sync_batches`    | Append-only: device, client batch id (unique per device), request fingerprint (SHA-256 of facility, snapshot and items, 0801), snapshot reference, time and age at receipt, maximum roster age in force, per-item results, counts that must add up, stale flag, exceptions, operation      |
 | `occupancy_snapshots`     | Append-only: facility day window, arrivals, departures, records on site, open from earlier days, reconciled flag, counted, verified occupancy, discrepancy                                                                                                                                 |
 
-Stage 3 (migrations `0804`, `0805`):
+Stage 3 (migrations `0804`, `0805`, `0806`):
 
-| Table / column                       | Purpose                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `release_records.authority_grant_id` | 0804: the identity access grant a verified online check relied on (composite key to `access_grants`); `NOT VALID` check so every new verified release names one (append-only rows before 0804 keep null)                                                                                                                                      |
-| `access_devices`                     | 0805: facility, kind `door/turnstile/gate/scanner`, name, provider device reference (unique in the organization, never reassigned), status `active → retired` (trigger `access_devices_guard`), health `online/offline/unknown` (default unknown), heartbeat timeout (> 0, null = not judged; no default), last heartbeat, revision           |
-| `access_policies`                    | 0805: device, holder kinds, pass statuses (`<@ {active}`), weekly schedule (facility-local), status `draft → active / retired`, `active → retired` (trigger `access_policies_guard`; content immutable), author, approver (`access_policies_four_eyes`), one active per device (partial unique index), revision                               |
-| `device_commands`                    | 0805: device, kind `revoke_credential` (names the pass) / `sync_policy` (policy snapshot, or none for deny-all), status `pending/delivered/failed/unknown/superseded` (trigger `device_commands_guard`), attempts, last error, settled by adapter or receipt, escalation exception; one revocation per device and pass (partial unique index) |
-| `visits.access_device_id`            | 0805: the registered device of an `access_control` arrival (composite key with the visit's facility; only access-control arrivals; immutable like the other arrival facts)                                                                                                                                                                    |
+| Table / column                       | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `release_records.authority_grant_id` | 0804: the identity access grant a verified online check relied on (composite key to `access_grants`); `NOT VALID` check so every new verified release names one (append-only rows before 0804 keep null)                                                                                                                                                                                                                                   |
+| `access_devices`                     | 0805: facility, kind `door/turnstile/gate/scanner`, name, provider device reference (unique in the organization, never reassigned), status `active → retired` (trigger `access_devices_guard`), health `online/offline/unknown` (default unknown), heartbeat timeout (> 0, null = not judged; no default), last heartbeat, revision; 0806: the registrant `(organization_id, registered_by_person_id)` references `persons` (INTEGRITY-07) |
+| `access_policies`                    | 0805: device, holder kinds, pass statuses (`<@ {active}`), weekly schedule (facility-local), status `draft → active / retired`, `active → retired` (trigger `access_policies_guard`; content immutable), author, approver (`access_policies_four_eyes`), one active per device (partial unique index), revision                                                                                                                            |
+| `device_commands`                    | 0805: device, kind `revoke_credential` (names the pass) / `sync_policy` (policy snapshot, or none for deny-all), status `pending/delivered/failed/unknown/superseded` (trigger `device_commands_guard`), attempts, last error, settled by adapter or receipt, escalation exception; one revocation per device and pass (partial unique index)                                                                                              |
+| `visits.access_device_id`            | 0805: the registered device of an `access_control` arrival (composite key with the visit's facility; only access-control arrivals; immutable like the other arrival facts)                                                                                                                                                                                                                                                                 |
 
 Every table carries `organization_id`; references use composite `(organization_id, …)` keys,
 including references into identity, catalog, scheduling and enrollment tables; batch references
@@ -123,7 +123,7 @@ are deferrable so a batch row is written once, after its items.
 | POST     | `/passes/scan`                                                                                                    | desk roles in facility scope (`entry.scan_pass`); not idempotent (writes only an audit record)                                                                                                                                                                                                                                                                               |
 | POST/GET | `/visits`, `/visits/{id}/void`                                                                                    | desk roles (`entry.record_arrival`, `entry.void_visit`); listing also support and facilities (`entry.read_visits`)                                                                                                                                                                                                                                                           |
 | POST     | `/departures`                                                                                                     | desk roles (`entry.record_departure`); a child on a participant visit or with a live check-in gets `release_required`                                                                                                                                                                                                                                                        |
-| POST/GET | `/session-checkins`, `/{id}/recheck`, `/{id}/withdraw`, `GET /{id}`                                               | desk roles, or coach/official with an accepted assignment (reads too: `entry.read_assigned_checkin`); customers with `view` read without staff identifiers                                                                                                                                                                                                                   |
+| POST/GET | `/session-checkins`, `/{id}/recheck`, `/{id}/withdraw`, `GET /{id}`                                               | desk roles, or coach/official with an accepted assignment (reads too: `entry.read_assigned_checkin`); customers with `view` read without staff identifiers; only desk and support staff see balance issues and obligation ids                                                                                                                                                |
 | POST     | `/attendance-observations`, `/attendance-observations/{id}/corrections`                                           | desk roles, or the assigned coach/official (`entry.record_*attendance`, `entry.correct_*attendance`)                                                                                                                                                                                                                                                                         |
 | GET      | `/attendance?activityType&activityId&offeringId&personId`                                                         | desk/support readers and the assigned coach/official; a customer only one person they hold `view` over (else NOT_FOUND), without staff or device identifiers                                                                                                                                                                                                                 |
 | POST/GET | `/releases`, `/releases/{id}`                                                                                     | front desk, program manager, GM, or the assigned coach for a child checked into or taking part in that activity (the coach's response carries only whether `collect` is held); reads: pickup staff the full record, `view` over the child a minimized projection (no staff notes, denial details, other adults' permissions, exception or staff identifiers), else NOT_FOUND |
@@ -150,12 +150,20 @@ enforced by the kernel for every command.
 
 - Provided: `ATTENDANCE_PORT` (`effectiveAttendance`, `openVisitOf`) for reporting, trials and the
   Today workspace.
-- Consumed: `FINANCIAL_STANDING_PORT` — answered by finance's `ParticipationStandingService`
-  (`standingOf(person, {offeringId, at})`: due, open obligations of the participant, `related` when
-  one belongs to the activity's offering) when the finance module is part of the application. An
-  explicit `FINANCIAL_STANDING_IMPL` takes precedence (tests script it); without either, every
-  standing is `unknown`, shown as an `info` issue that never blocks. Blocking on an unrelated
-  balance stays governed by `blockOnUnrelatedBalance: false` (DEC-056).
+- Consumed: `FINANCIAL_STANDING_PORT` — resolves `FINANCIAL_STANDING_IMPL` first, which finance
+  registers as `FinancialStandingService` (FIN-03, IF-39), so in the assembled application the
+  standing is finance's real answer (`standingOf(person, {offeringId, at})`: due, open obligations
+  of the participant and of everyone merged into them, `related` when one belongs to the
+  activity's offering; `unknown` only on a failed read). A test may register its own
+  `FINANCIAL_STANDING_IMPL` instead. Without it, finance's `ParticipationStandingService` answers
+  when it is in the container; without either, every standing is `unknown`, shown as an `info`
+  issue that never blocks. Blocking on an unrelated balance stays governed by
+  `blockOnUnrelatedBalance: false` (POL-017, DEC-056). Evidence:
+  `apps/api/src/__tests__/cross-module-ports.spec.ts` ("SPK-ENTRY-004: the arrival standing comes
+  from finance (clear, or an outstanding unrelated balance)"). The standing covers every
+  obligation the person owes, pays for or participates in (possibly another adult's order), so
+  its issues are projected per reader at read time (`issuesFor`): staff see them with the
+  obligation id; the assigned coach or official and a customer do not (AUTHZ-PRIVACY-01).
 - Provider port (§5.2): `FakeAccessControlProvider` is the deterministic hardware adapter —
   `granted` (success), `denied` (failure), `unknown` (timeout), duplicate deliveries; HMAC-signed.
   It is also the only `ACCESS_DEVICE_PORT` adapter (IF-38, refused in production): `sendCommand`
@@ -227,8 +235,9 @@ order. Proven under true concurrency by `__tests__/entry-concurrency.spec.ts` wi
 - Denied pickups are recorded `denied` unless staff escalate (`escalateDeniedPickups: false`;
   DEC-005); every denial still raises an exception.
 - Device clock tolerance 5 minutes (engineering proposal).
-- Technical setting (K-15, `entry.settings.ts`): `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS`
-  (default 3). No policy value of the access hardware work has a default: a device's heartbeat
+- Technical settings (K-15, `entry.settings.ts`): `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS`
+  (default 3), `ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS` (default 30) and
+  `ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS` (default 300), engineering proposals. No policy value of the access hardware work has a default: a device's heartbeat
   timeout, a policy's holder kinds and schedule are configuration entered by staff, and nothing is
   admitted until a policy is approved (deny-all).
 
@@ -254,7 +263,16 @@ active one and is sent; retiring the active policy without a replacement sends d
 synchronization supersedes an undelivered older one (`supersede`, an engineering addition to the
 ENT-05 plan so a retried older sync never overwrites a newer policy, **proposed**). A revoked pass
 is queued for every active device (passes carry no facility), and only its reference hash is sent.
-Delivery runs outside transactions; failed and unknown commands retry; after
+Delivery runs outside transactions; failed and unknown commands retry with a backoff (the first
+retry has no delay and goes out on the next pass that reaches it, which is a later pass of the same
+run when the run makes more than one pass, otherwise the next run; the retry after attempt n ≥ 2
+waits `ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS`·2^(n−2) seconds, at most
+`ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS`; every pass reads the clock afresh, so a run whose passes
+take longer than the base delay can send a command a third time), and due commands are taken in
+turns per device (never-attempted first), so an unreachable device with any backlog never keeps
+another device's revocations from being sent and is not re-sent every pass (ASYNC-02); the job
+renews its lease (`renewJobLease`, K-06) before each command it sends and sends nothing more once
+another runner holds the job (ASYNC-06); after
 `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS` undelivered attempts (technical setting, default 3)
 one `entry.device_command_undelivered` exception is raised and resolved when the command is later
 delivered; a receipt settles a pending or unknown command once. Heartbeats mark a device online;
@@ -291,6 +309,9 @@ reference. Access events are never attendance, check-in or pickup authority (SPK
   (DEC-023); entry sends the policy (holder kinds, active passes only, facility-local weekly
   windows) and revocations, nothing more.
 - Device commands of a retired device are not delivered and stay in their last state.
+- No exception names a device command that waits without a first attempt; with the per-device
+  turns this happens only while more commands are due than one delivery run sends
+  (`PERIODIC_JOBS_MAX_PASSES` × 50 per minute), and escalation starts at the third attempt.
 - `GET /attendance` returns one page; `GET /visits` is cursor-paginated.
 
 ## Cross-branch notes (stage 3)

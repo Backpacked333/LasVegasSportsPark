@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { emitOpenApiDocument } from '../../../openapi-document';
 import type { TestApp } from '../../../testing';
 import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
 import { proposedRuleSetContent } from '../competition.policy';
@@ -501,6 +502,21 @@ describe('bracket seeding, shootouts and tournament pools (CMP-10, CMP-15; SPK-C
     expect(read.body.revision).toBe(4);
     expect((await get(`/pools/${pool.body.id}/standings`, leagueManager)).status).toBe(200);
     await t.enableCapability('tournaments');
+  });
+
+  it('CMP-15 / §6.7: the published contract says the tournaments capability gates pool creation and placement, never removal', () => {
+    const paths = emitOpenApiDocument('0.1.0').paths as Record<
+      string,
+      { post?: { summary?: string } } | undefined
+    >;
+    const summary = (path: string) => paths[path]?.post?.summary ?? '';
+    expect(summary('/divisions/{id}/pools')).toMatch(/; capability tournaments\)$/);
+    expect(summary('/pools/{id}/entries')).toMatch(/; capability tournaments\)$/);
+    // removal is unwinding (IF-30): the service never checks the switch, and the test above
+    // removes an entry while it is off, so the contract must not say it is required
+    const removal = summary('/pools/{id}/entries/{teamEntryId}/remove');
+    expect(removal).not.toMatch(/; capability tournaments\)$/);
+    expect(removal).toContain('never gated by capability tournaments');
   });
 
   it('CMP-15: approving a pooled applied entry into another division is refused, never a raw key violation', async () => {

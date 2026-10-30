@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0608` and `0680`)
+`0600`–`0613` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -28,7 +28,8 @@ registers `FINANCIAL_STANDING_IMPL` (entry's `FinancialStandingPort`, FIN-03) an
 another module's tables (§4.2); composite foreign keys reference their rows read-only.
 
 **Status: implemented** — verified by `apps/api/src/modules/finance/__tests__` (PGlite and
-`TEST_DATABASE_URL` PostgreSQL) and the unit specs next to the code
+`TEST_DATABASE_URL` PostgreSQL; stage-5 review fixes in `money-guards.spec.ts`,
+`pos-money.spec.ts` and the specs named in each note) and the unit specs next to the code
 (`pricing/quote-calculator.spec.ts`, `ledger/ledger.service.spec.ts`,
 `providers/fake-payment.provider.spec.ts`, `providers/fake-accounting.provider.spec.ts`,
 `services/pos/pos-charges.spec.ts`, `services/customer-scope.spec.ts`). Statements below are
@@ -44,12 +45,12 @@ verified unless marked proposed or pending. Stage-3 work items FIN-01..FIN-07 ar
 | `orders` / `order_lines`       | The purchase with its price and policy basis (lines append-only); `payment_status` (`awaiting_payment/paid/canceled`) and `fulfillment_status` (`pending/fulfilled/recovery_required/compensated/canceled`) are independent facts                                                               |
 | `obligations`                  | Debtor person or team entry; mode `individual/single_team_payer/team_with_contributions`; responsible payer; source; amount, allocated, currency, due date; `open/settled/written_off/canceled`                                                                                                 |
 | `contribution_requests`        | A player asked to contribute toward ONE team obligation (composite key carries the obligation's mode); amount asked, status `requested/paid/canceled`, paying receipt                                                                                                                           |
-| `installment_plans`            | Order, payer, total, count, payment authorization (opaque method reference, never returned), retry policy, notice policy, policy version, `active/completed/defaulted/canceled`                                                                                                                 |
+| `installment_plans`            | Order, payer, total, count, payment authorization (opaque method reference, never returned), retry policy, notice policy, policy version, `active/completed/defaulted/canceled`; hold time and reason (`0613`, MONEY-04)                                                                        |
 | `installments`                 | One obligation each; amount, due date and original due date, `scheduled/paid/failed/canceled`, attempts, failure reason, next retry, extensions, notice sent                                                                                                                                    |
 | `checkouts`                    | CheckoutMachine status, payment kind (`provider/cash/none`), holds, enrollments, current payment attempt or tender, operation, failure and recovery details (plan, refund, credit, exception)                                                                                                   |
 | `payment_attempts`             | PaymentAttemptMachine status, purpose (`checkout/obligation/contribution/installment`), provider, opaque payment-method reference, provider reference, action payload, failure reason, fee, evidence source/inbox event/sequence, submitted, unknown                                            |
 | `receipts`                     | Money actually received (one per payment attempt or tender): amount = allocated + visible excess, processor fee, journal — append-only                                                                                                                                                          |
-| `payment_refundables`          | Per captured payment: captured, refunded, reserved                                                                                                                                                                                                                                              |
+| `payment_refundables`          | Per captured payment: captured, refunded, reserved, compensated (`0612`)                                                                                                                                                                                                                        |
 | `refund_attempts`              | RefundMachine status, reservation status (`reserved/settled/released`), purpose (`customer_refund/compensation`), provider reference, evidence, operation                                                                                                                                       |
 | `credits`                      | Owner, currency, original and remaining, permitted uses, source (`overpayment/compensation/goodwill/adjustment`), expiry, `pending_approval/active/exhausted/expired/revoked`                                                                                                                   |
 | `credit_redemptions`           | Append-only `redeem` and `reversal` rows per consuming reference                                                                                                                                                                                                                                |
@@ -69,13 +70,20 @@ carry `revision` and `touch_updated_at`.
   debtor; one checkout per quote and one live checkout per basket; one live payment attempt per
   checkout, per installment and per payer and obligation; one live checkout or installment charge
   per obligation (`0601`: the checkout charge names the obligation it pays, so the installment
-  worker can never charge the same debt beside it); one succeeded attempt per checkout; one
+  worker can never charge the same debt beside it; `0611`: one live checkout, installment or
+  direct-payment charge per obligation, so a collection and a payer's own payment of the same
+  installment cannot both charge, MONEY-07); one succeeded attempt per checkout; one
   credit per source fact (an in-process caller may name the source of an adjustment credit —
   migration passes the imported balance's mapping id — and a second credit for it is refused with
   `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
   and reference; one reversal per journal, entry and redemption.
+- **SPK-PAY-006, §4.11 step 10 (`0613`, MONEY-04):** a plan's hold is a time and a reason set
+  together, recorded once and never changed or cleared (`installment_plans_hold_recorded`), and no
+  installment payment attempt can name an installment of a held plan
+  (`payment_attempts_installment_plan_held`).
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
-  (`refunded + reserved <= captured`); captured is fixed and refunded only accumulates.
+  (`refunded + reserved + compensated <= captured`, `0612`); captured is fixed, refunded and
+  compensated (what a compensation credit took, MONEY-02) only accumulate.
 - **§4.7 invariant 7 / SPK-PAY-009:** `remaining_minor >= 0`, `remaining <= original`, and a
   deferred constraint trigger keeps `remaining = original - redeemed + reversed`, so a balance is
   never overwritten.
@@ -182,10 +190,17 @@ contribution's amount and status, never a player's payment or method.
   transaction (`PaymentsService.execute` refuses). A decline leaves the checkout awaiting payment
   for a retry while the hold lasts; after the hold expires with no live payment the timer aborts it
   and reverses every financial effect (obligations, credit redemptions, discount redemptions,
-  installments, basket).
+  installments, basket). While a checkout awaits payment its order's obligations are paid only
+  through it: a direct payment, a cash tender or a credit redemption into them is refused with
+  `CHECKOUT_PAYMENT_PENDING` naming the checkout (MONEY-01). Money that reached such an order by
+  another path is never charged again (a retry answers `CHECKOUT_MONEY_RECEIVED`) and an abort with
+  it raises the critical exception `finance.aborted_order_money_received` for the finance
+  operator.
 - **Payment uncertainty (SPK-PAY-007):** a timeout is `unknown` with a critical exception owned by
   the finance operator; retries and aborts are refused until a webhook, staff reconciliation or the
-  worker sweep resolves it. A record the provider has is applied at once; "no provider record" is
+  worker sweep resolves it. A direct payment, a cash or external tender and a credit redemption
+  into an obligation are refused (`PAYMENT_OUTCOME_UNKNOWN`) while a checkout, installment or
+  direct-payment charge of that obligation is in flight or unknown (MONEY-06). A record the provider has is applied at once; "no provider record" is
   authoritative absence only for an attempt never handed to the provider (decided under the row
   lock) or one submitted or gone unknown at least the reconciliation threshold ago, also when staff
   force the reconciliation. Every live attempt, an unsubmitted `created` one included, blocks abort
@@ -208,14 +223,23 @@ contribution's amount and status, never a player's payment or method.
   (checkout, order fulfillment, operation) with exception `finance.fulfillment_incomplete`; a place
   taken by a waitlist offer is never displaced; definitive failures are compensated per the refund
   policy the order recorded (refund by default; a version approved after the quote does not
-  apply, SPK-PAY-002), others wait for staff `recover` or `compensate`. Completing a compensation
+  apply, SPK-PAY-002), others wait for staff `recover` or `compensate`. A compensation credit is
+  what was received and not already returned (per captured payment: captured less refunded; a cash
+  tender in full) and consumes those refundable funds, so a later refund is refused beyond what is
+  left; while a refund of the payment is still reserved staff get `REFUND_PENDING` and the
+  automatic credit path leaves the checkout in recovery (MONEY-02). What a compensation credit took
+  is shown beside what was captured, refunded and reserved (`compensatedMinor` on a refund's
+  `refundable`, on `GET /payments/{id}` and in the `REFUND_EXCEEDS_REFUNDABLE` and
+  `REFUND_PENDING` details), so an operator sees the money went back as credit. Completing a compensation
   restores the credits redeemed at checkout (booked refunds → credits payable, the receivable is
   not reopened) and cancels the installment plan, its scheduled installments and open obligations.
 - **Refunds (SPK-PAY-008, SPK-AT-007):** reserved by conditional UPDATE before execution; of two
   concurrent 60% refunds exactly one reserves (also under PostgreSQL); an unknown or in-flight
   result keeps the reservation (REFUND_PENDING) until evidence settles or releases it; "no provider
   record" releases it only once the refund was submitted at least the reconciliation threshold
-  ago.
+  ago. Refund evidence (synchronous answer, webhook, reconciliation) is compared with the refund
+  attempt: another amount, currency or provider reference changes nothing and raises the critical
+  exception `finance.refund_evidence_conflict` (MONEY-09).
 - **Team billing (SPK-PAY-004/005, SPK-AT-022):** contribution payments that together exceed the
   remaining balance allocate exactly the remaining amount; the excess stays visible on the receipt
   and the obligation (`excessMinor`), sits in `overpayment_liability`, and is held as a credit
@@ -229,17 +253,36 @@ contribution's amount and status, never a player's payment or method.
   evaluated separately, POL-017); extensions reset the attempts and the notice, which goes out the
   plan's lead time before the new date; nothing is collected while the checkout's own payment is
   pending or its registration is not fulfilled; retry and notice terms come from the policy the
-  quote recorded.
+  quote recorded. Once every registration the order made is canceled, the plan is held (MONEY-04):
+  the first collection or notice that finds it records the hold on the plan (`hold` on
+  `GET /installment-plans/{id}`, `0613`) and raises `finance.installment_registration_canceled`
+  once (finance operator); enrollment's own cancellation of the registration, with any accepted
+  consequence other than `none`, also raises `enrollment.cancellation_consequence_pending` for the
+  finance operator, plan or no plan. A held plan is never collected (the worker no longer selects it, a
+  staff collection answers `INSTALLMENT_REGISTRATION_CANCELED`, and the database refuses an
+  installment charge for it) and its payer is sent no installment notice. Resolving the exception
+  neither lifts the hold nor raises it again; no command ends a hold yet: whether the remaining
+  installments are owed follows the cancellation policy (DEC-009 **Pending decision**). Until that
+  decision a held plan's open installment obligations still count as owed: once one falls due,
+  financial standing (FIN-03) reports the participant `outstanding`. Collection and extension
+  lock the obligation before its installment, the order the capture path uses (MONEY-07).
 - **Cash (SPK-PAY-012):** permitted staff only, facility-scoped, with evidence; against an existing
   obligation or through the checkout (holds and capacity apply); reconciled per cash drawer.
 - **Reconciliation (SPK-PAY-010/011):** balances are computed from journal entries; the report
   keeps orders, obligations, receipts, refunds, credits, processor fees, disputes, settlements and
-  cash apart; revenue stays deferred (payment volume is not revenue).
+  cash apart; revenue stays deferred (payment volume is not revenue). A processor settlement
+  expects the provider's receipts and point-of-sale card captures (settled card tenders and late
+  captures, which have no receipt) less their processor fees less settled refunds; the report's
+  `processorFeesMinor` counts every processor fee and its `pointOfSale` section shows card,
+  drawer (cash and external tenders), fees and returns beside receipts and cash tenders
+  (MONEY-03).
 
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
 `finance.policy.ts` (`DEFAULT_FINANCE_POLICY`), overridable by approved catalog policy versions of
-kind `installment` / `overpayment` / `refund` with key `finance` (the quote records which applied):
+kind `installment` / `overpayment` / `refund` with key `finance` (the quote records which applied,
+and for an installment version every term it leaves out as `installment.<term>: engineering
+default <value>`, MONEY-08):
 quote validity 15 minutes, never past the hold (POL-013, DEC-007); abandoned checkout aborted five
 minutes after its hold expiry; overpayment held as credit pending approval (POL-015, DEC-008);
 compensation of an unfulfillable paid checkout by refund (POL-009, DEC-009); installments enabled,
@@ -312,8 +355,10 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
 
 - `FinancialStandingService` is registered as entry's `FINANCIAL_STANDING_IMPL` (IF-39): the
   open obligations due by the arrival time that the person owes, is responsible payer of, or that
-  belong to an order registering them as participant; `outstanding` names the earliest-due one and
-  whether it is `related` to the activity's offering; a failed read is `unknown`, never a guess.
+  belong to an order registering them as participant; `outstanding` names the earliest-due one
+  whose order has a line for the activity's offering (`related: true`) when there is one, otherwise
+  the earliest-due one (`related: false`), so an older unrelated balance never hides a related one;
+  a failed read is `unknown`, never a guess.
   Whether a balance blocks arrival is entry's decision (POL-017 / DEC-056 **Pending decision**:
   informational by default). `ParticipationStandingService` (competition's
   `FINANCIAL_CONDITIONS_IMPL`) reads through the same service.
@@ -331,9 +376,13 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
 Enabled per organization by its capability switch (default off), naming its applicability
 decision: DEC-079 "Point of sale" within DEC-016 "Conditional capability applicability", both
 **Pending decision**. Disabled: creating or changing products, creating registers, opening a
-session, starting a sale, adding a line or a tender are refused (`ACCESS_DENIED`,
-`details.code: CAPABILITY_DISABLED`); retiring, closing a session, voids, returns and reads are
-never gated (DEC-016).
+session, starting a sale or adding a line are refused (`ACCESS_DENIED`,
+`details.code: CAPABILITY_DISABLED`); a tender settling an existing open sale, retiring, closing a
+session, voids, returns and reads are never gated (DEC-016), so a sale partly paid (a card tender
+cannot be voided) when the switch is turned off is still completed, returned, and its session and
+register closed through the API. The staff dashboard's sale page offers the tender form on an open
+sale whatever the switch, and hides only adding a line while it is off (`SalePage.test.tsx`
+"DEC-016 / CAPABILITIES-01: ...").
 
 | Method   | Path                                                                                                             | Who (action)                                                                    |
 | -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -350,6 +399,12 @@ never gated (DEC-016).
   (`services/pos/pos-access.ts`), so it holds no finance-area read and `GET /v1/me/permissions`
   shows it no finance area while POS is off (SPK-UX-005). Whether a desk running a register sees
   a finance area once POS is enabled follows the kernel's **Proposed** navigation mapping.
+  `GET /pos-registers` and `GET /pos-products` without `facilityId` are narrowed to the
+  facilities the caller's `read_pos` or `operate_register` roles cover (organization-wide
+  products stay listed; §4.3, §4.14), as the per-record reads are.
+- §4.9: lines, tenders, voids and returns compare the body's `expectedRevision` with the locked
+  sale (`STALE_REVISION`), and recording a tender moves the sale's revision on, so a void or return
+  decided on a view older than another operator's tender is refused instead of applied.
 - Migration `0607_finance_point_of_sale.sql`: `pos_products` (merchandise, concession or
   service; SKU unique per organization; never a registration, SPK-PAY-012), `pos_product_charges`
   (the approved `tax_fee` policy keys of a product), `pos_registers`, `pos_register_sessions` (one
@@ -361,7 +416,8 @@ never gated (DEC-016).
   trigger only while the sale is open; tenders never exceed the total and attach only to an open
   sale; a card tender names its payment attempt, an external one its evidence (SPK-PAY-012); a
   return never exceeds a line's sold quantity or the paid amount (constraint trigger, two
-  concurrent returns cannot both pass, also under PostgreSQL); a cash return names an open drawer
+  concurrent returns cannot both pass, also under PostgreSQL; since `0610` the units one return
+  names for the same line are summed first, MONEY-10); a cash return names an open drawer
   session; machine guards refuse every transition the `PosSale`, `PosTender`, `PosRegisterSession`
   machines (`finance.state-machines.ts`) do not allow.
 - Taxes and fees come only from approved catalog `tax_fee` policy versions (CAT-02, DEC-057):
@@ -376,6 +432,11 @@ never gated (DEC-016).
   `cash_on_hand` (cash and external tenders) and `cash_processor` (card tenders, less processor
   fees) against `pos_revenue`, `taxes_payable` and `fees_payable`. A void
   is only for an open sale without card tenders (`SALE_HAS_CARD_TENDER`).
+- A card capture the provider reports after its tender was recorded as failed is received money:
+  besides its refundable funds and the critical exception `finance.pos_capture_after_failure`, it
+  is booked once per attempt (`pos_capture_after_failure`: processor less fee against
+  `overpayment_liability`, the fee kept on the attempt), and its refund settles that liability
+  instead of booking a refund expense (MONEY-05).
 - Returns post a reversing journal; returned amounts are split per unit by largest remainder, so
   returning every unit returns exactly what was paid (SPK-PAY-010); a card return reserves and
   executes a provider refund against the card tender (SPK-PAY-008); a cash return pays out of an
@@ -404,7 +465,10 @@ outcome recording and reconciliation are never gated.
   `accounting_export_batches` (status machine guard, idempotency key unique per organization,
   `sha256:` checksum of the exported lines), `accounting_export_lines` (one side per line; a
   journal entry has at most one live export line; lines never change except leaving the live set
-  when their batch is rejected or canceled).
+  when their batch is rejected or canceled). Migration `0609_finance_export_line_guards.sql`
+  (INTEGRITY-03): a line is added only to a `prepared` batch and within its line count, copies its
+  journal entry's account, debit, credit and currency, and a batch commits holding exactly its
+  `line_count` lines, so the database keeps an exported batch as it was sent.
 - No default mapping exists: a batch is prepared only when every account of its entries has an
   approved mapping, else `ACCOUNTING_MAPPING_REQUIRED` naming the accounts (SPK-PAY-011, DEC-022).
   Corrections are later journals exported in a later batch; an exported batch never changes
@@ -414,8 +478,11 @@ outcome recording and reconciliation are never gated.
   unknown). The periodic job `finance.reconcile_accounting_exports` (every 60 s, failure owner
   finance operator) asks about `unknown` batches and `submitted` ones older than
   `FINANCE_ACCOUNTING_SUBMIT_STALE_SECONDS` (technical setting, default 300) and resubmits with
-  the same key when the connection has no record. Exceptions:
-  `finance.accounting_export_unknown`, `_rejected`, `_conflict`.
+  the same key when the connection has no record; it renews its lease (`renewJobLease`, K-06)
+  before each connection call and asks about nothing more once another runner holds the job
+  (ASYNC-06). Exceptions:
+  `finance.accounting_export_unknown`, `_rejected`, `_conflict`. Every batch transition is
+  audited, the move to `unknown` included (`finance.accounting_batch_unknown` with the error).
 - `ACCOUNTING_EXPORT_PORT` has only `FakeAccountingProvider` (success, rejection, timeout/unknown,
   duplicate submission), refused in production; registered as integration
   `finance.accounting_export` (gate `accounting`). Events `finance.accounting_mapping_changed`,
@@ -465,7 +532,9 @@ outcome recording and reconciliation are never gated.
   an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
   DEC-056), so it is never a pass or a block until the policy is approved.
 - The money side of transfers and cancellations is answered (consequence) but not executed
-  automatically (no automatic refund, credit or charge from enrollment's commands).
+  automatically (no automatic refund, credit or charge from enrollment's commands); a plan whose
+  registrations were all canceled is held (no collection, no notice) and waits for the finance
+  operator, with no command yet to end the hold, write off or cancel its installments (DEC-009).
 - Point of sale and accounting export: see [Stage 3](#stage-3-fin-01fin-07) for their own gaps.
 
 ## Kernel limitations worked around here
@@ -487,7 +556,10 @@ outcome recording and reconciliation are never gated.
   `installmentPolicyVersionId`); asking for another count is refused (`BOOKING_DEPOSIT_PLAN_FIXED`),
   mixing bookings with different plans is refused (`BOOKING_DEPOSIT_PLANS_DIFFER`), and a missing
   or incomplete policy refuses the quote (`BOOKING_DEPOSIT_POLICY_MISSING`,
-  `BOOKING_DEPOSIT_POLICY_INCOMPLETE`) instead of assuming a default. Whether such a booking may be
+  `BOOKING_DEPOSIT_POLICY_INCOMPLETE`) instead of assuming a default. The collection terms a
+  deposit version may leave out (retry attempts and interval, notice lead time) take the
+  engineering default, and the quote records each one taken in its `policies.defaults`
+  (`installment.<term>: engineering default <value>`, MONEY-08). Whether such a booking may be
   paid in full instead is not answered by the terms (**Pending decision**, POL-040). Found and
   verified by `apps/api/src/__tests__/journeys/spk-cond-003-rentals.spec.ts`.
 - `docs/api/openapi.json` and the API client are regenerated (the parity test passes); the

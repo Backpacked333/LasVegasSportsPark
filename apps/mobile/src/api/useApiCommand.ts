@@ -2,7 +2,9 @@
  * Consequential commands from screens (§4.9). One hook instance is one user intent: retrying the
  * same input reuses the idempotency key (a double tap or a retry after a timeout never duplicates
  * an effect); changed input, a confirmed success or a definitive refusal (an answer the API stores
- * and would replay for the same key) starts a new intent with a new key.
+ * and would replay for the same key) starts a new intent with a new key. IDEMPOTENCY_OUTCOME_
+ * UNAVAILABLE keeps the key (`keepsIntentAfterFailure`): the command committed, and a new key would
+ * run it again.
  * Pass `expectedRevision` in the body wherever the API takes it; a STALE_REVISION answer is shown
  * with "Reload" and the user's input is kept (SPK-UX-008).
  */
@@ -16,6 +18,7 @@ import type {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../providers/AppProviders';
+import { keepsIntentAfterFailure } from './command-outcome';
 
 export type CommandRequest<M extends CommandMethod, P extends PathsWithMethod<M>> = Omit<
   RequestOptions<P, M>,
@@ -43,9 +46,10 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
       return send(path, { ...request, intent });
     },
     // A definitive refusal ends the intent: the API replays a stored 4xx for the same key, so the
-    // next attempt (after the user fixed the cause) needs a new key. Unknown outcomes keep it.
+    // next attempt (after the user fixed the cause) needs a new key. Unknown outcomes keep it, and
+    // so does IDEMPOTENCY_OUTCOME_UNAVAILABLE (committed, its answer lost).
     onError: (error) => {
-      tracker.current.failed(error);
+      if (!keepsIntentAfterFailure(error)) tracker.current.complete();
     },
     onSuccess: async () => {
       tracker.current.complete();

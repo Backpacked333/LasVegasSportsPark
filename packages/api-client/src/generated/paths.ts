@@ -3242,7 +3242,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Review, grant, deny or withdraw an appeal */
+        /** Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason) */
         post: {
             parameters: {
                 query?: never;
@@ -13399,7 +13399,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Review, decide or withdraw a dispute */
+        /** Review, decide or withdraw a dispute (a decision or a withdrawal names its reason) */
         post: {
             parameters: {
                 query?: never;
@@ -33113,7 +33113,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Remove an entry from a pool (CMP-15; capability tournaments) */
+        /** Remove an entry from a pool (CMP-15; never gated by capability tournaments) */
         post: {
             parameters: {
                 query?: never;
@@ -34779,7 +34779,7 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Take a cash, external or card tender (card through the provider, §4.11)
+         * Take a cash, external or card tender on an open sale (card through the provider, §4.11; not gated by the switch, DEC-016)
          * @description FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).
          */
         post: {
@@ -49633,11 +49633,12 @@ export type components = {
             severity: "blocking" | "warning" | "info";
         };
         /** @enum {string} */
-        ArrivalIssueCode: "no_participation" | "enrollment_not_confirmed" | "missing_acknowledgment" | "outstanding_balance" | "balance_unknown" | "activity_canceled" | "activity_ended" | "not_on_site";
+        ArrivalIssueCode: "no_participation" | "enrollment_not_confirmed" | "missing_acknowledgment" | "outstanding_balance" | "balance_unknown" | "activity_canceled" | "activity_ended" | "not_on_site" | "desk_review_required";
         Assessment: {
             /** Format: uuid */
             authorPersonId: string;
             comments: string | null;
+            correctionReason: string | null;
             /** Format: uuid */
             correctsAssessmentId: string | null;
             /** Format: date-time */
@@ -54059,6 +54060,12 @@ export type components = {
                 authorizedByPersonId: string | null;
             };
             currency: string;
+            hold?: {
+                /** Format: date-time */
+                heldAt: string;
+                /** @enum {string} */
+                reason: "registrations_canceled";
+            } | null;
             /** Format: uuid */
             id: string;
             installments: components["schemas"]["Installment"][];
@@ -55517,6 +55524,7 @@ export type components = {
          */
         PaymentAttemptStatus: "created" | "action_required" | "processing" | "succeeded" | "failed" | "canceled" | "unknown";
         PaymentDetail: components["schemas"]["PaymentAttempt"] & {
+            compensatedMinor?: number;
             refundableMinor: number;
             refunds: components["schemas"]["PaymentRefundSummary"][];
         };
@@ -56747,6 +56755,12 @@ export type components = {
                 paidCount: number;
                 totalMinor: number;
             };
+            pointOfSale?: {
+                cardMinor: number;
+                drawerMinor: number;
+                processorFeesMinor: number;
+                returnedMinor: number;
+            };
             processorFeesMinor: number;
             receipts: {
                 cashMinor: number;
@@ -56995,6 +57009,7 @@ export type components = {
         Refundable: {
             availableMinor: number;
             capturedMinor: number;
+            compensatedMinor?: number;
             currency: string;
             refundedMinor: number;
             reservedMinor: number;

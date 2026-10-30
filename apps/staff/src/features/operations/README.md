@@ -49,7 +49,7 @@ the actual devices of §6.3.
   visibility (chosen, nothing preselected), feedback comments and a separate private coaching note
   (never shown to a family). Edit and submit are the author's, withdraw the author's or a program
   manager's (reason; never gated), review a program manager's other than the author (a return says
-  why); a published or recorded assessment is corrected by a new one naming it. Every command sends
+  why); a published or recorded assessment is corrected by a new one naming it, with a required reason (§4.9), the corrected assessment's skill area and visibility (locked, also when the correction's draft is edited) and only templates of its program offered (CORRECTION_MISMATCH otherwise, §4.7 invariant 9); the reason is shown on the correction. Every command sends
   `expectedRevision` where the API takes it and its own idempotency key.
 - **Offered from permissions.** Assessments carry no per-record actions, so commands are offered
   from the assessment state, the author and `GET /v1/me/permissions` (role view); the API decides

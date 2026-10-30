@@ -80,10 +80,15 @@ route above resolves to its screen.
   accept, decline and withdraw).
 - **No client prices** (SPK-PAY-001): quote and checkout bodies carry ids, codes and a provider
   token only; every amount shown is the API's integer minor units (`formatMinorUnits`).
-- **Payment uncertainty** (SPK-PAY-007, SPK-UX-001): a checkout request that gets no answer reads
-  "Payment outcome being confirmed. Do not pay again.", hides the Pay button, and is re-sent with
-  the same key when the app returns to the foreground, when the connection returns, or on "Check
-  now". The outcome screen re-reads an in-flight checkout every 5 seconds (display refresh, not a
+- **Payment uncertainty** (SPK-PAY-007, SPK-UX-001): a checkout request that gets no definite
+  answer (`mayHaveTakenEffect`: no answer, the same key still running, any 5xx) reads "Payment
+  outcome being confirmed. Do not pay again.", hides the Pay button, and is re-sent with the same
+  key when the app returns to the foreground, when the connection returns, or on "Check now". When
+  that finds the checkout committed with its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), no
+  payment is offered and the price is read again; it then names the checkout, which the screen
+  opens. A payment retry on the outcome screen is treated the same way. Elsewhere in registration a
+  command without a definite answer reads "No answer yet: this may already have been recorded" with
+  "Check again" under the same key (`features/registration/CommandError.tsx`). The outcome screen re-reads an in-flight checkout every 5 seconds (display refresh, not a
   policy) and on foreground; "Confirmed" appears only for enrollments the API reports confirmed,
   and "Confirmed: <team>" once the placement names a team.
 - **Final place and late payment** (SPK-AT-005, SPK-AT-006): CAPACITY_UNAVAILABLE on hold charges

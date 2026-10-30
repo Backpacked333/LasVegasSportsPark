@@ -947,7 +947,8 @@ export const DecideDisputeBody = withCommandMeta({
   decision: DisputeDecisionSchema.optional(),
   publicationConsequence: PublicationConsequenceSchema.optional(),
 })
-  .extend({ expectedRevision: Revision })
+  // the reason is trimmed like the dedicated withdraw path's, so a blank one is no reason
+  .extend({ expectedRevision: Revision, reason: Reason.optional() })
   .refine(
     (b) =>
       b.action !== 'decide' ||
@@ -957,6 +958,12 @@ export const DecideDisputeBody = withCommandMeta({
       path: ['decision'],
     },
   )
+  // §4.9, SPK-RESULT-005: league administration withdrawing another party's dispute is an
+  // override and names its reason, as the submitter's own POST /disputes/{id}/withdraw does.
+  .refine((b) => b.action !== 'withdraw' || !!b.reason, {
+    message: 'a withdrawal recorded by league administration requires a reason',
+    path: ['reason'],
+  })
   .openapi('DecideDisputeRequest');
 export type DecideDisputeInput = z.infer<typeof DecideDisputeBody>;
 
@@ -1219,9 +1226,17 @@ export type CreateAppealInput = z.infer<typeof CreateAppealBody>;
 export const DecideAppealBody = withCommandMeta({
   action: z.enum(['review', 'grant', 'deny', 'withdraw']),
 })
-  .extend({ expectedRevision: Revision })
+  // the reason is trimmed, so a blank one is no reason
+  .extend({ expectedRevision: Revision, reason: Reason.optional() })
   .refine((b) => !(b.action === 'grant' || b.action === 'deny') || !!b.reason, {
     message: 'an appeal decision requires a reason',
+    path: ['reason'],
+  })
+  // §4.9 (SPK-DISC-001/002): appeals have no submitter withdraw path, so a withdrawal is always
+  // league management ending the subject's appeal and resetting the appeal status it set; like
+  // a dispute withdrawal on POST /disputes/{id}/decide it names its reason.
+  .refine((b) => b.action !== 'withdraw' || !!b.reason, {
+    message: 'a withdrawal recorded by league management requires a reason',
     path: ['reason'],
   })
   .openapi('DecideAppealRequest');
@@ -1558,7 +1573,7 @@ command(
 command(
   'post',
   '/disputes/{id}/decide',
-  'Review, decide or withdraw a dispute',
+  'Review, decide or withdraw a dispute (a decision or a withdrawal names its reason)',
   DecideDisputeBody,
   DisputeSchema,
   200,
@@ -1636,7 +1651,7 @@ query('/appeals/{id}', 'Read an appeal', null, AppealSchema);
 command(
   'post',
   '/appeals/{id}/decide',
-  'Review, grant, deny or withdraw an appeal',
+  'Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason)',
   DecideAppealBody,
   AppealSchema,
   200,
@@ -1661,7 +1676,7 @@ command(
 openApiRegistry.registerPath({
   method: 'post',
   path: '/pools/{id}/entries/{teamEntryId}/remove',
-  summary: 'Remove an entry from a pool (CMP-15; capability tournaments)',
+  summary: 'Remove an entry from a pool (CMP-15; never gated by capability tournaments)',
   tags: [TAG],
   request: {
     params: z.object({ id: z.uuid(), teamEntryId: z.uuid() }),

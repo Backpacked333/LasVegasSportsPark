@@ -19,6 +19,7 @@ import {
 } from '@sportspark/db';
 import type { Selectable } from 'kysely';
 import {
+  assertExpectedRevision,
   AuditWriter,
   AuthorizationService,
   CLOCK,
@@ -550,6 +551,9 @@ export class PackageEntitlementsService {
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
+      // §4.9 (COMMANDS-04): the entitlement as the caller saw it; another redemption or reversal
+      // since then answers STALE_REVISION instead of being corrected blind.
+      assertExpectedRevision(input.expectedRevision, row.revision);
       if (redemption.kind !== 'redeem') {
         throw errors.invalidTransition('PackageRedemption', 'reversal', 'reverse');
       }

@@ -6,7 +6,7 @@
 import { fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Share } from 'react-native';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, dropAnswers } from '../../../testing/test-app';
 import {
   apiError,
   CHILD,
@@ -16,7 +16,7 @@ import {
   person,
   SELF,
 } from '../../account/__tests__/fixtures';
-import { FEED_REVOKED_TEXT, feedUrl } from '../CalendarFeedsSection';
+import { FEED_REVOKED_TEXT, feedUrl, WITHHELD_REVOKE_REASON } from '../CalendarFeedsSection';
 import { PreferencesScreen } from '../PreferencesScreen';
 import { PushPermissionProvider } from '../push-permission';
 
@@ -165,12 +165,46 @@ describe('SCR-C-36 PreferencesScreen', () => {
     expect(
       screen.getByRole('switch', { name: 'Text messages (SMS) for essential notices' }),
     ).toBeChecked();
-    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    // A 5xx may come after the change was stored: never "Something went wrong" (§4.9).
+    expect(
+      screen.getByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(calls).toBe(2));
     const keys = app.fake.requests
       .filter((r) => r.method === 'PATCH')
       .map((r) => r.headers['idempotency-key']);
     expect(keys).toEqual(['key-00000001', 'key-00000001']);
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a save that committed with its answer lost is "This may already have been done" with "Reload", never "Something went wrong"', async () => {
+    const app = prefsApp({
+      'PATCH /me/communication-preferences': () =>
+        apiError(409, 'IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+          nextAction: 'reload_current_state',
+          correlationId: 'corr-prefs',
+        }),
+    });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    fireEvent(
+      await screen.findByRole('switch', { name: 'Text messages (SMS) for essential notices' }),
+      'valueChange',
+      true,
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Save preferences' }));
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-prefs'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    const reads = () =>
+      app.fake.requests.filter(
+        (r) => r.method === 'GET' && r.route === '/me/communication-preferences',
+      ).length;
+    const before = reads();
+    fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    expect(app.fake.requests.filter((r) => r.method === 'PATCH')).toHaveLength(1);
   });
 
   it('offline: switches and saving are disabled; nothing is queued', async () => {
@@ -299,6 +333,115 @@ describe('SCR-C-36 calendar feeds (SPK-COMMS-008)', () => {
       message: 'http://api.test/v1/calendar-feeds/feed-token-value-0123456789.ics',
     });
     share.mockRestore();
+  });
+
+  it('§4.14: a feed created but whose link was lost is shown as created, listed, then revoked and issued again under a new key', async () => {
+    const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' });
+    let posts = 0;
+    const app = prefsApp({
+      'POST /me/calendar-feeds': () => {
+        posts += 1;
+        return posts <= 2
+          ? apiError(409, 'IDEMPOTENCY_SECRET_WITHHELD', {
+              nextAction: 'revoke_and_reissue',
+              correlationId: 'corr-f',
+              details: { resourceId: FEED.id },
+            })
+          : fakeResponse(201, {
+              ...FEED,
+              id: '0192f1a0-0000-7000-8000-00000000f102',
+              token: 'feed-token-value-9876543210',
+              path: '/v1/calendar-feeds/feed-token-value-9876543210.ics',
+            });
+      },
+      'POST /me/calendar-feeds/{id}/revoke': ok({ ...FEED, revokedAt: TEST_REVOKED_AT }),
+    });
+    dropAnswers(app, 'POST', /\/me\/calendar-feeds$/);
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    fireEvent.changeText(await screen.findByLabelText('Feed name (optional)'), 'Family');
+    fireEvent.press(screen.getByRole('button', { name: 'Create calendar feed' }));
+    const checkAgain = await screen.findByRole('button', { name: 'Check again' });
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    const feedReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/me/calendar-feeds')
+        .length;
+    const readsBefore = feedReads();
+    fireEvent.press(checkAgain);
+    const withheld = await screen.findByTestId('secret-withheld');
+    expect(
+      within(withheld).getByLabelText('Created, but the link cannot be shown again'),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Create calendar feed' })).toBeDisabled();
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(readsBefore));
+    fireEvent.press(within(withheld).getByRole('button', { name: 'Revoke and issue a new link' }));
+    const created = await screen.findByTestId('feed-created');
+    const revoke = app.fake.requests.find((r) => r.route === '/me/calendar-feeds/{id}/revoke');
+    expect(revoke?.params.id).toBe(FEED.id);
+    expect(revoke?.body).toEqual({ reason: WITHHELD_REVOKE_REASON });
+    const keys = app.fake.requests
+      .filter((r) => r.method === 'POST' && r.route === '/me/calendar-feeds')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    fireEvent.press(within(created).getByRole('button', { name: 'Share calendar link' }));
+    expect(share).toHaveBeenCalledWith({
+      message: 'http://api.test/v1/calendar-feeds/feed-token-value-9876543210.ics',
+    });
+    share.mockRestore();
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a same-key retry that finds the first attempt committed says the feed may already exist, lists the feeds again, and creates no second feed until "Start a new one"', async () => {
+    let posts = 0;
+    const app = prefsApp({
+      'POST /me/calendar-feeds': () => {
+        posts += 1;
+        return posts === 2
+          ? apiError(409, 'IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+              nextAction: 'reload_current_state',
+              correlationId: 'corr-fl',
+            })
+          : fakeResponse(201, {
+              ...FEED,
+              token: 'feed-token-value-9876543210',
+              path: '/v1/calendar-feeds/feed-token-value-9876543210.ics',
+            });
+      },
+    });
+    dropAnswers(app, 'POST', /\/me\/calendar-feeds$/);
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    fireEvent.changeText(await screen.findByLabelText('Feed name (optional)'), 'Family');
+    fireEvent.press(screen.getByRole('button', { name: 'Create calendar feed' }));
+    const feedReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/me/calendar-feeds')
+        .length;
+    const checkAgain = await screen.findByRole('button', { name: 'Check again' });
+    const readsBefore = feedReads();
+    fireEvent.press(checkAgain);
+    const lost = await screen.findByTestId('secret-withheld');
+    expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(within(lost).getByText(/may have created the calendar feed/)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create calendar feed' })).toBeDisabled();
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(readsBefore));
+    const afterAnswer = feedReads();
+    fireEvent.press(within(lost).getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(afterAnswer));
+    expect(
+      app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/me/calendar-feeds'),
+    ).toHaveLength(2);
+    fireEvent.press(within(lost).getByRole('button', { name: 'Start a new one' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Create calendar feed' })).toBeEnabled(),
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Create calendar feed' }));
+    expect(await screen.findByTestId('feed-created')).toBeOnTheScreen();
+    const keys = app.fake.requests
+      .filter((r) => r.method === 'POST' && r.route === '/me/calendar-feeds')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
   });
 
   it('builds the feed URL from the API origin', () => {
@@ -448,7 +591,11 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
     fireEvent.press(within(row).getByRole('button', { name: 'Stop push' }));
     expect(await within(row).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(within(row).getByLabelText('Reason')).toHaveProp('value', 'Old phone');
-    fireEvent.press(within(row).getByRole('button', { name: 'Try again' }));
+    // A 5xx may come after the device was stopped: checked again under the same key (§4.9).
+    expect(
+      within(row).getByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    fireEvent.press(within(row).getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(calls).toBe(2));
     const keys = app.fake.requests
       .filter((r) => r.route === '/me/push-devices/{id}/revoke')

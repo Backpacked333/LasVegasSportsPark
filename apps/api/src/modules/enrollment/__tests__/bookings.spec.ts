@@ -5,8 +5,8 @@ import {
   type PolicyVersion,
 } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Outbox, UnitOfWork } from '../../../kernel';
-import type { TestApp } from '../../../testing';
+import { OperationalExceptions, Outbox, UnitOfWork } from '../../../kernel';
+import { staffPrincipal, type TestApp } from '../../../testing';
 import { POLICY_PORT, createPolicyVersionFixture, type PolicyPort } from '../../catalog';
 import { EventsService, createScheduledEvent, seedResource } from '../../scheduling';
 import { WorkforceEvents, createAssignmentFixture } from '../../workforce';
@@ -18,7 +18,8 @@ import {
   type BookingQueryPort,
   type EnrollmentPort,
 } from '../enrollment.ports';
-import { BOOKING_LIFECYCLE_JOB } from '../services/enrollment-jobs';
+import { BookingsService } from '../services/bookings.service';
+import { BOOKING_LIFECYCLE_JOB, EnrollmentJobs } from '../services/enrollment-jobs';
 import { definitionWithScope } from './package-g-support';
 import { useBookingTerms } from './stage3-doubles';
 import {
@@ -306,6 +307,562 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
       expect(exception.owner_queue).toBe('scheduler');
     },
   );
+
+  it("SPK-SCHED-007 / SPK-STAFF-002: cancelling a recurring rental after its first week withdraws only the future weeks' staffing; work already done stays accepted and can be completed", async () => {
+    const setup = await rental({
+      price: 4_000,
+      staffing: [{ kind: 'supervisor', role: 'field_supervisor', count: 1, qualifications: [] }],
+    });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(40).toISOString(),
+      end: new Date(start(40).getTime() + HOUR).toISOString(),
+      recurrence: { interval: 1, count: 4 },
+      resourceIds: [fields[1]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    expect(row.scheduling_series_id).not.toBeNull();
+    await pay(row.basket_id!, row.enrollment_id!);
+    const events = await t.db
+      .selectFrom('events')
+      .select(['id', 'scheduled_start'])
+      .where('id', 'in', row.scheduling_event_ids)
+      .orderBy('scheduled_start')
+      .execute();
+    expect(events).toHaveLength(4);
+    for (const event of events) await accept(event.id, 'field_supervisor', 'supervisor');
+    const staffed = await t.http
+      .get(`/v1/bookings/${booked.body.id as string}`)
+      .set(customer.header);
+    expect(staffed.body.status).toBe('confirmed');
+    const assignmentOf = async (eventId: string) =>
+      t.db
+        .selectFrom('assignments')
+        .select(['id', 'status'])
+        .where('target_type', '=', 'event')
+        .where('target_id', '=', eventId)
+        .executeTakeFirstOrThrow();
+
+    // Week 1 has taken place; weeks 2 to 4 are still ahead.
+    const manager = await staff(t, ['program_manager']);
+    t.clock.set(new Date(events[0]!.scheduled_start.getTime() + 2 * HOUR));
+    try {
+      const canceled = await post(
+        t,
+        `/v1/bookings/${booked.body.id as string}/cancel`,
+        manager.header,
+        { reason: 'Team folded', expectedRevision: staffed.body.revision },
+      );
+      expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+      expect(canceled.body.status).toBe('canceled');
+      await drain(t);
+      const statuses = await t.db
+        .selectFrom('events')
+        .select(['id', 'status'])
+        .where('id', 'in', row.scheduling_event_ids)
+        .execute();
+      const statusOf = new Map(statuses.map((e) => [e.id, e.status]));
+      expect(statusOf.get(events[0]!.id)).not.toBe('canceled');
+      for (const later of events.slice(1)) expect(statusOf.get(later.id)).toBe('canceled');
+      // The past week's staffing is untouched; the cancelled weeks' assignments are withdrawn.
+      const past = await assignmentOf(events[0]!.id);
+      expect(past.status).toBe('accepted');
+      for (const later of events.slice(1)) {
+        expect((await assignmentOf(later.id)).status).toBe('withdrawn');
+      }
+      const retired = await t.db
+        .selectFrom('assignment_requirements')
+        .select(['target_id', 'retired_at'])
+        .where('target_type', '=', 'event')
+        .where('target_id', 'in', row.scheduling_event_ids)
+        .execute();
+      for (const requirement of retired) {
+        if (requirement.target_id === events[0]!.id) expect(requirement.retired_at).toBeNull();
+        else expect(requirement.retired_at).not.toBeNull();
+      }
+      // The work done can still be completed (and so paid).
+      const completed = await post(t, `/v1/assignments/${past.id}/complete`, manager.header, {});
+      expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+      expect((await assignmentOf(events[0]!.id)).status).toBe('completed');
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
+
+  /** A paid rental with an accepted supervisor on each week, confirmed (fields[2], from day 70). */
+  async function staffedPaidRental(weeks: number, day: number) {
+    const setup = await rental({
+      price: 6_000,
+      staffing: [{ kind: 'supervisor', role: 'field_supervisor', count: 1, qualifications: [] }],
+    });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(day).toISOString(),
+      end: new Date(start(day).getTime() + HOUR).toISOString(),
+      ...(weeks > 1 ? { recurrence: { interval: 1, count: weeks } } : {}),
+      resourceIds: [fields[2]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    await pay(row.basket_id!, row.enrollment_id!);
+    const events = await t.db
+      .selectFrom('events')
+      .select(['id', 'scheduled_start', 'scheduled_end'])
+      .where('id', 'in', row.scheduling_event_ids)
+      .orderBy('scheduled_start')
+      .execute();
+    for (const event of events) await accept(event.id, 'field_supervisor', 'supervisor');
+    const confirmed = await t.http
+      .get(`/v1/bookings/${booked.body.id as string}`)
+      .set(customer.header);
+    expect(confirmed.body.status).toBe('confirmed');
+    const enrollment = await t.db
+      .selectFrom('enrollments')
+      .select(['id', 'order_ref'])
+      .where('id', '=', row.enrollment_id!)
+      .executeTakeFirstOrThrow();
+    return { setup, customer, booking: confirmed.body, row, events, enrollment };
+  }
+
+  async function closeAndApply(from: Date, to: Date) {
+    const closure = await post(t, '/v1/closures', scheduler.header, {
+      facilityId: t.facilityId,
+      resourceId: fields[2],
+      interval: { start: from.toISOString(), end: to.toISOString() },
+      reason: 'Flooded field',
+      source: 'manual',
+    });
+    expect(closure.status, JSON.stringify(closure.body)).toBe(201);
+    const applied = await post(
+      t,
+      `/v1/closures/${closure.body.id as string}/apply`,
+      scheduler.header,
+      {
+        mode: 'cancel_affected',
+        expectedRevision: closure.body.revision,
+      },
+    );
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    await drain(t);
+    return closure.body as {
+      impact: {
+        customers: Array<{ personId: string; via: string[] }>;
+        obligations: Array<{ type: string; id: string }>;
+      };
+    };
+  }
+
+  /**
+   * One run of enrollment.booking_lifecycle at the clock's time, called directly so a run at a
+   * later test time leaves no job lease behind for the tests that follow.
+   */
+  async function lifecycle(): Promise<void> {
+    const jobs = t.app.get(EnrollmentJobs);
+    let result = { processed: 0, remaining: 1 };
+    for (let pass = 0; pass < 10 && result.remaining > 0; pass += 1) {
+      result = await jobs.bookingLifecycle({ now: t.clock.now(), batchSize: 50 });
+    }
+  }
+
+  const exceptionsOf = (bookingId: string) =>
+    t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'status', 'owner_queue', 'details'])
+      .where('affected_type', '=', 'booking')
+      .where('affected_id', '=', bookingId)
+      .orderBy('category')
+      .execute();
+
+  it('SPK-SCHED-009 / SPK-COND-003: a closure that cancels a paid rental cancels the booking, names its booker and order, tells the booker and never completes it', async () => {
+    const { customer, booking, row, events, enrollment } = await staffedPaidRental(1, 70);
+    const closure = await closeAndApply(
+      new Date(events[0]!.scheduled_start.getTime() - 3 * HOUR),
+      new Date(events[0]!.scheduled_end.getTime() + 3 * HOUR),
+    );
+    // The preview named the booker and the order the booking was paid through.
+    expect(closure.impact.customers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ personId: customer.personId, via: ['booking'] }),
+      ]),
+    );
+    expect(closure.impact.obligations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'order', id: enrollment.order_ref }),
+      ]),
+    );
+    const after = await t.http.get(`/v1/bookings/${booking.id as string}`).set(customer.header);
+    expect(after.body.status).toBe('canceled');
+    // Its money has an owner; no staffing exception is left open for a booking that will not happen.
+    const exceptions = await exceptionsOf(booking.id);
+    const open = exceptions.filter((e) => e.status === 'open');
+    expect(open.map((e) => e.category)).toEqual(['enrollment.booking_canceled_by_schedule']);
+    expect(open[0]).toMatchObject({
+      owner_queue: 'finance_operator',
+      details: { enrollmentId: row.enrollment_id, orderRef: enrollment.order_ref },
+    });
+    // The booker was told.
+    const notices = await t.db
+      .selectFrom('notifications')
+      .innerJoin(
+        'notification_recipients',
+        'notification_recipients.notification_id',
+        'notifications.id',
+      )
+      .select(['notifications.kind'])
+      .where('notifications.subject_id', '=', events[0]!.id)
+      .where('notification_recipients.person_id', '=', customer.personId)
+      .execute();
+    expect(notices.map((n) => n.kind)).toContain('cancellation');
+    // At its start and after its end the lifecycle job neither raises "started unstaffed" nor
+    // completes it or its enrollment.
+    t.clock.set(new Date(events[0]!.scheduled_end.getTime() + HOUR));
+    try {
+      await lifecycle();
+      await drain(t);
+      const later = await t.db
+        .selectFrom('bookings')
+        .select('status')
+        .where('id', '=', booking.id)
+        .executeTakeFirstOrThrow();
+      expect(later.status).toBe('canceled');
+      const enrollmentAfter = await t.db
+        .selectFrom('enrollments')
+        .select('status')
+        .where('id', '=', row.enrollment_id!)
+        .executeTakeFirstOrThrow();
+      expect(enrollmentAfter.status).not.toBe('completed');
+      expect((await exceptionsOf(booking.id)).map((e) => e.category)).not.toContain(
+        'enrollment.booking_started_unstaffed',
+      );
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
+
+  const requirementsOf = (eventIds: string[]) =>
+    t.db
+      .selectFrom('assignment_requirements')
+      .select(['target_id', 'retired_at'])
+      .where('target_type', '=', 'event')
+      .where('target_id', 'in', eventIds)
+      .execute();
+
+  it('SPK-SCHED-009: a closure that cancels one week of a recurring rental keeps the booking confirmed and gives the lost week an owner', async () => {
+    const { customer, booking, events } = await staffedPaidRental(3, 84);
+    await closeAndApply(
+      new Date(events[1]!.scheduled_start.getTime() - HOUR),
+      new Date(events[1]!.scheduled_end.getTime() + HOUR),
+    );
+    const row = await t.db
+      .selectFrom('bookings')
+      .select(['status'])
+      .where('id', '=', booking.id)
+      .executeTakeFirstOrThrow();
+    expect(row.status).toBe('confirmed');
+    const open = (await exceptionsOf(booking.id)).filter((e) => e.status === 'open');
+    expect(open.map((e) => e.category)).toEqual(['enrollment.booking_occurrence_canceled']);
+    expect(open[0]!.details).toMatchObject({ eventId: events[1]!.id });
+    // The booking reads as what still takes place: the lost week is no longer listed as booked,
+    // and its times agree with its occurrences.
+    const read = await t.http.get(`/v1/bookings/${booking.id as string}`).set(customer.header);
+    expect(read.status).toBe(200);
+    const occurrences = read.body.occurrences as Array<{
+      start: string;
+      end: string;
+      eventId: string;
+    }>;
+    expect(occurrences.map((o) => o.eventId)).toEqual([events[0]!.id, events[2]!.id]);
+    expect(read.body.firstStart).toBe(occurrences[0]!.start);
+    expect(read.body.lastEnd).toBe(occurrences[occurrences.length - 1]!.end);
+    // COMMANDS-01 / ASYNC-01: the lost week's staffing is withdrawn, the others stay in force.
+    for (const requirement of await requirementsOf(events.map((e) => e.id))) {
+      if (requirement.target_id === events[1]!.id) expect(requirement.retired_at).not.toBeNull();
+      else expect(requirement.retired_at).toBeNull();
+    }
+  });
+
+  it('ASYNC-01 / §4.12: a lost occurrence handled after its start still gets an owner and loses its staffing, and a resolved one is not raised again', async () => {
+    const { booking, events } = await staffedPaidRental(3, 140);
+    // The closure is applied before week 2, but its change is handled only once week 2 started
+    // (a late or retried delivery).
+    const closure = await post(t, '/v1/closures', scheduler.header, {
+      facilityId: t.facilityId,
+      resourceId: fields[2],
+      interval: {
+        start: new Date(events[1]!.scheduled_start.getTime() - HOUR).toISOString(),
+        end: new Date(events[1]!.scheduled_end.getTime() + HOUR).toISOString(),
+      },
+      reason: 'Flooded field',
+      source: 'manual',
+    });
+    expect(closure.status, JSON.stringify(closure.body)).toBe(201);
+    const applied = await post(
+      t,
+      `/v1/closures/${closure.body.id as string}/apply`,
+      scheduler.header,
+      { mode: 'cancel_affected', expectedRevision: closure.body.revision },
+    );
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    t.clock.set(new Date(events[1]!.scheduled_start.getTime() + 10 * 60_000));
+    try {
+      await drain(t);
+      const lost = () =>
+        exceptionsOf(booking.id).then((rows) =>
+          rows.filter((e) => e.category === 'enrollment.booking_occurrence_canceled'),
+        );
+      const raised = await lost();
+      expect(raised).toHaveLength(1);
+      expect(raised[0]).toMatchObject({
+        status: 'open',
+        owner_queue: 'finance_operator',
+        details: { eventId: events[1]!.id },
+      });
+      const retired = (await requirementsOf([events[1]!.id])).map((r) => r.retired_at);
+      expect(retired.length).toBeGreaterThan(0);
+      for (const at of retired) expect(at).not.toBeNull();
+      // A finance operator decides it; a later change of the booking does not raise it again.
+      const exception = await t.db
+        .selectFrom('operational_exceptions')
+        .select('id')
+        .where('category', '=', 'enrollment.booking_occurrence_canceled')
+        .where('affected_id', '=', booking.id)
+        .executeTakeFirstOrThrow();
+      await t.app
+        .get(UnitOfWork)
+        .run(({ trx }) =>
+          t.app
+            .get(OperationalExceptions)
+            .transition(
+              trx,
+              systemPrincipal(t.organizationId, 'test.finance'),
+              exception.id,
+              'resolved',
+              { reason: 'Week credited by phone' },
+            ),
+        );
+      const third = await t.db
+        .selectFrom('events')
+        .select('revision')
+        .where('id', '=', events[2]!.id)
+        .executeTakeFirstOrThrow();
+      const later = new Date(events[2]!.scheduled_start.getTime() + 30 * 60_000);
+      await t.app
+        .get(EventsService)
+        .moveEvent(staffPrincipal(t.organizationId, ['scheduler']), events[2]!.id, {
+          scheduledStart: later.toISOString(),
+          scheduledEnd: new Date(later.getTime() + HOUR).toISOString(),
+          expectedRevision: third.revision,
+          reason: 'Later kick-off',
+        });
+      await drain(t);
+      expect((await lost()).map((e) => e.status)).toEqual(['resolved']);
+      const moved = await t.db
+        .selectFrom('bookings')
+        .select(['status', 'last_end'])
+        .where('id', '=', booking.id)
+        .executeTakeFirstOrThrow();
+      expect(moved).toEqual({ status: 'confirmed', last_end: new Date(later.getTime() + HOUR) });
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
+
+  it('SPK-SCHED-009: a booking relocated through scheduling names the new field on that occurrence and audits the change', async () => {
+    const { customer, booking, events } = await staffedPaidRental(2, 170);
+    const first = await t.db
+      .selectFrom('events')
+      .select('revision')
+      .where('id', '=', events[0]!.id)
+      .executeTakeFirstOrThrow();
+    await t.app
+      .get(EventsService)
+      .moveEvent(staffPrincipal(t.organizationId, ['scheduler']), events[0]!.id, {
+        scheduledStart: events[0]!.scheduled_start.toISOString(),
+        scheduledEnd: events[0]!.scheduled_end.toISOString(),
+        resourceIds: [fields[0]!],
+        expectedRevision: first.revision,
+        reason: 'Field 3 resurfaced',
+      });
+    await drain(t);
+    const read = await t.http.get(`/v1/bookings/${booking.id as string}`).set(customer.header);
+    expect(read.status).toBe(200);
+    const occurrences = read.body.occurrences as Array<{
+      eventId: string;
+      resources: Array<{ id: string; name: string | null }>;
+    }>;
+    expect(occurrences.map((o) => [o.eventId, o.resources.map((r) => r.id)])).toEqual([
+      [events[0]!.id, [fields[0]]],
+      [events[1]!.id, [fields[2]]],
+    ]);
+    expect(occurrences[0]!.resources[0]!.name).toBe('Field 1');
+    const row = await t.db
+      .selectFrom('bookings')
+      .select(['resource_ids', 'revision'])
+      .where('id', '=', booking.id)
+      .executeTakeFirstOrThrow();
+    expect([...row.resource_ids].sort()).toEqual([fields[0], fields[2]].sort());
+    expect(row.revision).toBeGreaterThan(booking.revision as number);
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('action', '=', 'enrollment.booking_follow_schedule')
+      .where('target_id', '=', booking.id)
+      .executeTakeFirstOrThrow();
+    expect(audit.details).toMatchObject({ previousResourceIds: [fields[2]] });
+  });
+
+  it('ASYNC-01: an unpaid booking that loses a week and then expires leaves no money exception open', async () => {
+    const setup = await rental({ price: 3_500 });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(200).toISOString(),
+      end: new Date(start(200).getTime() + HOUR).toISOString(),
+      recurrence: { interval: 1, count: 2 },
+      resourceIds: [fields[2]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    expect(booked.body.status).toBe('held');
+    const second = new Date(start(207).getTime());
+    await closeAndApply(new Date(second.getTime() - HOUR), new Date(second.getTime() + 2 * HOUR));
+    const lost = await exceptionsOf(booked.body.id as string);
+    expect(lost.map((e) => [e.category, e.status])).toEqual([
+      ['enrollment.booking_occurrence_canceled', 'open'],
+    ]);
+    t.clock.advance(11 * 60_000);
+    try {
+      await drain(t);
+      const expired = await t.db
+        .selectFrom('bookings')
+        .select('status')
+        .where('id', '=', booked.body.id)
+        .executeTakeFirstOrThrow();
+      expect(expired.status).toBe('expired');
+      const after = await exceptionsOf(booked.body.id as string);
+      expect(after.filter((e) => e.status === 'open')).toEqual([]);
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
+
+  it('ASYNC-01: a booking the schedule cancels during its checkout has its money exception settled when the checkout is abandoned', async () => {
+    const setup = await rental({ price: 2_000 });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(220).toISOString(),
+      end: new Date(start(220).getTime() + HOUR).toISOString(),
+      resourceIds: [fields[2]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    const finance = systemPrincipal(t.organizationId, 'finance.checkout');
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        t.app
+          .get<BasketPort>(BASKET_PORT)
+          .startCheckout(trx, t.organizationId, row.basket_id!, 'order-abandoned', finance),
+      );
+    await closeAndApply(
+      new Date(start(220).getTime() - HOUR),
+      new Date(start(220).getTime() + 2 * HOUR),
+    );
+    const during = await exceptionsOf(row.id);
+    expect(during.map((e) => [e.category, e.status])).toEqual([
+      ['enrollment.booking_canceled_by_schedule', 'open'],
+    ]);
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        t.app
+          .get<BasketPort>(BASKET_PORT)
+          .finishCheckout(trx, t.organizationId, row.basket_id!, 'abandoned', finance),
+      );
+    await drain(t);
+    const after = await exceptionsOf(row.id);
+    expect(after.map((e) => [e.category, e.status])).toEqual([
+      ['enrollment.booking_canceled_by_schedule', 'resolved'],
+    ]);
+    const booking = await t.db
+      .selectFrom('bookings')
+      .select('status')
+      .where('id', '=', row.id)
+      .executeTakeFirstOrThrow();
+    expect(booking.status).toBe('canceled');
+  });
+
+  it('SPK-UX-006 / §4.12: a booking that started unstaffed raises its critical exception once, even after it is resolved', async () => {
+    const setup = await rental({
+      price: 4_500,
+      staffing: [{ kind: 'supervisor', role: 'field_supervisor', count: 1, qualifications: [] }],
+    });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(100).toISOString(),
+      end: new Date(start(100).getTime() + HOUR).toISOString(),
+      recurrence: { interval: 1, count: 3 },
+      resourceIds: [fields[2]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    await pay(row.basket_id!, row.enrollment_id!);
+    t.clock.set(new Date(start(100).getTime() + 10 * 60_000));
+    try {
+      const started = () =>
+        t.db
+          .selectFrom('operational_exceptions')
+          .select(['id', 'status'])
+          .where('category', '=', 'enrollment.booking_started_unstaffed')
+          .where('affected_id', '=', row.id)
+          .execute();
+      await lifecycle();
+      const raised = await started();
+      expect(raised).toHaveLength(1);
+      // A scheduler arranges cover off-system and resolves it.
+      await t.app
+        .get(UnitOfWork)
+        .run(({ trx }) =>
+          t.app
+            .get(OperationalExceptions)
+            .transition(
+              trx,
+              systemPrincipal(t.organizationId, 'test.scheduler'),
+              raised[0]!.id,
+              'resolved',
+              { reason: 'Cover arranged by phone' },
+            ),
+        );
+      t.clock.advance(10 * 60_000);
+      await lifecycle();
+      expect(await started()).toHaveLength(1);
+      // The booking is no longer due for the job until it ends.
+      const due = await t.app.get(BookingsService).lifecycleDue(t.clock.now(), 50);
+      expect(due.map((d) => d.id)).not.toContain(row.id);
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
 
   it('SPK-COND-003: an instant booking whose field is taken writes nothing (no event, hold, basket line, requirement or booking)', async () => {
     const setup = await rental({
@@ -664,7 +1221,7 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     }
   });
 
-  it('the database refuses a requested booking that reserves something and a held one without its events', async () => {
+  it('§4.3: the database refuses a requested booking that reserves something, a held one without its events and a series of no organization', async () => {
     const setup = await rental();
     const customer = await booker(setup);
     const policy = await terms('instant');
@@ -699,5 +1256,7 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     expect(await reject({ status: 'requested', scheduling_event_ids: [newId()] })).toBe('23514');
     expect(await reject({ status: 'held' })).toBe('23514');
     expect(await reject({ status: 'requested', kind: 'party' })).toBe('23514');
+    // §4.3 composite references (INTEGRITY-07): a series that does not exist in this organization.
+    expect(await reject({ status: 'requested', scheduling_series_id: newId() })).toBe('23503');
   });
 });

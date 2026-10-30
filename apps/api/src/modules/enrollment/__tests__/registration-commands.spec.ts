@@ -239,6 +239,50 @@ describe('registration commands of stage 3 (ENR-03, ENR-04, ENR-05, ENR-06)', ()
     expect(hidden.status).toBe(404);
   });
 
+  it('§4.10 / §4.14: a customer previewing or committing a transfer to an unpublished offering gets NOT_FOUND; staff get the preview', async () => {
+    const { enrollmentId } = await confirmedEnrollment(10_000);
+    const draft = await createOfferingFixture(t, {
+      responsibleManagerPersonId: programManager.personId,
+      programId: await createProgramFixture(t, { ageBand: { minAgeYears: 6, maxAgeYears: 12 } }),
+      kind: 'term',
+      capacityUnits: [{ unit: 'seats', limit: 20 }],
+      basePriceMinor: 9_000,
+      publicationState: 'draft',
+    });
+    const preview = await t.http
+      .get(`/v1/enrollments/${enrollmentId}/transfer-preview?targetOfferingId=${draft.offeringId}`)
+      .set(parent.header);
+    expect(preview.status).toBe(404);
+    expect(preview.body.code).toBe('NOT_FOUND');
+    // Nothing about the draft (its name, dates, price or capacity) is in the answer.
+    expect(JSON.stringify(preview.body)).not.toContain('9000');
+    expect(JSON.stringify(preview.body)).not.toContain(draft.offeringId);
+    const committed = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, parent.header, {
+      targetOfferingId: draft.offeringId,
+      expectedRevision: 2,
+      commit: true,
+    });
+    expect(committed.status).toBe(404);
+    expect(committed.body.code).toBe('NOT_FOUND');
+    // The same for an offering that does not exist.
+    const unknown = await t.http
+      .get(
+        `/v1/enrollments/${enrollmentId}/transfer-preview?targetOfferingId=00000000-0000-7000-8000-000000000000`,
+      )
+      .set(parent.header);
+    expect(unknown.status).toBe(404);
+    // Staff who transfer registrations see the draft target.
+    const desk = await staff(t, ['front_desk']);
+    const staffPreview = await t.http
+      .get(`/v1/enrollments/${enrollmentId}/transfer-preview?targetOfferingId=${draft.offeringId}`)
+      .set(desk.header);
+    expect(staffPreview.status, JSON.stringify(staffPreview.body)).toBe(200);
+    expect(staffPreview.body.proposed).toMatchObject({
+      offeringId: draft.offeringId,
+      price: { basePriceMinor: 9_000 },
+    });
+  });
+
   // -------------------------------------------------------------------------------------------
   // ENR-04
   // -------------------------------------------------------------------------------------------

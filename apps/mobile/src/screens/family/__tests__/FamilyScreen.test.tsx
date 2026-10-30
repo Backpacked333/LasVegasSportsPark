@@ -8,7 +8,7 @@ import { fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Share } from 'react-native';
 import type { AppConfig } from '../../../config/app-config';
-import { createTestApp, mePermissions } from '../../../testing/test-app';
+import { createTestApp, dropAnswers, mePermissions } from '../../../testing/test-app';
 import {
   apiError,
   CHILD,
@@ -23,7 +23,7 @@ import {
   TOKEN,
 } from '../../account/__tests__/fixtures';
 import { FamilyScreen } from '../FamilyScreen';
-import { SHARE_MESSAGE } from '../InviteAdultForm';
+import { SHARE_MESSAGE, WITHHELD_REVOKE_REASON } from '../InviteAdultForm';
 
 const SAM = person(CHILD, 'Sam', 'Morgan', 'child');
 const INVITATION = '0192f1a0-0000-7000-8000-00000000c001';
@@ -325,6 +325,138 @@ describe('SCR-C-31 FamilyScreen', () => {
     const revoke = app.fake.requests.find((r) => r.route === '/invitations/{id}/revoke');
     expect(revoke?.body).toEqual({ reason: 'Sent to the wrong address', expectedRevision: 1 });
     expect(revoke?.headers['idempotency-key']).toBe('key-00000002');
+  });
+
+  it('§4.9: a connection lost after creating is "No answer yet" with "Check again" under the same key, never "Something went wrong"', async () => {
+    const app = familyApp({ 'POST /invitations': { status: 201, body: issued() } });
+    dropAnswers(app, 'POST', /\/invitations$/);
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const form = await openInvite();
+    fireEvent.changeText(within(form).getByLabelText('Their email address'), 'jo@example.test');
+    fireEvent.press(within(form).getByRole('checkbox', { name: 'View' }));
+    fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
+    expect(
+      await within(form).findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(within(form).queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(within(form).getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByTestId('invitation-issued')).toBeOnTheScreen();
+    const keys = app.fake.requests
+      .filter((r) => r.method === 'POST' && r.route === '/invitations')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toEqual(['key-00000001', 'key-00000001']);
+  });
+
+  it('§4.14: an invitation created but whose link was lost is shown as created, listed, then revoked and issued again under a new key', async () => {
+    let posts = 0;
+    const lost = '0192f1a0-0000-7000-8000-00000000c0aa';
+    const app = familyApp({
+      'POST /invitations': () => {
+        posts += 1;
+        return posts <= 2
+          ? apiError(409, 'IDEMPOTENCY_SECRET_WITHHELD', {
+              message: 'This request already succeeded.',
+              nextAction: 'revoke_and_reissue',
+              correlationId: 'corr-w',
+              details: { resourceId: lost },
+            })
+          : fakeResponse(201, issued());
+      },
+      'POST /invitations/{id}/revoke': ok(issued({ id: lost, status: 'revoked', revision: 2 })),
+    });
+    dropAnswers(app, 'POST', /\/invitations$/);
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const form = await openInvite();
+    fireEvent.changeText(within(form).getByLabelText('Their email address'), 'jo@example.test');
+    fireEvent.press(within(form).getByRole('checkbox', { name: 'View' }));
+    fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
+    const sentReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/me/invitations').length;
+    const checkAgain = await within(form).findByRole('button', { name: 'Check again' });
+    const readsBefore = sentReads();
+    fireEvent.press(checkAgain);
+    const withheld = await within(form).findByTestId('secret-withheld');
+    expect(
+      within(withheld).getByLabelText('Created, but the link cannot be shown again'),
+    ).toBeOnTheScreen();
+    expect(
+      within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD. Reference: corr-w'),
+    ).toBeOnTheScreen();
+    expect(within(form).queryByLabelText('Something went wrong')).toBeNull();
+    // Nothing new is created beside the invitation nobody has a link for.
+    expect(within(form).getByRole('button', { name: 'Create invitation' })).toBeDisabled();
+    // "Invitations you sent" is read again, so the created invitation is listed.
+    await waitFor(() => expect(sentReads()).toBeGreaterThan(readsBefore));
+    fireEvent.press(within(withheld).getByRole('button', { name: 'Revoke and issue a new link' }));
+    expect(await screen.findByTestId('invitation-issued')).toBeOnTheScreen();
+    const revoke = app.fake.requests.find((r) => r.route === '/invitations/{id}/revoke');
+    expect(revoke?.params.id).toBe(lost);
+    expect(revoke?.body).toEqual({ reason: WITHHELD_REVOKE_REASON });
+    const keys = app.fake.requests
+      .filter((r) => r.method === 'POST' && r.route === '/invitations')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a same-key retry that finds the first attempt committed is "This may already have been done": "Create invitation" is held back, the list is read again, and only "Start a new one" sends a new key', async () => {
+    let posts = 0;
+    const app = familyApp({
+      'POST /invitations': () => {
+        posts += 1;
+        return posts === 2
+          ? apiError(409, 'IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+              message:
+                'The request with this idempotency key changed data but its response was not recorded; reload the current state instead of retrying it.',
+              nextAction: 'reload_current_state',
+              correlationId: 'corr-lost',
+            })
+          : fakeResponse(201, issued());
+      },
+    });
+    dropAnswers(app, 'POST', /\/invitations$/);
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const form = await openInvite();
+    fireEvent.changeText(within(form).getByLabelText('Their email address'), 'jo@example.test');
+    fireEvent.press(within(form).getByRole('checkbox', { name: 'View' }));
+    fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
+    const sentReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/me/invitations').length;
+    const checkAgain = await within(form).findByRole('button', { name: 'Check again' });
+    const readsBefore = sentReads();
+    fireEvent.press(checkAgain);
+    const lost = await within(form).findByTestId('secret-withheld');
+    expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-lost'),
+    ).toBeOnTheScreen();
+    expect(
+      within(lost).getByText('Find it under "Invitations you sent" and revoke it there.'),
+    ).toBeOnTheScreen();
+    expect(within(form).queryByLabelText('Something went wrong')).toBeNull();
+    expect(within(form).queryByLabelText(/^No answer yet/)).toBeNull();
+    // Nothing new is created beside the invitation it may have made, and no revoke is guessed.
+    expect(within(form).getByRole('button', { name: 'Create invitation' })).toBeDisabled();
+    expect(within(lost).queryByRole('button', { name: 'Revoke and issue a new link' })).toBeNull();
+    await waitFor(() => expect(sentReads()).toBeGreaterThan(readsBefore));
+    const afterAnswer = sentReads();
+    fireEvent.press(within(lost).getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(sentReads()).toBeGreaterThan(afterAnswer));
+    expect(app.fake.requests.filter((r) => r.route === '/invitations/{id}/revoke')).toHaveLength(0);
+
+    fireEvent.press(within(lost).getByRole('button', { name: 'Start a new one' }));
+    await waitFor(() =>
+      expect(within(form).getByRole('button', { name: 'Create invitation' })).toBeEnabled(),
+    );
+    fireEvent.press(within(form).getByRole('button', { name: 'Create invitation' }));
+    expect(await screen.findByTestId('invitation-issued')).toBeOnTheScreen();
+    const keys = app.fake.requests
+      .filter((r) => r.method === 'POST' && r.route === '/invitations')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
   });
 
   it('stale version: STALE_REVISION on withdrawing says the invitation is no longer open and offers no Withdraw', async () => {

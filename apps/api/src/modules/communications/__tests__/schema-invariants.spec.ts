@@ -9,6 +9,7 @@ import {
   type Db,
 } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { databaseConstraintOf } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import { IdentityModule, createPersonFixture } from '../../identity';
 
@@ -16,7 +17,7 @@ import { IdentityModule, createPersonFixture } from '../../identity';
  * Integrity that matters is enforced by the database (CLAUDE.md, §4.7). Each test proves that
  * PostgreSQL rejects the violation regardless of what a service does.
  */
-describe('communications schema invariants (migrations 1000-1003)', () => {
+describe('communications schema invariants (migrations 1000-1009)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -403,6 +404,39 @@ describe('communications schema invariants (migrations 1000-1003)', () => {
     ).rejects.toSatisfy(isCheckViolation);
     await expect(insertEntry({ event_id: newId(), status: 'tentative' })).rejects.toSatisfy(
       isCheckViolation,
+    );
+  });
+
+  it('INTEGRITY-07 / §4.3: a reminder mark or a merge follow-up can never name an event or a merge that is not its organization’s (1009)', async () => {
+    const markError = await db
+      .insertInto('reminder_marks')
+      .values({
+        organization_id: org,
+        scheduling_event_id: newId(),
+        event_revision: 1,
+        composed_at: now(),
+      } as never)
+      .execute()
+      .catch((error: unknown) => error);
+    expect(isForeignKeyViolation(markError)).toBe(true);
+    expect(databaseConstraintOf(markError)?.constraint).toBe('reminder_marks_event_fk');
+    const other = await createPersonFixture(t, { kind: 'adult' });
+    const followUpError = await db
+      .insertInto('communication_merge_follow_ups')
+      .values({
+        organization_id: org,
+        merge_id: newId(),
+        survivor_person_id: person,
+        merged_person_id: other,
+        survivor_preferences: json([]),
+        conflicts: json([]),
+        followed_at: now(),
+      } as never)
+      .execute()
+      .catch((error: unknown) => error);
+    expect(isForeignKeyViolation(followUpError)).toBe(true);
+    expect(databaseConstraintOf(followUpError)?.constraint).toBe(
+      'communication_merge_follow_ups_merge_fk',
     );
   });
 });

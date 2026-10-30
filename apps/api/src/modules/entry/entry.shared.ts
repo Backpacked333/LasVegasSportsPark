@@ -271,7 +271,50 @@ export function toVisit(row: VisitRow): Visit {
   };
 }
 
-export function toCheckin(row: CheckinRow, audience: ReadAudience = 'staff'): SessionCheckin {
+/**
+ * Who reads a check-in (AUTHZ-PRIVACY-01): `staff` (desk and support roles, or the system, through
+ * `entry.check_in` / `entry.read_checkin`), `assigned` (a coach or official through their accepted
+ * assignment, `entry.check_in_assigned` / `entry.read_assigned_checkin`), or `customer` (a holder
+ * of `view` over the person).
+ */
+export type CheckinAudience = ReadAudience | 'assigned';
+
+/** What a reader without finance authority sees instead of a blocking balance issue. */
+const DESK_REVIEW_REQUIRED: ArrivalIssue = {
+  code: 'desk_review_required',
+  severity: 'blocking',
+  message: 'This participant is held until the front desk reviews the arrival.',
+  nextAction: 'see_the_desk',
+  reference: null,
+};
+
+/**
+ * The recorded arrival issues as the audience may see them (SPK-UX-007 "relevant participant
+ * information", §4.14 least privilege and field-level authorization). The balance issues come from
+ * finance's standing, which covers every obligation the person owes, is the responsible payer of,
+ * or is a participant on, so they can name another adult's unpaid order. Only staff see them, with
+ * the obligation; the assigned coach or official and a customer never learn of a balance: an
+ * informational or warning balance issue (and an unknown standing) is left out, and a blocking one
+ * becomes the neutral `desk_review_required` with no reference. A customer's own balances are
+ * finance's reads (which check debtor and payer authority), not entry's.
+ */
+export function issuesFor(
+  issues: readonly ArrivalIssue[],
+  audience: CheckinAudience,
+): ArrivalIssue[] {
+  if (audience === 'staff') return [...issues];
+  const visible: ArrivalIssue[] = [];
+  for (const issue of issues) {
+    if (issue.code === 'outstanding_balance' || issue.code === 'balance_unknown') {
+      if (issue.severity === 'blocking') visible.push({ ...DESK_REVIEW_REQUIRED });
+      continue;
+    }
+    visible.push(issue);
+  }
+  return visible;
+}
+
+export function toCheckin(row: CheckinRow, audience: CheckinAudience): SessionCheckin {
   const basisId =
     row.basis_kind === 'enrollment'
       ? row.enrollment_id
@@ -288,13 +331,13 @@ export function toCheckin(row: CheckinRow, audience: ReadAudience = 'staff'): Se
     activityEnd: iso(row.activity_end),
     basis: row.basis_kind ? { kind: row.basis_kind, id: basisId } : null,
     status: row.status,
-    issues: row.issues as ArrivalIssue[],
+    issues: issuesFor(row.issues as ArrivalIssue[], audience),
     checkedInAt: iso(row.checked_in_at),
     evaluatedAt: iso(row.evaluated_at),
     admittedAt: isoOrNull(row.admitted_at),
     withdrawnAt: isoOrNull(row.withdrawn_at),
     withdrawnReason: row.withdrawn_reason,
-    recordedBy: audience === 'staff' ? actorOf(row.recorded_by) : customerActor(row.recorded_by),
+    recordedBy: audience === 'customer' ? customerActor(row.recorded_by) : actorOf(row.recorded_by),
     revision: row.revision,
   };
 }

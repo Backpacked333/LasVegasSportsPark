@@ -18,6 +18,35 @@ function positiveInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
+/** The installment terms a version may state, with where the engineering default sits. */
+const INSTALLMENT_TERMS = {
+  maxInstallments: (c: FinancePolicyConfig) => c.installments.maxInstallments,
+  intervalDays: (c: FinancePolicyConfig) => c.installments.intervalDays,
+  retryMaxAttempts: (c: FinancePolicyConfig) => c.installments.retry.maxAttempts,
+  retryIntervalHours: (c: FinancePolicyConfig) => c.installments.retry.retryIntervalHours,
+  noticeDaysBefore: (c: FinancePolicyConfig) => c.installments.noticeDaysBefore,
+} as const;
+type InstallmentTerm = keyof typeof INSTALLMENT_TERMS;
+
+/**
+ * MONEY-08 (SPK-PAY-002, SPK-PAY-006, §6.7): one `defaults` entry per term an approved
+ * installment version leaves out, naming the engineering default that applies in its place, so a
+ * quote never says it follows an approved version for a term that version did not state. The
+ * numeric terms are listed here; the boolean `enabled` term is recorded by `build`.
+ */
+function termDefaults(
+  content: Record<string, unknown>,
+  defaults: FinancePolicyConfig,
+  terms: readonly InstallmentTerm[],
+): string[] {
+  return terms
+    .filter((term) => positiveInt(content[term]) === undefined)
+    .map(
+      (term) =>
+        `installment.${term}: engineering default ${INSTALLMENT_TERMS[term](defaults)} (POL-016, DEC-008)`,
+    );
+}
+
 /**
  * Applies approved catalog policy versions (kinds `installment`, `overpayment`, `refund`, key
  * `finance`) over the engineering defaults. Only recognised content keys are read; anything else
@@ -82,7 +111,14 @@ export class FinancePolicyResolver {
     };
     if (installment) {
       const c = installment.content;
-      if (typeof c['enabled'] === 'boolean') config.installments.enabled = c['enabled'];
+      if (typeof c['enabled'] === 'boolean') {
+        config.installments.enabled = c['enabled'];
+      } else {
+        // MONEY-08: whether installments are offered at all is a term too.
+        defaults.push(
+          `installment.enabled: engineering default ${String(this.defaults.installments.enabled)} (POL-016, DEC-008)`,
+        );
+      }
       config.installments.maxInstallments =
         positiveInt(c['maxInstallments']) ?? config.installments.maxInstallments;
       config.installments.intervalDays =
@@ -93,6 +129,9 @@ export class FinancePolicyResolver {
         positiveInt(c['retryIntervalHours']) ?? config.installments.retry.retryIntervalHours;
       config.installments.noticeDaysBefore =
         positiveInt(c['noticeDaysBefore']) ?? config.installments.noticeDaysBefore;
+      defaults.push(
+        ...termDefaults(c, this.defaults, Object.keys(INSTALLMENT_TERMS) as InstallmentTerm[]),
+      );
     } else {
       defaults.push('installment: engineering default (POL-016, DEC-008)');
     }
@@ -122,14 +161,22 @@ export class FinancePolicyResolver {
    * name (`installmentPolicyKey`): the approved installment policy version of that key effective at
    * `at`, read for the two values a deposit schedule needs, `installments` (the number of payments,
    * the first one due at checkout) and `intervalDays`. Nothing is assumed: a missing version or a
-   * missing value refuses the quote (no engineering default stands in for a deposit rule).
+   * missing value refuses the quote (no engineering default stands in for a deposit rule). The
+   * collection terms the version may leave out (retry attempts and interval, notice lead time)
+   * take the engineering default, and each one taken is returned in `defaults` for the quote to
+   * record (MONEY-08).
    */
   async bookingDeposit(
     organizationId: string,
     key: string,
     at: Date,
     trx?: Trx,
-  ): Promise<{ policyVersionId: string; count: number; intervalDays: number }> {
+  ): Promise<{
+    policyVersionId: string;
+    count: number;
+    intervalDays: number;
+    defaults: string[];
+  }> {
     const version = await this.policies.currentPolicyVersion(
       organizationId,
       'installment',
@@ -159,7 +206,16 @@ export class FinancePolicyResolver {
         },
       );
     }
-    return { policyVersionId: version.id, count, intervalDays };
+    return {
+      policyVersionId: version.id,
+      count,
+      intervalDays,
+      defaults: termDefaults(version.content, this.defaults, [
+        'retryMaxAttempts',
+        'retryIntervalHours',
+        'noticeDaysBefore',
+      ]),
+    };
   }
 
   private async recorded(

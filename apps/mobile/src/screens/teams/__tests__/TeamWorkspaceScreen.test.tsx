@@ -284,7 +284,7 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
       fireEvent.changeText(screen.getByLabelText('What you need'), 'Field 2');
       fireEvent.press(screen.getByRole('button', { name: 'Send to the operating team' }));
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
-      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(await screen.findByTestId('support-request-sent')).toBeOnTheScreen();
       const keys = app.fake.requests
         .filter((r) => r.route === '/me/support-requests')

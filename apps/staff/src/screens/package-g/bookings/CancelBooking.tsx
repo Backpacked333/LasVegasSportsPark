@@ -12,8 +12,11 @@
  *   `partially_fulfilled` the payment completed and the booking moves on asynchronously (the
  *   enrollment's confirmation), so in both cases cancellation is not offered and "Reload the
  *   booking" reads it again. A basket the viewer cannot read leaves the checkout state unknown,
- *   so cancellation is not offered either (the outcome is never assumed). The API does not yet
- *   refuse this itself (README API issue 3); its CHECKOUT_IN_PROGRESS answer is shown in words.
+ *   so cancellation is not offered either (the outcome is never assumed). The API refuses the
+ *   first two itself (README API issue 3, fixed): 409 RESOURCE_CONFLICT `CHECKOUT_IN_PROGRESS`
+ *   while the basket is `checking_out` and `BOOKING_CONFIRMATION_PENDING` once it is `fulfilled`;
+ *   both answers are shown in words with "Reload the booking". A `partially_fulfilled` basket is
+ *   not refused by the API, so for it the basket re-read here is the only guard.
  * - awaiting_staff or confirmed (paid): the enrollment's cancellation preview
  *   (`GET /v1/enrollments/{id}/cancellation-preview`) shows the refund, credit or charge as the API
  *   computed it; a consequence other than "none" needs the customer's acceptance, and the previewed

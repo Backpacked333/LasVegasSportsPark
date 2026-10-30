@@ -321,6 +321,54 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
     }
   });
 
+  it('§4.9 COMMANDS-04: a reversal decided on a stale view of the entitlement answers STALE_REVISION and returns nothing', async () => {
+    const buyer = await adult(t);
+    const { entitlementId } = await buy(buyer, 3);
+    expect((await book(buyer, sessions[0]!, entitlementId)).status).toBe(201);
+    const seen = await t.db
+      .selectFrom('package_entitlements')
+      .select('revision')
+      .where('id', '=', entitlementId)
+      .executeTakeFirstOrThrow();
+    // Another redemption meanwhile moves the entitlement on.
+    expect((await book(buyer, sessions[1]!, entitlementId)).status).toBe(201);
+    const [first] = await t.db
+      .selectFrom('package_redemptions')
+      .select('id')
+      .where('package_entitlement_id', '=', entitlementId)
+      .where('kind', '=', 'redeem')
+      .orderBy('redeemed_at')
+      .orderBy('id')
+      .execute();
+    const stale = await post(t, `/v1/package-redemptions/${first!.id}/reverse`, frontDesk.header, {
+      reason: 'Session was moved by the facility',
+      expectedRevision: seen.revision,
+    });
+    expect(stale.status, JSON.stringify(stale.body)).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    const after = await t.db
+      .selectFrom('package_entitlements')
+      .select(['redeemed_count', 'revision'])
+      .where('id', '=', entitlementId)
+      .executeTakeFirstOrThrow();
+    expect(after.redeemed_count).toBe(2);
+    const reversals = await t.db
+      .selectFrom('package_redemptions')
+      .select('id')
+      .where('package_entitlement_id', '=', entitlementId)
+      .where('kind', '=', 'reversal')
+      .execute();
+    expect(reversals).toHaveLength(0);
+    const current = await post(
+      t,
+      `/v1/package-redemptions/${first!.id}/reverse`,
+      frontDesk.header,
+      { reason: 'Session was moved by the facility', expectedRevision: after.revision },
+    );
+    expect(current.status, JSON.stringify(current.body)).toBe(200);
+    expect(current.body).toMatchObject({ redeemedCount: 1, remainingCredits: 2 });
+  });
+
   it('POL-007, POL-039: a canceled package booking returns its credit only as the approved cancellation policy says', async () => {
     const policyId = await cancellationPolicy(t, {
       text: 'Credits return until a day before the session.',
@@ -453,6 +501,47 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
       hourCycle: 'h23',
     }).format(new Date(datedRow.expires_at!));
     expect(local).toBe('2027-01-01, 00:00');
+  });
+
+  it('K-12 / SPK-COND-002: a package purchase is not transferred, so its credits are never orphaned', async () => {
+    const buyer = await adult(t);
+    const { enrollmentId, entitlementId } = await buy(buyer, 4);
+    const other = await packageOffering(t, {
+      credits: 4,
+      appliesTo: { offeringIds: [target.offeringId] },
+    });
+    await acknowledge(t, other, buyer.personId, buyer.personId);
+    const preview = await t.http
+      .get(`/v1/enrollments/${enrollmentId}/transfer-preview?targetOfferingId=${other.offeringId}`)
+      .set(buyer.header);
+    expect(preview.status).toBe(409);
+    expect(preview.body.details).toMatchObject({
+      code: 'NOT_TRANSFERABLE',
+      intent: 'package_purchase',
+    });
+    for (const actor of [buyer, frontDesk]) {
+      const committed = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, actor.header, {
+        targetOfferingId: other.offeringId,
+        expectedRevision: 2,
+        commit: true,
+      });
+      expect(committed.status).toBe(409);
+      expect(committed.body.details.code).toBe('NOT_TRANSFERABLE');
+    }
+    await drain(t);
+    // Nothing moved: the purchase stands with its active credits, and no second purchase exists.
+    const source = await t.db
+      .selectFrom('enrollments')
+      .select(['status', 'transferred_to_enrollment_id'])
+      .where('id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(source).toEqual({ status: 'confirmed', transferred_to_enrollment_id: null });
+    const entitlements = await t.db
+      .selectFrom('package_entitlements')
+      .select(['id', 'status'])
+      .where('participant_person_id', '=', buyer.personId)
+      .execute();
+    expect(entitlements).toEqual([{ id: entitlementId, status: 'active' }]);
   });
 
   it('staff list packages in facility scope; a customer list needs a participant', async () => {

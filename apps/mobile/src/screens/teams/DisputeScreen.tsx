@@ -317,6 +317,7 @@ function DisputeContent({
             void results.refetch();
             void fixture.refetch();
           }}
+          read
         />
       );
     }

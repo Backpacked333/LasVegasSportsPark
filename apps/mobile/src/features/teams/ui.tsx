@@ -11,7 +11,13 @@ import {
 } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  mayHaveTakenEffect,
+  secretWithheldOf,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { Button } from '../../ui/Button';
+import { OutcomeLost } from '../../ui/OutcomeLost';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
@@ -268,12 +274,25 @@ export function detailCodeOf(error: ApiError): string | null {
  * idempotency key; "Reload" fetches the current record after STALE_REVISION or
  * INVALID_TRANSITION. A refusal (ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED, protected
  * NOT_FOUND) is "not available" with no hint that a record exists (§4.10).
+ *
+ * An answer after which the command may have taken effect (`mayHaveTakenEffect`: a lost
+ * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx,
+ * PAYMENT_OUTCOME_UNKNOWN) is never "Not done" (§4.9, SPK-PAY-007): it reads "No answer yet: this
+ * may already have been recorded", and "Check again" repeats the same request under the same key,
+ * which the API answers with the stored outcome or runs once. IDEMPOTENCY_OUTCOME_UNAVAILABLE
+ * (`tookEffectOutcomeLost`: an earlier attempt committed, its answer lost) is "This may already have
+ * been done" with "Reload" (`ui/OutcomeLost`: every API record on screen is read again), never
+ * "Not done". IDEMPOTENCY_SECRET_WITHHELD is a success whose one-time link cannot be shown again;
+ * screens whose create returns a link show `SecretWithheld` instead, and this never calls it a
+ * failure either. Pass `read` for a failed read: it changed nothing, so it is "Not loaded" and
+ * "Try again".
  */
 export function CommandFailure({
   error,
   onRetry,
   onReload,
   unavailableText,
+  read = false,
   testID = 'command-failure',
 }: {
   error: ApiError;
@@ -281,6 +300,8 @@ export function CommandFailure({
   onReload?: () => void;
   /** What is not available, e.g. "Inviting players is not available to you for this team." */
   unavailableText?: string;
+  /** The failure is of a read (a GET), which changes nothing. */
+  read?: boolean;
   testID?: string;
 }) {
   const presentation = presentationForError(error);
@@ -299,21 +320,34 @@ export function CommandFailure({
       </View>
     );
   }
+  if (!read && tookEffectOutcomeLost(error)) {
+    return (
+      <View testID={testID}>
+        <OutcomeLost error={error} />
+      </View>
+    );
+  }
   const recovery = recoveryActionFor(error);
   const reasons = error.code === 'ELIGIBILITY_FAILED' ? eligibilityReasonsOf(error) : [];
   const issues = error.code === 'VALIDATION_FAILED' ? fieldIssuesOf(error) : [];
   const stale = error.isStale;
   const rule = detailCodeOf(error);
+  const unknown = !read && mayHaveTakenEffect(error);
+  const withheld = !read && secretWithheldOf(error) !== null;
   return (
     <View style={styles.failure} testID={testID} accessibilityLiveRegion="polite">
       <StatusBadge
-        tone={error.outcomeUnknown ? 'warning' : 'danger'}
+        tone={unknown || withheld ? 'warning' : 'danger'}
         label={
-          error.outcomeUnknown
+          unknown
             ? 'No answer yet: this may already have been recorded'
-            : stale
-              ? 'This changed since you opened it'
-              : 'Not done'
+            : withheld
+              ? 'Done, but the link cannot be shown again'
+              : stale
+                ? 'This changed since you opened it'
+                : read
+                  ? 'Not loaded'
+                  : 'Not done'
         }
       />
       <Text style={styles.body}>{error.message}</Text>
@@ -328,9 +362,11 @@ export function CommandFailure({
         <Button label="Reload" onPress={onReload} variant="secondary" />
       ) : recovery.retry && onRetry ? (
         <Button
-          label="Try again"
+          label={unknown ? 'Check again' : 'Try again'}
           onPress={onRetry}
-          accessibilityHint="Sends the same request again; it is never applied twice"
+          accessibilityHint={
+            read ? 'Reads it again' : 'Sends the same request again; it is never applied twice'
+          }
         />
       ) : (
         <Text style={styles.body}>{recovery.label}</Text>

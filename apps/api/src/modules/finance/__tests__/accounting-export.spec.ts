@@ -1,11 +1,14 @@
 import { newId, systemPrincipal } from '@sportspark/contracts';
-import { pgErrorCode } from '@sportspark/db';
+import { json, pgErrorCode } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork, databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { LedgerService } from '../ledger/ledger.service';
 import { FakeAccountingProvider } from '../providers/fake-accounting.provider';
-import { RECONCILE_ACCOUNTING_JOB } from '../services/accounting/accounting-export.service';
+import {
+  AccountingExportService,
+  RECONCILE_ACCOUNTING_JOB,
+} from '../services/accounting/accounting-export.service';
 import { createObligationFixture } from '../testing/finance-fixtures';
 import { adult, financeTestApp, post, staff, type Actor } from './support';
 
@@ -85,6 +88,38 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     return post(t, `/v1/accounting-export-batches/${batch.id}/submit`, fo1.header, {
       expectedRevision: batch.revision,
     });
+  }
+
+  /** A prepared batch row as only the service writes it (for direct database probes). */
+  function newBatchRow(lineCount: number) {
+    const id = newId();
+    return {
+      id,
+      organization_id: t.organizationId,
+      period_start: new Date('2026-01-01T00:00:00Z'),
+      period_end: new Date('2026-01-02T00:00:00Z'),
+      idempotency_key: `acct-${id}`,
+      checksum: `sha256:${'0'.repeat(64)}`,
+      line_count: lineCount,
+      provider_reference: null,
+      last_error: null,
+      prepared_by: json({ kind: 'system' }),
+      prepared_by_person_id: null,
+      prepared_at: new Date(),
+      submitted_at: null,
+      decided_at: null,
+      canceled_at: null,
+      cancel_reason: null,
+    };
+  }
+
+  async function firstLine(batchId: string) {
+    return t.db
+      .selectFrom('accounting_export_lines')
+      .selectAll()
+      .where('batch_id', '=', batchId)
+      .orderBy('line_number')
+      .executeTakeFirstOrThrow();
   }
 
   it('DEC-016, DEC-081: with accounting disabled no mapping is proposed and no batch prepared; reads continue', async () => {
@@ -265,12 +300,27 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     expect(accepted.body.status).toBe('accepted');
   });
 
-  it('§4.11, §4.12: a lost answer is unknown, and the job reconciles it without a second batch', async () => {
+  it('§4.11, §4.12, §4.4 (COMMANDS-05): a lost answer is unknown and audited, and the job reconciles it without a second batch', async () => {
     // The connection kept the batch but its answer was lost.
     const kept = await prepared((await dayWithEntries(2_000)).period);
     fake.scriptSubmissions('timeout_accepted');
     const unknown = await submit(kept);
     expect(unknown.body).toMatchObject({ status: 'unknown', lastError: expect.any(String) });
+    // COMMANDS-05 (§4.4): the move to unknown is audited with its revision step and its error.
+    const trail = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'before_revision', 'after_revision', 'details'])
+      .where('organization_id', '=', t.organizationId)
+      .where('target_id', '=', kept.id)
+      .orderBy('occurred_at')
+      .orderBy('id')
+      .execute();
+    expect(trail.map((a) => [a.action, a.before_revision, a.after_revision])).toEqual([
+      ['finance.export_accounting', null, 1],
+      ['finance.export_accounting.submit', 1, 2],
+      ['finance.accounting_batch_unknown', 2, 3],
+    ]);
+    expect(trail[2]?.details).toMatchObject({ from: 'submitted', error: expect.any(String) });
     // The request never arrived: the job resubmits with the same key.
     const lost = await prepared((await dayWithEntries(2_100)).period);
     fake.scriptSubmissions('timeout_lost');
@@ -310,6 +360,49 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     ).toBe('accepted');
   });
 
+  it('K-06 / ASYNC-06: the reconciliation job renews its lease before each provider call and leaves the rest to the run that holds the job', async () => {
+    const waiting = () =>
+      t.db
+        .selectFrom('accounting_export_batches')
+        .select(['id', 'status'])
+        .where('status', 'in', ['unknown', 'submitted'])
+        .execute();
+    expect(await waiting()).toEqual([]);
+    const first = await prepared((await dayWithEntries(4_100)).period);
+    const second = await prepared((await dayWithEntries(4_200)).period);
+    fake.scriptSubmissions('timeout_lost', 'timeout_lost');
+    expect((await submit(first)).body.status).toBe('unknown');
+    expect((await submit(second)).body.status).toBe('unknown');
+    const sentBefore = fake.submissions.length;
+    // A lease that renews for one batch (its status query and its resubmission), then reports
+    // another runner holding the job.
+    const aborts = new AbortController();
+    let renewals = 0;
+    const lease = {
+      signal: aborts.signal,
+      renew: async () => {
+        renewals += 1;
+        if (renewals <= 2) return true;
+        aborts.abort();
+        return false;
+      },
+    };
+    const result = await t.app
+      .get(AccountingExportService)
+      .reconcile({ now: t.clock.now(), batchSize: 50, lease });
+    expect(renewals).toBe(3);
+    expect(result.processed).toBe(1);
+    expect(fake.submissions.length).toBe(sentBefore + 1);
+    const after = await waiting();
+    expect(after).toHaveLength(1);
+    expect(after[0]?.status).toBe('unknown');
+    expect([first.id, second.id]).toContain(after[0]?.id);
+    // The run that holds the job reconciles the rest with the same key.
+    await t.runPeriodicJobs([RECONCILE_ACCOUNTING_JOB]);
+    expect(await waiting()).toEqual([]);
+    expect(fake.submissions.length).toBe(sentBefore + 2);
+  });
+
   it('§4.7 invariant 5: the database exports an entry at most once and never edits or deletes an export line', async () => {
     const { period } = await dayWithEntries(900);
     const batch = await prepared(period);
@@ -320,18 +413,23 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
       .orderBy('line_number')
       .executeTakeFirstOrThrow();
     const other = await prepared((await dayWithEntries(901)).period);
+    // A batch being prepared cannot take an entry another batch exports live.
     expect(
       await refusedBy(
-        t.db
-          .insertInto('accounting_export_lines')
-          .values({
-            ...line,
-            id: newId(),
-            batch_id: other.id,
-            line_number: 99,
-            created_at: new Date(),
-          })
-          .execute(),
+        t.db.transaction().execute(async (trx) => {
+          const draft = newBatchRow(1);
+          await trx.insertInto('accounting_export_batches').values(draft).execute();
+          await trx
+            .insertInto('accounting_export_lines')
+            .values({
+              ...line,
+              id: newId(),
+              batch_id: draft.id,
+              line_number: 1,
+              created_at: new Date(),
+            })
+            .execute();
+        }),
       ),
     ).toBe('23505:accounting_export_lines_live_entry_idx');
     expect(
@@ -369,6 +467,99 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     for (const b of [batch, other]) {
       await post(t, `/v1/accounting-export-batches/${b.id}/cancel`, fo1.header, { reason: 'tidy' });
     }
+  });
+
+  it('SPK-PAY-010 (INTEGRITY-03): the database refuses a line added to a batch after it was prepared, in any status, and a line that misstates its entry', async () => {
+    // Entries that no batch exports live (their batch was canceled).
+    const freed = await prepared((await dayWithEntries(1_300)).period);
+    const entry = await firstLine(freed.id);
+    await post(t, `/v1/accounting-export-batches/${freed.id}/cancel`, fo1.header, {
+      reason: 'Frees the entries for the probe',
+    });
+    const lineFor = (batchId: string, lineNumber: number, overrides: Json = {}) => ({
+      ...entry,
+      id: newId(),
+      batch_id: batchId,
+      line_number: lineNumber,
+      live: true,
+      created_at: new Date(),
+      ...overrides,
+    });
+
+    // A prepared batch is complete when its transaction commits: no line can follow later.
+    const open = await prepared((await dayWithEntries(1_400)).period);
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('accounting_export_lines')
+          .values(lineFor(open.id, (open.lineCount as number) + 1))
+          .execute(),
+      ),
+    ).toBe('23514:accounting_export_lines_within_count');
+
+    // Submitted (a stopped process), unknown (a lost answer) and accepted batches take no line.
+    const submitted = await prepared((await dayWithEntries(1_500)).period);
+    await t.db
+      .updateTable('accounting_export_batches')
+      .set({ status: 'submitted', submitted_at: t.clock.now(), revision: submitted.revision + 1 })
+      .where('id', '=', submitted.id)
+      .execute();
+    const lost = await prepared((await dayWithEntries(1_600)).period);
+    fake.scriptSubmissions('timeout_accepted');
+    expect((await submit(lost)).body.status).toBe('unknown');
+    const accepted = await prepared((await dayWithEntries(1_700)).period);
+    expect((await submit(accepted)).body.status).toBe('accepted');
+    for (const batch of [submitted, lost, accepted]) {
+      expect(
+        await refusedBy(
+          t.db
+            .insertInto('accounting_export_lines')
+            .values(lineFor(batch.id, (batch.lineCount as number) + 1))
+            .execute(),
+        ),
+      ).toBe('23514:accounting_export_lines_prepared_batch');
+    }
+    const counts = await t.db
+      .selectFrom('accounting_export_lines')
+      .select(['batch_id', (eb) => eb.fn.countAll<number>().as('n')])
+      .where('batch_id', 'in', [submitted.id, lost.id, accepted.id])
+      .groupBy('batch_id')
+      .execute();
+    expect(counts.map((c) => Number(c.n))).toEqual([2, 2, 2]);
+
+    // A line copies its entry's account, amounts and currency.
+    expect(
+      await refusedBy(
+        t.db.transaction().execute(async (trx) => {
+          const draft = newBatchRow(1);
+          await trx.insertInto('accounting_export_batches').values(draft).execute();
+          await trx
+            .insertInto('accounting_export_lines')
+            .values(
+              lineFor(draft.id, 1, {
+                ledger_account: 'refunds',
+                debit_minor: 999_999,
+                credit_minor: 0,
+                currency: 'EUR',
+              }),
+            )
+            .execute();
+        }),
+      ),
+    ).toBe('23514:accounting_export_lines_copy_entry');
+    // A batch stating more lines than it holds never commits.
+    expect(
+      await refusedBy(
+        t.db.transaction().execute(async (trx) => {
+          const draft = newBatchRow(2);
+          await trx.insertInto('accounting_export_batches').values(draft).execute();
+          await trx.insertInto('accounting_export_lines').values(lineFor(draft.id, 1)).execute();
+        }),
+      ),
+    ).toBe('23514:accounting_export_batches_complete');
+    await post(t, `/v1/accounting-export-batches/${open.id}/cancel`, fo1.header, {
+      reason: 'tidy',
+    });
   });
 
   it('DEC-016: once disabled, preparation and submission stop; cancel and reconciliation continue', async () => {

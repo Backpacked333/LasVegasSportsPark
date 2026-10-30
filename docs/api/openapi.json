@@ -28133,6 +28133,12 @@
             ],
             "format": "uuid"
           },
+          "correctionReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -28163,6 +28169,7 @@
           "reviewNote",
           "reviewedAt",
           "correctsAssessmentId",
+          "correctionReason",
           "revision",
           "createdAt",
           "updatedAt"
@@ -28841,7 +28848,8 @@
           "balance_unknown",
           "activity_canceled",
           "activity_ended",
-          "not_on_site"
+          "not_on_site",
+          "desk_review_required"
         ]
       },
       "ArrivalIssue": {
@@ -32913,6 +32921,9 @@
               "refundableMinor": {
                 "type": "integer"
               },
+              "compensatedMinor": {
+                "type": "integer"
+              },
               "refunds": {
                 "type": "array",
                 "items": {
@@ -34195,6 +34206,9 @@
           "reservedMinor": {
             "type": "integer"
           },
+          "compensatedMinor": {
+            "type": "integer"
+          },
           "availableMinor": {
             "type": "integer"
           },
@@ -34791,6 +34805,28 @@
           },
           "outstandingMinor": {
             "type": "integer"
+          },
+          "hold": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "registrations_canceled"
+                ]
+              },
+              "heldAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "reason",
+              "heldAt"
+            ]
           },
           "installments": {
             "type": "array",
@@ -35391,6 +35427,29 @@
             "required": [
               "recordedMinor",
               "unreconciledMinor"
+            ]
+          },
+          "pointOfSale": {
+            "type": "object",
+            "properties": {
+              "cardMinor": {
+                "type": "integer"
+              },
+              "drawerMinor": {
+                "type": "integer"
+              },
+              "processorFeesMinor": {
+                "type": "integer"
+              },
+              "returnedMinor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cardMinor",
+              "drawerMinor",
+              "processorFeesMinor",
+              "returnedMinor"
             ]
           },
           "exceptions": {
@@ -68451,7 +68510,7 @@
     },
     "/disputes/{id}/decide": {
       "post": {
-        "summary": "Review, decide or withdraw a dispute",
+        "summary": "Review, decide or withdraw a dispute (a decision or a withdrawal names its reason)",
         "tags": [
           "Competition"
         ],
@@ -69968,7 +70027,7 @@
     },
     "/appeals/{id}/decide": {
       "post": {
-        "summary": "Review, grant, deny or withdraw an appeal",
+        "summary": "Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason)",
         "tags": [
           "Competition"
         ],
@@ -70374,7 +70433,7 @@
     },
     "/pools/{id}/entries/{teamEntryId}/remove": {
       "post": {
-        "summary": "Remove an entry from a pool (CMP-15; capability tournaments)",
+        "summary": "Remove an entry from a pool (CMP-15; never gated by capability tournaments)",
         "tags": [
           "Competition"
         ],
@@ -90134,7 +90193,7 @@
     },
     "/pos-sales/{id}/tenders": {
       "post": {
-        "summary": "Take a cash, external or card tender (card through the provider, §4.11)",
+        "summary": "Take a cash, external or card tender on an open sale (card through the provider, §4.11; not gated by the switch, DEC-016)",
         "description": "FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).",
         "tags": [
           "Finance"

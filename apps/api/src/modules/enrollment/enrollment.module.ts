@@ -7,7 +7,7 @@ import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
 import { CommunicationsModule, SESSION_AUDIENCE_IMPL } from '../communications';
 import { IdentityEvents, IdentityModule } from '../identity';
 import { FacilitiesModule } from '../facilities';
-import { ClosureImpactContributors, SchedulingModule } from '../scheduling';
+import { ClosureImpactContributors, EventChanged, SchedulingModule } from '../scheduling';
 import { WorkforceEvents, WorkforceModule } from '../workforce';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
@@ -422,6 +422,24 @@ export class EnrollmentModule implements OnModuleInit {
             event.organizationId,
             event.payload.enrollmentId,
             event.payload.reason,
+            event.payload.previousStatus,
+            event.correlationId,
+          ),
+        ),
+      { failureOwner: 'scheduler' },
+    );
+    // ASYNC-01 (SPK-SCHED-009, SPK-COND-003, §4.12): a booking follows its scheduling events; a
+    // closure or any other cancellation of every occurrence ends it with an owned money exception,
+    // a lost occurrence of a continuing one is an owned exception, a move moves its times.
+    this.registry.on<EventPayload<typeof EventChanged>>(
+      EventChanged.type,
+      'enrollment.booking_follow_event',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.bookingsG.onSchedulingEventChanged(
+            ctx.trx,
+            event.organizationId,
+            event.payload,
             event.correlationId,
           ),
         ),

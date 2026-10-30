@@ -12,6 +12,7 @@ import {
   MODULE_SETTINGS,
   OperationalExceptions,
   Outbox,
+  renewJobLease,
   runWithTransaction,
   UnitOfWork,
   type Clock,
@@ -54,10 +55,11 @@ interface ClaimedCommand {
  *
  * - `entry.deliver_device_commands` (failure owner: facilities operator) sends each due command
  *   outside any transaction and records the outcome as a fact: delivered, failed (refused) or
- *   unknown (no answer). Failed and unknown commands are retried; after
- *   ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS undelivered attempts (technical default 3) one
- *   `entry.device_command_undelivered` exception asks the facilities operator to look at the
- *   device. Only active devices are sent commands.
+ *   unknown (no answer). Failed and unknown commands are retried with an exponential backoff, and
+ *   due commands are taken in turns per device, so one unreachable device never starves the
+ *   others (`deliverDue`); after ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS undelivered attempts
+ *   (technical default 3) one `entry.device_command_undelivered` exception asks the facilities
+ *   operator to look at the device. Only active devices are sent commands.
  * - A device's receipt (`device.command_receipt`) settles a pending or unknown command once; a
  *   duplicate or late receipt changes nothing.
  * - A heartbeat (`device.heartbeat`) marks the device online. `entry.detect_device_outages` marks
@@ -98,24 +100,69 @@ export class DeviceDeliveryService {
   // Delivery job
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * One pass of `entry.deliver_device_commands` (ASYNC-02; §3.16 a revocation reaches every
+   * device, §4.12). A command is due when it is undelivered, its device is active, and it was never
+   * attempted or its retry time has come. The first retry has no delay: it goes out on the next
+   * pass that reaches the command, which is a later pass of the same run when the run makes more
+   * than one pass (`remaining` > 0), otherwise the next run. The retry after attempt n (n ≥ 2)
+   * waits ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS·2^(n−2), at most
+   * ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS. Due commands are taken fairly: each device's commands
+   * take turns (never attempted first, then the least recently attempted, then the oldest), and a
+   * pass takes every device's first turn before any device's second, so an unreachable device
+   * with a long backlog can never keep another device's commands from being sent. `remaining`
+   * counts the due commands this pass could not take. After its second attempt a command is not
+   * due again before its backoff, so later passes reach other commands instead of re-sending the
+   * same ones. Each pass reads the clock afresh (`context.now`), so "at most twice in one run"
+   * holds only while the run's passes finish within ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS; a
+   * slower run (an adapter waiting out its timeout on a dead door) can reach a command's next
+   * retry in the same run.
+   */
   async deliverDue(context: PeriodicJobContext): Promise<PeriodicJobResult> {
+    const now = context.now;
+    const base = this.settings.DEVICE_COMMAND_RETRY_BASE_SECONDS;
+    const max = this.settings.DEVICE_COMMAND_RETRY_MAX_SECONDS;
+    const retryDelaySeconds = sql<number>`case when c.attempts <= 1 then 0::float8 else least(${base}::float8 * power(2::float8, least(c.attempts - 2, 30)), ${max}::float8) end`;
     const due = await this.uow
       .reader()
-      .selectFrom('device_commands as c')
-      .innerJoin('access_devices as d', (join) =>
-        join.onRef('d.organization_id', '=', 'c.organization_id').onRef('d.id', '=', 'c.device_id'),
+      .with('due', (db) =>
+        db
+          .selectFrom('device_commands as c')
+          .innerJoin('access_devices as d', (join) =>
+            join
+              .onRef('d.organization_id', '=', 'c.organization_id')
+              .onRef('d.id', '=', 'c.device_id'),
+          )
+          .select(['c.id', 'c.organization_id', 'c.created_at', 'c.last_attempt_at'])
+          .select(
+            sql<number>`row_number() over (partition by c.organization_id, c.device_id order by c.last_attempt_at asc nulls first, c.created_at, c.id)`.as(
+              'turn',
+            ),
+          )
+          .where('c.status', 'in', ['pending', 'failed', 'unknown'])
+          .where('d.status', '=', 'active')
+          .where('c.created_at', '<=', now)
+          .where(
+            sql<boolean>`(c.last_attempt_at is null or c.last_attempt_at + make_interval(secs => ${retryDelaySeconds}) <= ${now}::timestamptz)`,
+          ),
       )
-      .select(['c.id', 'c.organization_id'])
-      .where('c.status', 'in', ['pending', 'failed', 'unknown'])
-      .where('d.status', '=', 'active')
-      .where('c.created_at', '<=', context.now)
-      .orderBy('c.created_at')
-      .orderBy('c.id')
+      .selectFrom('due')
+      .select(['id', 'organization_id'])
+      .orderBy('turn')
+      .orderBy('last_attempt_at', (ob) => ob.asc().nullsFirst())
+      .orderBy('created_at')
+      .orderBy('id')
       .limit(context.batchSize + 1)
       .execute();
     const batch = due.slice(0, context.batchSize);
     let processed = 0;
-    for (const { id, organization_id } of batch) {
+    for (const [index, { id, organization_id }] of batch.entries()) {
+      // K-06 (ASYNC-06, SPK-AT-023): the run's lease is renewed before each provider call, outside
+      // any transaction; once another runner holds the job (or the runner gave up on this run) no
+      // further command is sent, and what is left stays due for the run that holds the job.
+      if (!(await renewJobLease(context))) {
+        return { processed, remaining: due.length - index };
+      }
       if (await this.deliverOne(organization_id, id)) processed += 1;
     }
     return { processed, remaining: due.length - batch.length };

@@ -90,3 +90,29 @@ export function createTestApp(options: TestAppOptions = {}) {
   }
   return { services, fake, sources, sessionStore, queryClient, wrapper };
 }
+
+/**
+ * Makes the next `times` requests of `method` to a URL matching `url` reach the fake API (recorded
+ * and answered there, as the API would commit them) and then lose the answer: fetch rejects with
+ * the `TypeError` React Native's fetch raises when the connection drops while it waits for the
+ * response. The client reports NETWORK_UNAVAILABLE (`kind: 'network'`): the request was sent, so
+ * the outcome is unknown, exactly as after a timeout (§4.9, SPK-PAY-007). Call it before rendering.
+ */
+export function dropAnswers(
+  app: { services: AppServices },
+  method: string,
+  url: RegExp,
+  times = 1,
+) {
+  const answer = app.services.fetch;
+  if (!answer) throw new Error('The test app has no fake fetch.');
+  let left = times;
+  app.services.fetch = async (input, init) => {
+    if (left > 0 && (init.method ?? 'GET').toUpperCase() === method && url.test(input)) {
+      left -= 1;
+      await answer(input, init);
+      throw new TypeError('Network request failed');
+    }
+    return answer(input, init);
+  };
+}

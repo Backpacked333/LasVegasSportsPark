@@ -8,7 +8,9 @@ import type {
 
 /**
  * Facilities lifecycles (§4.6 "each command must define allowed source state"). The database check
- * constraints in migrations 0900 and 0903 (restriction `withdrawn`) list exactly these states.
+ * constraints in migrations 0900 and 0903 (restriction `withdrawn`) list exactly these states, and
+ * the `restrictions_terminal_guard` trigger (migration 0904, INTEGRITY-05) allows exactly the
+ * RestrictionMachine transitions.
  */
 
 export type MaintenanceTaskEvent =

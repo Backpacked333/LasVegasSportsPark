@@ -363,6 +363,87 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
       await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-p/),
     ).toBeOnTheScreen();
     expect(cancels(app)).toHaveLength(0);
+    // Only the read failed: nothing says the cancellation may already have been made.
+    expect(screen.queryByLabelText('No answer yet')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Try again' }).length).toBeGreaterThan(0);
+  });
+
+  it('SPK-UX-008: a re-read at confirm time that gets no connection is offline, never "No answer yet"', async () => {
+    let reads = 0;
+    const app = renderDetail({
+      'GET /bookings/{id}': ok(PAID),
+      'GET /enrollments/{id}/cancellation-preview': () => {
+        reads += 1;
+        if (reads === 1)
+          return fakeResponse(200, cancellationPreview({ enrollmentId: G.enrollment }));
+        throw new TypeError('Network request failed');
+      },
+    });
+    await openCancel();
+    fireEvent.press(
+      await screen.findByRole('checkbox', { name: 'I understand: Refund of $60.00' }),
+    );
+    await confirmCancel();
+    expect(await screen.findByLabelText('You are offline')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('No answer yet')).toBeNull();
+    expect(screen.queryByText(/may already have been made/)).toBeNull();
+    expect(cancels(app)).toHaveLength(0);
+  });
+
+  it('§4.9: a 5xx answer to canceling is "No answer yet", never "Something went wrong", and "Check again" keeps the key', async () => {
+    let attempts = 0;
+    const requested = booking({ status: 'requested', basketId: null, enrollmentId: null });
+    const app = renderDetail({
+      'GET /bookings/{id}': ok(requested),
+      'POST /bookings/{id}/cancel': () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { correlationId: 'c-500' }));
+        }
+        return fakeResponse(200, { ...requested, status: 'canceled', revision: 2 });
+      },
+    });
+    await openCancel();
+    await confirmCancel();
+    expect(await screen.findByLabelText('No answer yet')).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: INTERNAL_ERROR\. Reference: c-500/)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByTestId('booking-canceled')).toBeOnTheScreen();
+    const [first, second] = cancels(app);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a cancellation that committed with its answer lost is "This may already have been done"; "Reload" reads the booking again and sends nothing', async () => {
+    const requested = booking({ status: 'requested', basketId: null, enrollmentId: null });
+    const app = renderDetail({
+      'GET /bookings/{id}': ok(requested),
+      'POST /bookings/{id}/cancel': {
+        status: 409,
+        body: apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+          nextAction: 'reload_current_state',
+          correlationId: 'c-lost',
+        }),
+      },
+    });
+    await openCancel();
+    await confirmCancel();
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: c-lost'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.queryByLabelText('This changed since you opened it')).toBeNull();
+    const reads = app.fake.requests.filter((r) => r.route === '/bookings/{id}').length;
+    fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/bookings/{id}').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    expect(cancels(app)).toHaveLength(1);
   });
 
   it('STALE_REVISION keeps the reason and offers "Reload", which reads the booking again', async () => {

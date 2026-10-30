@@ -127,6 +127,8 @@ export class PaymentWebhooksService {
       {
         status: body.type === 'refund.succeeded' ? 'succeeded' : 'failed',
         providerReference: data.providerReference,
+        amountMinor: data.amountMinor ?? null,
+        currency: data.currency ?? null,
         failureReason: data.failureReason ?? null,
         source: 'webhook',
         inboxEventId: event.id,

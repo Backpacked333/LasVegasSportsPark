@@ -6,7 +6,8 @@
  * administrator turns it on). With the switch off the API keeps existing records readable and
  * never gates voids, returns, closing a register session or retiring a product or register, so the
  * gate shows its notice above the pages and only the commands that start a new commitment
- * (products, registers, opening a session, a sale, its lines and tenders) are not offered.
+ * (products, registers, opening a session, a sale and its lines) are not offered; a tender that
+ * settles a sale already open stays offered, as the API never gates it (CAPABILITIES-01).
  *
  * Pages (nested routes, record ids only, §4.14):
  * - index: registers by facility, opening and closing their sessions (RegistersPage);

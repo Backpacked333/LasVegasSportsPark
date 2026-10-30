@@ -191,11 +191,33 @@ export interface FeeAdjustmentsTable {
   created_at: GeneratedTimestamp;
 }
 
+/** The communications kinds of the notices workforce composes to assignees (WRK-04). */
+export type AssignmentNoticeKind = 'assignment_offer' | 'schedule_changed' | 'cancellation';
+
+/**
+ * What workforce told an assignee about an assignment (migration 0705, WRK-04, SPK-COMMS-005):
+ * one append-only row per composed notice, with the communications notification it became and the
+ * activity time it stated. `sequence` orders one assignment's rows.
+ */
+export interface AssignmentNoticesTable {
+  id: string;
+  organization_id: string;
+  assignment_id: string;
+  sequence: number;
+  notice_kind: AssignmentNoticeKind;
+  notification_id: string;
+  source_event_id: string;
+  stated_start: Timestamp;
+  stated_end: Timestamp;
+  created_at: GeneratedTimestamp;
+}
+
 export interface WorkforceTables {
   availability: AvailabilityTable;
   qualifications: QualificationsTable;
   assignment_requirements: AssignmentRequirementsTable;
   assignments: AssignmentsTable;
+  assignment_notices: AssignmentNoticesTable;
   fee_export_batches: FeeExportBatchesTable;
   fee_submissions: FeeSubmissionsTable;
   fee_adjustments: FeeAdjustmentsTable;

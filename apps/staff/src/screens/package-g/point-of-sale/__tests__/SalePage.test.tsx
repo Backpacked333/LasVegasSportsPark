@@ -72,7 +72,7 @@ describe('SCR-S-55 SalePage', () => {
     expect(within(table).getByText('Sales tax (tax): $0.42')).toBeInTheDocument();
     expect(within(table).getByText('$5.42')).toBeInTheDocument();
     const call = app.fake.requests.find((r) => r.route === '/pos-sales/{id}/lines');
-    expect(call?.body).toEqual({ productId: PRODUCT_ID, quantity: 2 });
+    expect(call?.body).toEqual({ productId: PRODUCT_ID, quantity: 2, expectedRevision: 1 });
     expect(call?.headers['idempotency-key']).toMatch(/^key-/);
     const totals = screen.getByLabelText('Sale totals');
     expect(within(totals).getByText('$0.42')).toBeInTheDocument();
@@ -122,7 +122,7 @@ describe('SCR-S-55 SalePage', () => {
       screen.getByRole('link', { name: 'Open the receipt of sale FD1-20261024-0001' }),
     ).toHaveAttribute('href', `${SALE_PATH}/receipt`);
     const call = app.fake.requests.find((r) => r.route === '/pos-sales/{id}/tenders');
-    expect(call?.body).toEqual({ kind: 'cash', amountMinor: 542 });
+    expect(call?.body).toEqual({ kind: 'cash', amountMinor: 542, expectedRevision: 1 });
     // Paid: no more tender form, and no void.
     expect(screen.queryByRole('form', { name: 'Take a tender' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Void the sale' })).toBeNull();
@@ -154,6 +154,7 @@ describe('SCR-S-55 SalePage', () => {
     expect(call?.body).toEqual({
       kind: 'external',
       amountMinor: 600,
+      expectedRevision: 1,
       evidence: { reference: 'SLIP-77' },
     });
   });
@@ -206,6 +207,7 @@ describe('SCR-S-55 SalePage', () => {
       kind: 'card',
       amountMinor: 542,
       paymentMethodToken: 'pm_fake_timeout',
+      expectedRevision: 1,
     });
   });
 
@@ -316,6 +318,7 @@ describe('SCR-S-55 SalePage', () => {
       lines: [{ saleLineId: LINE_ID, quantity: 1 }],
       tenderKind: 'cash',
       reason: 'Damaged',
+      expectedRevision: 3,
     });
     // A definitive refusal ends the intent: the corrected return is a new key.
     expect(calls[1]?.headers['idempotency-key']).not.toBe(calls[0]?.headers['idempotency-key']);
@@ -484,7 +487,7 @@ describe('SCR-S-55 SalePage', () => {
     await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
     expect(await screen.findByText('paid')).toBeInTheDocument();
     const [card, second] = app.fake.requests.filter((r) => r.route === '/pos-sales/{id}/tenders');
-    expect(second?.body).toEqual({ kind: 'cash', amountMinor: 242 });
+    expect(second?.body).toEqual({ kind: 'cash', amountMinor: 242, expectedRevision: 1 });
     expect(second?.headers['idempotency-key']).not.toBe(card?.headers['idempotency-key']);
   });
 
@@ -693,7 +696,7 @@ describe('SCR-S-55 SalePage', () => {
     expect(await screen.findByText('voided')).toBeInTheDocument();
     expect(screen.getByText('Customer left')).toBeInTheDocument();
     const call = app.fake.requests.find((r) => r.route === '/pos-sales/{id}/void');
-    expect(call?.body).toEqual({ reason: 'Customer left' });
+    expect(call?.body).toEqual({ reason: 'Customer left', expectedRevision: 1 });
   });
 
   it('SPK-PAY-002: the receipt lists lines, approved charges, tenders and the facility-local paid time', async () => {
@@ -744,10 +747,17 @@ describe('SCR-S-55 SalePage', () => {
     expect(screen.queryByRole('form', { name: 'Add a line' })).toBeNull();
   });
 
-  it('DEC-016: while the switch is off an open sale offers no new line or tender, but can be voided', async () => {
+  it('DEC-016 / CAPABILITIES-01: while the switch is off an open sale offers no new line, but can still be paid or voided', async () => {
+    const user = userEvent.setup();
+    let current = saleWithLine();
     const app = createTestApp({
       routes: {
-        ...saleRoutes(() => saleWithLine()),
+        ...saleRoutes(() => current, {
+          'POST /pos-sales/{id}/tenders': () => {
+            current = paidSale();
+            return fakeResponse(201, current);
+          },
+        }),
         'GET /me/permissions': permissions([], SELLER),
       },
     });
@@ -757,7 +767,49 @@ describe('SCR-S-55 SalePage', () => {
     );
     await waitFor(() => expect(screen.getByRole('table', { name: 'Sale lines' })).toBeVisible());
     expect(screen.queryByRole('form', { name: 'Add a line' })).toBeNull();
-    expect(screen.queryByRole('form', { name: 'Take a tender' })).toBeNull();
+    expect(screen.getByText(/no line is added to this sale/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Void the sale' })).toBeInTheDocument();
+    // A tender settles the existing sale; the API never gates it.
+    const form = screen.getByRole('form', { name: 'Take a tender' });
+    await user.click(within(form).getByLabelText('Cash'));
+    await user.type(within(form).getByLabelText(/^Amount \(USD\)/), '5.42');
+    await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
+    expect(await screen.findByText('paid')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/pos-sales/{id}/tenders')?.body).toEqual({
+      kind: 'cash',
+      amountMinor: 542,
+      expectedRevision: saleWithLine().revision,
+    });
+  });
+
+  it('§4.9 COMMANDS-04: a tender decided on a sale that changed meanwhile is refused as stale and offers Reload', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const app = createTestApp({
+      routes: saleRoutes(
+        () => {
+          reads += 1;
+          return saleWithLine();
+        },
+        {
+          'POST /pos-sales/{id}/tenders': apiError(409, 'STALE_REVISION', {
+            nextAction: 'reload_and_retry',
+            details: { expectedRevision: saleWithLine().revision, currentRevision: 9 },
+          }),
+        },
+      ),
+    });
+    render(app.at(SALE_PATH));
+    const form = await screen.findByRole('form', { name: 'Take a tender' });
+    await user.click(within(form).getByLabelText('Cash'));
+    await user.type(within(form).getByLabelText(/^Amount \(USD\)/), '1.00');
+    await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
+    await user.click(await within(form).findByRole('button', { name: /^Reload/ }));
+    await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
+    expect(app.fake.requests.find((r) => r.route === '/pos-sales/{id}/tenders')?.body).toEqual({
+      kind: 'cash',
+      amountMinor: 100,
+      expectedRevision: saleWithLine().revision,
+    });
   });
 });

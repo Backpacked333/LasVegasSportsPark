@@ -240,6 +240,9 @@ function AssessmentRow({
           {a.reviewedAt ? ` · reviewed ${formatInstant(a.reviewedAt, timezone)}` : ''}
           {a.correctsAssessmentId ? ' · corrects an earlier assessment' : ''}
         </span>
+        {a.correctionReason ? (
+          <span className="caption">Reason for the correction: {a.correctionReason}</span>
+        ) : null}
       </div>
       <div className="ops-actions">
         {can.edit ? (

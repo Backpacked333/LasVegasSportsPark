@@ -3,7 +3,8 @@
  * its lines at the product's price with the approved taxes and fees the API applied, its totals,
  * tenders and returns (`GET /v1/pos-sales/{id}`), and the commands its state allows:
  *
- * - open: add a line, take a cash, external or card tender (SaleForms), void it with a reason
+ * - open: add a line (only while `point_of_sale` is on), take a cash, external or card tender
+ *   (SaleForms; never gated, a tender settles an existing sale, DEC-016), void it with a reason
  *   while it holds no card tender (`POST /v1/pos-sales/{id}/void`, never gated);
  * - paid or partially returned: return lines within what was paid (ReturnForm), and the receipt.
  *
@@ -85,7 +86,11 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
   const cards = cardState(sale);
   const c = sale.currency;
   const operate = offer.allowed(POS_ACTIONS.operateRegister, sale.facilityId);
-  const selling = sale.status === 'open' && operate && offer.capabilityOn('point_of_sale');
+  // DEC-016: with point_of_sale off no line is added, but an open sale can still be paid (a
+  // tender settles an existing sale and is never gated, CAPABILITIES-01).
+  const switchOn = offer.capabilityOn('point_of_sale');
+  const tendering = sale.status === 'open' && operate;
+  const selling = tendering && switchOn;
   const returnable =
     (sale.status === 'paid' || sale.status === 'partially_returned') &&
     offer.allowed(POS_ACTIONS.approveReturn, sale.facilityId);
@@ -150,13 +155,15 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
       <Lines sale={sale} />
       <Tenders sale={sale} zone={zone} />
       <Returns sale={sale} zone={zone} />
-      {selling ? (
-        <>
-          <AddLineForm sale={sale} onReload={onReload} />
-          {sale.lines.length > 0 && sale.remainingMinor > 0 ? (
-            <TenderForm sale={sale} onReload={onReload} />
-          ) : null}
-        </>
+      {selling ? <AddLineForm sale={sale} onReload={onReload} /> : null}
+      {tendering && !switchOn ? (
+        <p className="caption">
+          Point of sale is turned off: no line is added to this sale, but what it already holds can
+          still be paid, or the sale voided.
+        </p>
+      ) : null}
+      {tendering && sale.lines.length > 0 && sale.remainingMinor > 0 ? (
+        <TenderForm sale={sale} onReload={onReload} />
       ) : null}
       {sale.status === 'open' && operate ? (
         cards.blocksVoid ? (
@@ -369,7 +376,10 @@ function VoidSale({ sale, onReload }: { sale: Sale; onReload: () => void }) {
         disabled={!online}
         onConfirm={async (reason) => {
           try {
-            await command.submit({ path: { id: sale.id }, body: { reason } });
+            await command.submit({
+              path: { id: sale.id },
+              body: { reason, expectedRevision: sale.revision },
+            });
             return true;
           } catch {
             return false;

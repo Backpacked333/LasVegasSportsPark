@@ -56,8 +56,21 @@ export const ConfigSchema = z
     LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
     /** How often the worker looks for due periodic jobs (K-06, §4.12; technical value). */
     PERIODIC_JOBS_TICK_MS: z.coerce.number().int().min(100).default(5000),
-    /** How long a claimed periodic job stays reserved for its runner (SPK-AT-023 takeover after). */
+    /**
+     * How long a claimed periodic job stays reserved for its runner without a renewal (SPK-AT-023,
+     * ASYNC-06). While a pass runs, the runner renews it every third of this, but only while the
+     * run shows progress (a pass start, or the job's `renewJobLease`) within this long; a run that
+     * shows none for this long is given up, counted as a failure, and its job is taken over once
+     * the lease lapses, as is a stopped runner's.
+     */
     PERIODIC_JOBS_LEASE_SECONDS: z.coerce.number().int().min(5).default(300),
+    /**
+     * The longest one run of a periodic job (all its passes) may take (§4.12, ASYNC-06; technical
+     * value, at least PERIODIC_JOBS_LEASE_SECONDS). At this age the runner starts no further pass,
+     * and a pass still running is given up: the lease is no longer renewed, `lease.signal` is
+     * aborted, the run counts as a failure and the job is taken over once the lease lapses.
+     */
+    PERIODIC_JOBS_MAX_RUN_SECONDS: z.coerce.number().int().min(5).default(1800),
     /** How many passes one run makes while a job reports remaining work. */
     PERIODIC_JOBS_MAX_PASSES: z.coerce.number().int().min(1).max(1000).default(10),
     /** Consecutive failures after which the job's failure owner gets an exception (§4.12). */
@@ -130,6 +143,13 @@ export const ConfigSchema = z
           });
         }
       }
+    }
+    if (cfg.PERIODIC_JOBS_MAX_RUN_SECONDS < cfg.PERIODIC_JOBS_LEASE_SECONDS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PERIODIC_JOBS_MAX_RUN_SECONDS'],
+        message: 'PERIODIC_JOBS_MAX_RUN_SECONDS must be at least PERIODIC_JOBS_LEASE_SECONDS',
+      });
     }
     if (cfg.NODE_ENV === 'production' && !cfg.DATABASE_URL) {
       ctx.addIssue({

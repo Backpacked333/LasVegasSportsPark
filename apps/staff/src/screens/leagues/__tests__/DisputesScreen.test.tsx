@@ -259,3 +259,42 @@ describe('SCR-S-12 withdrawing one’s own dispute (CMP-12)', () => {
     expect(keys[0]).toBe(keys[1]);
   });
 });
+
+describe('SCR-S-12 league administration recording a withdrawal (SPK-RESULT-005, §4.9)', () => {
+  it('SPK-RESULT-005 / §4.9: withdrawing a captain’s dispute through the review command names its reason; none sends no request', async () => {
+    const user = userEvent.setup();
+    const captains = dispute();
+    const app = createTestApp({
+      routes: {
+        'GET /me': staffMe(),
+        'GET /fixtures/{id}': ok(fixtureDetail()),
+        'GET /fixtures/{id}/disputes': ok([captains]),
+        'GET /team-entries': ok([teamEntry()]),
+        'POST /disputes/{id}/decide': ok({ ...captains, status: 'withdrawn', revision: 2 }),
+      },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/disputes`));
+    const list = await screen.findByRole('list', { name: 'Disputes' });
+    await user.click(await within(list).findByRole('button', { name: 'Record withdrawal' }));
+    const form = within(list).getByRole('form', { name: 'Record the withdrawal' });
+    await user.click(within(form).getByRole('button', { name: 'Record withdrawal' }));
+    expect(
+      within(form).getByText('Give the reason for withdrawing the dispute.'),
+    ).toBeInTheDocument();
+    // A blank reason is no reason (the API trims it).
+    await user.type(within(form).getByLabelText(/^Reason/), '   ');
+    await user.click(within(form).getByRole('button', { name: 'Record withdrawal' }));
+    expect(app.fake.requests.some((r) => r.route === '/disputes/{id}/decide')).toBe(false);
+    await user.clear(within(form).getByLabelText(/^Reason/));
+    await user.type(within(form).getByLabelText(/^Reason/), 'The captain withdrew it by phone.');
+    await user.click(within(form).getByRole('button', { name: 'Record withdrawal' }));
+    expect(await within(list).findByText('Dispute withdrawn')).toBeInTheDocument();
+    const sent = app.fake.requests.filter((r) => r.route === '/disputes/{id}/decide');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toEqual({
+      action: 'withdraw',
+      expectedRevision: captains.revision,
+      reason: 'The captain withdrew it by phone.',
+    });
+  });
+});

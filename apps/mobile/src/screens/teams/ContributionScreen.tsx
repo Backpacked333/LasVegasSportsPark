@@ -18,13 +18,22 @@
  * States: loading; ready; permission restriction (another person's request: NOT_FOUND, not
  * available); stale (refetch after paying and on focus); offline (paying disabled); processing
  * ("Payment processing"); success ("Paid"); recovery required ("Payment outcome being confirmed.
- * Do not pay again." on this line only; a timeout is retried under the same key, never paid twice).
+ * Do not pay again." on this line only). Without a definite answer to paying (a lost connection or
+ * a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx) the line reads
+ * "No answer yet: this may already have been recorded", the payment methods stay hidden and
+ * "Check again" repeats the same request under the same key, so it is never paid twice. When that
+ * check finds that the first attempt committed but its answer was lost
+ * (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the line reads "This may already have been done": the payment
+ * methods stay hidden, the payments and the request are read again (so an attempt the API recorded
+ * shows "Do not pay again"), and "Reload" reads them again; paying is not offered again on this
+ * visit.
  */
-import { presentationForError, type Schema } from '@sportspark/api-client';
+import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { DEV_CONTRIBUTION_PAYMENT_METHODS } from '../../features/teams/dev';
@@ -56,6 +65,14 @@ import { useContributionPayments } from './MyContributionsScreen';
 type ContributionRequest = Schema<'ContributionRequest'>;
 /** The published component is nullable (reported); an outcome without an attempt shows nothing. */
 type PaymentAttempt = NonNullable<Schema<'PaymentAttempt'>>;
+
+/** Reads a payment toward a contribution changes. */
+const PAY_EFFECT_KEYS = [
+  ['api', '/contribution-requests/{id}'],
+  ['api', '/me/contribution-requests'],
+  ['api', '/me/payments'],
+  ['api', '/me/receipts'],
+] as const;
 
 const UNSETTLED: ReadonlySet<PaymentAttempt['status']> = new Set([
   'created',
@@ -105,12 +122,7 @@ function PayContribution({
   const methods = DEV_CONTRIBUTION_PAYMENT_METHODS;
   const [token, setToken] = useState<string | null>(null);
   const pay = useApiCommand('post', '/contribution-requests/{id}/pay', {
-    invalidate: [
-      ['api', '/contribution-requests/{id}'],
-      ['api', '/me/contribution-requests'],
-      ['api', '/me/payments'],
-      ['api', '/me/receipts'],
-    ],
+    invalidate: PAY_EFFECT_KEYS,
   });
   const outcome = pay.data;
   const payment = outcome?.payment ?? null;
@@ -149,11 +161,19 @@ function PayContribution({
       void queryClient.invalidateQueries({ queryKey: ['api', '/contribution-requests/{id}'] });
     }
   }, [settled, latest.data, queryClient]);
+  const rereadPayments = () => {
+    for (const queryKey of PAY_EFFECT_KEYS) void queryClient.invalidateQueries({ queryKey });
+  };
   const submit = () => {
     if (!token) return;
     void pay
       .submit({ path: { id: request.id }, body: { paymentMethodToken: token } })
-      .catch(() => undefined);
+      .catch((error: ApiError) => {
+        // The payment may have been made (or was, its answer lost): read what the API knows, so
+        // an attempt it recorded is shown with "Do not pay again" even before "Check again"
+        // (SPK-PAY-007).
+        if (mayHaveTakenEffect(error) || tookEffectOutcomeLost(error)) rereadPayments();
+      });
   };
   // What the API knows of a payment on its way for this line, shown in every build (SPK-PAY-007).
   const knownState = (
@@ -176,7 +196,7 @@ function PayContribution({
             We could not check for a payment already on its way. If you paid recently, check again
             before paying: a second payment is refused while one is being confirmed.
           </Body>
-          <CommandFailure error={knownFailed} onRetry={() => void known.payments.refetch()} />
+          <CommandFailure error={knownFailed} onRetry={() => void known.payments.refetch()} read />
         </View>
       ) : null}
     </>
@@ -195,9 +215,16 @@ function PayContribution({
     );
   }
   // A payment that may have been taken is never offered again (SPK-PAY-007); a failed one is.
+  // Without a definite answer (a lost connection or a timeout after sending, the same key still
+  // running, a server failure, PAYMENT_OUTCOME_UNKNOWN) the method picker stays hidden: picking
+  // another method would change the request and send it under a new key. "Check again" repeats
+  // the same request under the same key until the API answers with the attempt. An attempt that
+  // committed with its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) keeps them hidden too.
+  const unanswered =
+    pay.error !== null && (mayHaveTakenEffect(pay.error) || tookEffectOutcomeLost(pay.error));
   const locked =
     elsewhere !== null ||
-    pay.error?.outcomeUnknown === true ||
+    unanswered ||
     (outcome !== undefined &&
       (current === null || UNSETTLED.has(current.status) || current.status === 'succeeded'));
   return (

@@ -187,6 +187,11 @@ export interface EnrollmentsTable {
   renewed_from_enrollment_id: string | null;
   /** When the membership's renewal_opportunity notice was composed. */
   renewal_notice_at: NullableTimestamp;
+  /**
+   * Migration 0513: when the renewal notice is next worth checking (due instant, term end when
+   * never due, or a re-check time); null until the lifecycle job first evaluates it.
+   */
+  renewal_notice_due_at: NullableTimestamp;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

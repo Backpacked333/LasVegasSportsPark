@@ -136,7 +136,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
     expect(screen.getByText('This claim code has already been used.')).toBeOnTheScreen();
   });
 
-  it('§4.9: "Try again" after INTEGRATION_UNAVAILABLE resends the same idempotency key', async () => {
+  it('§4.9: "Check again" after INTEGRATION_UNAVAILABLE resends the same idempotency key', async () => {
     let calls = 0;
     const app = createTestApp({
       routes: {
@@ -150,7 +150,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
     render(<OnboardingScreen claimToken={TOKEN} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Claim record' }));
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(calls).toBe(2));
     const keys = app.fake.requests
       .filter((r) => r.method === 'POST')
@@ -235,7 +235,7 @@ describe('SCR-C-01 OnboardingScreen', () => {
     });
   });
 
-  it('§4.9: Try again after no answer resends the same body and key, even after a refetch shows the new point', async () => {
+  it('§4.9: Check again after no answer resends the same body and key, even after a refetch shows the new point', async () => {
     let posts = 0;
     let added = false;
     const point = contactPoint(
@@ -264,7 +264,13 @@ describe('SCR-C-01 OnboardingScreen', () => {
     render(<OnboardingScreen />, { wrapper: app.wrapper });
     fireEvent.changeText(await screen.findByLabelText('Email address'), 'alex@example.test');
     fireEvent.press(screen.getByRole('button', { name: 'Add email' }));
-    const retry = await screen.findByRole('button', { name: 'Try again' });
+    const retry = await screen.findByRole('button', { name: 'Check again' });
+    // The request was sent and its answer lost: it may have been recorded, never "Something went
+    // wrong" (§4.9, SPK-UX-008).
+    expect(
+      screen.getByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     // A reconnect or focus refetch now lists the new point, so a rebuilt body would say isPrimary false.
     await act(async () => {
       await app.queryClient.invalidateQueries({ queryKey: ['api', '/people/{id}'] });

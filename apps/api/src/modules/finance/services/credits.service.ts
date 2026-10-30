@@ -313,7 +313,13 @@ export class CreditsService {
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, credit.revision);
-      const obligation = await this.facts.loadObligation(trx, organizationId, input.obligationId);
+      // Lock order everywhere: obligation, then credit (MoneyFacts.redeemCredit).
+      const obligation = await this.facts.loadObligation(
+        trx,
+        organizationId,
+        input.obligationId,
+        true,
+      );
       if (!obligation) throw errors.protectedNotFound('obligation');
       if (!isStaffLike(principal)) {
         // The credit's owner must also be entitled to pay this obligation (no paying into
@@ -334,6 +340,11 @@ export class CreditsService {
             obligation.mode === 'team_with_contributions' ? obligation.debtor_team_entry_id : null,
           protected: true,
         });
+      }
+      // SPK-PAY-007 (MONEY-06), §4.11 (MONEY-01): no credit into a debt a provider charge is
+      // paying meanwhile, nor into a checkout's order while that checkout awaits its payment.
+      if (obligation.status === 'open') {
+        await this.facts.assertPayableOutsideCheckout(trx, obligation, principal);
       }
       const { replayed } = await this.facts.redeemCredit(trx, {
         organizationId,

@@ -13,7 +13,11 @@
  *   templates drafted or approved on this page; otherwise staff give the template reference, the
  *   skill area key and the value, and the API answers TEMPLATE_MISMATCH when they do not fit.
  * - Edits send `expectedRevision`; a correction of a published or recorded assessment is a new
- *   assessment naming the one it corrects (`correctsAssessmentId`).
+ *   assessment naming the one it corrects (`correctsAssessmentId`) and saying why (`reason`, §4.9;
+ *   the API answers 400 VALIDATION_FAILED without one). A correction corrects the same observation
+ *   (§4.7 invariant 9, SPK-YOUTH-005): its skill area and visibility are the corrected
+ *   assessment's and cannot be changed, also when its draft is edited, and only templates of the
+ *   corrected template's program are offered; otherwise the API answers CORRECTION_MISMATCH.
  */
 import { useState } from 'react';
 import { useApiCommand } from '../../../api/useApiCommand';
@@ -55,8 +59,14 @@ export function AssessmentForm({
   onDone: (saved: Assessment) => void;
 }) {
   const base = editing ?? corrects;
+  // A correction (new, or its draft being edited) keeps the corrected observation's skill area
+  // and visibility (CORRECTION_MISMATCH otherwise).
+  const fixedObservation = corrects ?? (editing?.correctsAssessmentId ? editing : undefined);
+  const programId =
+    (corrects ? templates.find((t) => t.id === corrects.templateId)?.programId : undefined) ??
+    subject.programId;
   const approved = templates.filter(
-    (t) => t.status === 'approved' && (!subject.programId || t.programId === subject.programId),
+    (t) => t.status === 'approved' && (!programId || t.programId === programId),
   );
   const [templateChoice, setTemplateChoice] = useState(
     base ? (approved.some((t) => t.id === base.templateId) ? base.templateId : OTHER_TEMPLATE) : '',
@@ -67,7 +77,10 @@ export function AssessmentForm({
   const [skill, setSkill] = useState(base?.skillAreaKey ?? '');
   const [observedOn, setObservedOn] = useState(editing?.observedOn ?? '');
   const [scale, setScale] = useState(base ? String(base.scaleValue) : '');
-  const [visibility, setVisibility] = useState<Visibility | ''>(editing?.visibility ?? '');
+  const [visibility, setVisibility] = useState<Visibility | ''>(
+    editing?.visibility ?? corrects?.visibility ?? '',
+  );
+  const [correctionReason, setCorrectionReason] = useState('');
   const [comments, setComments] = useState(editing?.comments ?? '');
   const [staffNote, setStaffNote] = useState(editing?.staffNote ?? '');
   const [problems, setProblems] = useState<Record<string, string>>({});
@@ -99,6 +112,7 @@ export function AssessmentForm({
     if (!/^\d{1,2}$/.test(scale) || value < 1 || value > levels)
       next.scale = `Choose a value on the scale (1 to ${levels}).`;
     if (!visibility) next.visibility = 'Choose who may see it.';
+    if (corrects && !correctionReason.trim()) next.reason = 'Say why the assessment is corrected.';
     setProblems(next);
     if (Object.keys(next).length > 0 || !visibility) return;
     const fields = {
@@ -132,7 +146,9 @@ export function AssessmentForm({
           offeringId: subject.offeringId,
           ...(comments.trim() ? { comments: comments.trim() } : {}),
           ...(staffNote.trim() ? { staffNote: staffNote.trim() } : {}),
-          ...(corrects ? { correctsAssessmentId: corrects.id } : {}),
+          ...(corrects
+            ? { correctsAssessmentId: corrects.id, reason: correctionReason.trim() }
+            : {}),
         },
       })
       .then(onSaved)
@@ -167,7 +183,7 @@ export function AssessmentForm({
             value={templateChoice}
             onChange={(v) => {
               setTemplateChoice(v);
-              setSkill('');
+              if (!fixedObservation) setSkill('');
               setScale('');
             }}
             placeholder="Choose a template"
@@ -183,12 +199,25 @@ export function AssessmentForm({
               label="Template reference"
               value={templateRef}
               onChange={setTemplateRef}
-              hint="The full reference of an approved template of this program."
+              hint={
+                corrects
+                  ? 'The full reference of an approved template of the corrected assessment’s program.'
+                  : 'The full reference of an approved template of this program.'
+              }
             />
           ) : null}
         </>
       )}
-      {template ? (
+      {fixedObservation ? (
+        <TextField
+          label="Skill area key"
+          value={skill}
+          onChange={setSkill}
+          disabled
+          hint="A correction keeps the skill area of the assessment it corrects."
+          error={apiErrors.skillAreaKey}
+        />
+      ) : template ? (
         <SelectField
           label="Skill area"
           value={skill}
@@ -249,17 +278,34 @@ export function AssessmentForm({
               type="radio"
               name="assessment-visibility"
               checked={visibility === v}
+              disabled={fixedObservation !== undefined}
               onChange={() => setVisibility(v)}
             />
             {ASSESSMENT_VISIBILITY[v]}
           </label>
         ))}
+        {fixedObservation ? (
+          <span className="caption">
+            A correction keeps who may see the assessment it corrects.
+          </span>
+        ) : null}
         {problems.visibility ? (
           <span className="error-text" id="assessment-visibility-error" role="alert">
             {problems.visibility}
           </span>
         ) : null}
       </fieldset>
+      {corrects ? (
+        <TextAreaField
+          label="Reason for the correction"
+          value={correctionReason}
+          onChange={setCorrectionReason}
+          required
+          rows={2}
+          hint="Recorded with the correction and its audit record."
+          error={problems.reason ?? apiErrors.reason}
+        />
+      ) : null}
       <TextAreaField
         label="Feedback comments (optional)"
         value={comments}

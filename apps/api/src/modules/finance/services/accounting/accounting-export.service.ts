@@ -37,6 +37,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  renewJobLease,
   snapshotActor,
   type Clock,
   type PeriodicJobContext,
@@ -707,6 +708,19 @@ export class AccountingExportService {
           .where('organization_id', '=', organizationId)
           .where('id', '=', id)
           .execute();
+        // COMMANDS-05 (§4.4 audit, SPK-PAY-011): the batch's audit trail shows when its answer was
+        // lost and why, the step a finance operator reconciles.
+        await this.audit.record(trx, {
+          organizationId,
+          actor,
+          action: 'finance.accounting_batch_unknown',
+          targetType: 'accounting_export_batch',
+          targetId: id,
+          beforeRevision: row.revision,
+          afterRevision: row.revision + 1,
+          correlationId,
+          details: { from: row.status, error: result.error },
+        });
         await this.exceptions.raise(trx, {
           organizationId,
           category: 'finance.accounting_export_unknown',
@@ -928,6 +942,10 @@ export class AccountingExportService {
       .execute();
     let processed = 0;
     for (const row of rows) {
+      // K-06 (ASYNC-06, SPK-AT-023): the run's lease is renewed before each provider call, outside
+      // any transaction; once another runner holds the job (or the runner gave up on this run) no
+      // further batch is asked about or resubmitted, and the rest stays due for that run.
+      if (!(await renewJobLease(context))) break;
       const status = await this.call(() =>
         this.connection.batchStatus({
           organizationId: row.organization_id,
@@ -937,6 +955,9 @@ export class AccountingExportService {
       );
       let result: AccountingSubmitResult;
       if (status.outcome === 'not_found') {
+        // The status answer is recorded only with the resubmission's outcome; without the lease
+        // the batch stays as it was (submitted or unknown) and is asked about again.
+        if (!(await renewJobLease(context))) break;
         const submission = await this.submissionOf(this.db, row);
         result = await this.call(() => this.connection.submitBatch(submission));
         await this.uow.run(async ({ trx }) => {

@@ -9,7 +9,7 @@ escalation), SPK-COND-003 (equipment reserved with a booking, through the asset 
 
 **Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999` (present: `0900`,
 `0901_facilities_task_owner_fk`, `0902_facilities_facility_scoped_keys`,
-`0903_facilities_restriction_withdrawal`)
+`0903_facilities_restriction_withdrawal`, `0904_facilities_restriction_transition_guard`)
 
 **Depends on:** scheduling (closure port, resources public API) and identity
 (`PERSON_DIRECTORY_PORT`, to check assigned task owners). Restrictions create scheduling closures
@@ -59,6 +59,16 @@ restriction; the trigger `restrictions_terminal_guard` refuses any rewrite of a 
 `withdrawn` row (`restrict_violation`). **Verified**: `schema-invariants.spec.ts` "the database
 rejects a withdrawn restriction without withdrawal facts (FAC-01, migration 0903)", "released and
 withdrawn restrictions are final: the database refuses to rewrite them (FAC-01, migration 0903)".
+Migration `0904` (INTEGRITY-05, §4.6) replaces the guard function so the database mirrors
+RestrictionMachine: a status change is only `proposed → approved`, `proposed → withdrawn`,
+`approved → active`, `approved → withdrawn` or `active → released` (so `active → approved`,
+`approved → proposed` and `proposed → active` are refused); once approved, the approval facts and
+what was approved (area, interval, kind, reason, links) are final, and only the lifecycle moves on
+(status, closure link, conflict units at activation, release or withdrawal facts, `operation_id`,
+`revision`); the closure link, once recorded, never changes or is cleared; the conflict units are
+final while active. **Verified**: `schema-invariants.spec.ts` "§4.6 RestrictionMachine: the
+database refuses transitions the machine forbids and keeps what was approved final (INTEGRITY-05,
+migration 0904)".
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/facilities.ts`)
 
@@ -169,6 +179,22 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
   escalating task past due raises one exception when the job runs after FixedClock passes its due
   time", "a second run raises nothing new". Which severities escalate is **Proposed**
   (`FACILITIES_POLICY`, DEC-001).
+- **Overdue settlement (ASYNC-09, SPK-UX-006, §4.12).** The fact that ends an overdue exception
+  settles it: when `PATCH /v1/maintenance-tasks/{id}` leaves a task resolved or closed, re-dated
+  to a later due time (or without one) or at a severity that does not escalate, the task command
+  resolves its open or acknowledged `facilities.maintenance_task_overdue` exception in the same
+  unit of work (system actor `facilities.maintenance_task_overdue_settled`, the reason naming the
+  fact, the task's status, severity, due time and revision as the resolution; the task's own audit
+  names the person). A task that is overdue again later is raised anew. The sweep locks the tasks
+  it raises for (`FOR UPDATE SKIP LOCKED`): it leaves a task a command holds to that command, and a
+  command that reaches a task the sweep holds waits, then settles what the sweep raised. The due
+  timer handler reads the task row locked, so a task resolved in the same instant is never
+  escalated. **Verified**: `facilities-jobs.spec.ts` "SPK-UX-006 (ASYNC-09): resolving, closing,
+  re-dating or de-escalating an overdue task settles its exception, and the sweep raises nothing
+  for it again", "§4.12 (ASYNC-09): a task resolved while the sweep is raising its exception keeps
+  no open overdue exception (PGlite and TEST_DATABASE_URL)", "§4.12 (ASYNC-09): the due timer of a
+  task being resolved never escalates it (PGlite and TEST_DATABASE_URL)". A manually closed
+  exception of a task that is still overdue is raised again by the next sweep (intended).
 - Assets follow their restrictions: `in_service → restricted` on activation and back on release
   when no other open restriction remains; other asset states are left alone. Retiring an asset
   with open tasks is refused.

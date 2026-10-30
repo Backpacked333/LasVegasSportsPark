@@ -190,6 +190,57 @@ describe('customer registration lists and enrollment reads (ENR-01, ENR-02)', ()
     expect(outsiders.body.items.map((a: { id: string }) => a.id)).not.toContain(applied.body.id);
   });
 
+  it("SPK-AT-004 / §4.14: another guardian reads the child's trial without learning which adult booked it", async () => {
+    const booker = await adult(t);
+    const otherGuardian = await adult(t);
+    const kid = await child(t, [booker, otherGuardian]);
+    const trial = await offering(t, { kind: 'trial', basePriceMinor: 0 });
+    const sessionId = await createOfferingSessionFixture(t, {
+      offeringId: trial.offeringId,
+      scheduledStart: new Date('2026-11-21T01:00:00Z'),
+      scheduledEnd: new Date('2026-11-21T02:00:00Z'),
+    });
+    await acknowledge(t, trial, kid, booker.personId);
+    const booked = await post(t, '/v1/trial-participations', booker.header, {
+      offeringId: trial.offeringId,
+      participantPersonId: kid,
+      sessionId,
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    expect(booked.body.registeredBy).toMatchObject({ personId: booker.personId });
+
+    // The other guardian sees the participation, not the adult who booked it.
+    const listed = await t.http.get('/v1/me/trial-participations').set(otherGuardian.header);
+    expect(listed.status).toBe(200);
+    expect(listed.body.items).toHaveLength(1);
+    expect(listed.body.items[0]).toMatchObject({
+      id: booked.body.id,
+      participantPersonId: kid,
+      registeredBy: { kind: 'customer', accountId: null, personId: null },
+      assistedByPersonId: null,
+    });
+    const single = await t.http
+      .get(`/v1/trial-participations/${booked.body.id as string}`)
+      .set(otherGuardian.header);
+    expect(single.status).toBe(200);
+    expect(single.body.registeredBy).toMatchObject({ accountId: null, personId: null });
+    for (const body of [listed.body, single.body]) {
+      expect(JSON.stringify(body)).not.toContain(booker.personId);
+      expect(JSON.stringify(body)).not.toContain(booker.accountId);
+    }
+
+    // The booker and staff still see who booked it.
+    const own = await t.http
+      .get(`/v1/trial-participations/${booked.body.id as string}`)
+      .set(booker.header);
+    expect(own.body.registeredBy).toMatchObject({ personId: booker.personId });
+    const desk = await t.http
+      .get(`/v1/trial-participations/${booked.body.id as string}`)
+      .set(frontDesk.header);
+    expect(desk.status).toBe(200);
+    expect(desk.body.registeredBy).toMatchObject({ personId: booker.personId });
+  });
+
   it('SPK-UX-004: a pending enrollment states what is outstanding', async () => {
     const parent = await adult(t);
     const kid = await child(t, [parent]);

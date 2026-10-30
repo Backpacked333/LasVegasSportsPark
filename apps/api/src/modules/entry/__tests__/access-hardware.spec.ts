@@ -1,12 +1,16 @@
-import { newId } from '@sportspark/contracts';
+import { newId, systemPrincipal } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
 import {
   FAKE_ACCESS_CONTROL_SIGNATURE_HEADER,
   FakeAccessControlProvider,
 } from '../providers/fake-access-control.provider';
+import { DeviceCommandQueue } from '../services/device-command-queue';
+import { DeviceDeliveryService } from '../services/device-delivery.service';
+import { createPassFixture } from '../testing/entry-fixtures';
 import {
   drainInbox,
   drainOutbox,
@@ -21,6 +25,7 @@ import {
 
 const UNIQUE = '23505';
 const CHECK = '23514';
+const FOREIGN_KEY = '23503';
 const ACTOR = { kind: 'system', actorLabel: 'hardware-test' };
 const ALWAYS = [
   { days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], from: '00:00', to: '24:00' },
@@ -340,13 +345,23 @@ describe('device command delivery, receipts and outages (ENT-05)', () => {
   it('§4.11 / IF-38: a failed command retries; a lost answer stays unknown until the receipt settles it once; undelivered commands escalate once', async () => {
     const lost = await h.register(operator, { providerDeviceRef: 'door-1' });
     const [command] = await h.commands(lost.body.id);
-    // Three attempts with no answer.
+    // Three attempts with no answer. The first retry has no delay (here the next run: one pass took
+    // everything due); the next one waits for the backoff (ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS,
+    // technical default 30, ASYNC-02).
     h.fake().scriptCommands('timeout', 'timeout', 'timeout');
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      await h.deliver();
-      const [now] = await h.commands(lost.body.id);
-      expect(now).toMatchObject({ status: 'unknown', attempts: attempt, settled_by: null });
-    }
+    const attemptsOf = async () => (await h.commands(lost.body.id))[0];
+    await h.deliver();
+    expect(await attemptsOf()).toMatchObject({ status: 'unknown', attempts: 1, settled_by: null });
+    await h.deliver();
+    expect(await attemptsOf()).toMatchObject({ status: 'unknown', attempts: 2, settled_by: null });
+    await h.deliver();
+    expect(await attemptsOf()).toMatchObject({ attempts: 2 });
+    t.clock.advance(29_000);
+    await h.deliver();
+    expect(await attemptsOf()).toMatchObject({ attempts: 2 });
+    t.clock.advance(1_000);
+    await h.deliver();
+    expect(await attemptsOf()).toMatchObject({ status: 'unknown', attempts: 3, settled_by: null });
     const escalated = await exceptionsOf(t, 'entry.device_command_undelivered');
     expect(escalated).toHaveLength(1);
     expect(escalated[0]).toMatchObject({
@@ -399,11 +414,12 @@ describe('device command delivery, receipts and outages (ENT-05)', () => {
       status: 'failed',
       attempts: 2,
     });
-    // A retired device is no longer sent anything.
+    // A retired device is no longer sent anything, even once its retry is due.
     await post(t, `/v1/access-devices/${refusing.body.id}/retire`, operator, {
       reason: 'Removed from the wall',
       expectedRevision: 1,
     });
+    t.clock.advance(10 * 60_000);
     await h.deliver();
     expect((await h.commands(refusing.body.id))[0]).toMatchObject({ attempts: 2 });
   });
@@ -475,6 +491,168 @@ describe('device command delivery, receipts and outages (ENT-05)', () => {
     t.clock.advance(24 * 60 * 60_000);
     await h.detect();
     expect(await health(silent.body.id)).toBe('unknown');
+  });
+});
+
+describe('ASYNC-02: device command delivery is fair across devices and backs off (§3.16 revocation, §4.12)', () => {
+  let t: TestApp;
+  let operator: Actor;
+  const h = hardware(() => t);
+
+  beforeAll(async () => {
+    t = await entryTestApp();
+    await t.enableCapability('access_hardware');
+    operator = await staffMember(t, ['facilities_operator']);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  /** Revokes new passes the way `entry.queue_device_revocations` does (every active device). */
+  const revokePasses = async (count: number) => {
+    const holder = await createPersonFixture(t, { kind: 'adult' });
+    const queue = t.app.get(DeviceCommandQueue);
+    const system = systemPrincipal(t.organizationId, 'entry.queue_device_revocations');
+    for (let i = 0; i < count; i += 1) {
+      const { passId } = await createPassFixture(t, { personId: holder });
+      await t.app
+        .get(UnitOfWork)
+        .run(({ trx }) => queue.revokeCredential(trx, system, t.organizationId, passId, null));
+    }
+  };
+  const sentTo = (deviceRef: string) =>
+    h.fake().commandCalls.filter((c) => c.deviceRef === deviceRef).length;
+
+  it('§3.16: a revocation reaches a healthy device while an unreachable one has a backlog larger than a run; the backlog is retried with backoff, not every pass', async () => {
+    const dead = await h.register(operator, { providerDeviceRef: 'dead-door', kind: 'door' });
+    await h.deliver(); // its deny-all, while it still answers
+    // The door goes down; 61 passes are revoked while it is the only device.
+    h.fake().scriptDevice('dead-door', 'timeout');
+    await revokePasses(61);
+    t.clock.advance(1_000);
+    // A healthy door is registered and one more pass is revoked: its two commands are the newest.
+    const healthy = await h.register(operator, { providerDeviceRef: 'healthy-door', kind: 'door' });
+    await revokePasses(1);
+    const backlog = async () =>
+      (await h.commands(dead.body.id)).filter((c) => c.kind === 'revoke_credential');
+    expect(await backlog()).toHaveLength(62);
+
+    const first = await h.deliver();
+    // The healthy door's commands go out in the first pass, ahead of the unreachable door's backlog.
+    const healthyCommands = await h.commands(healthy.body.id);
+    expect(healthyCommands).toHaveLength(2);
+    expect(healthyCommands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'sync_policy', status: 'delivered', attempts: 1 }),
+        expect.objectContaining({ kind: 'revoke_credential', status: 'delivered', attempts: 1 }),
+      ]),
+    );
+    // Every backlog command was tried, and its first retry (no delay) came in a later pass of the
+    // same run; the fixed clock does not move within the run, so no command is due a third time:
+    // 124 sends, not 500.
+    expect((await backlog()).map((c) => [c.status, c.attempts])).toEqual(
+      Array.from({ length: 62 }, () => ['unknown', 2]),
+    );
+    expect(sentTo('dead-door')).toBe(1 + 62 * 2);
+    expect(first).toMatchObject({ processed: 2 + 62 * 2, remaining: 0 });
+
+    // Before the backoff has passed, nothing is sent again.
+    expect(await h.deliver()).toMatchObject({ processed: 0 });
+    expect(sentTo('dead-door')).toBe(1 + 62 * 2);
+
+    // A new revocation while the whole backlog is due again still reaches the healthy door first.
+    t.clock.advance(30_000);
+    await revokePasses(1);
+    const healthyBefore = sentTo('healthy-door');
+    await h.deliver();
+    expect(sentTo('healthy-door')).toBe(healthyBefore + 1);
+    expect((await h.commands(healthy.body.id)).map((c) => c.status)).toEqual([
+      'delivered',
+      'delivered',
+      'delivered',
+    ]);
+    const after = await backlog();
+    expect(after.filter((c) => c.attempts === 3)).toHaveLength(62);
+    expect(after.filter((c) => c.attempts === 2)).toHaveLength(1); // the newest: tried twice
+    // Escalation names the unreachable door's commands, one exception each; none for the healthy one.
+    const escalated = await exceptionsOf(t, 'entry.device_command_undelivered');
+    expect(escalated).toHaveLength(62);
+    expect(new Set(escalated.map((e) => e.affected_id))).toEqual(
+      new Set(after.filter((c) => c.attempts === 3).map((c) => c.id)),
+    );
+
+    // The retry after a third attempt waits twice as long (60 s); the newest one is due after 30 s.
+    const sent = sentTo('dead-door');
+    t.clock.advance(30_000);
+    await h.deliver();
+    expect(sentTo('dead-door')).toBe(sent + 1);
+    t.clock.advance(30_000);
+    await h.deliver();
+    expect(sentTo('dead-door')).toBe(sent + 1 + 62);
+
+    // The door comes back: the backlog is delivered once its retries are due.
+    h.fake().scriptDevice('dead-door', null);
+    t.clock.advance(5 * 60_000);
+    await h.deliver();
+    expect((await backlog()).every((c) => c.status === 'delivered')).toBe(true);
+  });
+
+  it('K-06 / ASYNC-06: a pass renews its lease before each command it sends and sends nothing more once the job is held elsewhere', async () => {
+    await h.register(operator, { providerDeviceRef: 'lease-door', kind: 'door' });
+    await revokePasses(2);
+    const due = async () =>
+      t.db
+        .selectFrom('device_commands')
+        .select(['id', 'attempts'])
+        .where('organization_id', '=', t.organizationId)
+        .where('status', '=', 'pending')
+        .execute();
+    const pendingBefore = await due();
+    expect(pendingBefore.length).toBeGreaterThanOrEqual(3); // the deny-all and two revocations
+    const sendsBefore = h.fake().commandCalls.length;
+    // A lease that renews once, then reports another runner holding the job.
+    const aborts = new AbortController();
+    let renewals = 0;
+    const lease = {
+      signal: aborts.signal,
+      renew: async () => {
+        renewals += 1;
+        if (renewals === 1) return true;
+        aborts.abort();
+        return false;
+      },
+    };
+    const result = await t.app
+      .get(DeviceDeliveryService)
+      .deliverDue({ now: t.clock.now(), batchSize: 50, lease });
+    expect(h.fake().commandCalls.length).toBe(sendsBefore + 1);
+    expect(renewals).toBe(2);
+    expect(result).toEqual({ processed: 1, remaining: pendingBefore.length - 1 });
+    // What was not sent stays pending and never attempted, for the run that holds the job.
+    const left = await due();
+    expect(left).toHaveLength(pendingBefore.length - 1);
+    expect(left.every((c) => c.attempts === 0)).toBe(true);
+    await h.deliver();
+    expect(await due()).toHaveLength(0);
+  });
+
+  it('the backoff is capped at ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS (300 s) however many attempts were made', async () => {
+    const flaky = await h.register(operator, { providerDeviceRef: 'flaky-door', kind: 'door' });
+    h.fake().scriptDevice('flaky-door', 'timeout');
+    await h.deliver();
+    const [command] = await h.commands(flaky.body.id);
+    expect(command).toMatchObject({ status: 'unknown', attempts: 1 });
+    await t.db
+      .updateTable('device_commands')
+      .set({ attempts: 1_000, last_attempt_at: t.clock.now() })
+      .where('id', '=', command!.id)
+      .execute();
+    t.clock.advance(299_000);
+    await h.deliver();
+    expect((await h.commands(flaky.body.id))[0]).toMatchObject({ attempts: 1_000 });
+    t.clock.advance(1_000);
+    await h.deliver();
+    expect((await h.commands(flaky.body.id))[0]).toMatchObject({ attempts: 1_001 });
   });
 });
 
@@ -570,7 +748,7 @@ describe('access events from devices (ENT-05, SPK-COND-004)', () => {
   });
 });
 
-describe('access hardware schema invariants (migration 0805)', () => {
+describe('access hardware schema invariants (migrations 0805, 0806)', () => {
   let t: TestApp;
   let author: string;
   let approver: string;
@@ -773,6 +951,20 @@ describe('access hardware schema invariants (migration 0805)', () => {
       CHECK,
     );
     await expectPgError(t.db.deleteFrom('access_devices').where('id', '=', id).execute(), '23001');
+  });
+
+  it('INTEGRITY-07 / §4.3 (0806): a device names a registrant of its own organization, or none', async () => {
+    await expectPgError(
+      t.db
+        .insertInto('access_devices')
+        .values(deviceRow({ registered_by_person_id: newId() }))
+        .execute(),
+      FOREIGN_KEY,
+    );
+    await t.db
+      .insertInto('access_devices')
+      .values(deviceRow({ registered_by_person_id: author }))
+      .execute();
   });
 
   it('commands: one revocation per device and pass, transitions follow DeviceCommandMachine', async () => {

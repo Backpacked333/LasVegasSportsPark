@@ -611,6 +611,39 @@ describe('SCR-S-52 Parties', () => {
     expect(within(form).getByRole('button', { name: 'Reload the booking' })).toBeInTheDocument();
   });
 
+  it('SPK-PAY-007 BOOKING_CONFIRMATION_PENDING: a cancel the API refuses once the basket was paid reads in words with Reload the booking', async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings/{id}': () => {
+          reads += 1;
+          return fakeResponse(200, partyBooking({ status: 'held', outstanding: ['payment'] }));
+        },
+        'GET /baskets/{id}': ok({ id: BASKET_ID, status: 'held' }),
+        'POST /bookings/{id}/cancel': apiError(409, 'RESOURCE_CONFLICT', {
+          message:
+            'This booking is paid and being confirmed; cancel it once it is confirmed, with its consequence.',
+          nextAction: 'reload_current_state',
+          details: { code: 'BOOKING_CONFIRMATION_PENDING' },
+        }),
+      }),
+    });
+    render(app.at(DETAIL));
+    const form = await screen.findByRole('form', { name: 'Cancel the party' });
+    await user.type(within(form).getByLabelText(/^Reason for canceling/), 'Changed plans');
+    await user.click(within(form).getByRole('button', { name: 'Cancel the party' }));
+    expect(
+      await within(form).findByText('Error code: RESOURCE_CONFLICT. Reference: corr-pg-1'),
+    ).toBeInTheDocument();
+    expect(
+      within(form).getByText(/its confirmation is still on its way, so nothing was canceled/),
+    ).toBeInTheDocument();
+    const before = reads;
+    await user.click(within(form).getByRole('button', { name: 'Reload the booking' }));
+    await waitFor(() => expect(reads).toBeGreaterThan(before));
+  });
+
   it('§4.9: after no answer the cancel reads "Outcome not known yet" and Try again resends the same key and body', async () => {
     const user = userEvent.setup();
     let calls = 0;
