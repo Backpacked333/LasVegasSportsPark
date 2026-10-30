@@ -25,7 +25,7 @@ import { seedAsset } from '../testing/facilities-fixtures';
  * Integrity invariants proven at the database (CLAUDE.md "Integrity that matters is enforced in
  * the database"): rows are inserted through Kysely, bypassing the services.
  */
-describe('facilities schema invariants (migrations 0900-0903)', () => {
+describe('facilities schema invariants (migrations 0900-0904)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -603,6 +603,129 @@ describe('facilities schema invariants (migrations 0900-0903)', () => {
       .set({ reason: 'clarified' })
       .where('id', '=', open)
       .execute();
+  });
+
+  it('§4.6 RestrictionMachine: the database refuses transitions the machine forbids and keeps what was approved final (INTEGRITY-05, migration 0904)', async () => {
+    const restrictViolation = (error: unknown) =>
+      (error as { code?: string } | null)?.code === '23001';
+    const approval = {
+      approved_by: json({ kind: 'staff', actorLabel: 'approver' }),
+      approved_at: new Date('2026-10-19T12:00:00Z'),
+    };
+    const update = (id: string, values: Record<string, unknown>) =>
+      db
+        .updateTable('restrictions')
+        .set(values as never)
+        .where('id', '=', id)
+        .execute();
+    const statusOf = async (id: string) =>
+      (
+        await db
+          .selectFrom('restrictions')
+          .select(['status', 'approved_at', 'scheduling_closure_id'])
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow()
+      ).status;
+
+    // the reported path: an active restriction (backed by its closure) moved back to approved,
+    // then to proposed with its approval erased; and an approved one moved back to proposed
+    const active = await insertRestriction({
+      ...approval,
+      status: 'active',
+      scheduling_closure_id: await appliedClosure(),
+      affected_conflict_unit_ids: [pitch.units.north],
+    });
+    const approved = await insertRestriction({
+      ...approval,
+      status: 'approved',
+      scheduling_closure_id: await appliedClosure(),
+    });
+    const proposed = await insertRestriction();
+    await expect(update(active, { status: 'approved' })).rejects.toSatisfy(restrictViolation);
+    await expect(
+      update(active, { status: 'proposed', approved_at: null, approved_by: null }),
+    ).rejects.toSatisfy(restrictViolation);
+    await expect(
+      update(approved, { status: 'proposed', approved_at: null, approved_by: null }),
+    ).rejects.toSatisfy(restrictViolation);
+    // proposed -> active or released skips the recorded approval; active is never withdrawn
+    await expect(
+      update(proposed, {
+        ...approval,
+        status: 'active',
+        scheduling_closure_id: await appliedClosure(),
+      }),
+    ).rejects.toSatisfy(restrictViolation);
+    await expect(
+      update(active, {
+        status: 'withdrawn',
+        withdrawn_at: new Date(),
+        withdrawn_by: json({ kind: 'staff' }),
+        withdrawal_reason: 'not needed',
+        affected_conflict_unit_ids: [],
+      }),
+    ).rejects.toSatisfy(restrictViolation);
+    // the approval facts and what was approved are final, in approved and active alike
+    await expect(
+      update(approved, { approved_by: json({ kind: 'staff', actorLabel: 'someone else' }) }),
+    ).rejects.toSatisfy(restrictViolation);
+    await expect(update(active, { approved_at: new Date() })).rejects.toSatisfy(restrictViolation);
+    await expect(update(active, { reason: 'rewritten' })).rejects.toSatisfy(restrictViolation);
+    await expect(
+      update(approved, {
+        during: tstzrange(at('2026-11-16', '08:00'), at('2026-11-16', '20:00')),
+      }),
+    ).rejects.toSatisfy(restrictViolation);
+    await expect(update(active, { resource_id: pitch.pitchId })).rejects.toSatisfy(
+      restrictViolation,
+    );
+    // the closure link is final once recorded; the conflict units are final while active
+    await expect(
+      update(approved, { scheduling_closure_id: await appliedClosure() }),
+    ).rejects.toSatisfy(restrictViolation);
+    await expect(update(approved, { scheduling_closure_id: null })).rejects.toSatisfy(
+      restrictViolation,
+    );
+    await expect(update(active, { affected_conflict_unit_ids: [] })).rejects.toSatisfy(
+      restrictViolation,
+    );
+    expect(await statusOf(active)).toBe('active');
+    expect(await statusOf(approved)).toBe('approved');
+    expect(await statusOf(proposed)).toBe('proposed');
+
+    // every path RestrictionMachine allows still runs, with the bookkeeping the service writes
+    await update(proposed, { ...approval, status: 'approved', operation_id: newId(), revision: 2 });
+    await update(proposed, { revision: 3 }); // resume: same status, operation bookkeeping
+    await update(proposed, { scheduling_closure_id: await appliedClosure() }); // link once
+    await update(proposed, {
+      status: 'active',
+      affected_conflict_unit_ids: [pitch.units.north],
+      revision: 4,
+    });
+    await update(proposed, { operation_id: newId(), revision: 5 }); // release requested
+    await update(proposed, {
+      status: 'released',
+      released_at: new Date(),
+      released_by: json({ kind: 'staff' }),
+      release_reason: 'inspection passed',
+      revision: 6,
+    });
+    expect(await statusOf(proposed)).toBe('released');
+    await update(approved, {
+      status: 'withdrawn',
+      withdrawn_at: new Date(),
+      withdrawn_by: json({ kind: 'staff' }),
+      withdrawal_reason: 'activation never completed',
+    });
+    expect(await statusOf(approved)).toBe('withdrawn');
+    const fresh = await insertRestriction();
+    await update(fresh, {
+      status: 'withdrawn',
+      withdrawn_at: new Date(),
+      withdrawn_by: json({ kind: 'staff' }),
+      withdrawal_reason: 'no longer needed',
+    });
+    expect(await statusOf(fresh)).toBe('withdrawn');
   });
 
   it('inspections are append-only observations (corrections are new rows)', async () => {
