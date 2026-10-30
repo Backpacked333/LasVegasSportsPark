@@ -29,6 +29,7 @@ import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, COMMUNICATIONS_TABS } from '../../features/operations/AreaTabs';
+import { useFacilityZone } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import { TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
 import { formatInstant, humanize } from '../../features/operations/format';
@@ -103,6 +104,8 @@ export function NotificationView({
 }
 
 function NotificationSummary({ notification: n }: { notification: Notification }) {
+  // SPK-SCHED-008: "deliver no earlier than" was entered in the facility's zone; shown in it too.
+  const zone = useFacilityZone(n.facilityId);
   const badge = NOTIFICATION_STATUS[n.status];
   return (
     <div className="ops-section">
@@ -124,9 +127,11 @@ function NotificationSummary({ notification: n }: { notification: Notification }
       </div>
       <p className="caption">
         {humanize(n.kind)}
-        {n.scheduledFor ? ` · Delivered no earlier than ${formatInstant(n.scheduledFor)}` : ''}
-        {n.queuedAt ? ` · Queued ${formatInstant(n.queuedAt)}` : ''}
-        {n.dispatchedAt ? ` · Dispatched ${formatInstant(n.dispatchedAt)}` : ''}
+        {n.scheduledFor
+          ? ` · Delivered no earlier than ${formatInstant(n.scheduledFor, zone)}`
+          : ''}
+        {n.queuedAt ? ` · Queued ${formatInstant(n.queuedAt, zone)}` : ''}
+        {n.dispatchedAt ? ` · Dispatched ${formatInstant(n.dispatchedAt, zone)}` : ''}
       </p>
       <p>{n.body}</p>
       {n.detailsBefore || n.detailsAfter ? (
@@ -166,6 +171,7 @@ function summaryOf(details: Notification['detailsBefore']): string {
 }
 
 function PreviewAndSend({ notification: n }: { notification: Notification }) {
+  const zone = useFacilityZone(n.facilityId);
   const queryClient = useQueryClient();
   const preview = useApiQuery({
     path: '/notifications/{id}/recipients',
@@ -205,7 +211,7 @@ function PreviewAndSend({ notification: n }: { notification: Notification }) {
           <>
             <p data-testid="recipient-count">
               {data.count} recipient{data.count === 1 ? '' : 's'}, resolved from current permissions
-              at {formatInstant(data.resolvedAt)}. Contact details are never shown.
+              at {formatInstant(data.resolvedAt, zone)}. Contact details are never shown.
             </p>
             <ul className="list" aria-label="Recipients">
               {data.recipients.map((r) => (
@@ -304,6 +310,7 @@ function retryable(a: Attempt, data: Deliveries, recipientAuthorized: boolean): 
 }
 
 function DeliveryDetail({ data, notification }: { data: Deliveries; notification: Notification }) {
+  const zone = useFacilityZone(notification.facilityId);
   const permissions = usePermissions();
   const mayRetry = permissions.isPermitted(RETRY_ACTION, notification.facilityId);
   const commands = useKeyedCommands({ invalidate: [DELIVERIES_KEY] });
@@ -375,14 +382,14 @@ function DeliveryDetail({ data, notification }: { data: Deliveries; notification
                           label={DELIVERY_STATUS[a.status].label}
                         />{' '}
                         <span className="caption">
-                          queued {formatInstant(a.queuedAt)}
-                          {a.acceptedAt ? `, accepted ${formatInstant(a.acceptedAt)}` : ''}
-                          {a.deliveredAt ? `, delivered ${formatInstant(a.deliveredAt)}` : ''}
-                          {a.readAt ? `, read ${formatInstant(a.readAt)}` : ''}
+                          queued {formatInstant(a.queuedAt, zone)}
+                          {a.acceptedAt ? `, accepted ${formatInstant(a.acceptedAt, zone)}` : ''}
+                          {a.deliveredAt ? `, delivered ${formatInstant(a.deliveredAt, zone)}` : ''}
+                          {a.readAt ? `, read ${formatInstant(a.readAt, zone)}` : ''}
                           {a.acknowledgedAt
-                            ? `, acknowledged ${formatInstant(a.acknowledgedAt)}`
+                            ? `, acknowledged ${formatInstant(a.acknowledgedAt, zone)}`
                             : ''}
-                          {a.failedAt ? `, failed ${formatInstant(a.failedAt)}` : ''}
+                          {a.failedAt ? `, failed ${formatInstant(a.failedAt, zone)}` : ''}
                           {a.failureCode ? ` (${humanize(a.failureCode.toLowerCase())})` : ''}
                         </span>
                         {mayRetry && retryable(a, data, r.status === 'authorized') ? (
@@ -392,7 +399,7 @@ function DeliveryDetail({ data, notification }: { data: Deliveries; notification
                             commands={commands}
                           />
                         ) : null}
-                        <RetryOutcome attemptId={a.id} commands={commands} />
+                        <RetryOutcome attemptId={a.id} commands={commands} timezone={zone} />
                       </li>
                     ))}
                   </ul>
@@ -485,9 +492,11 @@ function RetryDelivery({
 function RetryOutcome({
   attemptId,
   commands,
+  timezone,
 }: {
   attemptId: string;
   commands: ReturnType<typeof useKeyedCommands>;
+  timezone: string | null;
 }) {
   const outcome = commands.outcome(`retry|${attemptId}`);
   const retried = outcome.status === 'success' ? (outcome.data as Attempt) : null;
@@ -498,8 +507,8 @@ function RetryOutcome({
       label={`Retry ${DELIVERY_STATUS[retried.status].label.toLowerCase()}`}
     >
       <span className="caption">
-        A new attempt was queued {formatInstant(retried.queuedAt)}; the failed one stays as
-        recorded.
+        A new attempt was queued {formatInstant(retried.queuedAt, timezone)}; the failed one stays
+        as recorded.
       </span>
     </CommandSuccess>
   );

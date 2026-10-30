@@ -404,6 +404,22 @@ describe('SCR-S-40 Delivery status', () => {
     );
   });
 
+  it('SPK-SCHED-008: shows "delivered no earlier than" in the notice’s facility zone it was entered in', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /notifications/{id}': {
+          status: 200,
+          body: { ...notification(), scheduledFor: '2026-10-25T16:30:00.000Z' },
+        },
+      }),
+    });
+    render(app.at(`/communications/notifications/${NOTICE}`));
+    // FACILITY_A is America/Los_Angeles in the Today feed: 16:30Z is 09:30 PDT on any device.
+    expect(
+      await screen.findByText(/Delivered no earlier than .*09:30 (PDT|GMT-7)/),
+    ).toBeInTheDocument();
+  });
+
   it('shows a notice the viewer may not read as not available', async () => {
     const app = createTestApp({
       routes: routes({

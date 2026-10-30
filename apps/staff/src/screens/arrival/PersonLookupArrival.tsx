@@ -11,7 +11,8 @@
  * - The session comes from today's sessions at the facility (`GET /v1/sessions`, facility time
  *   zone). Whether the person takes part is the API's evaluation: a check-in without a
  *   participation basis is held with the issue stated (SPK-ENTRY-004), never a fabricated
- *   enrollment (SPK-ENTRY-006).
+ *   enrollment (SPK-ENTRY-006). A held check-in is actionable in place: "Check again"
+ *   (`POST /v1/session-checkins/{id}/recheck` with its revision, its own intent), as from a scan.
  * - Recording for a looked-up person needs a connection: the offline queue works from a pass scan
  *   (the scan is the roster snapshot, §4.15).
  */
@@ -106,6 +107,10 @@ function LookedUpPerson({
   );
   const checkinKey = `lookup-checkin|${sessionId}`;
   const checkin = commands.outcome(checkinKey);
+  const recheckKey = `lookup-recheck|${sessionId}`;
+  const recheck = commands.outcome(recheckKey);
+  // The latest evaluation: a recheck's answer, else the check-in's own.
+  const current = (recheck.data ?? checkin.data) as SessionCheckin | undefined;
   const chosenSession = (sessions.data ?? []).find((s) => s.sessionId === sessionId);
 
   const recordArrival = () => {
@@ -211,11 +216,26 @@ function LookedUpPerson({
               />
             ) : null}
             <LoadMore pages={sessions} label="sessions" />
-            {checkin.status === 'success' && chosenSession ? (
-              <CheckinOutcome
-                checkin={checkin.data as SessionCheckin}
-                title={sessionTitle(chosenSession)}
-              />
+            {checkin.status === 'success' && current && chosenSession ? (
+              <>
+                <CheckinOutcome
+                  checkin={current}
+                  title={sessionTitle(chosenSession)}
+                  busy={recheck.status === 'pending'}
+                  onRecheck={
+                    online
+                      ? () =>
+                          void commands.run(recheckKey, 'post', '/session-checkins/{id}/recheck', {
+                            path: { id: current.id },
+                            body: { expectedRevision: current.revision },
+                          })
+                      : undefined
+                  }
+                />
+                {recheck.status === 'error' && recheck.error ? (
+                  <CommandError error={recheck.error} subject="This check-in" />
+                ) : null}
+              </>
             ) : (
               <div className="ops-actions">
                 <Button

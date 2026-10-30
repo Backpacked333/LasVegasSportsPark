@@ -17,6 +17,12 @@ export interface AssessmentSubject {
   facilityId: string;
   personId: string;
   name: string;
+  /**
+   * Chosen from the viewer's own accepted coach session (SessionParticipants). The API answers
+   * NOT_FOUND to such a coach until an assessment they may read exists, so the list then says
+   * nothing is visible yet instead of "not available" (it never asserts that a record exists).
+   */
+  fromOwnSession?: boolean;
 }
 
 /** The capability every authoring, review and sharing command needs (DEC-016). */

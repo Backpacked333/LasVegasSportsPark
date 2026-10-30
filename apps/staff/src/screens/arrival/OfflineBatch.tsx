@@ -6,11 +6,13 @@
  * snapshot reference and age at receipt, the maximum roster age in force, whether it was stale,
  * the counts and each item's outcome, reason and flags. Desk readers and support may also open a
  * batch another device sent by its reference (validated as an id before any request); anyone the
- * API does not let read it sees "not available", never whether it exists (§4.10).
+ * API does not let read it sees "not available", never whether it exists (§4.10). Times are in
+ * the batch facility's zone (SPK-SCHED-008).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
+import { useFacilityZone } from '../../features/operations/context';
 import { TextField } from '../../features/operations/fields';
 import { formatInstant, shortRef } from '../../features/operations/format';
 import type { SyncedBatch } from '../../features/operations/offline/queue';
@@ -46,35 +48,53 @@ export function SyncedBatches({ batches }: { batches: readonly SyncedBatch[] }) 
         <p className="caption">No batch has been synchronised from this device yet.</p>
       ) : (
         <ul className="list" aria-label="Synchronised batches">
-          {batches.map((b) => {
-            const name = `Batch ${shortRef(b.id)}, received ${formatInstant(b.receivedAt)}`;
-            return (
-              <li key={b.id} aria-label={name}>
-                <div className="row-text">
-                  <span className="row-title">{name}</span>
-                  <span className="caption">
-                    {b.items} item{b.items === 1 ? '' : 's'}: {b.accepted} synchronised,{' '}
-                    {b.conflicts + b.rejected} for review
-                    {b.duplicates > 0 ? `, ${b.duplicates} already recorded` : ''}
-                    {b.stale > 0 ? `, ${b.stale} against an old roster` : ''}
-                  </span>
-                </div>
-                <Button
-                  variant="secondary"
-                  aria-expanded={open === b.id}
-                  aria-label={`${open === b.id ? 'Hide' : 'Show'} outcomes of ${name}`}
-                  onClick={() => setOpen(open === b.id ? null : b.id)}
-                >
-                  {open === b.id ? 'Hide outcomes' : 'Show outcomes'}
-                </Button>
-                {open === b.id ? <OfflineBatchView batchId={b.id} /> : null}
-              </li>
-            );
-          })}
+          {batches.map((b) => (
+            <SyncedBatchRow
+              key={b.id}
+              batch={b}
+              open={open === b.id}
+              onToggle={() => setOpen(open === b.id ? null : b.id)}
+            />
+          ))}
         </ul>
       )}
       <BatchLookup />
     </section>
+  );
+}
+
+function SyncedBatchRow({
+  batch: b,
+  open,
+  onToggle,
+}: {
+  batch: SyncedBatch;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const zone = useFacilityZone(b.facilityId);
+  const name = `Batch ${shortRef(b.id)}, received ${formatInstant(b.receivedAt, zone)}`;
+  return (
+    <li aria-label={name}>
+      <div className="row-text">
+        <span className="row-title">{name}</span>
+        <span className="caption">
+          {b.items} item{b.items === 1 ? '' : 's'}: {b.accepted} synchronised,{' '}
+          {b.conflicts + b.rejected} for review
+          {b.duplicates > 0 ? `, ${b.duplicates} already recorded` : ''}
+          {b.stale > 0 ? `, ${b.stale} against an old roster` : ''}
+        </span>
+      </div>
+      <Button
+        variant="secondary"
+        aria-expanded={open}
+        aria-label={`${open ? 'Hide' : 'Show'} outcomes of ${name}`}
+        onClick={onToggle}
+      >
+        {open ? 'Hide outcomes' : 'Show outcomes'}
+      </Button>
+      {open ? <OfflineBatchView batchId={b.id} /> : null}
+    </li>
   );
 }
 
@@ -143,6 +163,7 @@ export function OfflineBatchView({ batchId }: { batchId: string }) {
 }
 
 function BatchDetail({ batch: b }: { batch: OfflineSyncBatch }) {
+  const zone = useFacilityZone(b.facilityId);
   const review = b.counts.acceptedWithConflict + b.counts.rejected;
   return (
     <>
@@ -156,11 +177,11 @@ function BatchDetail({ batch: b }: { batch: OfflineSyncBatch }) {
       />
       <dl>
         <dt>Received</dt>
-        <dd>{formatInstant(b.receivedAt)}</dd>
+        <dd>{formatInstant(b.receivedAt, zone)}</dd>
         <dt>Roster snapshot</dt>
         <dd>
-          Taken {formatInstant(b.snapshot.takenAt)}, {Math.round(b.snapshotAgeSeconds / 60)} minutes
-          old at receipt (maximum {b.maxRosterAgeMinutes} minutes)
+          Taken {formatInstant(b.snapshot.takenAt, zone)}, {Math.round(b.snapshotAgeSeconds / 60)}{' '}
+          minutes old at receipt (maximum {b.maxRosterAgeMinutes} minutes)
           {b.stale ? (
             <>
               {' '}

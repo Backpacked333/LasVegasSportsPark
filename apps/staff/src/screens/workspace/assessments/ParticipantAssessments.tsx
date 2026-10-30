@@ -5,7 +5,12 @@
  * - The API lists what the viewer may read: program managers see the offering's assessments in
  *   their facility scope; a coach sees those of offerings they hold an accepted assignment on
  *   (others' from submission on, and their own drafts). Anyone else sees the list as not available,
- *   never whether the participant exists (§4.10). Paged by the API's cursor.
+ *   never whether the participant exists (§4.10). Paged by the API's cursor. The API answers a
+ *   coach NOT_FOUND until an assessment they may read exists (reported as an API issue): for a
+ *   participant taken from the coach's own accepted session the page says nothing is visible yet
+ *   and still offers recording, without implying that any record exists.
+ * - Authors are staff: a name the viewer may not read is labelled "Staff member", never
+ *   "Participant". Review times are in the offering's facility zone (SPK-SCHED-008).
  * - Each row shows skill area, observation date, scale value, comments, the private coaching note
  *   (staff only, labelled so), visibility, author and review status with the review note.
  * - Commands follow the Assessment machine and the viewer's permissions (`GET /v1/me/permissions`;
@@ -21,7 +26,7 @@ import { useState } from 'react';
 import { usePermissions } from '../../../api/permissions';
 import { useApiPages } from '../../../api/useApiPages';
 import { useKeyedCommands } from '../../../features/operations/commands';
-import { nameOf, usePersonNames } from '../../../features/operations/context';
+import { nameOf, useFacilityZone, usePersonNames } from '../../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../../features/operations/feedback';
 import { TextAreaField } from '../../../features/operations/fields';
 import { formatInstant } from '../../../features/operations/format';
@@ -29,6 +34,7 @@ import { ASSESSMENT_STATUS, ASSESSMENT_VISIBILITY } from '../../../features/oper
 import { Button } from '../../../ui/Button';
 import { LoadMore } from '../../../ui/LoadMore';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
+import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { AssessmentForm } from './AssessmentForm';
 import {
@@ -66,37 +72,56 @@ export function ParticipantAssessments({
   const authors = usePersonNames(
     (assessments.data ?? []).map((a) => a.authorPersonId).filter((id) => id !== me),
   );
+  const zone = useFacilityZone(subject.facilityId);
+  // The coach's own session, nothing they may read yet: the API answers NOT_FOUND (API issue).
+  const nothingVisibleYet =
+    subject.fromOwnSession === true &&
+    assessments.data === undefined &&
+    assessments.error?.isNotFound === true;
   return (
     <section className="ops-section" aria-labelledby="participant-assessments-title">
       <h3 id="participant-assessments-title">
         Assessments of {subject.name} in {subject.offeringName}
       </h3>
-      <QueryBoundary
-        query={assessments}
-        label="assessments"
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: 'No assessments yet',
-          description: 'Assessments recorded for this participant in this offering appear here.',
-        }}
-        unavailableOffline={['recording, submitting, reviewing and withdrawing assessments']}
-      >
-        {(items) => (
-          <ul className="list" aria-label="Assessments">
-            {items.map((a) => (
-              <AssessmentRow
-                key={a.id}
-                assessment={a}
-                subject={subject}
-                templates={templates}
-                me={me}
-                author={a.authorPersonId === me ? 'you' : nameOf(authors, a.authorPersonId)}
-                capabilityOn={capabilityOn}
-              />
-            ))}
-          </ul>
-        )}
-      </QueryBoundary>
+      {nothingVisibleYet ? (
+        <StateView
+          variant="empty"
+          title="No assessments you can see yet"
+          description="Nothing recorded for this participant in this offering is visible to you yet. Assessments you record appear here once saved; others appear once submitted."
+        />
+      ) : (
+        <QueryBoundary
+          query={assessments}
+          label="assessments"
+          isEmpty={(items) => items.length === 0}
+          empty={{
+            title: 'No assessments yet',
+            description: 'Assessments recorded for this participant in this offering appear here.',
+          }}
+          unavailableOffline={['recording, submitting, reviewing and withdrawing assessments']}
+        >
+          {(items) => (
+            <ul className="list" aria-label="Assessments">
+              {items.map((a) => (
+                <AssessmentRow
+                  key={a.id}
+                  assessment={a}
+                  subject={subject}
+                  templates={templates}
+                  me={me}
+                  author={
+                    a.authorPersonId === me
+                      ? 'you'
+                      : nameOf(authors, a.authorPersonId, 'Staff member')
+                  }
+                  capabilityOn={capabilityOn}
+                  timezone={zone}
+                />
+              ))}
+            </ul>
+          )}
+        </QueryBoundary>
+      )}
       <LoadMore pages={assessments} label="assessments" />
       {capabilityOn && mayAuthor ? (
         adding ? (
@@ -120,6 +145,7 @@ function AssessmentRow({
   me,
   author,
   capabilityOn,
+  timezone,
 }: {
   assessment: Assessment;
   subject: AssessmentSubject;
@@ -127,13 +153,20 @@ function AssessmentRow({
   me: string | null;
   author: string;
   capabilityOn: boolean;
+  timezone: string | null;
 }) {
   const permissions = usePermissions();
   const queryClient = useQueryClient();
   const commands = useKeyedCommands({ invalidate: [ASSESSMENTS_KEY] });
   const [mode, setMode] = useState<'edit' | 'correct' | 'withdraw' | 'return' | null>(null);
-  const [reason, setReason] = useState('');
+  // Two audited free texts, never shared: the withdrawal reason and the note to the author.
+  const [withdrawReason, setWithdrawReason] = useState('');
+  const [returnNote, setReturnNote] = useState('');
   const [missing, setMissing] = useState(false);
+  const openMode = (next: typeof mode) => {
+    setMode(next);
+    setMissing(false);
+  };
   const isAuthor = me !== null && a.authorPersonId === me;
   const isManager = permissions.isPermitted(ACTIONS.review, subject.facilityId) === true;
   const mayAuthor = permissions.isPermitted(ACTIONS.author, subject.facilityId) === true;
@@ -161,7 +194,7 @@ function AssessmentRow({
   };
   const body = { expectedRevision: a.revision };
   const run = (k: (typeof keys)[number]) => {
-    if ((k === 'withdraw' || k === 'return') && !reason.trim()) {
+    if ((k === 'withdraw' && !withdrawReason.trim()) || (k === 'return' && !returnNote.trim())) {
       setMissing(true);
       return;
     }
@@ -172,7 +205,7 @@ function AssessmentRow({
     if (k === 'withdraw') {
       void commands.run(`withdraw|${a.id}`, 'post', '/assessments/{id}/withdraw', {
         path,
-        body: { ...body, reason: reason.trim() },
+        body: { ...body, reason: withdrawReason.trim() },
       });
     }
     if (k === 'approve') {
@@ -184,7 +217,7 @@ function AssessmentRow({
     if (k === 'return') {
       void commands.run(`return|${a.id}`, 'post', '/assessments/{id}/review', {
         path,
-        body: { ...body, decision: 'return', note: reason.trim() },
+        body: { ...body, decision: 'return', note: returnNote.trim() },
       });
     }
   };
@@ -204,13 +237,13 @@ function AssessmentRow({
         {a.reviewNote ? <span className="caption">Review note: {a.reviewNote}</span> : null}
         <span className="caption">
           By {author}
-          {a.reviewedAt ? ` · reviewed ${formatInstant(a.reviewedAt)}` : ''}
+          {a.reviewedAt ? ` · reviewed ${formatInstant(a.reviewedAt, timezone)}` : ''}
           {a.correctsAssessmentId ? ' · corrects an earlier assessment' : ''}
         </span>
       </div>
       <div className="ops-actions">
         {can.edit ? (
-          <Button variant="secondary" aria-label={`Edit ${label}`} onClick={() => setMode('edit')}>
+          <Button variant="secondary" aria-label={`Edit ${label}`} onClick={() => openMode('edit')}>
             Edit
           </Button>
         ) : null}
@@ -235,7 +268,7 @@ function AssessmentRow({
             <Button
               variant="secondary"
               aria-label={`Return ${label}`}
-              onClick={() => setMode('return')}
+              onClick={() => openMode('return')}
             >
               Return
             </Button>
@@ -245,7 +278,7 @@ function AssessmentRow({
           <Button
             variant="secondary"
             aria-label={`Withdraw ${label}`}
-            onClick={() => setMode('withdraw')}
+            onClick={() => openMode('withdraw')}
           >
             Withdraw
           </Button>
@@ -254,7 +287,7 @@ function AssessmentRow({
           <Button
             variant="secondary"
             aria-label={`Record a correction of ${label}`}
-            onClick={() => setMode('correct')}
+            onClick={() => openMode('correct')}
           >
             Record a correction
           </Button>
@@ -289,9 +322,10 @@ function AssessmentRow({
           }}
         >
           <TextAreaField
+            key={mode}
             label={mode === 'withdraw' ? 'Reason for withdrawing' : 'What should change'}
-            value={reason}
-            onChange={setReason}
+            value={mode === 'withdraw' ? withdrawReason : returnNote}
+            onChange={mode === 'withdraw' ? setWithdrawReason : setReturnNote}
             required
             hint={
               mode === 'return' ? 'The author sees this note; the family never does.' : undefined

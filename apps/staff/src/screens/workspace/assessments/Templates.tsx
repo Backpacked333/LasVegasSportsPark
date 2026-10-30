@@ -4,10 +4,12 @@
  *
  * Which templates, skill areas, scales and family visibility are approved is DEC-054 (pending):
  * the screen records what a program manager drafts and approves, and invents none. A template
- * names its program, a name and version, its skill areas (lower-case key and label) and an ordinal
- * scale (levels in order, lowest first, 2 to 20). Approval sends `expectedRevision`; retiring
- * needs a reason and is never gated by the switch. The API has no read or list of templates, so
- * the templates drafted or approved on this page are the ones offered to the assessment form.
+ * names its program (chosen by name from `GET /v1/programs`, the chosen offering's program by
+ * default), a name and version, its skill areas (lower-case key and label) and an ordinal scale
+ * (levels in order, lowest first, 2 to 20). Approval and retirement send `expectedRevision`;
+ * retiring needs a reason and is never gated by the switch. The API has no read or list of
+ * templates, so the templates drafted or approved on this page are the ones offered to the
+ * assessment form, and a STALE_REVISION answer cannot be reloaded here: it is shown with its code.
  */
 import { useState } from 'react';
 import { usePermissions } from '../../../api/permissions';
@@ -18,7 +20,8 @@ import { TEMPLATE_STATUS } from '../../../features/operations/labels';
 import { Button } from '../../../ui/Button';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
-import { ACTIONS, SKILL_KEY, UUID, YOUTH_CAPABILITY, type AssessmentTemplate } from './subject';
+import { ProgramPicker } from './programs';
+import { ACTIONS, SKILL_KEY, YOUTH_CAPABILITY, type AssessmentTemplate } from './subject';
 
 interface AreaDraft {
   key: string;
@@ -105,7 +108,7 @@ function TemplateRow({
     }
     setMissing(false);
     void retire
-      .submit({ path: { id: t.id }, body: { reason: reason.trim() } })
+      .submit({ path: { id: t.id }, body: { reason: reason.trim(), expectedRevision: t.revision } })
       .then((next) => {
         onChange(next);
         setRetiring(false);
@@ -167,6 +170,9 @@ function TemplateRow({
       {retire.error ? (
         <CommandError error={retire.error} onRetry={doRetire} subject="This template" />
       ) : null}
+      {approve.error?.code === 'STALE_REVISION' || retire.error?.code === 'STALE_REVISION' ? (
+        <StaleWithoutRead what="template" />
+      ) : null}
     </li>
   );
 }
@@ -202,7 +208,7 @@ function TemplateForm({
     .filter((l) => l.length > 0);
   const submit = () => {
     const next: Record<string, string> = {};
-    if (!UUID.test(program.trim())) next.program = 'Give the program reference.';
+    if (!program) next.program = 'Choose the program.';
     if (!name.trim()) next.name = 'Name the template.';
     if (!/^\d{1,4}$/.test(version.trim()) || Number(version) < 1)
       next.version = 'Give the version as a whole number from 1.';
@@ -217,7 +223,7 @@ function TemplateForm({
     void command
       .submit({
         body: {
-          programId: program.trim(),
+          programId: program,
           name: name.trim(),
           version: Number(version),
           skillAreas: areas.map((a) => ({ key: a.key.trim(), label: a.label.trim() })),
@@ -240,10 +246,10 @@ function TemplateForm({
       }}
     >
       <h4>Draft a template</h4>
-      <TextField
-        label="Program reference"
+      <ProgramPicker
+        label="Program"
         value={program}
-        onChange={setProgram}
+        onChange={(id) => setProgram(id)}
         hint="The program the template belongs to (the chosen offering's program by default)."
         error={problems.program ?? apiErrors.programId}
       />
@@ -328,5 +334,18 @@ function TemplateForm({
       ) : null}
       {command.data ? <CommandSuccess label={TEMPLATE_STATUS[command.data.status].label} /> : null}
     </form>
+  );
+}
+
+/**
+ * STALE_REVISION on a record the API offers no staff read of (templates, recommendations): it
+ * changed since this page showed it and cannot be reloaded here, so nothing is retried blindly.
+ */
+export function StaleWithoutRead({ what }: { what: string }) {
+  return (
+    <p className="caption" data-testid="stale-without-read">
+      This {what} changed since it was shown here. The service has no read of it to reload, so check
+      it with whoever changed it before acting again.
+    </p>
   );
 }

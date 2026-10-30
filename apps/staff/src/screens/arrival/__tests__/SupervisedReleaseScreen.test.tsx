@@ -6,7 +6,7 @@
  * release unavailable; the outage procedure is pending DEC-005/DEC-034, cached authority never
  * asserted).
  */
-import { apiErrorBody, type FakeHandler } from '@sportspark/api-client/testing';
+import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -161,6 +161,37 @@ describe('SCR-S-30 SupervisedReleaseScreen', () => {
       escalate: true,
       escalationNotes: 'Call the guardian on file',
     });
+  });
+
+  it('keeps the release record once the departure closes the visit and the child leaves the on-site list', async () => {
+    const user = userEvent.setup();
+    let released = false;
+    const app = createTestApp({
+      routes: routes({
+        // The release records the departure: the child is no longer on site afterwards.
+        'GET /visits': () =>
+          fakeResponse(200, {
+            items: released ? [] : [visit(VISIT_1, CHILD_1)],
+            nextCursor: null,
+          }),
+        'POST /releases': () => {
+          released = true;
+          return fakeResponse(201, release('verified'));
+        },
+      }),
+    });
+    render(app.at('/arrival/release'));
+    await identifyAndChoose(user);
+    await user.click(screen.getByRole('button', { name: 'Check authority and release' }));
+    expect(await screen.findByText('Released to Sam Rivera')).toBeInTheDocument();
+    // The on-site read is refetched after the release and no longer lists the child.
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/visits').length).toBeGreaterThan(1),
+    );
+    expect(await screen.findByText('No children awaiting release')).toBeInTheDocument();
+    const record = screen.getByRole('listitem', { name: 'Release record for Alex Rivera' });
+    expect(within(record).getByText('Released to Sam Rivera')).toBeInTheDocument();
+    expect(within(record).getByText(/Checked .*05:00 (PDT|GMT-7)/)).toBeInTheDocument();
   });
 
   it('asks for the collecting person before checking authority, and restriction notes to withhold', async () => {
@@ -324,6 +355,11 @@ describe('SCR-S-30 SupervisedReleaseScreen', () => {
       await user.click(within(group).getByRole('button', { name: 'Check the collector' }));
       expect(await screen.findByText('May collect: Sam Rivera')).toBeInTheDocument();
       expect(screen.getByText(/checked again when the release is recorded/)).toBeInTheDocument();
+      // SPK-SCHED-008: the check and the confirmation use the facility zone, as the record does.
+      expect(screen.getByTestId('collector-check')).toHaveTextContent(
+        /Checked .*05:00 (PDT|GMT-7)/,
+      );
+      expect(screen.getByText(/Collector confirmed at .*05:00 (PDT|GMT-7)/)).toBeInTheDocument();
       // Read-only: the reference travels in the body, nothing is recorded yet.
       const check = app.fake.requests.find((r) => r.route === '/releases/collector-checks');
       expect(check?.body).toEqual({

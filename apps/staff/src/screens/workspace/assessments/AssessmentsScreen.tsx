@@ -212,6 +212,7 @@ function SessionParticipants({
                       facilityId: item.activity.facilityId,
                       personId: p.personId,
                       name,
+                      fromOwnSession: true,
                     })
                   }
                 >

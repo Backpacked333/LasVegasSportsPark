@@ -14,7 +14,7 @@
  * - Offline, the report stays on screen as entered; submitting needs a connection (a queued
  *   submission is DEC-032, pending).
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -32,6 +32,7 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { useMatchSheet, type MatchSheet } from './MatchSheet';
 import { MyAssignmentPage, type WorkspaceAssignment } from './MyAssignment';
+import { activityZone } from './WorkspaceScreen';
 
 type Classification = Schema<'ResultClassification'>;
 type IncidentInput = Schema<'ResultIncidentInput'>;
@@ -239,7 +240,7 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
                 <span className="caption">
                   {' '}
                   by {r.submittedBy.actorLabel}
-                  {r.submittedAt ? `, ${formatInstant(r.submittedAt)}` : ''}
+                  {r.submittedAt ? `, ${formatInstant(r.submittedAt, activityZone(item))}` : ''}
                 </span>
               </li>
             ))}
@@ -365,6 +366,7 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
         <CardsEditor
           sheet={sheet.data}
           sheetError={sheet.error}
+          onRetrySheet={() => void sheet.refetch()}
           cards={cards}
           problems={problems}
           onChange={setCards}
@@ -486,34 +488,48 @@ function IncidentEditor({
   );
 }
 
-/** Cards against players of the match sheet (SPK-DISC-001, SPK-STAFF-005). */
+/**
+ * Cards against players of the match sheet (SPK-DISC-001, SPK-STAFF-005). SPK-UX-008: while the
+ * sheet loads, a loading state; a refusal (NOT_FOUND, ACCESS_DENIED) or a sheet without the
+ * official's full view, "not available"; any other failure (5xx, timeout, offline), the error
+ * with its code and "Try again", never presented as a permission restriction.
+ */
 function CardsEditor({
   sheet,
   sheetError,
+  onRetrySheet,
   cards,
   problems,
   onChange,
 }: {
   sheet: MatchSheet | undefined;
-  sheetError: unknown;
+  sheetError: ApiError | null;
+  onRetrySheet: () => void;
   cards: CardDraft[];
   problems: Record<string, string>;
   onChange: (cards: CardDraft[]) => void;
 }) {
   const sides = (sheet?.sides ?? []).filter((side) => side.players.some((p) => p.personId));
-  if (!sheet || sheet.view !== 'full' || sides.length === 0) {
-    return (
-      <StateView
-        variant="unavailable"
-        title="Cards are not available"
-        description={
-          sheet === undefined && !sheetError
-            ? 'Loading the player list…'
-            : 'Recording a card needs the match sheet, which is not available to you for this fixture. Report cards to the league manager.'
-        }
-      />
+  const refused = sheetError !== null && presentationForError(sheetError) === 'unavailable';
+  const notAvailable = (
+    <StateView
+      variant="unavailable"
+      title="Cards are not available"
+      description="Recording a card needs the match sheet, which is not available to you for this fixture. Report cards to the league manager."
+    />
+  );
+  if (refused) return notAvailable;
+  if (sheet === undefined) {
+    return sheetError ? (
+      <div role="group" aria-label="Cards">
+        <p className="caption">Recording a card needs the player list, which could not load.</p>
+        <StateView variant="error" error={sheetError} onRetry={onRetrySheet} />
+      </div>
+    ) : (
+      <StateView variant="loading" label="the player list" />
     );
   }
+  if (sheet.view !== 'full' || sides.length === 0) return notAvailable;
   const update = (n: number, next: CardDraft) =>
     onChange(cards.map((c, i) => (i === n ? next : c)));
   return (

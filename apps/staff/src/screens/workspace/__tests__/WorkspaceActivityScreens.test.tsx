@@ -567,6 +567,47 @@ describe('SCR-W-05 cards from the match sheet (CMP-06)', () => {
     expect(await within(form).findByText('Cards are not available')).toBeInTheDocument();
     expect(within(form).queryByRole('button', { name: 'Add a card' })).toBeNull();
   });
+
+  it('SPK-UX-008: a failed player-list read is an error with its code and Try again, not a restriction', async () => {
+    const user = userEvent.setup();
+    let failing = true;
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': { status: 200, body: [] },
+        'GET /fixtures/{id}/match-sheet': () =>
+          failing
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(200, sheet),
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const form = await screen.findByRole('form', { name: 'Match report' });
+    const cards = await within(form).findByRole('group', { name: 'Cards' });
+    expect(within(cards).getByTestId('state-error')).toHaveTextContent('INTEGRATION_UNAVAILABLE');
+    expect(within(form).queryByText('Cards are not available')).toBeNull();
+    failing = false;
+    await user.click(within(cards).getByRole('button', { name: 'Try again' }));
+    expect(await within(form).findByRole('button', { name: 'Add a card' })).toBeInTheDocument();
+  });
+
+  it('shows the player list loading, not "not available", while it is read', async () => {
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': { status: 200, body: [] },
+        // Never answers within the test: the read stays in flight.
+        'GET /fixtures/{id}/match-sheet': () => new Promise<Response>(() => undefined),
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const form = await screen.findByRole('form', { name: 'Match report' });
+    expect(
+      await within(form).findByRole('progressbar', { name: 'Loading the player list' }),
+    ).toBeInTheDocument();
+    expect(within(form).queryByText('Cards are not available')).toBeNull();
+  });
 });
 
 describe('SCR-W-09 collector check (ENT-02)', () => {

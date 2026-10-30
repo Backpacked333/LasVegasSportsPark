@@ -130,6 +130,21 @@ function routes(
     'GET /participants/{personId}/assessments': page([]),
     'GET /person-names': personNames([nameEntry(OTHER_COACH, 'Casey', 'Lee', 'adult')]),
     'GET /offerings': page([]),
+    'GET /programs': page([
+      {
+        id: PROGRAM,
+        name: 'Junior football',
+        description: null,
+        activityType: 'football',
+        format: null,
+        ageBand: {},
+        status: 'active',
+        source: 'staff',
+        revision: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]),
     ...extra,
   };
 }
@@ -176,8 +191,11 @@ describe('SCR-W-07 AssessmentsScreen', () => {
       routes: routes(
         {},
         {
+          // The API answers a coach NOT_FOUND until an assessment they may read exists.
           'GET /participants/{personId}/assessments': () =>
-            fakeResponse(200, { items: created ? [assessment()] : [], nextCursor: null }),
+            created
+              ? fakeResponse(200, { items: [assessment()], nextCursor: null })
+              : fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' })),
           'POST /assessments': () => {
             created = true;
             return fakeResponse(201, assessment());
@@ -191,7 +209,10 @@ describe('SCR-W-07 AssessmentsScreen', () => {
     });
     render(app.at('/workspace/assessments'));
     await assessAlex(user);
-    expect(await screen.findByText('No assessments yet')).toBeInTheDocument();
+    // From the coach's own session: "nothing visible yet", never "not available" or "check the link".
+    expect(await screen.findByText('No assessments you can see yet')).toBeInTheDocument();
+    expect(screen.queryByTestId('state-unavailable')).toBeNull();
+    expect(screen.queryByText(/Check the link/)).toBeNull();
     const read = app.fake.requests.find((r) => r.route === '/participants/{personId}/assessments');
     expect(read?.params).toEqual({ personId: CHILD_1 });
     expect(read?.query.offeringId).toBe(OFFERING);
@@ -370,12 +391,32 @@ describe('SCR-W-07 AssessmentsScreen', () => {
     expect(review?.body).toEqual({ expectedRevision: 5, decision: 'approve' });
   });
 
-  it('shows a participant the viewer may not read as not available', async () => {
+  it('shows a participant found by search that the viewer may not read as not available', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes(
-        {},
+        { actions: MANAGER_ACTIONS },
         {
+          'GET /offerings': page([
+            {
+              id: OFFERING,
+              programId: PROGRAM,
+              facilityId: FACILITY_A,
+              name: 'Junior skills',
+              startsOn: '2026-09-01',
+              endsOn: '2026-12-15',
+            },
+          ]),
+          'GET /people': page([
+            {
+              id: CHILD_1,
+              givenName: 'Alex',
+              familyName: 'Rivera',
+              kind: 'child',
+              status: 'active',
+              matchedOn: 'name',
+            },
+          ]),
           'GET /participants/{personId}/assessments': {
             status: 404,
             body: apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' }),
@@ -384,13 +425,103 @@ describe('SCR-W-07 AssessmentsScreen', () => {
       ),
     });
     render(app.at('/workspace/assessments'));
-    await assessAlex(user);
+    const offering = await screen.findByLabelText('Offering');
+    await waitFor(() =>
+      expect(within(offering).getByRole('option', { name: /Junior skills/ })).toBeInTheDocument(),
+    );
+    await user.selectOptions(offering, OFFERING);
+    await user.type(screen.getByRole('searchbox', { name: 'Find the participant' }), 'Alex{enter}');
+    await user.click(await screen.findByRole('button', { name: 'Assess Alex Rivera' }));
     const heading = await screen.findByRole('heading', {
       name: 'Assessments of Alex Rivera in Junior skills',
     });
     expect(
       await within(heading.parentElement as HTMLElement).findByTestId('state-unavailable'),
     ).toBeInTheDocument();
+    expect(screen.queryByText('No assessments you can see yet')).toBeNull();
+  });
+
+  it('labels an author whose name the viewer may not read as a staff member, never a participant', async () => {
+    const user = userEvent.setup();
+    const UNNAMED = '0192f1a0-0000-7000-8000-0000000008c9';
+    const app = createTestApp({
+      routes: routes(
+        {},
+        {
+          'GET /participants/{personId}/assessments': page([
+            assessment({ status: 'submitted', authorPersonId: UNNAMED }),
+          ]),
+        },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    await assessAlex(user);
+    const row = await screen.findByRole('listitem', {
+      name: 'ball_control, observed 2026-10-20',
+    });
+    expect(
+      await within(row).findByText(/By Staff member, name not available \(ref 0192f1a0\)/),
+    ).toBeInTheDocument();
+    expect(within(row).queryByText(/Participant, name not available/)).toBeNull();
+  });
+
+  it('keeps the note to the author and the withdrawal reason apart', async () => {
+    const user = userEvent.setup();
+    let returned = false;
+    const submitted = assessment({ status: 'submitted', authorPersonId: OTHER_COACH, revision: 5 });
+    const app = createTestApp({
+      routes: routes(
+        { actions: MANAGER_ACTIONS },
+        {
+          'GET /participants/{personId}/assessments': () =>
+            fakeResponse(200, {
+              items: [returned ? { ...submitted, status: 'returned', revision: 6 } : submitted],
+              nextCursor: null,
+            }),
+          'POST /assessments/{id}/review': () => {
+            returned = true;
+            return fakeResponse(200, { ...submitted, status: 'returned', revision: 6 });
+          },
+          'POST /assessments/{id}/withdraw': {
+            status: 200,
+            body: assessment({ ...submitted, status: 'withdrawn', revision: 7 }),
+          },
+        },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    await assessAlex(user);
+    const row = await screen.findByRole('listitem', { name: 'ball_control, observed 2026-10-20' });
+    await user.click(
+      within(row).getByRole('button', { name: 'Return ball_control, observed 2026-10-20' }),
+    );
+    await user.type(within(row).getByLabelText('What should change'), 'Add the date');
+    await user.click(within(row).getByRole('button', { name: 'Return to the author' }));
+    await waitFor(() =>
+      expect(
+        within(row).getByRole('button', { name: 'Withdraw ball_control, observed 2026-10-20' }),
+      ).toBeInTheDocument(),
+    );
+    expect(app.fake.requests.find((r) => r.route === '/assessments/{id}/review')?.body).toEqual({
+      expectedRevision: 5,
+      decision: 'return',
+      note: 'Add the date',
+    });
+    await user.click(
+      within(row).getByRole('button', { name: 'Withdraw ball_control, observed 2026-10-20' }),
+    );
+    // The note to the author is never carried over as the withdrawal reason.
+    expect(within(row).getByLabelText('Reason for withdrawing')).toHaveValue('');
+    await user.click(within(row).getByRole('button', { name: 'Confirm withdrawal' }));
+    expect(within(row).getByText('A reason is required.')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/assessments/{id}/withdraw')).toBe(false);
+    await user.type(within(row).getByLabelText('Reason for withdrawing'), 'Recorded twice');
+    await user.click(within(row).getByRole('button', { name: 'Confirm withdrawal' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.route === '/assessments/{id}/withdraw')?.body).toEqual(
+        { expectedRevision: 6, reason: 'Recorded twice' },
+      ),
+    );
   });
 
   it('says so when the coach has no accepted session', async () => {
@@ -503,6 +634,8 @@ describe('SCR-W-07 progression recommendations (SPK-YOUTH-006)', () => {
     );
     await user.click(within(card).getByRole('button', { name: 'Share with the family' }));
     expect(await within(card).findByText('Shared with the family')).toBeInTheDocument();
+    // SPK-SCHED-008: in the offering's facility zone (America/Los_Angeles), not the device's.
+    expect(within(card).getByText(/Shared .*05:00 (PDT|GMT-7)/)).toBeInTheDocument();
     const share = app.fake.requests.find(
       (r) => r.route === '/progression-recommendations/{id}/share',
     );
@@ -551,7 +684,100 @@ describe('SCR-W-07 progression recommendations (SPK-YOUTH-006)', () => {
     expect(await within(card).findByText('Withdrawn')).toBeInTheDocument();
     expect(
       app.fake.requests.find((r) => r.route === '/progression-recommendations/{id}/withdraw')?.body,
-    ).toEqual({ reason: 'Family moved away' });
+    ).toEqual({ reason: 'Family moved away', expectedRevision: 1 });
+  });
+});
+
+describe('SCR-W-07 recommending a program (SPK-YOUTH-006)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('chooses the program by name from GET /v1/programs and names it on the card; a stale withdrawal says it cannot be reloaded', async () => {
+    const user = userEvent.setup();
+    const made = {
+      id: RECOMMENDATION,
+      participantPersonId: CHILD_1,
+      fromOfferingId: OFFERING,
+      recommendedOfferingId: null,
+      recommendedProgramId: PROGRAM,
+      eligibility: null,
+      suitability: 'Ready for match play',
+      status: 'draft',
+      sharedAt: null,
+      revision: 2,
+      createdAt: '2026-10-24T12:00:00.000Z',
+      updatedAt: '2026-10-24T12:00:00.000Z',
+    };
+    const app = createTestApp({
+      routes: routes(
+        {},
+        {
+          'POST /progression-recommendations': { status: 201, body: made },
+          'POST /progression-recommendations/{id}/withdraw': {
+            status: 409,
+            body: apiErrorBody('STALE_REVISION', {
+              nextAction: 'reload_and_retry',
+              details: { expectedRevision: 2, currentRevision: 3 },
+            }),
+          },
+        },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    await assessAlex(user);
+    const form = screen.getByRole('form', { name: 'Recommend a next step for Alex Rivera' });
+    await user.click(within(form).getByRole('radio', { name: 'A program' }));
+    const program = within(form).getByLabelText('Recommended program');
+    await waitFor(() =>
+      expect(within(program).getByRole('option', { name: 'Junior football' })).toBeInTheDocument(),
+    );
+    // Programs are named, never typed as record ids.
+    expect(within(form).queryByLabelText(/reference/)).toBeNull();
+    await user.selectOptions(program, PROGRAM);
+    await user.type(
+      within(form).getByLabelText('Why it suits the participant'),
+      'Ready for match play',
+    );
+    await user.click(
+      within(form).getByRole('button', { name: 'Save the recommendation as a draft' }),
+    );
+    const card = await screen.findByRole('listitem', {
+      name: 'Recommendation: Ready for match play',
+    });
+    expect(within(card).getByText('A program: Junior football')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/progression-recommendations')?.body).toEqual(
+      {
+        participantPersonId: CHILD_1,
+        fromOfferingId: OFFERING,
+        recommendedProgramId: PROGRAM,
+        suitability: 'Ready for match play',
+      },
+    );
+    await user.click(within(card).getByRole('button', { name: 'Withdraw' }));
+    await user.type(within(card).getByLabelText('Reason for withdrawing'), 'Changed my mind');
+    await user.click(within(card).getByRole('button', { name: 'Confirm withdrawal' }));
+    expect(await within(card).findByText(/Error code: STALE_REVISION/)).toBeInTheDocument();
+    expect(within(card).getByTestId('stale-without-read')).toHaveTextContent(
+      'no read of it to reload',
+    );
+    expect(
+      app.fake.requests.find((r) => r.route === '/progression-recommendations/{id}/withdraw')?.body,
+    ).toEqual({ reason: 'Changed my mind', expectedRevision: 2 });
+  });
+
+  it('shows a refused programs list as not available with its code', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes(
+        {},
+        { 'GET /programs': () => fakeResponse(403, apiErrorBody('ACCESS_DENIED')) },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    await assessAlex(user);
+    const form = screen.getByRole('form', { name: 'Recommend a next step for Alex Rivera' });
+    await user.click(within(form).getByRole('radio', { name: 'A program' }));
+    expect(await within(form).findByText('Programs are not available')).toBeInTheDocument();
+    expect(within(form).getByText(/Error code: ACCESS_DENIED/)).toBeInTheDocument();
   });
 });
 
@@ -596,7 +822,11 @@ describe('SCR-W-07 templates for program managers (DEC-054)', () => {
     expect(await screen.findByText(/DEC-054/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Draft a template' }));
     const form = screen.getByRole('form', { name: 'Draft an assessment template' });
-    await user.type(within(form).getByLabelText('Program reference'), PROGRAM);
+    const program = within(form).getByLabelText('Program');
+    await waitFor(() =>
+      expect(within(program).getByRole('option', { name: 'Junior football' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(program, PROGRAM);
     await user.type(within(form).getByLabelText('Template name'), 'Junior skills');
     await user.type(within(form).getByLabelText('Version'), '1');
     await user.type(within(form).getByLabelText('Skill area 1 key'), 'Ball control');
@@ -640,6 +870,55 @@ describe('SCR-W-07 templates for program managers (DEC-054)', () => {
         name: '3: Secure',
       }),
     ).toBeInTheDocument();
+  });
+
+  it('retires a template with a reason and its expected revision', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes(
+        { actions: MANAGER_ACTIONS },
+        {
+          'POST /assessment-templates': { status: 201, body: drafted },
+          'POST /assessment-templates/{id}/retire': {
+            status: 200,
+            body: {
+              ...drafted,
+              status: 'retired',
+              retiredAt: '2026-10-24T12:00:00.000Z',
+              revision: 2,
+            },
+          },
+        },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    await user.click(await screen.findByRole('button', { name: 'Draft a template' }));
+    const form = screen.getByRole('form', { name: 'Draft an assessment template' });
+    const program = within(form).getByLabelText('Program');
+    await waitFor(() =>
+      expect(within(program).getByRole('option', { name: 'Junior football' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(program, PROGRAM);
+    await user.type(within(form).getByLabelText('Template name'), 'Junior skills');
+    await user.type(within(form).getByLabelText('Version'), '1');
+    await user.type(within(form).getByLabelText('Skill area 1 key'), 'ball_control');
+    await user.type(within(form).getByLabelText('Skill area 1 label'), 'Ball control');
+    await user.type(
+      within(form).getByLabelText('Scale levels (one per line, lowest first)'),
+      'Emerging{enter}Secure',
+    );
+    await user.click(within(form).getByRole('button', { name: 'Save the template as a draft' }));
+    const templates = await screen.findByRole('list', { name: 'Templates on this page' });
+    await user.click(
+      within(templates).getByRole('button', { name: 'Retire Junior skills (version 1)' }),
+    );
+    await user.type(within(templates).getByLabelText('Reason for retiring'), 'Replaced by v2');
+    await user.click(within(templates).getByRole('button', { name: 'Confirm retirement' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/assessment-templates/{id}/retire')?.body,
+      ).toEqual({ reason: 'Replaced by v2', expectedRevision: 1 }),
+    );
   });
 
   it('does not offer templates to a coach without the template permission', async () => {

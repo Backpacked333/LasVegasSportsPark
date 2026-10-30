@@ -22,7 +22,7 @@ import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, STAFF_TABS } from '../../features/operations/AreaTabs';
-import { nameOf, usePersonNames } from '../../features/operations/context';
+import { nameOf, useFacilityZone, usePersonNames } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import {
   CheckboxField,
@@ -78,6 +78,8 @@ export function AssignmentDetailScreen() {
 }
 
 function AssignmentDetail({ assignment: a }: { assignment: Assignment }) {
+  // SPK-SCHED-008: the assignment's facility zone.
+  const zone = useFacilityZone(a.facilityId);
   const names = usePersonNames([a.personId]);
   const badge = ASSIGNMENT_STATUS[a.status];
   const access = a.access;
@@ -93,36 +95,36 @@ function AssignmentDetail({ assignment: a }: { assignment: Assignment }) {
           <dt>Person</dt>
           <dd>{nameOf(names, a.personId)}</dd>
           <dt>When</dt>
-          <dd>{formatRange(a.scheduledStart, a.scheduledEnd)}</dd>
+          <dd>{formatRange(a.scheduledStart, a.scheduledEnd, zone)}</dd>
           <dt>Held until (with turnaround of {a.turnaroundMinutes} minutes)</dt>
-          <dd>{formatInstant(a.committedUntil)}</dd>
+          <dd>{formatInstant(a.committedUntil, zone)}</dd>
           <dt>Engagement</dt>
           <dd>{humanize(a.engagement)}</dd>
           <dt>Time-bounded access</dt>
           <dd>
             {humanize(access.status)}
             {access.from && access.until
-              ? `, ${formatInstant(access.from)} to ${formatInstant(access.until)}`
+              ? `, ${formatInstant(access.from, zone)} to ${formatInstant(access.until, zone)}`
               : ''}
             {access.active ? ' (in effect now)' : ''}
           </dd>
         </dl>
         <ol className="ops-history" aria-label="Assignment history">
-          {a.offeredAt ? <li>Offered {formatInstant(a.offeredAt)}</li> : null}
-          {a.acceptedAt ? <li>Accepted {formatInstant(a.acceptedAt)}</li> : null}
+          {a.offeredAt ? <li>Offered {formatInstant(a.offeredAt, zone)}</li> : null}
+          {a.acceptedAt ? <li>Accepted {formatInstant(a.acceptedAt, zone)}</li> : null}
           {a.declinedAt ? (
             <li>
-              Declined {formatInstant(a.declinedAt)}
+              Declined {formatInstant(a.declinedAt, zone)}
               {a.declineReason ? `: ${a.declineReason}` : ''}
             </li>
           ) : null}
           {a.withdrawnAt ? (
             <li>
-              Withdrawn {formatInstant(a.withdrawnAt)}
+              Withdrawn {formatInstant(a.withdrawnAt, zone)}
               {a.withdrawnReason ? `: ${a.withdrawnReason}` : ''}
             </li>
           ) : null}
-          {a.completedAt ? <li>Completed {formatInstant(a.completedAt)}</li> : null}
+          {a.completedAt ? <li>Completed {formatInstant(a.completedAt, zone)}</li> : null}
           {a.replacesAssignmentId ? (
             <li>
               Replaces{' '}
@@ -155,6 +157,7 @@ function useAvailableActions(a: Assignment) {
 }
 
 function Transitions({ assignment: a }: { assignment: Assignment }) {
+  const zone = useFacilityZone(a.facilityId);
   const queryClient = useQueryClient();
   const available = useAvailableActions(a);
   const invalidate = [
@@ -259,7 +262,7 @@ function Transitions({ assignment: a }: { assignment: Assignment }) {
       {error ? <CommandError error={error} onReload={reload} subject="This assignment" /> : null}
       {last ? (
         <CommandSuccess label={ASSIGNMENT_STATUS[last.assignment.status].label}>
-          {last.uncovered ? <UncoveredNotice notice={last.uncovered} /> : null}
+          {last.uncovered ? <UncoveredNotice notice={last.uncovered} timezone={zone} /> : null}
         </CommandSuccess>
       ) : null}
     </section>
@@ -274,6 +277,7 @@ const REASON_TONE: Record<Schema<'ReplacementCandidateReason'>['severity'], Stat
 };
 
 function Replacement({ assignment: a }: { assignment: Assignment }) {
+  const zone = useFacilityZone(a.facilityId);
   const candidates = useApiQuery({
     path: '/assignments/{id}/replacements',
     request: { path: { id: a.id } },
@@ -345,7 +349,7 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
               </p>
             ) : null}
             <fieldset className="ops-fieldset">
-              <legend>Candidates (evaluated {formatInstant(data.evaluatedAt)})</legend>
+              <legend>Candidates (evaluated {formatInstant(data.evaluatedAt, zone)})</legend>
               {data.candidates.map((c) => (
                 <div key={c.personId}>
                   <label className="ops-check">
@@ -426,7 +430,9 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
             Original: {ASSIGNMENT_STATUS[command.data.original.status].label}. Readiness is
             re-evaluated by the service.
           </span>
-          {command.data.uncovered ? <UncoveredNotice notice={command.data.uncovered} /> : null}
+          {command.data.uncovered ? (
+            <UncoveredNotice notice={command.data.uncovered} timezone={zone} />
+          ) : null}
         </CommandSuccess>
       ) : null}
     </section>

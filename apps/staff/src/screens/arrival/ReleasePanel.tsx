@@ -17,7 +17,9 @@
  *   scan, and authority is checked when the release is recorded.
  * - The record shows child, collecting person, verification outcome, staff actor, time,
  *   restriction or escalation, and release outcome. One child at a time: partial completion is
- *   per child (one released, one escalated).
+ *   per child (one released, one escalated). A record stays listed after the release closes the
+ *   child's visit (the child is no longer on site), with the name known when it was recorded.
+ * - Every time (collector check, confirmation, record) is in the facility zone (SPK-SCHED-008).
  * - An adult without the collect grant is denied, or escalated when staff choose the escalation
  *   (the procedure itself is DEC-005, pending).
  * - Offline, release is unavailable: the manual outage procedure is DEC-034 (pending) and cached
@@ -87,6 +89,8 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
   const [scanned, setScanned] = useState<PassScan | null>(null);
   const [childId, setChildId] = useState<string | null>(null);
   const [released, setReleased] = useState<string[]>([]);
+  // Children with a release record from this panel (any outcome), kept after they leave the list.
+  const [recorded, setRecorded] = useState<string[]>([]);
   // Names of everyone identified in this panel (scanned people, checked collectors).
   const [knownNames, setKnownNames] = useState<ReadonlyMap<string, string>>(new Map());
   const remember = (entries: readonly (readonly [string, string])[]) =>
@@ -159,6 +163,7 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
     return entry?.status === 'loading' || (entry?.status === 'ok' && entry.kind === 'child');
   });
   const awaiting = children.filter((id) => !released.includes(id));
+  const withRecords = [...new Set([...children, ...recorded])];
 
   return (
     <div className="ops-release">
@@ -214,21 +219,28 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
         <ReleaseForm
           key={childId}
           facilityId={facilityId}
+          timezone={timezone}
           activity={activity}
           childPersonId={childId}
           childName={childName(childId)}
           deskCollector={collector}
           onChecked={(c) => remember([[c.personId, c.displayName]])}
           commands={commands}
-          onReleased={() => {
-            // Released: the child leaves the waiting list; the record stays below.
-            setReleased((prev) => [...prev, childId]);
-            setChildId(null);
+          onRecorded={(outcome) => {
+            // The record stays below even once the departure closes the visit and the on-site
+            // read no longer lists the child; the name is kept as it was shown.
+            remember([[childId, childName(childId)]]);
+            setRecorded((prev) => (prev.includes(childId) ? prev : [...prev, childId]));
+            if (outcome === 'released') {
+              // Released: the child leaves the waiting list.
+              setReleased((prev) => [...prev, childId]);
+              setChildId(null);
+            }
           }}
         />
       ) : null}
       <ReleaseOutcomes
-        ids={children}
+        ids={withRecords}
         childName={childName}
         collectorLabel={collectorLabel}
         commands={commands}
@@ -388,12 +400,14 @@ function CollectorCheckStep({
   childPersonId,
   childName,
   collector,
+  timezone,
   onCollector,
 }: {
   activity: ActivityRef;
   childPersonId: string;
   childName: string;
   collector: Collector | null;
+  timezone: string | null;
   onCollector: (collector: Collector | null, check: CollectorCheck | null) => void;
 }) {
   const [reference, setReference] = useState('');
@@ -458,7 +472,7 @@ function CollectorCheckStep({
             <StatusBadge tone="danger" label={`Not confirmed to collect ${childName}`} />
           )}
           <p className="caption">
-            Checked {formatInstant(result.checkedAt)}.{' '}
+            Checked {formatInstant(result.checkedAt, timezone)}.{' '}
             {result.mayCollect
               ? ''
               : 'This pass does not show current pickup authority for this child in this session. Record the release to deny or escalate it.'}
@@ -489,15 +503,17 @@ function CollectorCheckStep({
 
 function ReleaseForm({
   facilityId,
+  timezone,
   activity,
   childPersonId,
   childName,
   deskCollector,
   onChecked,
   commands,
-  onReleased,
+  onRecorded,
 }: {
   facilityId: string;
+  timezone: string | null;
   activity?: ActivityRef;
   childPersonId: string;
   childName: string;
@@ -505,7 +521,8 @@ function ReleaseForm({
   deskCollector: Collector | null;
   onChecked: (collector: { personId: string; displayName: string }) => void;
   commands: ReturnType<typeof useKeyedCommands>;
-  onReleased: () => void;
+  /** A release record was written (released, or not released: denied, withheld, escalated). */
+  onRecorded: (outcome: RecordedRelease['release']['outcome']) => void;
 }) {
   const now = useNow();
   const [checked, setChecked] = useState<Collector | null>(null);
@@ -550,7 +567,7 @@ function ReleaseForm({
         ...(escalate && escalationNotes.trim() ? { escalationNotes: escalationNotes.trim() } : {}),
       },
     })) as RecordedRelease | undefined;
-    if (result?.release.outcome === 'released') onReleased();
+    if (result) onRecorded(result.release.outcome);
   };
 
   return (
@@ -562,6 +579,7 @@ function ReleaseForm({
           childPersonId={childPersonId}
           childName={childName}
           collector={checked}
+          timezone={timezone}
           onCollector={(c, check) => {
             setChecked(c);
             setCheckAnswered(check !== null);
@@ -572,8 +590,8 @@ function ReleaseForm({
       ) : null}
       <p className="caption">
         {collector?.kind === 'person' && collector.checkedAt
-          ? `Collector confirmed at ${formatInstant(collector.checkedAt)}; pickup authority is checked again when you confirm.`
-          : `Checked against current pickup authority at ${formatInstant(now.toISOString())} when you confirm.`}
+          ? `Collector confirmed at ${formatInstant(collector.checkedAt, timezone)}; pickup authority is checked again when you confirm.`
+          : `Checked against current pickup authority at ${formatInstant(now.toISOString(), timezone)} when you confirm.`}
       </p>
       {problems.collector ? (
         <p className="error-text" role="alert">

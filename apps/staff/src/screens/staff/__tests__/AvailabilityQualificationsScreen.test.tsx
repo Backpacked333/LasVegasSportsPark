@@ -18,8 +18,17 @@ import { FACILITY_A, createTestApp } from '../../../testing/test-app';
 
 const COACH = '0192f1a0-0000-7000-8000-000000000002';
 
-function directory(items: unknown[]) {
-  return { status: 200, body: { items, nextCursor: null } };
+function directory(items: unknown[], nextCursor: string | null = null) {
+  return { status: 200, body: { items, nextCursor } };
+}
+
+/** `GET /v1/staff-directory` filters by one role (StaffDirectoryQuery). */
+function byRole(people: { roles: string[] }[]): FakeHandler {
+  return (req) =>
+    fakeResponse(200, {
+      items: people.filter((p) => !req.query.role || p.roles.includes(req.query.role)),
+      nextCursor: null,
+    });
 }
 
 const JORDAN = {
@@ -63,7 +72,7 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
     'GET /qualifications': { status: 200, body: [qualification()] },
     'GET /availability': { status: 200, body: [] },
     'GET /person-names': personNames([nameEntry(OFFICIAL, 'Jordan', 'Lee', 'adult')]),
-    'GET /staff-directory': directory([CASEY, JORDAN]),
+    'GET /staff-directory': byRole([CASEY, JORDAN]),
     ...extra,
   };
 }
@@ -177,18 +186,20 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
     expect(await screen.findByTestId('state-unavailable')).toBeInTheDocument();
   });
 
-  it('ID-05: lists officials and coaches from the staff directory and opens one’s availability', async () => {
+  it('ID-05: lists officials and coaches from the staff directory (one read per role) and opens one’s availability', async () => {
     const user = userEvent.setup();
     const app = createTestApp({ routes: routes() });
     render(app.at('/staff/availability'));
-    const list = await screen.findByRole('list', { name: 'Officials and coaches' });
-    const casey = within(list).getByRole('listitem', { name: 'Casey Lee' });
+    const coaches = await screen.findByRole('list', { name: 'Coaches' });
+    const casey = within(coaches).getByRole('listitem', { name: 'Casey Lee' });
     expect(within(casey).getByText('coach: 1 facility')).toBeInTheDocument();
-    expect(within(list).getByRole('listitem', { name: 'Jordan Lee' })).toHaveTextContent(
+    const officials = await screen.findByRole('list', { name: 'Officials' });
+    expect(within(officials).getByRole('listitem', { name: 'Jordan Lee' })).toHaveTextContent(
       'official: every facility',
     );
-    const read = app.fake.requests.find((r) => r.route === '/staff-directory');
-    expect(read?.query.facilityId).toBe(FACILITY_A);
+    const reads = app.fake.requests.filter((r) => r.route === '/staff-directory');
+    expect(reads.map((r) => r.query.role).sort()).toEqual(['coach', 'official']);
+    expect(reads.every((r) => r.query.facilityId === FACILITY_A)).toBe(true);
     await user.click(within(casey).getByRole('button', { name: 'Availability of Casey Lee' }));
     await waitFor(() =>
       expect(
@@ -229,7 +240,8 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
   it('says so when nobody holds an official or coach role, and shows a refused directory as not available', async () => {
     const empty = createTestApp({ routes: routes({ 'GET /staff-directory': directory([]) }) });
     const { unmount } = render(empty.at('/staff/availability'));
-    expect(await screen.findByText('No officials or coaches')).toBeInTheDocument();
+    expect(await screen.findByText('No officials')).toBeInTheDocument();
+    expect(await screen.findByText('No coaches')).toBeInTheDocument();
     unmount();
     const refused = createTestApp({
       routes: routes({
@@ -239,7 +251,109 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
     render(refused.at('/staff/availability'));
     const section = (await screen.findByRole('heading', { name: 'Officials and coaches' }))
       .parentElement as HTMLElement;
-    expect(await within(section).findByTestId('state-unavailable')).toBeInTheDocument();
+    expect(await within(section).findAllByTestId('state-unavailable')).toHaveLength(2);
+  });
+
+  it('SPK-UX-008: never says "nobody" while the directory has a further page', async () => {
+    const user = userEvent.setup();
+    // The API pages by name; with a role filter the first page is never filtered on the client.
+    const app = createTestApp({
+      routes: routes({
+        'GET /staff-directory': (req) =>
+          req.query.cursor
+            ? fakeResponse(200, { items: [JORDAN], nextCursor: null })
+            : fakeResponse(200, {
+                items: [],
+                nextCursor: req.query.role === 'official' ? 'p2' : null,
+              }),
+      }),
+    });
+    render(app.at('/staff/availability'));
+    expect(await screen.findByText('No coaches')).toBeInTheDocument();
+    const officials = (await screen.findByRole('heading', { name: 'Officials' }))
+      .parentElement as HTMLElement;
+    await user.click(await within(officials).findByRole('button', { name: 'Load more officials' }));
+    expect(screen.queryByText('No officials')).toBeNull();
+    expect(
+      await within(officials).findByRole('listitem', { name: 'Jordan Lee' }),
+    ).toBeInTheDocument();
+  });
+
+  it('SPK-SCHED-008: shows evidence validity and availability windows in the facility zone they were entered in', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /availability': {
+          status: 200,
+          body: [
+            {
+              id: '0192f1a0-0000-7000-8000-0000000002b1',
+              personId: ME_PERSON,
+              interval: { start: '2026-10-25T17:00:00.000Z', end: '2026-10-25T21:00:00.000Z' },
+              kind: 'available',
+              note: null,
+              status: 'active',
+              withdrawnAt: null,
+              withdrawnReason: null,
+              revision: 1,
+              createdAt: '2026-10-24T12:00:00.000Z',
+            },
+          ],
+        },
+      }),
+    });
+    render(app.at('/staff/availability'));
+    // The Today feed gives America/Los_Angeles: 17:00Z is 10:00 PDT, whatever the device zone.
+    const windows = await screen.findByRole('list', { name: 'Availability windows' });
+    expect(within(windows).getByText(/10:00 (PDT|GMT-7) to 14:00/)).toBeInTheDocument();
+    const evidence = await screen.findByRole('list', { name: 'Qualification evidence' });
+    expect(
+      within(evidence).getByText(/Valid from .*16:00 (PST|PDT|GMT-8|GMT-7)/),
+    ).toBeInTheDocument();
+  });
+
+  it('SCR-S-32: the evidence form never records against a person the picker no longer shows', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /staff-directory': (req) =>
+          fakeResponse(200, {
+            items: req.query.query ? [CASEY] : [JORDAN],
+            nextCursor: null,
+          }),
+        'POST /qualifications': { status: 201, body: qualification() },
+      }),
+    });
+    render(app.at('/staff/availability'));
+    await user.click(await screen.findByRole('button', { name: 'Record qualification evidence' }));
+    const form = screen.getByRole('form', { name: 'Record qualification evidence' });
+    const picker = within(form).getByLabelText('Official or coach');
+    await waitFor(() =>
+      expect(
+        within(picker).getByRole('option', { name: 'Jordan Lee (official)' }),
+      ).toBeInTheDocument(),
+    );
+    await user.selectOptions(picker, OFFICIAL);
+    await user.type(within(form).getByLabelText('Qualification'), 'referee_grade_8');
+    await user.type(within(form).getByLabelText('Valid from'), '2026-01-01T09:00');
+    // A new name search leaves Jordan out of the results; Enter only searches.
+    await user.type(within(form).getByLabelText('Find official or coach by name'), 'Cas{enter}');
+    await waitFor(() =>
+      expect(within(picker).getByRole('option', { name: 'Casey Lee (coach)' })).toBeInTheDocument(),
+    );
+    expect(
+      app.fake.requests.some((r) => r.route === '/qualifications' && r.method === 'POST'),
+    ).toBe(false);
+    // The chosen person stays visible as chosen: the select never hides the id it will send.
+    expect(picker).toHaveValue(OFFICIAL);
+    expect(
+      within(picker).getByRole('option', { name: 'Jordan Lee (official), chosen' }),
+    ).toBeInTheDocument();
+    await user.click(within(form).getByRole('button', { name: 'Record evidence' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/qualifications' && r.method === 'POST')?.body,
+      ).toMatchObject({ personId: OFFICIAL }),
+    );
   });
 
   it('SPK-SCHED-008: reads facility times in the zone from the facility directory when the Today feed is not readable', async () => {

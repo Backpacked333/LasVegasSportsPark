@@ -115,7 +115,12 @@ export function AvailabilityQualificationsScreen() {
           {(data) => (
             <ul className="list" aria-label="Qualification evidence">
               {data.map((q) => (
-                <QualificationRow key={q.id} qualification={q} name={nameOf(names, q.personId)} />
+                <QualificationRow
+                  key={q.id}
+                  qualification={q}
+                  name={nameOf(names, q.personId)}
+                  timezone={facility.timezone}
+                />
               ))}
             </ul>
           )}
@@ -143,7 +148,12 @@ const STAFFING_ROLES: readonly { value: StaffRole | ''; label: string }[] = [
   { value: 'coach', label: 'Coaches' },
 ];
 
-/** SCR-S-32 "Assignment scope per official and coach" from the staff directory (ID-05). */
+/**
+ * SCR-S-32 "Assignment scope per official and coach" from the staff directory (ID-05). The API
+ * filters by one role, so "Officials and coaches" is two reads (role=official and role=coach),
+ * each paged by its own cursor: nothing is filtered on the client, and "nobody" is said only when
+ * the API answered an empty list with no further page.
+ */
 function OfficialsAndCoaches({
   facilityId,
   ready,
@@ -156,15 +166,7 @@ function OfficialsAndCoaches({
 }) {
   const [role, setRole] = useState<StaffRole | ''>('');
   const [search, setSearch] = useState('');
-  const directory = useStaffDirectory({
-    facilityId,
-    role: role || undefined,
-    query: search,
-    enabled: ready,
-  });
-  const staffing = (directory.data ?? []).filter((s) =>
-    role ? true : s.roles.some((r) => r === 'official' || r === 'coach'),
-  );
+  const roles: readonly StaffingRole[] = role ? [role as StaffingRole] : ['official', 'coach'];
   return (
     <section className="ops-section" aria-labelledby="officials-title">
       <h3 id="officials-title">Officials and coaches</h3>
@@ -181,61 +183,120 @@ function OfficialsAndCoaches({
           onChange={setSearch}
           type="search"
           hint="The first letters of the given or family name."
+          onEnter={() => undefined}
         />
       </div>
+      {roles.map((r) => (
+        <DirectoryByRole
+          key={r}
+          role={r}
+          facilityId={facilityId}
+          search={search}
+          ready={ready}
+          titled={roles.length > 1}
+          onChoose={onChoose}
+        />
+      ))}
+    </section>
+  );
+}
+
+type StaffingRole = 'official' | 'coach';
+
+const STAFFING_WORDS: Record<StaffingRole, { plural: string; one: string }> = {
+  official: { plural: 'Officials', one: 'an official' },
+  coach: { plural: 'Coaches', one: 'a coach' },
+};
+
+function DirectoryByRole({
+  role,
+  facilityId,
+  search,
+  ready,
+  titled,
+  onChoose,
+}: {
+  role: StaffingRole;
+  facilityId: string | null;
+  search: string;
+  ready: boolean;
+  /** Both roles are shown: each list has its own heading. */
+  titled: boolean;
+  onChoose: (person: { id: string; name: string }) => void;
+}) {
+  const directory = useStaffDirectory({ facilityId, role, query: search, enabled: ready });
+  const words = STAFFING_WORDS[role];
+  const headingId = `officials-${role}-title`;
+  return (
+    <div
+      className="ops-section"
+      role="group"
+      aria-labelledby={titled ? headingId : undefined}
+      aria-label={titled ? undefined : words.plural}
+    >
+      {titled ? <h4 id={headingId}>{words.plural}</h4> : null}
       <QueryBoundary
         query={directory}
-        label="officials and coaches"
-        isEmpty={() => staffing.length === 0}
+        label={words.plural.toLowerCase()}
+        isEmpty={(items) => items.length === 0 && !directory.hasNextPage}
         empty={{
-          title: 'No officials or coaches',
+          title: `No ${words.plural.toLowerCase()}`,
           description: facilityId
-            ? 'Nobody holds an official or coach role at this facility now (or the directory leaves them out for your role).'
-            : 'Nobody holds an official or coach role now (or the directory leaves them out for your role).',
+            ? `Nobody holds ${words.one} role at this facility now (or the directory leaves them out for your role).`
+            : `Nobody holds ${words.one} role now (or the directory leaves them out for your role).`,
         }}
       >
-        {() => (
-          <ul className="list" aria-label="Officials and coaches">
-            {staffing.map((s) => (
-              <li key={s.personId} aria-label={s.displayName}>
-                <div className="row-text">
-                  <span className="row-title">{s.displayName}</span>
-                  <span className="caption">
-                    {s.scopes
-                      .map(
-                        (scope) =>
-                          `${roleWords([scope.role])}: ${
-                            scope.facilityIds.length === 0
-                              ? 'every facility'
-                              : `${scope.facilityIds.length} ${scope.facilityIds.length === 1 ? 'facility' : 'facilities'}`
-                          }`,
-                      )
-                      .join(' · ')}
-                  </span>
-                </div>
-                <Button
-                  variant="secondary"
-                  aria-label={`Availability of ${s.displayName}`}
-                  onClick={() => onChoose({ id: s.personId, name: s.displayName })}
-                >
-                  Availability
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+        {(items) =>
+          items.length === 0 ? (
+            <p className="caption">
+              None on the pages loaded so far; load more to see the rest of the directory.
+            </p>
+          ) : (
+            <ul className="list" aria-label={words.plural}>
+              {items.map((s) => (
+                <li key={s.personId} aria-label={s.displayName}>
+                  <div className="row-text">
+                    <span className="row-title">{s.displayName}</span>
+                    <span className="caption">
+                      {s.scopes
+                        .map(
+                          (scope) =>
+                            `${roleWords([scope.role])}: ${
+                              scope.facilityIds.length === 0
+                                ? 'every facility'
+                                : `${scope.facilityIds.length} ${scope.facilityIds.length === 1 ? 'facility' : 'facilities'}`
+                            }`,
+                        )
+                        .join(' · ')}
+                    </span>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    aria-label={`Availability of ${s.displayName}`}
+                    onClick={() => onChoose({ id: s.personId, name: s.displayName })}
+                  >
+                    Availability
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )
+        }
       </QueryBoundary>
-      <LoadMore pages={directory} label="officials and coaches" />
-    </section>
+      <LoadMore pages={directory} label={words.plural.toLowerCase()} />
+    </div>
   );
 }
 
 function QualificationRow({
   qualification: q,
   name,
+  timezone,
 }: {
   qualification: Qualification;
   name: string;
+  /** The zone the validity was entered in (the operating facility's, SPK-SCHED-008). */
+  timezone: string | null;
 }) {
   const commands = useKeyedCommands({ invalidate: [QUALIFICATIONS_KEY] });
   const [reasonFor, setReasonFor] = useState<'reject' | 'revoke' | null>(null);
@@ -276,8 +337,8 @@ function QualificationRow({
         </span>
         <StatusBadge tone={badge.tone} label={badge.label} />
         <span className="caption">
-          Valid from {formatInstant(q.validFrom)}
-          {q.validTo ? ` to ${formatInstant(q.validTo)}` : ''}
+          Valid from {formatInstant(q.validFrom, timezone)}
+          {q.validTo ? ` to ${formatInstant(q.validTo, timezone)}` : ''}
           {q.evidenceReference ? ` · Evidence: ${q.evidenceReference}` : ' · No evidence reference'}
           {q.verifiedBy ? ` · Verified by ${q.verifiedBy.actorLabel}` : ''}
           {q.statusReason ? ` · ${q.statusReason}` : ''}
@@ -481,7 +542,7 @@ function AvailabilitySection({
   initial: { id: string; name: string } | null;
 }) {
   const now = useNow(60_000);
-  const { facilityId } = useOperatingFacility();
+  const { facilityId, timezone } = useOperatingFacility();
   const [choice, setChoice] = useState<string>(initial?.id ?? 'me');
   const [picked, setPicked] = useState('');
   const known = [
@@ -532,7 +593,7 @@ function AvailabilitySection({
             {(data) => (
               <ul className="list" aria-label="Availability windows">
                 {data.map((w) => (
-                  <WindowRow key={w.id} window={w} />
+                  <WindowRow key={w.id} window={w} timezone={timezone} />
                 ))}
               </ul>
             )}
@@ -546,7 +607,8 @@ function AvailabilitySection({
   );
 }
 
-function WindowRow({ window: w }: { window: Availability }) {
+/** Shown in the zone windows are entered in (the operating facility's, SPK-SCHED-008). */
+function WindowRow({ window: w, timezone }: { window: Availability; timezone: string | null }) {
   const withdraw = useApiCommand('post', '/availability/{id}/withdraw', {
     invalidate: [AVAILABILITY_KEY],
   });
@@ -559,7 +621,8 @@ function WindowRow({ window: w }: { window: Availability }) {
   const [reason, setReason] = useState('');
   const [missing, setMissing] = useState(false);
   const badge = AVAILABILITY_KIND[w.kind];
-  const label = `${badge.label}, ${formatRange(w.interval.start, w.interval.end)}`;
+  const range = formatRange(w.interval.start, w.interval.end, timezone);
+  const label = `${badge.label}, ${range}`;
   const submit = () => {
     if (!reason.trim()) {
       setMissing(true);
@@ -573,11 +636,12 @@ function WindowRow({ window: w }: { window: Availability }) {
     <li aria-label={label}>
       <div className="row-text">
         <StatusBadge tone={badge.tone} label={badge.label} />
-        <span>{formatRange(w.interval.start, w.interval.end)}</span>
+        <span>{range}</span>
         {w.note ? <span className="caption">{w.note}</span> : null}
         {w.status === 'withdrawn' ? (
           <span className="caption">
-            Withdrawn {w.withdrawnAt ? formatInstant(w.withdrawnAt) : ''}: {w.withdrawnReason}
+            Withdrawn {w.withdrawnAt ? formatInstant(w.withdrawnAt, timezone) : ''}:{' '}
+            {w.withdrawnReason}
           </span>
         ) : null}
       </div>

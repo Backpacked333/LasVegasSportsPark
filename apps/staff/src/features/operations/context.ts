@@ -74,6 +74,31 @@ export function useOperatingFacility(): OperatingFacility {
   };
 }
 
+/**
+ * The IANA zone of a facility a record names (SPK-SCHED-008): from the Today feed when it lists
+ * the facility, otherwise from `GET /v1/facilities/{id}` (any signed-in principal); the same reads
+ * and cache as `useOperatingFacility`. Null while it loads, when the record names no facility or
+ * when the read fails: `formatInstant` then labels the device zone, so a device time is never
+ * presented as facility time.
+ */
+export function useFacilityZone(facilityId: string | null | undefined): string | null {
+  const me = useApiQuery({ path: '/me' });
+  const isStaff = me.data?.principal.kind === 'staff';
+  const today = useApiQuery({ path: '/today', enabled: isStaff, staleTime: 5 * 60_000 });
+  const listed = facilityId
+    ? today.data?.facilities.find((f) => f.facilityId === facilityId)
+    : undefined;
+  const todaySettled = !isStaff || today.data !== undefined || today.error !== null;
+  const directory = useApiQuery({
+    path: '/facilities/{id}',
+    request: { path: { id: facilityId ?? '' } },
+    enabled: !!facilityId && me.data !== undefined && todaySettled && !listed,
+    staleTime: 60 * 60_000,
+  });
+  if (!facilityId) return null;
+  return listed?.timezone ?? directory.data?.timezone ?? null;
+}
+
 export type PersonName =
   | { status: 'loading' }
   /** The API left the person out, or refused the read as not available (§4.10). */
@@ -166,13 +191,18 @@ export function usePersonNames(
 /**
  * The label of a listed person. A person whose name the viewer may not read (an assigned coach or
  * official reading a child: identity.read_person is not granted to them) keeps a short opaque
- * reference, so rows and buttons stay distinguishable (SPK-UX-009) without revealing more.
+ * reference, so rows and buttons stay distinguishable (SPK-UX-009) without revealing more. `noun`
+ * says who the person is on this list ("Participant" by default; "Staff member" for an author).
  */
-export function nameOf(names: ReadonlyMap<string, PersonName>, id: string): string {
+export function nameOf(
+  names: ReadonlyMap<string, PersonName>,
+  id: string,
+  noun = 'Participant',
+): string {
   const entry = names.get(id);
   const ref = id.slice(0, 8);
   if (!entry || entry.status === 'loading') return 'Loading name…';
-  if (entry.status === 'unavailable') return `Participant, name not available (ref ${ref})`;
+  if (entry.status === 'unavailable') return `${noun}, name not available (ref ${ref})`;
   if (entry.status === 'error') return `Name could not load (ref ${ref})`;
   return entry.name;
 }

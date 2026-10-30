@@ -240,6 +240,34 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     ).toBeInTheDocument();
   });
 
+  it('SPK-SCHED-008: shows a batch’s receipt and roster snapshot times in its facility zone', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me': oneFacilityMe(),
+        'GET /offline-sync/{id}': {
+          status: 200,
+          body: syncBatch([
+            {
+              clientObservationId: '0192f1a0-0000-7000-8000-0000000000c9',
+              kind: 'arrival',
+              outcome: 'accepted',
+            },
+          ]),
+        },
+      },
+    });
+    render(app.at('/arrival/offline'));
+    await user.type(await screen.findByLabelText('Batch reference'), BATCH_ID);
+    await user.click(screen.getByRole('button', { name: 'Open batch' }));
+    const batch = await screen.findByTestId('offline-batch');
+    // FACILITY_A is America/Los_Angeles (Today feed): 12:00Z is 05:00 PDT on any device.
+    await waitFor(() =>
+      expect(within(batch).getByText(/Taken .*05:00 (PDT|GMT-7)/)).toBeInTheDocument(),
+    );
+    expect(within(batch).getAllByText(/05:00 (PDT|GMT-7)/)).toHaveLength(2);
+  });
+
   it('opens a batch by reference after validating it, and shows a refused one as not available', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

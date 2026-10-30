@@ -5,21 +5,23 @@
  *
  * - A program manager or an accepted coach of the offering drafts a recommendation of the next
  *   offering or program, chosen explicitly (nothing preselected), with the suitability in words.
- *   Offerings come from the published catalogue of the facility (`GET /v1/offerings`); a program
- *   is named by an offering of it.
+ *   Offerings come from the published catalogue of the facility (`GET /v1/offerings`); programs
+ *   by name from `GET /v1/programs` (ProgramPicker).
  * - For an offering the API records a read-only eligibility evaluation; unknown stays unknown and
  *   nothing is shown as eligible without the API saying so. A recommendation reserves nothing and
  *   does not guarantee acceptance, availability or purchase.
  * - Sharing with the family is a separate command with `expectedRevision`; withdrawing needs a
- *   reason and is never gated by the switch.
+ *   reason, sends `expectedRevision` too and is never gated by the switch.
  * - The API has no staff read or list of recommendations, so only those made on this page are
- *   shown (Proposed handling of an API gap).
+ *   shown (Proposed handling of an API gap), named by what was chosen, and a STALE_REVISION answer
+ *   cannot be reloaded: it is shown with its code. Times are in the offering's facility zone.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
 import { usePermissions } from '../../../api/permissions';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiPages } from '../../../api/useApiPages';
+import { useFacilityZone } from '../../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../../features/operations/feedback';
 import { SelectField, TextAreaField, fieldErrorsOf } from '../../../features/operations/fields';
 import { formatInstant, humanize } from '../../../features/operations/format';
@@ -28,7 +30,9 @@ import { Button } from '../../../ui/Button';
 import { LoadMore } from '../../../ui/LoadMore';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
+import { ProgramPicker } from './programs';
 import { ACTIONS, YOUTH_CAPABILITY, type AssessmentSubject, type Recommendation } from './subject';
+import { StaleWithoutRead } from './Templates';
 
 type Offering = Schema<'OfferingListItem'>;
 type Reason = { code?: unknown; message?: unknown; severity?: unknown };
@@ -51,6 +55,8 @@ export function Recommendations({ subject }: { subject: AssessmentSubject }) {
   const capabilityOn = permissions.isCapabilityEnabled(YOUTH_CAPABILITY) === true;
   const mayRecommend = permissions.isPermitted(ACTIONS.recommend, subject.facilityId) === true;
   const [made, setMade] = useState<Recommendation[]>([]);
+  // What each recommendation made here names (the offering or program chosen), by its id.
+  const [named, setNamed] = useState<ReadonlyMap<string, string>>(new Map());
   const replace = (next: Recommendation) =>
     setMade((prev) => prev.map((r) => (r.id === next.id ? next : r)));
   return (
@@ -68,6 +74,7 @@ export function Recommendations({ subject }: { subject: AssessmentSubject }) {
             <RecommendationCard
               key={r.id}
               recommendation={r}
+              recommended={named.get(r.id) ?? null}
               subject={subject}
               capabilityOn={capabilityOn}
               onChange={replace}
@@ -80,7 +87,13 @@ export function Recommendations({ subject }: { subject: AssessmentSubject }) {
         </p>
       )}
       {capabilityOn && mayRecommend ? (
-        <RecommendForm subject={subject} onMade={(r) => setMade((prev) => [r, ...prev])} />
+        <RecommendForm
+          subject={subject}
+          onMade={(r, name) => {
+            setMade((prev) => [r, ...prev]);
+            setNamed((prev) => new Map(prev).set(r.id, name));
+          }}
+        />
       ) : null}
     </section>
   );
@@ -91,10 +104,11 @@ function RecommendForm({
   onMade,
 }: {
   subject: AssessmentSubject;
-  onMade: (r: Recommendation) => void;
+  onMade: (r: Recommendation, name: string) => void;
 }) {
   const [target, setTarget] = useState<'offering' | 'program' | ''>('');
   const [choice, setChoice] = useState('');
+  const [programName, setProgramName] = useState('');
   const [suitability, setSuitability] = useState('');
   const [problems, setProblems] = useState<Record<string, string>>({});
   const offerings = useApiPages({
@@ -106,12 +120,6 @@ function RecommendForm({
     () => (offerings.data ?? []).filter((o) => o.id !== subject.offeringId),
     [offerings.data, subject.offeringId],
   );
-  const programs = useMemo(() => {
-    const byProgram = new Map<string, Offering>();
-    for (const o of offerings.data ?? [])
-      if (!byProgram.has(o.programId)) byProgram.set(o.programId, o);
-    return [...byProgram.entries()];
-  }, [offerings.data]);
   const command = useApiCommand('post', '/progression-recommendations');
   const apiErrors = fieldErrorsOf(command.error);
   const submit = () => {
@@ -134,8 +142,15 @@ function RecommendForm({
         },
       })
       .then((r) => {
-        onMade(r);
+        const offering = others.find((o) => o.id === choice);
+        onMade(
+          r,
+          target === 'offering' && offering
+            ? `${offering.name} (${offering.startsOn} to ${offering.endsOn})`
+            : programName || 'The chosen program',
+        );
         setChoice('');
+        setProgramName('');
         setSuitability('');
       })
       .catch(() => undefined);
@@ -180,10 +195,10 @@ function RecommendForm({
           </span>
         ) : null}
       </fieldset>
-      {target ? (
+      {target === 'offering' ? (
         <>
           <SelectField
-            label={target === 'offering' ? 'Recommended offering' : 'Recommended program'}
+            label="Recommended offering"
             value={choice}
             onChange={setChoice}
             placeholder={
@@ -194,24 +209,12 @@ function RecommendForm({
                 : 'Choose'
             }
             disabled={offerings.data === undefined}
-            options={
-              target === 'offering'
-                ? others.map((o) => ({
-                    value: o.id,
-                    label: `${o.name} (${o.startsOn} to ${o.endsOn})`,
-                  }))
-                : programs.map(([programId, o]) => ({
-                    value: programId,
-                    label: `The program of ${o.name}`,
-                  }))
-            }
+            options={others.map((o) => ({
+              value: o.id,
+              label: `${o.name} (${o.startsOn} to ${o.endsOn})`,
+            }))}
             hint="From the published offerings of this facility."
-            error={
-              problems.choice ??
-              (target === 'offering'
-                ? apiErrors.recommendedOfferingId
-                : apiErrors.recommendedProgramId)
-            }
+            error={problems.choice ?? apiErrors.recommendedOfferingId}
           />
           {offerings.error ? (
             <StateView
@@ -222,6 +225,17 @@ function RecommendForm({
           ) : null}
           <LoadMore pages={offerings} label="offerings" />
         </>
+      ) : target === 'program' ? (
+        <ProgramPicker
+          label="Recommended program"
+          value={choice}
+          onChange={(id, program) => {
+            setChoice(id);
+            setProgramName(program?.name ?? '');
+          }}
+          hint="The program, not a particular offering of it."
+          error={problems.choice ?? apiErrors.recommendedProgramId}
+        />
       ) : null}
       <TextAreaField
         label="Why it suits the participant"
@@ -246,16 +260,20 @@ function RecommendForm({
 
 function RecommendationCard({
   recommendation: r,
+  recommended,
   subject,
   capabilityOn,
   onChange,
 }: {
   recommendation: Recommendation;
+  /** The offering or program chosen, as named when it was recommended here. */
+  recommended: string | null;
   subject: AssessmentSubject;
   capabilityOn: boolean;
   onChange: (r: Recommendation) => void;
 }) {
   const permissions = usePermissions();
+  const zone = useFacilityZone(subject.facilityId);
   const mayRecommend = permissions.isPermitted(ACTIONS.recommend, subject.facilityId) === true;
   const mayWithdraw =
     permissions.isPermitted(ACTIONS.withdrawRecommendation, subject.facilityId) === true;
@@ -278,14 +296,14 @@ function RecommendationCard({
     }
     setMissing(false);
     void withdraw
-      .submit({ path: { id: r.id }, body: { reason: reason.trim() } })
+      .submit({ path: { id: r.id }, body: { reason: reason.trim(), expectedRevision: r.revision } })
       .then((next) => {
         onChange(next);
         setWithdrawing(false);
       })
       .catch(() => undefined);
   };
-  const what = r.recommendedOfferingId ? 'An offering' : 'A program';
+  const what = `${r.recommendedOfferingId ? 'An offering' : 'A program'}${recommended ? `: ${recommended}` : ''}`;
   return (
     <li aria-label={`Recommendation: ${r.suitability}`}>
       <div className="row-text">
@@ -324,7 +342,9 @@ function RecommendationCard({
             registers.
           </span>
         )}
-        {r.sharedAt ? <span className="caption">Shared {formatInstant(r.sharedAt)}</span> : null}
+        {r.sharedAt ? (
+          <span className="caption">Shared {formatInstant(r.sharedAt, zone)}</span>
+        ) : null}
       </div>
       <div className="ops-actions">
         {r.status === 'draft' && capabilityOn && mayRecommend ? (
@@ -368,6 +388,9 @@ function RecommendationCard({
       ) : null}
       {withdraw.error ? (
         <CommandError error={withdraw.error} onRetry={doWithdraw} subject="This recommendation" />
+      ) : null}
+      {share.error?.code === 'STALE_REVISION' || withdraw.error?.code === 'STALE_REVISION' ? (
+        <StaleWithoutRead what="recommendation" />
       ) : null}
       {share.data && share.data.status === 'shared' ? (
         <CommandSuccess label="Recommendation shared">
