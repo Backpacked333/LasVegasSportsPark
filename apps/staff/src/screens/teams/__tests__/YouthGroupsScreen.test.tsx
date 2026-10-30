@@ -273,7 +273,7 @@ describe('SCR-S-19 progression recommendations (SPK-YOUTH-006, ENR-14, DEC-055)'
     const made = await screen.findByRole('list', { name: 'Recommendations made here' });
     expect(within(made).getByText('Recommendation draft')).toBeInTheDocument();
     expect(within(made).getByText('Not visible to the family until shared.')).toBeVisible();
-    expect(within(made).getByTestId('recommendation-eligibility')).toHaveTextContent('Eligible');
+    expect(within(made).getByTestId('eligibility-summary')).toHaveTextContent('Eligible');
     expect(app.fake.requests.find((r) => r.route === '/progression-recommendations')?.body).toEqual(
       {
         participantPersonId: ID.child,
@@ -322,10 +322,15 @@ describe('SCR-S-19 progression recommendations (SPK-YOUTH-006, ENR-14, DEC-055)'
     await user.click(within(form).getByRole('button', { name: 'Draft the recommendation' }));
     const made = await screen.findByRole('list', { name: 'Recommendations made here' });
     const eligibility = within(made).getByTestId('recommendation-eligibility');
-    expect(eligibility).not.toHaveTextContent(
-      /^Eligibility for the recommended offering: Eligible/,
+    // The summary badge itself (not the reason rows) reads unknown, never "Eligible", although
+    // the recorded evaluation says eligible: true with an unknown-severity reason (DEC-055).
+    expect(within(eligibility).getByTestId('eligibility-summary')).toHaveTextContent(
+      'Unknown or stale evidence',
     );
-    expect(within(eligibility).getAllByText('Unknown or stale evidence').length).toBeGreaterThan(0);
+    expect(within(eligibility).getByTestId('eligibility-summary')).not.toHaveTextContent(
+      'Eligible',
+    );
+    expect(within(eligibility).queryByText('Eligible')).toBeNull();
     await user.click(within(made).getByRole('button', { name: 'Withdraw' }));
     const withdraw = within(made).getByRole('form', { name: 'Withdraw the recommendation' });
     await user.click(within(withdraw).getByRole('button', { name: 'Withdraw the recommendation' }));
@@ -358,6 +363,91 @@ describe('SCR-S-19 progression recommendations (SPK-YOUTH-006, ENR-14, DEC-055)'
     expect(
       await within(form).findByText('Youth assessments and progression turned off'),
     ).toBeInTheDocument();
+  });
+
+  it('keeps a recommendation made here withdrawable when the switch turns off (withdraw is never gated)', async () => {
+    const { app, user } = await openOffering({
+      ...on,
+      'POST /progression-recommendations': created(recommendation()),
+      'POST /progression-recommendations/{id}/share': () =>
+        fakeResponse(403, capabilityDisabledBody('youth_progression', ['DEC-016'])),
+      'POST /progression-recommendations/{id}/withdraw': ok(
+        recommendation({ status: 'withdrawn', revision: 2 }),
+      ),
+    });
+    const form = await screen.findByRole('form', { name: 'Draft a progression recommendation' });
+    await waitFor(() =>
+      expect(within(form).getByRole('option', { name: 'Mia Camper' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(within(form).getByLabelText(/^Child/), ID.child);
+    await user.selectOptions(within(form).getByLabelText(/^Recommend\b/), 'offering');
+    await waitFor(() =>
+      expect(within(form).getByRole('option', { name: 'Summer camp week 2' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(within(form).getByLabelText(/^Recommended offering/), ID.offering2);
+    await user.type(within(form).getByLabelText(/^Suitability/), 'Strong skills.');
+    await user.click(within(form).getByRole('button', { name: 'Draft the recommendation' }));
+    const made = await screen.findByRole('list', { name: 'Recommendations made here' });
+    // The organization turns the switch off; sharing answers CAPABILITY_DISABLED and the
+    // permissions read is refreshed.
+    app.fake.set('GET /me/permissions', mePermissions());
+    await user.click(within(made).getByRole('button', { name: 'Share with the family' }));
+    expect(await screen.findByText('Progression recommendations turned off')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: 'Draft a progression recommendation' })).toBeNull(),
+    );
+    const still = screen.getByRole('list', { name: 'Recommendations made here' });
+    expect(within(still).queryByRole('button', { name: 'Share with the family' })).toBeNull();
+    expect(
+      screen.getByText(/Recommendations made on this page stay listed and can still be withdrawn/),
+    ).toBeVisible();
+    await user.click(within(still).getByRole('button', { name: 'Withdraw' }));
+    const withdraw = within(still).getByRole('form', { name: 'Withdraw the recommendation' });
+    await user.type(within(withdraw).getByLabelText(/^Reason/), 'Offered in error.');
+    await user.click(within(withdraw).getByRole('button', { name: 'Withdraw the recommendation' }));
+    expect(await within(still).findByText('Recommendation withdrawn')).toBeInTheDocument();
+  });
+
+  it('pages the offerings to recommend with Load more and offers only active programs', async () => {
+    const third = { ...offering, id: ID.offering3, name: 'Autumn term' };
+    const { app, user } = await openOffering({
+      ...on,
+      'GET /offerings': (req: { query: Record<string, string> }) =>
+        fakeResponse(
+          200,
+          req.query.kind
+            ? page([offering])
+            : req.query.cursor
+              ? page([third])
+              : page([offering, next], 'more-offerings'),
+        ),
+      'GET /programs': ok(page([{ id: ID.program, name: 'Junior pathway' }])),
+    });
+    const form = await screen.findByRole('form', { name: 'Draft a progression recommendation' });
+    await user.selectOptions(within(form).getByLabelText(/^Recommend\b/), 'offering');
+    const select = within(form).getByLabelText(/^Recommended offering/);
+    await waitFor(() =>
+      expect(within(select).getByRole('option', { name: 'Summer camp week 2' })).toBeVisible(),
+    );
+    expect(within(select).queryByRole('option', { name: 'Autumn term' })).toBeNull();
+    await user.click(within(form).getByRole('button', { name: 'Load more offerings' }));
+    await waitFor(() =>
+      expect(within(select).getByRole('option', { name: 'Autumn term' })).toBeInTheDocument(),
+    );
+    expect(
+      app.fake.requests.some(
+        (r) => r.route === '/offerings' && r.query.cursor === 'more-offerings',
+      ),
+    ).toBe(true);
+    await user.selectOptions(within(form).getByLabelText(/^Recommend\b/), 'program');
+    await waitFor(() =>
+      expect(
+        within(within(form).getByLabelText(/^Recommended program/)).getByRole('option', {
+          name: 'Junior pathway',
+        }),
+      ).toBeInTheDocument(),
+    );
+    expect(app.fake.requests.find((r) => r.route === '/programs')?.query.status).toBe('active');
   });
 
   it('shows ACCESS_DENIED for an account that is not the offering’s author as not available', async () => {

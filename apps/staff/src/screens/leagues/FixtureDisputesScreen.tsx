@@ -7,6 +7,8 @@
  * the review command; a staff member who submitted the dispute withdraws it with a reason
  * (`POST /v1/disputes/{id}/withdraw`, CMP-12). The dispute and appeal procedure is pending
  * DEC-010. The card and its actions are shared with the season-wide list (DisputesScreen).
+ * Submission, protest-window and decision times are shown in the venue's time zone when the
+ * fixture has one (SPK-SCHED-008); otherwise in the device's zone, named.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState, type ReactNode } from 'react';
@@ -250,11 +252,14 @@ export function DisputeCard({
   dispute,
   entries,
   fixtureLabel,
+  timeZone,
 }: {
   dispute: Dispute;
   entries: EntryNames;
   /** The fixture the dispute is about, on lists that span fixtures. */
   fixtureLabel?: ReactNode;
+  /** The fixture venue's IANA time zone (SPK-SCHED-008); the device zone, named, until known. */
+  timeZone?: string | null;
 }) {
   const badge = DISPUTE_STATUS[dispute.status];
   return (
@@ -280,11 +285,11 @@ export function DisputeCard({
           </div>
           <div>
             <dt>Submitted</dt>
-            <dd>{formatInstant(dispute.submittedAt)}</dd>
+            <dd>{formatInstant(dispute.submittedAt, timeZone)}</dd>
           </div>
           <div>
             <dt>Submission window closed</dt>
-            <dd>{formatInstant(dispute.submissionDeadlineAt)}</dd>
+            <dd>{formatInstant(dispute.submissionDeadlineAt, timeZone)}</dd>
           </div>
           <div>
             <dt>Disputed result</dt>
@@ -298,7 +303,7 @@ export function DisputeCard({
             <dt>Decision</dt>
             <dd>
               {dispute.decision
-                ? `${humanizeCode(dispute.decision)} ${formatInstant(dispute.decidedAt)}`
+                ? `${humanizeCode(dispute.decision)} ${formatInstant(dispute.decidedAt, timeZone)}`
                 : 'Not decided'}
             </dd>
           </div>
@@ -365,7 +370,12 @@ export function FixtureDisputesScreen() {
         {(data) => (
           <ul className="list" aria-label="Disputes">
             {data.map((dispute) => (
-              <DisputeCard key={dispute.id} dispute={dispute} entries={byId} />
+              <DisputeCard
+                key={dispute.id}
+                dispute={dispute}
+                entries={byId}
+                timeZone={fixture.data?.venue?.timezone ?? null}
+              />
             ))}
           </ul>
         )}

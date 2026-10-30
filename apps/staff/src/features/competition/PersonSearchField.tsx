@@ -5,7 +5,8 @@
  * names, kind and status only, never a date of birth or contact. Anyone may still enter the opaque
  * reference from the person's record instead. The chosen person is confirmed by name through
  * `GET /v1/person-names`; a person the viewer may not view reads "not available", never more.
- * The search text stays in the form: it is never put in the page address or logged.
+ * The search text stays in the form: it is never put in the page address or logged. Enter in the
+ * search box searches (it never submits the enclosing form, SPK-UX-009).
  */
 import { useId, useState } from 'react';
 import { usePermissions } from '../../api/permissions';
@@ -174,8 +175,9 @@ export function PersonSearchField({
         required={required}
         value={input}
         onChange={setInput}
+        onEnter={search}
         error={inputError ?? error}
-        hint={hint}
+        hint={hint ?? 'Press Enter or choose Search.'}
       />
       <div className="actions">
         <Button variant="secondary" onClick={search}>

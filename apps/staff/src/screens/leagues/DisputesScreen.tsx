@@ -16,6 +16,7 @@ import { PendingNote } from '../../features/competition/feedback';
 import { SelectField } from '../../features/competition/fields';
 import { formatInstant } from '../../features/competition/format';
 import { DISPUTE_STATUS } from '../../features/competition/labels';
+import { FixtureReadFailure } from '../../features/competition/names';
 import { LeaguesNav } from '../../features/competition/nav';
 import { PENDING } from '../../features/competition/pending';
 import { LoadMore } from '../../ui/LoadMore';
@@ -57,11 +58,18 @@ function DisputeRow({ dispute }: { dispute: Dispute }) {
         : ''}
     </Link>
   ) : fixture.error ? (
-    <span>Fixture not available</span>
+    <FixtureReadFailure error={fixture.error} onRetry={() => void fixture.refetch()} />
   ) : (
     <span aria-busy="true">Loading the fixture…</span>
   );
-  return <DisputeCard dispute={dispute} entries={entries} fixtureLabel={label} />;
+  return (
+    <DisputeCard
+      dispute={dispute}
+      entries={entries}
+      fixtureLabel={label}
+      timeZone={data?.venue?.timezone ?? null}
+    />
+  );
 }
 
 export function DisputesScreen() {

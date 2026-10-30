@@ -8,7 +8,10 @@
  * A concurrent roster edit answers STALE_REVISION and offers "Reload". A player is found by name
  * or contact through the staff person search (`GET /v1/people`, ID-02; names, kind and status
  * only) or entered by the reference on their record; overriding an eligibility failure is
- * pending DEC-066 and not offered.
+ * pending DEC-066 and not offered. Adding and removing players are offered only when the team
+ * workspace's `viewer.availableActions` (CMP-02, `GET /v1/team-entries/{id}`) holds
+ * `competition.manage_roster` for this entry in its current state; the API still decides and its
+ * ACCESS_DENIED is shown as not available.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -42,6 +45,8 @@ type Workspace = Schema<'TeamEntryWorkspace'>;
 type PlayingStatus = Schema<'RosterPlayingStatus'>;
 
 const ROSTER_KEYS = keys('/team-entries/{id}/roster', '/team-entries/{id}', '/team-entries');
+/** The roster command's action id, as listed in the workspace's `viewer.availableActions`. */
+export const MANAGE_ROSTER_ACTION = 'competition.manage_roster';
 
 function EligibilityIndicator({ member }: { member: Member }) {
   const indicator = member.eligibility;
@@ -336,6 +341,8 @@ export function RosterScreen() {
   const [history, setHistory] = useState(false);
   const [adding, setAdding] = useState(false);
   const workspace = useApiQuery({ path: '/team-entries/{id}', request: { path: { id: entryId } } });
+  // CMP-02: what the kernel allows this viewer on this entry now; the client never decides it.
+  const canManage = workspace.data?.viewer.availableActions.includes(MANAGE_ROSTER_ACTION) === true;
   const atIso = localInputToIso(at);
   const roster = useApiQuery({
     path: '/team-entries/{id}/roster',
@@ -371,16 +378,23 @@ export function RosterScreen() {
           checked={history}
           onChange={setHistory}
         />
-        <Button
-          variant="secondary"
-          aria-expanded={adding}
-          onClick={() => setAdding((a) => !a)}
-          disabled={!workspace.data}
-        >
-          {adding ? 'Close the add form' : 'Add a player'}
-        </Button>
+        {!workspace.data || canManage ? (
+          <Button
+            variant="secondary"
+            aria-expanded={adding}
+            onClick={() => setAdding((a) => !a)}
+            disabled={!workspace.data}
+          >
+            {adding ? 'Close the add form' : 'Add a player'}
+          </Button>
+        ) : null}
       </div>
-      {adding && workspace.data ? <AddMember workspace={workspace.data} /> : null}
+      {workspace.data && !canManage ? (
+        <p className="caption" role="note" data-testid="roster-changes-unavailable">
+          Adding and removing players is not available to you on this entry now.
+        </p>
+      ) : null}
+      {adding && workspace.data && canManage ? <AddMember workspace={workspace.data} /> : null}
       <QueryBoundary
         query={roster}
         label="the roster"
@@ -425,7 +439,7 @@ export function RosterScreen() {
                       {member.status === 'active' ||
                       member.status === 'guest' ||
                       member.status === 'substitute' ? (
-                        workspace.data ? (
+                        workspace.data && canManage ? (
                           <RemoveMember
                             entryId={entryId}
                             entryRevision={workspace.data.entry.revision}

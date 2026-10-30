@@ -36,6 +36,7 @@ import { useSeasonEntries } from '../../features/competition/names';
 import { Button } from '../../ui/Button';
 import { CapabilityGate } from '../../ui/CapabilityGate';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { SeedNode } from './SeedFromStandings';
 import { StandingsTable } from './StandingsScreen';
@@ -315,30 +316,51 @@ function PoolStandings({ pool }: { pool: Pool }) {
       <QueryBoundary
         query={standings}
         label="pool standings"
-        isEmpty={(data) => data.rows.length === 0}
-        empty={{
-          title: 'No standings yet',
-          description: 'The table appears once the pool has entries.',
-        }}
+        empty={{ title: '', description: '' }}
       >
-        {(data) => (
-          <>
-            {data.pendingFixtureIds.length > 0 ? (
+        {(data) => {
+          const pending = data.pendingFixtureIds.length;
+          const pendingNote =
+            pending > 0 ? (
               <p role="note">
-                <StatusBadge tone="warning" label="Not final" /> {data.pendingFixtureIds.length}{' '}
-                {data.pendingFixtureIds.length === 1 ? 'fixture' : 'fixtures'} between pool entries
-                {data.pendingFixtureIds.length === 1 ? ' has' : ' have'} no official result yet;
-                seeding a bracket waits for them.
+                <StatusBadge tone="warning" label="Not final" /> {pending}{' '}
+                {pending === 1 ? 'fixture' : 'fixtures'} between pool entries
+                {pending === 1 ? ' has' : ' have'} no official result yet; seeding a bracket waits
+                for them.
               </p>
-            ) : (
-              <p role="note">
-                <StatusBadge tone="success" label="Final" /> Every fixture between pool entries has
-                an official result.
-              </p>
-            )}
-            <StandingsTable standings={data} caption="Pool standings" />
-          </>
-        )}
+            ) : null;
+          // SCR-S-13 "empty (no official results)": a table of entries on zero points is not a
+          // standing, and is never called final (SPK-RESULT-003).
+          if (data.sourceResultIds.length === 0) {
+            return (
+              <>
+                <StateView
+                  variant="empty"
+                  title="No official results yet"
+                  description={
+                    pending > 0
+                      ? 'The table appears once a fixture between pool entries has an official result.'
+                      : data.rows.length < 2
+                        ? 'The pool needs at least two entries and a fixture between them.'
+                        : 'No fixture between pool entries exists yet. The table appears once one has an official result.'
+                  }
+                />
+                {pendingNote}
+              </>
+            );
+          }
+          return (
+            <>
+              {pendingNote ?? (
+                <p role="note">
+                  <StatusBadge tone="success" label="Final" /> Every fixture between pool entries
+                  has an official result.
+                </p>
+              )}
+              <StandingsTable standings={data} caption="Pool standings" />
+            </>
+          );
+        }}
       </QueryBoundary>
     </section>
   );

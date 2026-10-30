@@ -78,6 +78,11 @@ const workspace = {
   pendingInvitations: [],
   pendingJoinRequests: [],
   upcomingFixtures: [],
+  viewer: {
+    roles: [],
+    actingAsCaptain: false,
+    availableActions: ['competition.manage_roster', 'competition.handover_team_role'],
+  },
 };
 
 const roster = (members: unknown[]) => ({
@@ -281,6 +286,55 @@ describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
     ).toEqual({ personId: ID.person, status: 'active' });
   });
 
+  it('offers adding and removing players only when the workspace lists competition.manage_roster (CMP-02)', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /team-entries/{id}': ok({
+          ...workspace,
+          viewer: {
+            roles: [],
+            actingAsCaptain: false,
+            availableActions: ['competition.manage_team'],
+          },
+        }),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    const list = await screen.findByRole('list', { name: 'Roster' });
+    expect(await screen.findByTestId('roster-changes-unavailable')).toHaveTextContent(
+      'Adding and removing players is not available to you on this entry now.',
+    );
+    expect(screen.queryByRole('button', { name: 'Add a player' })).toBeNull();
+    expect(within(list).queryByRole('button', { name: /^Remove / })).toBeNull();
+    // Reading and explaining stay available.
+    expect(
+      within(list).getByRole('button', { name: 'Explain eligibility of Alex Keeper' }),
+    ).toBeVisible();
+  });
+
+  it('still shows ACCESS_DENIED from the roster command as not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'POST /team-entries/{id}/roster': fail(
+          403,
+          'ACCESS_DENIED',
+          'contact_support_or_request_access',
+        ),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(
+      await screen.findByRole('button', { name: 'Remove Alex Keeper from the roster' }),
+    );
+    const form = screen.getByRole('form', { name: 'Remove Alex Keeper' });
+    await user.type(within(form).getByLabelText(/^Reason/), 'Moved away.');
+    await user.click(within(form).getByRole('button', { name: 'Remove from the roster' }));
+    expect(await within(form).findByText('Not available to you')).toBeInTheDocument();
+  });
+
   it('shows a roster the viewer may not see as not available', async () => {
     const app = createTestApp({
       routes: {
@@ -335,6 +389,22 @@ describe('SCR-S-17 adding a player found by person search (ID-02, SPK-IAM-002, Â
     );
     // The search text never reaches the page address.
     expect(window.location.href).not.toContain('Nia');
+  });
+
+  it('searches when Enter is pressed in the search box, without submitting the add form (SPK-UX-009)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: searchRoutes });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(await screen.findByRole('button', { name: 'Add a player' }));
+    const form = screen.getByRole('form', { name: 'Add a player' });
+    await user.type(await within(form).findByLabelText(/^Player: find by name/), 'Nia{Enter}');
+    const results = await within(form).findByRole('list', { name: /People matching/ });
+    expect(within(results).getByText('Nia Striker')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/people')?.query.query).toBe('Nia');
+    // The enclosing form was not submitted: no validation messages, no roster command.
+    expect(within(form).queryByText(/Find the player by name, or enter the reference/)).toBeNull();
+    expect(within(form).queryByText('Choose active, guest or substitute.')).toBeNull();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
   });
 
   it('lets the player be changed after choosing, and entered by reference instead', async () => {

@@ -7,7 +7,9 @@
  * (the input snapshot) so it can be run again. Earlier runs are listed newest first
  * (`GET /v1/fixture-specifications/{id}/solver-runs`, CMP-05) with the outcome in the same honest
  * words: "feasible" never reads as optimal and "none found within the limit" never as impossible.
- * The solver run page shows a recorded run.
+ * The solver run page shows a recorded run. A saved specification is changed in place
+ * (`PATCH /v1/fixture-specifications/{id}`, CMP-12) with its `expectedRevision`; compressed play
+ * (games per team per day, officials per game, CMP-15) is part of the summary.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -17,7 +19,7 @@ import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError, fieldErrorsOf } from '../../features/competition/CommandError';
-import { keys } from '../../features/competition/feedback';
+import { keys, SuccessNote } from '../../features/competition/feedback';
 import {
   CheckboxField,
   NumberField,
@@ -33,9 +35,11 @@ import {
 } from '../../features/competition/labels';
 import { LeaguesNav } from '../../features/competition/nav';
 import { EntryName, useSeasonEntries } from '../../features/competition/names';
+import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SpecificationForm } from './FixtureGenerationScreen';
 import { SolverRunView } from './SolverRunView';
 
 type Specification = Schema<'FixtureSpecification'>;
@@ -120,6 +124,14 @@ function SpecificationSummary({
                 : 'None'}
             </dd>
           </div>
+          <div>
+            <dt>Most games per team on one day</dt>
+            <dd>
+              {spec.maxGamesPerTeamPerDay !== null && spec.maxGamesPerTeamPerDay !== undefined
+                ? `${spec.maxGamesPerTeamPerDay} (facility-local day)`
+                : 'No daily cap'}
+            </dd>
+          </div>
           {hard.map((p, index) => (
             <div key={`hard-${index}`}>
               <dt>Hard preference</dt>
@@ -128,6 +140,12 @@ function SpecificationSummary({
           ))}
         </dl>
       </div>
+      <p data-testid="officials-per-game">
+        Officials each game needs:{' '}
+        {spec.officialsPerGame !== null && spec.officialsPerGame !== undefined
+          ? `${spec.officialsPerGame} (reported per day on each run)`
+          : 'not stated'}
+      </p>
       <div className="constraint-group" data-kind="preference">
         <h3>
           <StatusBadge tone="info" label="Preferences (weighted)" />
@@ -273,6 +291,20 @@ function GenerateForm({
   );
 }
 
+/**
+ * What a run created, from what the API recorded (SPK-FIX-004, SPK-FIX-005): a check creates
+ * nothing; a generation creates fixtures and a schedule draft only when its proposal met every
+ * hard constraint, so an infeasible run or one that found nothing within the limit says so.
+ */
+export function runProduct(run: Schema<'SolverRun'>): string {
+  if (run.dryRun) return 'Check only: no fixtures or draft created';
+  const fixtures = run.fixtureIds.length;
+  const count = `${fixtures} ${fixtures === 1 ? 'fixture' : 'fixtures'}`;
+  if (run.scheduleDraftId !== null) return `Created ${count} in a schedule draft`;
+  if (fixtures > 0) return `Created ${count}; no schedule draft (no game had a time and resource)`;
+  return 'No fixtures or draft created';
+}
+
 /** Earlier runs of the specification, newest first (CMP-05, SPK-FIX-004, SPK-AT-011). */
 function EarlierRuns({ specificationId }: { specificationId: string }) {
   const runs = useApiPages({
@@ -303,8 +335,8 @@ function EarlierRuns({ specificationId }: { specificationId: string }) {
                     </Link>
                     <StatusBadge tone={outcome.tone} label={outcome.label} />
                     <span className="caption">
-                      {run.dryRun ? 'Check only' : 'Generated fixtures and a draft'} · search
-                      stopped because {SOLVER_STOPPED_BY[run.explanation.stoppedBy]} ·{' '}
+                      {runProduct(run)} · search stopped because{' '}
+                      {SOLVER_STOPPED_BY[run.explanation.stoppedBy]} ·{' '}
                       {run.explanation.candidatesTried} candidates tried
                     </span>
                     <span className="caption">{outcome.explanation}</span>
@@ -316,6 +348,67 @@ function EarlierRuns({ specificationId }: { specificationId: string }) {
         )}
       </QueryBoundary>
       <LoadMore pages={runs} label="runs" />
+    </section>
+  );
+}
+
+/** CMP-12: change the saved specification from its current values, with `expectedRevision`. */
+function ChangeSpecification({ spec }: { spec: Specification }) {
+  const [open, setOpen] = useState(false);
+  const [saved, setSaved] = useState<number | null>(null);
+  const division = useApiQuery({
+    path: '/divisions/{id}',
+    request: { path: { id: spec.divisionId } },
+    enabled: open,
+  });
+  const season = useApiQuery({
+    path: '/seasons/{id}',
+    request: { path: { id: spec.seasonId } },
+    enabled: open,
+  });
+  return (
+    <section className="panel" aria-labelledby="change-specification-title">
+      <h3 id="change-specification-title">Change this specification</h3>
+      <p className="caption">
+        Earlier runs keep the input they ran with. A change is refused while a schedule draft
+        generated from this specification is open.
+      </p>
+      {saved !== null && !open ? (
+        <SuccessNote>{`Specification saved (revision ${saved})`}</SuccessNote>
+      ) : null}
+      {!open ? (
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setSaved(null);
+            setOpen(true);
+          }}
+        >
+          Change the specification
+        </Button>
+      ) : division.data && season.data ? (
+        <SpecificationForm
+          key={spec.revision}
+          division={division.data}
+          season={season.data}
+          existing={spec}
+          onSaved={(next) => {
+            setSaved(next.revision);
+            setOpen(false);
+          }}
+          onCancel={() => setOpen(false)}
+        />
+      ) : division.error || season.error ? (
+        <CommandError
+          error={division.error ?? season.error}
+          onRetry={() => {
+            void division.refetch();
+            void season.refetch();
+          }}
+        />
+      ) : (
+        <p aria-busy="true">Loading the division and season…</p>
+      )}
     </section>
   );
 }
@@ -343,6 +436,7 @@ export function FixtureSpecificationScreen() {
               <Link to={`/leagues/seasons/${data.seasonId}/fixtures`}>Season fixtures</Link>
             </p>
             <SpecificationSummary spec={data} entries={byId} />
+            <ChangeSpecification spec={data} />
             <GenerateForm spec={data} entries={byId} />
             <EarlierRuns specificationId={data.id} />
           </>

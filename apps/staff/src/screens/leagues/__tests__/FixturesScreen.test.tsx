@@ -241,6 +241,81 @@ describe('SCR-S-10 FixturesScreen (SPK-READY-001, SPK-READY-004)', () => {
     expect(screen.getByText(/for the fixtures on this page/)).toBeInTheDocument();
   });
 
+  it('reads each fixture on a filtered page when its window is also too large (TOO_MANY_FIXTURES)', async () => {
+    const user = userEvent.setup();
+    const tooMany = () =>
+      fakeResponse(
+        400,
+        apiErrorBody('VALIDATION_FAILED', {
+          nextAction: 'correct_input',
+          details: { code: 'TOO_MANY_FIXTURES', limit: 100 },
+        }),
+      );
+    const app = createTestApp({
+      routes: {
+        ...listRoutes,
+        'GET /seasons/{id}/fixtures': ok(page([fixture()])),
+        // The summary filters by time only: the division's page window still holds more than 100
+        // fixtures of the whole season.
+        'GET /seasons/{id}/readiness': tooMany,
+        'GET /fixtures/{id}/readiness': ok(
+          readiness({ status: 'blocked', issues: [readinessIssue()] }),
+        ),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/fixtures`));
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Division A' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(screen.getByLabelText('Division'), ID.division);
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some(
+          (r) => r.route === '/seasons/{id}/fixtures' && r.query.divisionId === ID.division,
+        ),
+      ).toBe(true),
+    );
+    const table = await screen.findByRole('table', { name: 'Fixtures' });
+    expect(await within(table).findByText('Blocked')).toBeInTheDocument();
+    expect(within(table).getByText(/1 blocking/)).toBeInTheDocument();
+    expect(within(table).queryByText(/could not evaluate/)).toBeNull();
+    expect(screen.getByText(/readiness is evaluated for each fixture on the page/)).toBeVisible();
+    expect(screen.queryByText(/could not be evaluated \(VALIDATION_FAILED\)/)).toBeNull();
+    expect(
+      app.fake.requests.some((r) => r.route === '/seasons/{id}/readiness' && r.query.from),
+    ).toBe(true);
+    const reads = () =>
+      app.fake.requests.filter((r) => r.route === '/fixtures/{id}/readiness').length;
+    const before = reads();
+    expect(before).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Re-evaluate readiness' }));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
+  it('says why a per-fixture read failed, never ready', async () => {
+    const tooMany = () =>
+      fakeResponse(
+        400,
+        apiErrorBody('VALIDATION_FAILED', {
+          nextAction: 'correct_input',
+          details: { code: 'TOO_MANY_FIXTURES', limit: 100 },
+        }),
+      );
+    const app = createTestApp({
+      routes: {
+        ...listRoutes,
+        'GET /seasons/{id}/fixtures': ok(page([fixture()])),
+        'GET /seasons/{id}/readiness': tooMany,
+        'GET /fixtures/{id}/readiness': fail(503, 'INTEGRATION_UNAVAILABLE', 'retry_later'),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/fixtures`));
+    expect(
+      await screen.findByText('Unknown: could not evaluate (INTEGRATION_UNAVAILABLE)'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).toBeNull();
+  });
+
   it('shows start times in the division facility’s time zone (SPK-SCHED-008)', async () => {
     const app = createTestApp({
       routes: {

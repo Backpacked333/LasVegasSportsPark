@@ -7,7 +7,11 @@
  * (unknown stays unknown) and the recommendation reserves nothing and promises nothing. A draft
  * is shared with the family by a separate command with `expectedRevision`; withdrawing needs a
  * reason and is never gated. Drafting and sharing are new commitments of the capability, so they
- * are offered only while it is on.
+ * are offered only while it is on; the recommendations made here stay listed with "Withdraw"
+ * when the switch turns off (the turned-off state is a notice above them, never a replacement).
+ *
+ * The offerings and programs to recommend are paged with "Load more" (published offerings,
+ * active programs), so nothing is silently cut off.
  *
  * The API has no read or list of a participant's recommendations for staff, so only the
  * recommendations made on this page are shown (Proposed handling of an API gap). Children are
@@ -15,8 +19,9 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
-import { useApiQuery } from '../../api/useApiQuery';
+import { useApiPages } from '../../api/useApiPages';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError } from '../../features/competition/CommandError';
 import { SuccessNote } from '../../features/competition/feedback';
@@ -25,6 +30,9 @@ import { formatInstant } from '../../features/competition/format';
 import { ISSUE_SEVERITY, RECOMMENDATION_STATUS } from '../../features/competition/labels';
 import { PersonName, type PersonNames } from '../../features/competition/names';
 import { Button } from '../../ui/Button';
+import { CapabilityGate } from '../../ui/CapabilityGate';
+import { LoadMore } from '../../ui/LoadMore';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type Recommendation = Schema<'ProgressionRecommendation'>;
@@ -73,7 +81,9 @@ function EligibilitySummary({ recommendation }: { recommendation: Recommendation
     <div className="row-text" data-testid="recommendation-eligibility">
       <span>
         Eligibility for the recommended offering:{' '}
-        <StatusBadge tone={badge.tone} label={badge.label} />
+        <span data-testid="eligibility-summary">
+          <StatusBadge tone={badge.tone} label={badge.label} />
+        </span>
         {view.evaluatedAt ? (
           <span className="caption"> evaluated {formatInstant(view.evaluatedAt)}</span>
         ) : null}
@@ -98,10 +108,13 @@ function EligibilitySummary({ recommendation }: { recommendation: Recommendation
 function RecommendationCard({
   recommendation,
   names,
+  canShare,
   onChange,
 }: {
   recommendation: Recommendation;
   names: PersonNames;
+  /** Sharing is a new commitment of `youth_progression`; withdrawing never is. */
+  canShare: boolean;
   onChange: (next: Recommendation) => void;
 }) {
   const share = useApiCommand('post', '/progression-recommendations/{id}/share');
@@ -150,7 +163,7 @@ function RecommendationCard({
       {recommendation.status === 'withdrawn' ? null : (
         <div className="form">
           <div className="actions">
-            {recommendation.status === 'draft' ? (
+            {recommendation.status === 'draft' && canShare ? (
               <CommandButton busy={share.isProcessing} onClick={doShare}>
                 Share with the family
               </CommandButton>
@@ -193,6 +206,71 @@ function RecommendationCard({
   );
 }
 
+const PAGE_SIZE = 50;
+
+/** The published offerings or active programs to recommend, a page at a time (§4.5). */
+function TargetChoice({
+  target,
+  fromOfferingId,
+  value,
+  onChange,
+  error,
+}: {
+  target: 'offering' | 'program';
+  fromOfferingId: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+}) {
+  const offerings = useApiPages({
+    path: '/offerings',
+    request: { query: { limit: PAGE_SIZE } },
+    enabled: target === 'offering',
+    staleTime: 5 * 60_000,
+  });
+  const programs = useApiPages({
+    path: '/programs',
+    request: { query: { status: 'active', limit: PAGE_SIZE } },
+    enabled: target === 'program',
+    staleTime: 5 * 60_000,
+  });
+  const what = target === 'offering' ? 'offerings' : 'programs';
+  const options =
+    target === 'offering'
+      ? (offerings.data ?? [])
+          .filter((o) => o.id !== fromOfferingId)
+          .map((o) => ({ value: o.id, label: o.name }))
+      : (programs.data ?? []).map((p) => ({ value: p.id, label: p.name }));
+  const pages = target === 'offering' ? offerings : programs;
+  return (
+    <div className="field">
+      <SelectField
+        label={target === 'offering' ? 'Recommended offering' : 'Recommended program'}
+        required
+        value={value}
+        onChange={onChange}
+        options={options}
+        error={error}
+        hint={
+          pages.data === undefined && !pages.error
+            ? `Loading ${what}…`
+            : pages.data && options.length === 0 && !pages.hasNextPage
+              ? target === 'offering'
+                ? 'No other published offering to recommend.'
+                : 'No active program to recommend.'
+              : target === 'offering'
+                ? 'Published offerings; the child’s current offering is not listed.'
+                : 'Active programs.'
+        }
+      />
+      {pages.error && pages.data === undefined ? (
+        <StateView variant="error" error={pages.error} onRetry={() => void pages.refetch()} />
+      ) : null}
+      <LoadMore pages={pages} label={what} />
+    </div>
+  );
+}
+
 export function ProgressionRecommendations({
   offeringId,
   childIds,
@@ -203,32 +281,21 @@ export function ProgressionRecommendations({
   childIds: readonly string[];
   names: PersonNames;
 }) {
-  const offerings = useApiQuery({
-    path: '/offerings',
-    request: { query: { limit: 100 } },
-    staleTime: 5 * 60_000,
-  });
-  const programs = useApiQuery({ path: '/programs', staleTime: 5 * 60_000 });
+  const permissions = usePermissions();
+  const enabled = permissions.isCapabilityEnabled('youth_progression') === true;
   const create = useApiCommand('post', '/progression-recommendations');
   const [participant, setParticipant] = useState('');
   const [target, setTarget] = useState<'' | 'offering' | 'program'>('');
   const [recommendedId, setRecommendedId] = useState('');
   const [suitability, setSuitability] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Kept outside the capability gate: a switch turning off never hides what can be withdrawn.
   const [made, setMade] = useState<Recommendation[]>([]);
 
   const childOptions = childIds.map((id) => ({
     value: id,
     label: names.get(id)?.displayName ?? 'A child (name not available)',
   }));
-  const targetOptions =
-    target === 'offering'
-      ? (offerings.data?.items ?? [])
-          .filter((o) => o.id !== offeringId)
-          .map((o) => ({ value: o.id, label: o.name }))
-      : target === 'program'
-        ? (programs.data?.items ?? []).map((p) => ({ value: p.id, label: p.name }))
-        : [];
 
   const submit = () => {
     const next: Record<string, string> = {};
@@ -262,64 +329,74 @@ export function ProgressionRecommendations({
 
   return (
     <>
-      <form
-        className="form"
-        noValidate
-        aria-label="Draft a progression recommendation"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
+      <CapabilityGate
+        capability="youth_progression"
+        subject="Progression recommendations"
+        whenOff="notice"
+        stillAvailable="Recommendations made on this page stay listed and can still be withdrawn."
       >
-        <SelectField
-          label="Child"
-          required
-          value={participant}
-          onChange={setParticipant}
-          options={childOptions}
-          error={errors.participant}
-          hint={childOptions.length === 0 ? 'No enrolled child is listed on this page.' : undefined}
-        />
-        <SelectField
-          label="Recommend"
-          required
-          value={target}
-          onChange={(v) => {
-            setTarget(v as '' | 'offering' | 'program');
-            setRecommendedId('');
-          }}
-          options={[
-            { value: 'offering', label: 'An offering' },
-            { value: 'program', label: 'A program' },
-          ]}
-          error={errors.target}
-        />
-        {target ? (
-          <SelectField
-            label={target === 'offering' ? 'Recommended offering' : 'Recommended program'}
-            required
-            value={recommendedId}
-            onChange={setRecommendedId}
-            options={targetOptions}
-            error={errors.recommendedId}
-          />
+        {enabled ? (
+          <form
+            className="form"
+            noValidate
+            aria-label="Draft a progression recommendation"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submit();
+            }}
+          >
+            <SelectField
+              label="Child"
+              required
+              value={participant}
+              onChange={setParticipant}
+              options={childOptions}
+              error={errors.participant}
+              hint={
+                childOptions.length === 0 ? 'No enrolled child is listed on this page.' : undefined
+              }
+            />
+            <SelectField
+              label="Recommend"
+              required
+              value={target}
+              onChange={(v) => {
+                setTarget(v as '' | 'offering' | 'program');
+                setRecommendedId('');
+              }}
+              options={[
+                { value: 'offering', label: 'An offering' },
+                { value: 'program', label: 'A program' },
+              ]}
+              error={errors.target}
+            />
+            {target ? (
+              <TargetChoice
+                target={target}
+                fromOfferingId={offeringId}
+                value={recommendedId}
+                onChange={setRecommendedId}
+                error={errors.recommendedId}
+              />
+            ) : null}
+            <TextAreaField
+              label="Suitability"
+              required
+              value={suitability}
+              onChange={setSuitability}
+              error={errors.suitability}
+              hint="From approved information only. A recommendation never guarantees acceptance, a place or a purchase."
+            />
+            <CommandButton type="submit" busy={create.isProcessing}>
+              Draft the recommendation
+            </CommandButton>
+            {create.status === 'success' && create.data ? (
+              <SuccessNote>{`Recommendation ${create.data.status}`}</SuccessNote>
+            ) : null}
+            <CommandError error={create.error} onRetry={submit} />
+          </form>
         ) : null}
-        <TextAreaField
-          label="Suitability"
-          required
-          value={suitability}
-          onChange={setSuitability}
-          error={errors.suitability}
-          hint="From approved information only. A recommendation never guarantees acceptance, a place or a purchase."
-        />
-        <CommandButton type="submit" busy={create.isProcessing}>
-          Draft the recommendation
-        </CommandButton>
-        {create.status === 'success' && create.data ? (
-          <SuccessNote>{`Recommendation ${create.data.status}`}</SuccessNote>
-        ) : null}
-        <CommandError error={create.error} onRetry={submit} />
-      </form>
+      </CapabilityGate>
       {made.length > 0 ? (
         <ul className="list" aria-label="Recommendations made here">
           {made.map((recommendation) => (
@@ -327,6 +404,7 @@ export function ProgressionRecommendations({
               key={recommendation.id}
               recommendation={recommendation}
               names={names}
+              canShare={enabled}
               onChange={(next) => setMade((list) => list.map((r) => (r.id === next.id ? next : r)))}
             />
           ))}

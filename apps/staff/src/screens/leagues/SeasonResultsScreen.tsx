@@ -8,7 +8,7 @@
  * results screen (`ResultsReviewScreen`), under the publication authority the API enforces
  * (DEC-065). Times are in the venue's time zone when the fixture has one (SPK-SCHED-008).
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiPages } from '../../api/useApiPages';
@@ -17,6 +17,7 @@ import { PendingNote } from '../../features/competition/feedback';
 import { SelectField } from '../../features/competition/fields';
 import { formatInstant, shortRef } from '../../features/competition/format';
 import { RESULT_CLASSIFICATION, RESULT_STATUS } from '../../features/competition/labels';
+import { FixtureReadFailure } from '../../features/competition/names';
 import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
 import { PENDING } from '../../features/competition/pending';
 import { LoadMore } from '../../ui/LoadMore';
@@ -36,6 +37,8 @@ export function ResultRevisionRow({ revision }: { revision: Revision }) {
     staleTime: 5 * 60_000,
   });
   const data = fixture.data;
+  // §4.10: a fixture the viewer may not read is "not available"; another failure is an error.
+  const unavailable = !!fixture.error && presentationForError(fixture.error) === 'unavailable';
   const zone = data?.venue?.timezone ?? null;
   const badge = RESULT_STATUS[revision.status];
   const home = data?.home.teamName ?? 'Home';
@@ -50,11 +53,14 @@ export function ResultRevisionRow({ revision }: { revision: Revision }) {
         <span className="row-title" id={`revision-${revision.id}`}>
           {data
             ? `${home} v ${away}`
-            : fixture.error
+            : unavailable
               ? 'Fixture not available'
               : `Fixture ${shortRef(revision.fixtureId)}`}
           {`, revision ${revision.revisionNo}`}
         </span>
+        {!data && fixture.error && !unavailable ? (
+          <FixtureReadFailure error={fixture.error} onRetry={() => void fixture.refetch()} />
+        ) : null}
         <StatusBadge tone={badge.tone} label={`Result ${badge.label}`} />
         <span>
           {RESULT_CLASSIFICATION[revision.classification]}: {score}
@@ -69,6 +75,18 @@ export function ResultRevisionRow({ revision }: { revision: Revision }) {
               )}`
             : ''}
         </span>
+        {revision.shootoutWinnerEntryId ? (
+          <span>
+            Shootout won by{' '}
+            {data
+              ? revision.shootoutWinnerEntryId === data.home.entryId
+                ? data.home.teamName
+                : revision.shootoutWinnerEntryId === data.away?.entryId
+                  ? data.away.teamName
+                  : 'another team'
+              : 'a side of this fixture'}
+          </span>
+        ) : null}
         {revision.supersedesRevisionId ? (
           <span className="caption">
             Correction of revision {shortRef(revision.supersedesRevisionId)}

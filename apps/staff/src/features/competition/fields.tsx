@@ -73,12 +73,18 @@ export function TextField({
   type = 'text',
   inputMode,
   placeholder,
+  onEnter,
 }: BaseProps & {
   value: string;
   onChange: (value: string) => void;
   type?: 'text' | 'date' | 'datetime-local' | 'time' | 'number';
   inputMode?: 'numeric' | 'text';
   placeholder?: string;
+  /**
+   * The field's own action on Enter (e.g. a search inside a larger form, SPK-UX-009): Enter
+   * runs it instead of submitting the enclosing form.
+   */
+  onEnter?: () => void;
 }) {
   const ids = useFieldIds(hint, error);
   return (
@@ -94,6 +100,16 @@ export function TextField({
         aria-invalid={error ? true : undefined}
         aria-describedby={ids.describedBy}
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={
+          onEnter
+            ? (event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  onEnter();
+                }
+              }
+            : undefined
+        }
       />
     </FieldFrame>
   );

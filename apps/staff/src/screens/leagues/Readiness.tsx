@@ -1,7 +1,11 @@
 /**
  * SCR-S-10 readiness pieces (SPK-READY-001 to SPK-READY-004, SPK-UX-008): the season summary
  * for the fixture list (one read for a page of fixtures, CMP-01) and the full explanation for one
- * fixture. Every issue names its reason, source
+ * fixture. A season summary is refused above 100 fixtures (`TOO_MANY_FIXTURES`): the page's time
+ * window is read instead, and when that window still holds more than 100 fixtures of the season
+ * (the summary filters by time only, not by the list's division or state), each fixture on the
+ * page is read on its own; a row is never left unknown only because the season is large. Every
+ * issue names its reason, source
  * record, responsible role, required action, last evaluation and deadline (SPK-READY-003). There
  * is no "mark ready" control (SPK-READY-004): "Re-evaluate" asks the API to derive it again.
  */
@@ -13,6 +17,7 @@ import {
 } from '@sportspark/api-client';
 import { useMemo } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
+import { useRefetch } from '../../features/competition/feedback';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { formatInstant, shortRef } from '../../features/competition/format';
 import { ISSUE_SEVERITY, READINESS_STATUS, humanizeCode } from '../../features/competition/labels';
@@ -62,6 +67,11 @@ export interface SeasonReadinessState {
   counts(fixtureId: string): Counts | undefined;
   /** The season holds more fixtures than one summary evaluates: only this page's window is read. */
   windowed: boolean;
+  /**
+   * The page's window also holds more fixtures than one summary evaluates: each fixture on the
+   * page is read on its own (`GET /v1/fixtures/{id}/readiness`).
+   */
+  perFixture: boolean;
 }
 
 function useSeasonReadinessQuery(
@@ -90,9 +100,51 @@ export function useSeasonReadiness(
   const window = useMemo(() => windowOf(fixtures ?? []), [fixtures]);
   const page = useSeasonReadinessQuery(seasonId, window ?? {}, windowed && window !== null);
   const active = windowed ? page : whole;
+  const perFixture = windowed && isTooMany(page.error);
   const items = active.data?.items;
   const byId = useMemo(() => new Map((items ?? []).map((i) => [i.fixtureId, i])), [items]);
-  return { query: active, counts: (id) => byId.get(id), windowed };
+  return { query: active, counts: (id) => byId.get(id), windowed, perFixture };
+}
+
+/** One row's own readiness read, when the page's window is too large for a summary. */
+function FixtureReadinessBadge({ fixtureId }: { fixtureId: string }) {
+  const now = useNow();
+  const { online, services } = useApp();
+  const readiness = useReadiness(fixtureId);
+  if (!readiness.data) {
+    if (readiness.error && presentationForError(readiness.error) === 'unavailable') {
+      return <StatusBadge tone="neutral" label="Readiness not available" />;
+    }
+    return (
+      <StatusBadge
+        tone="pending"
+        label={
+          readiness.error
+            ? `Unknown: could not evaluate (${readiness.error.code})`
+            : 'Readiness: checking'
+        }
+      />
+    );
+  }
+  const effective = effectiveReadiness(readiness.data, {
+    now,
+    staleThresholdMs: services.config.staleDataThresholdMs,
+    offline: !online,
+    refreshFailed: readiness.error !== null,
+  });
+  const badge = READINESS_STATUS[effective.status];
+  const blocking = readiness.data.issues.filter((i) => i.severity === 'blocking').length;
+  const unknown = readiness.data.issues.filter((i) => i.severity === 'unknown').length;
+  const detail = [
+    blocking > 0 ? `${blocking} blocking` : null,
+    unknown > 0 ? `${unknown} unknown` : null,
+  ].filter(Boolean);
+  return (
+    <span>
+      <StatusBadge tone={badge.tone} label={badge.label} />
+      {detail.length > 0 ? <span className="caption"> ({detail.join(', ')})</span> : null}
+    </span>
+  );
 }
 
 /**
@@ -113,6 +165,12 @@ export function SummaryReadinessBadge({
   const { online, services } = useApp();
   const { query } = readiness;
   const counts = readiness.counts(fixtureId);
+  if (readiness.perFixture) {
+    if (!scheduled) {
+      return <StatusBadge tone="pending" label="Unknown: open the fixture to evaluate" />;
+    }
+    return <FixtureReadinessBadge fixtureId={fixtureId} />;
+  }
   if (!counts || !query.data) {
     if (readiness.windowed && !scheduled) {
       return <StatusBadge tone="pending" label="Unknown: open the fixture to evaluate" />;
@@ -153,12 +211,19 @@ export function SeasonReadinessStatus({ readiness }: { readiness: SeasonReadines
   const now = useNow();
   const { online } = useApp();
   const { query } = readiness;
-  const failed = query.error && !(presentationForError(query.error) === 'unavailable');
+  const refetchEach = useRefetch(['/fixtures/{id}/readiness']);
+  const failed =
+    !readiness.perFixture && query.error && !(presentationForError(query.error) === 'unavailable');
   // A large season whose page has no scheduled fixture has nothing to evaluate in a window.
   const nothingToEvaluate = readiness.windowed && query.isPending && query.fetchStatus === 'idle';
   return (
     <div className="actions" data-testid="season-readiness">
-      {query.data ? (
+      {readiness.perFixture ? (
+        <span className="caption" role="note">
+          More than 100 fixtures of the season fall in this page’s time window, so readiness is
+          evaluated for each fixture on the page.
+        </span>
+      ) : query.data ? (
         <span className="caption">
           Readiness evaluated {formatAge(new Date(query.data.evaluatedAt), now)}
           {readiness.windowed ? ' for the fixtures on this page' : ''}
@@ -169,7 +234,7 @@ export function SeasonReadinessStatus({ readiness }: { readiness: SeasonReadines
           variant="secondary"
           busy={query.fetchStatus === 'fetching'}
           disabled={!online}
-          onClick={() => void query.refetch()}
+          onClick={() => (readiness.perFixture ? refetchEach() : void query.refetch())}
         >
           Re-evaluate readiness
         </Button>

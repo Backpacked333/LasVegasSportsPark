@@ -101,6 +101,72 @@ describe('SCR-S-12 DisputesScreen (SPK-RESULT-005, CMP-05)', () => {
     expect(screen.queryByRole('list', { name: 'Disputes' })).toBeNull();
   });
 
+  it('shows submission, window and decision times in the venue’s time zone (SPK-SCHED-008)', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /disputes': ok(
+          page([
+            dispute({
+              status: 'decided',
+              decision: 'rejected',
+              decidedAt: '2026-11-08T17:30:00.000Z',
+              decisionReason: 'No offside.',
+              publicationConsequence: 'none',
+            }),
+          ]),
+        ),
+      },
+    });
+    render(app.at('/leagues/disputes'));
+    const list = await screen.findByRole('list', { name: 'Disputes' });
+    await within(list).findByRole('link', { name: /Red v Blue/ });
+    // 20:00 UTC is 12:00 in Los Angeles (PST); 19:00 UTC is 11:00; 17:30 UTC is 09:30.
+    await waitFor(() =>
+      expect(within(list).getByText('Submitted').nextElementSibling).toHaveTextContent(
+        /12:00.*PST/,
+      ),
+    );
+    expect(within(list).getByText('Submission window closed').nextElementSibling).toHaveTextContent(
+      /11:00.*PST/,
+    );
+    expect(within(list).getByText('Decision').nextElementSibling).toHaveTextContent(/09:30.*PST/);
+  });
+
+  it('shows a failed fixture read with its code and Try again, not as not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /fixtures/{id}': fail(503, 'INTEGRATION_UNAVAILABLE', 'retry_later'),
+      },
+    });
+    render(app.at('/leagues/disputes'));
+    const list = await screen.findByRole('list', { name: 'Disputes' });
+    expect(
+      await within(list).findByText(/Fixture could not load \(INTEGRATION_UNAVAILABLE\)/),
+    ).toBeInTheDocument();
+    expect(within(list).queryByText('Fixture not available')).toBeNull();
+    const before = app.fake.requests.filter((r) => r.route === '/fixtures/{id}').length;
+    app.fake.set('GET /fixtures/{id}', ok(fixtureDetail({ venue: venue() })));
+    await user.click(within(list).getByRole('button', { name: 'Try loading the fixture again' }));
+    expect(await within(list).findByRole('link', { name: /Red v Blue/ })).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/fixtures/{id}').length).toBeGreaterThan(
+      before,
+    );
+  });
+
+  it('names a fixture the viewer may not read only as not available', async () => {
+    const app = createTestApp({
+      routes: { ...routes, 'GET /fixtures/{id}': fail(404, 'NOT_FOUND', 'verify_reference') },
+    });
+    render(app.at('/leagues/disputes'));
+    const list = await screen.findByRole('list', { name: 'Disputes' });
+    expect(await within(list).findByText('Fixture not available')).toBeInTheDocument();
+    expect(within(list).queryByText(/could not load/)).toBeNull();
+    expect(within(list).queryByRole('button', { name: /Try loading/ })).toBeNull();
+  });
+
   it('decides from the list with the expected revision', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

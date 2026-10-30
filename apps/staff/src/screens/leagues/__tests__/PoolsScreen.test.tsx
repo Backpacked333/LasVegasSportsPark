@@ -179,6 +179,47 @@ describe('SCR-S-13 PoolScreen (CMP-15)', () => {
     expect(screen.getByText(/1 fixture between pool entries has no official result/)).toBeVisible();
   });
 
+  it('shows "No official results yet", never "Final", for a pool without official results', async () => {
+    const app = createTestApp({
+      routes: {
+        ...poolRoutes,
+        // Entries on zero points, no fixture between them yet: the API lists no pending fixture.
+        'GET /pools/{id}/standings': ok(
+          poolStandings({ sourceResultIds: [], pendingFixtureIds: [] }),
+        ),
+      },
+    });
+    render(app.at(`/leagues/pools/${ID.pool}`));
+    const panel = await screen.findByRole('region', { name: 'Pool standings' });
+    expect(
+      await within(panel).findByRole('heading', { name: 'No official results yet' }),
+    ).toBeVisible();
+    expect(within(panel).getByText(/No fixture between pool entries exists yet/)).toBeVisible();
+    expect(within(panel).queryByText('Final')).toBeNull();
+    expect(within(panel).queryByRole('table', { name: 'Pool standings' })).toBeNull();
+  });
+
+  it('keeps the pending fixtures visible while no result is official yet', async () => {
+    const app = createTestApp({
+      routes: {
+        ...poolRoutes,
+        'GET /pools/{id}/standings': ok(
+          poolStandings({ sourceResultIds: [], pendingFixtureIds: [ID.fixture, ID.fixture2] }),
+        ),
+      },
+    });
+    render(app.at(`/leagues/pools/${ID.pool}`));
+    const panel = await screen.findByRole('region', { name: 'Pool standings' });
+    expect(
+      await within(panel).findByRole('heading', { name: 'No official results yet' }),
+    ).toBeVisible();
+    expect(within(panel).getByText('Not final')).toBeInTheDocument();
+    expect(
+      within(panel).getByText(/2 fixtures between pool entries have no official/),
+    ).toBeVisible();
+    expect(within(panel).queryByText('Final')).toBeNull();
+  });
+
   it('never implies that a pool the viewer may not see exists', async () => {
     const app = createTestApp({
       routes: { 'GET /pools/{id}': fail(404, 'NOT_FOUND', 'verify_reference') },

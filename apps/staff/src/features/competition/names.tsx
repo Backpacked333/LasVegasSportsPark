@@ -9,6 +9,7 @@
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useMemo } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
+import { Button } from '../../ui/Button';
 import { isUuid } from '../../ui/RecordRef';
 import { shortRef } from './format';
 
@@ -161,6 +162,23 @@ export function EntryName({
   if (!entry) return <span>Entry {shortRef(entryId)}</span>;
   if (entry.teamName) return <span>{entry.teamName}</span>;
   return <TeamName teamId={entry.teamId} />;
+}
+
+/**
+ * A list row's fixture read that failed (SPK-UX-008, §4.10): a protected NOT_FOUND or
+ * ACCESS_DENIED reads "not available" and implies nothing more; any other failure (5xx, timeout,
+ * no connection) is a load error with the API's code and "Try again", never a restriction.
+ */
+export function FixtureReadFailure({ error, onRetry }: { error: ApiError; onRetry: () => void }) {
+  if (presentationForError(error) === 'unavailable') return <span>Fixture not available</span>;
+  return (
+    <span>
+      Fixture could not load ({error.code}){' '}
+      <Button variant="secondary" onClick={onRetry} aria-label="Try loading the fixture again">
+        Try again
+      </Button>
+    </span>
+  );
 }
 
 /** A rule-set version by id: name and version number (SPK-RESULT-003, SPK-FIX-004). */

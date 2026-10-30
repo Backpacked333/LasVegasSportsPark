@@ -43,7 +43,6 @@ import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { CapabilityGate } from '../../ui/CapabilityGate';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { ProgressionRecommendations } from './ProgressionRecommendations';
 
@@ -367,9 +366,8 @@ function OfferingGroups({ offeringId }: { offeringId: string }) {
           A recommendation explains eligibility and suitability from approved information and never
           guarantees acceptance, availability or purchase.
         </p>
-        <CapabilityGate capability="youth_progression" subject="Progression recommendations">
-          <ProgressionRecommendations offeringId={offeringId} childIds={childIds} names={names} />
-        </CapabilityGate>
+        {/* The capability gate is inside: drafting and sharing are gated, withdrawing never is. */}
+        <ProgressionRecommendations offeringId={offeringId} childIds={childIds} names={names} />
       </section>
     </>
   );

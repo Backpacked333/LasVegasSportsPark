@@ -8,9 +8,15 @@
  * convenience preference needs its approval reference. A specification error (dates outside the
  * season, games per team that do not match the teams and frequency) is the API's 400 answer.
  * The division's saved specifications are listed first (`GET /v1/divisions/{id}/fixture-
- * specifications`, CMP-05), so an existing one is opened and run again rather than retyped.
+ * specifications`, CMP-05), so an existing one is opened and run again rather than retyped; a
+ * saved one is changed with `PATCH /v1/fixture-specifications/{id}` and `expectedRevision`
+ * (CMP-12), refused with SPECIFICATION_IN_USE while a draft generated from it is open.
+ *
+ * Compressed play (CMP-15, §3.16 Tournaments "compressed scheduling"): an optional cap of games a
+ * team plays on one facility-local day (a hard constraint) and the officials each game needs (for
+ * the per-day demand report of each run). Both are empty unless stated; nothing is preset.
  */
-import type { Schema } from '@sportspark/api-client';
+import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -19,7 +25,7 @@ import { useApp } from '../../providers/AppProviders';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError, fieldErrorsOf } from '../../features/competition/CommandError';
 import { useFacilityOptions } from '../../features/competition/facilities';
-import { keys, PendingNote } from '../../features/competition/feedback';
+import { keys, PendingNote, useRefetch } from '../../features/competition/feedback';
 import {
   CheckboxField,
   NumberField,
@@ -40,6 +46,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 type Division = Schema<'Division'>;
 type PreferenceKind = Schema<'FairnessPreferenceKind'>;
 type CreateSpecification = Schema<'CreateFixtureSpecificationRequest'>;
+type Specification = Schema<'FixtureSpecification'>;
 
 interface StartTimeDraft {
   weekday: string;
@@ -118,6 +125,28 @@ function StartTimes({
   );
 }
 
+const toDrafts = (times: readonly { weekday: number; time: string }[]): StartTimeDraft[] =>
+  times.map((t) => ({ weekday: String(t.weekday), time: t.time }));
+
+function preferenceDrafts(spec: Specification | undefined): PreferenceDraft[] {
+  return (spec?.fairnessPreferences ?? []).map((p) => ({
+    kind: p.kind,
+    strength: p.hard ? 'hard' : 'preference',
+    weight: String(p.weight),
+    teamEntryId: p.teamEntryId ?? '',
+    startTimes: toDrafts(p.startTimes ?? []),
+    approvalReference: p.approvalReference ?? '',
+  }));
+}
+
+/** CMP-12: a draft generated from the specification is open, so it cannot change now. */
+function isInUse(error: ApiError | null): boolean {
+  return (
+    error?.code === 'INVALID_TRANSITION' &&
+    (error.details as { code?: unknown } | undefined)?.code === 'SPECIFICATION_IN_USE'
+  );
+}
+
 function parseStartTimes(value: StartTimeDraft[]): { weekday: number; time: string }[] | null {
   const out: { weekday: number; time: string }[] = [];
   for (const slot of value) {
@@ -128,7 +157,25 @@ function parseStartTimes(value: StartTimeDraft[]): { weekday: number; time: stri
   return out;
 }
 
-function SpecificationForm({ division, season }: { division: Division; season: Schema<'Season'> }) {
+const SPEC_KEYS = keys('/fixture-specifications/{id}', '/divisions/{id}/fixture-specifications');
+
+/**
+ * A new specification of the division, or a change of a saved one (`existing`, CMP-12): the
+ * change starts from the saved values and carries their `expectedRevision`.
+ */
+export function SpecificationForm({
+  division,
+  season,
+  existing,
+  onSaved,
+  onCancel,
+}: {
+  division: Division;
+  season: Schema<'Season'>;
+  existing?: Specification;
+  onSaved?: (spec: Specification) => void;
+  onCancel?: () => void;
+}) {
   const navigate = useNavigate();
   const { facilityId: selectedFacility } = useApp();
   const facilityOptions = useFacilityOptions();
@@ -137,29 +184,52 @@ function SpecificationForm({ division, season }: { division: Division; season: S
     request: { query: { seasonId: season.id, divisionId: division.id, status: 'approved' } },
   });
   const create = useApiCommand('post', '/divisions/{id}/fixture-specifications', {
-    invalidate: keys('/fixture-specifications/{id}'),
+    invalidate: SPEC_KEYS,
   });
-  const [name, setName] = useState('');
-  const [facilityId, setFacilityId] = useState(division.facilityId ?? selectedFacility ?? '');
+  const update = useApiCommand('patch', '/fixture-specifications/{id}', {
+    invalidate: SPEC_KEYS,
+  });
+  const reload = useRefetch(['/fixture-specifications/{id}']);
+  const command = existing ? update : create;
+  const [name, setName] = useState(existing?.name ?? '');
+  const [facilityId, setFacilityId] = useState(
+    existing?.facilityId ?? division.facilityId ?? selectedFacility ?? '',
+  );
   const resources = useApiQuery({
     path: '/resources',
     request: { query: { facilityId } },
     enabled: !!facilityId,
   });
-  const [gamesPerTeam, setGamesPerTeam] = useState('');
-  const [frequency, setFrequency] = useState('');
-  const [startsOn, setStartsOn] = useState(season.startsOn);
-  const [endsOn, setEndsOn] = useState(season.endsOn);
-  const [blackouts, setBlackouts] = useState<{ start: string; end: string }[]>([]);
-  const [byesAllowed, setByesAllowed] = useState<boolean | null>(null);
-  const [minimumRest, setMinimumRest] = useState('');
-  const [startTimes, setStartTimes] = useState<StartTimeDraft[]>([]);
-  const [duration, setDuration] = useState('');
-  const [resourceIds, setResourceIds] = useState<string[]>([]);
-  const [playoffTeams, setPlayoffTeams] = useState('');
-  const [preferences, setPreferences] = useState<PreferenceDraft[]>([]);
+  const [gamesPerTeam, setGamesPerTeam] = useState(existing ? String(existing.gamesPerTeam) : '');
+  const [frequency, setFrequency] = useState(existing ? String(existing.opponentFrequency) : '');
+  const [startsOn, setStartsOn] = useState(existing?.startsOn ?? season.startsOn);
+  const [endsOn, setEndsOn] = useState(existing?.endsOn ?? season.endsOn);
+  const [blackouts, setBlackouts] = useState<{ start: string; end: string }[]>(
+    existing?.blackouts ?? [],
+  );
+  const [byesAllowed, setByesAllowed] = useState<boolean | null>(existing?.byesAllowed ?? null);
+  const [minimumRest, setMinimumRest] = useState(
+    existing ? String(existing.minimumRestMinutes) : '',
+  );
+  const [startTimes, setStartTimes] = useState<StartTimeDraft[]>(
+    toDrafts(existing?.allowedStartTimes ?? []),
+  );
+  const [duration, setDuration] = useState(existing ? String(existing.matchDurationMinutes) : '');
+  const [resourceIds, setResourceIds] = useState<string[]>(existing?.requiredResourceIds ?? []);
+  const [playoffTeams, setPlayoffTeams] = useState(
+    existing?.playoffStructure ? String(existing.playoffStructure.teams) : '',
+  );
+  const [maxPerDay, setMaxPerDay] = useState(
+    existing && existing.maxGamesPerTeamPerDay !== null
+      ? String(existing.maxGamesPerTeamPerDay)
+      : '',
+  );
+  const [officials, setOfficials] = useState(
+    existing && existing.officialsPerGame !== null ? String(existing.officialsPerGame) : '',
+  );
+  const [preferences, setPreferences] = useState<PreferenceDraft[]>(preferenceDrafts(existing));
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const apiErrors = fieldErrorsOf(create.error);
+  const apiErrors = fieldErrorsOf(command.error);
   const err = (key: string) => errors[key] ?? apiErrors[key];
 
   // CMP-01: each entry carries its team's name, so no per-team read is needed.
@@ -194,6 +264,12 @@ function SpecificationForm({ division, season }: { division: Division; season: S
     const playoff = playoffTeams.trim() ? parseWholeNumber(playoffTeams) : null;
     if (playoffTeams.trim() && (playoff === null || playoff < 2))
       next.playoffStructure = 'Enter at least 2 qualifying teams, or leave empty.';
+    const dailyCap = maxPerDay.trim() ? parseWholeNumber(maxPerDay) : null;
+    if (maxPerDay.trim() && (dailyCap === null || dailyCap < 1 || dailyCap > 20))
+      next.maxGamesPerTeamPerDay = 'Enter 1 to 20 games, or leave empty for no daily cap.';
+    const officialsCount = officials.trim() ? parseWholeNumber(officials) : null;
+    if (officials.trim() && (officialsCount === null || officialsCount < 1 || officialsCount > 10))
+      next.officialsPerGame = 'Enter 1 to 10 officials, or leave empty.';
     const prefs: NonNullable<CreateSpecification['fairnessPreferences']> = [];
     preferences.forEach((p, index) => {
       const key = `fairnessPreferences.${index}`;
@@ -223,26 +299,48 @@ function SpecificationForm({ division, season }: { division: Division; season: S
     setErrors(next);
     if (Object.keys(next).length > 0 || games === null || freq === null || rest === null || !times)
       return;
+    const content = {
+      name: name.trim(),
+      facilityId,
+      gamesPerTeam: games,
+      opponentFrequency: freq,
+      startsOn,
+      endsOn,
+      blackouts,
+      byesAllowed: byesAllowed ?? false,
+      minimumRestMinutes: rest,
+      allowedStartTimes: times,
+      ...(dur !== null ? { matchDurationMinutes: dur } : {}),
+      requiredResourceIds: resourceIds,
+      fairnessPreferences: prefs,
+    };
+    const playoffStructure =
+      playoff !== null ? { kind: 'single_elimination' as const, teams: playoff } : null;
+    if (existing) {
+      // A change states every field: cleared optional values are sent as null (CMP-12).
+      void update
+        .submit({
+          path: { id: existing.id },
+          body: {
+            ...content,
+            playoffStructure,
+            maxGamesPerTeamPerDay: dailyCap,
+            officialsPerGame: officialsCount,
+            expectedRevision: existing.revision,
+          },
+        })
+        .then((spec) => onSaved?.(spec))
+        .catch(() => undefined);
+      return;
+    }
     void create
       .submit({
         path: { id: division.id },
         body: {
-          name: name.trim(),
-          facilityId,
-          gamesPerTeam: games,
-          opponentFrequency: freq,
-          startsOn,
-          endsOn,
-          blackouts,
-          byesAllowed: byesAllowed ?? false,
-          minimumRestMinutes: rest,
-          allowedStartTimes: times,
-          ...(dur !== null ? { matchDurationMinutes: dur } : {}),
-          requiredResourceIds: resourceIds,
-          ...(playoff !== null
-            ? { playoffStructure: { kind: 'single_elimination', teams: playoff } }
-            : {}),
-          fairnessPreferences: prefs,
+          ...content,
+          ...(playoffStructure ? { playoffStructure } : {}),
+          ...(dailyCap !== null ? { maxGamesPerTeamPerDay: dailyCap } : {}),
+          ...(officialsCount !== null ? { officialsPerGame: officialsCount } : {}),
         },
       })
       .then((spec) => navigate(`/leagues/fixture-specifications/${spec.id}`))
@@ -256,7 +354,7 @@ function SpecificationForm({ division, season }: { division: Division; season: S
     <form
       className="form"
       noValidate
-      aria-label="Fixture specification"
+      aria-label={existing ? 'Change the fixture specification' : 'Fixture specification'}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
@@ -349,7 +447,11 @@ function SpecificationForm({ division, season }: { division: Division; season: S
             label="Match duration (minutes)"
             value={duration}
             onChange={setDuration}
-            hint="Leave empty to use the rule set's match length plus the resource turnover."
+            hint={
+              existing
+                ? 'The saved length; leave it to keep it.'
+                : "Leave empty to use the rule set's match length plus the resource turnover."
+            }
             error={err('matchDurationMinutes')}
           />
           <NumberField
@@ -358,6 +460,13 @@ function SpecificationForm({ division, season }: { division: Division; season: S
             onChange={setPlayoffTeams}
             hint="Leave empty for no playoff."
             error={err('playoffStructure')}
+          />
+          <NumberField
+            label="Most games per team on one day (compressed play)"
+            value={maxPerDay}
+            onChange={setMaxPerDay}
+            hint="Facility-local days, for tournaments played over a few days. Leave empty for no daily cap."
+            error={err('maxGamesPerTeamPerDay')}
           />
         </div>
         <fieldset>
@@ -442,6 +551,17 @@ function SpecificationForm({ division, season }: { division: Division; season: S
           ) : null}
         </fieldset>
       </div>
+
+      <fieldset>
+        <legend>Officials demand (reported, not a constraint)</legend>
+        <NumberField
+          label="Officials each game needs"
+          value={officials}
+          onChange={setOfficials}
+          hint="Each run then reports, per facility-local day, the official assignments its games need. Officials are assigned in Workforce. Leave empty if not stated."
+          error={err('officialsPerGame')}
+        />
+      </fieldset>
 
       <div className="constraint-group" data-kind="preference">
         <h4>
@@ -536,11 +656,38 @@ function SpecificationForm({ division, season }: { division: Division; season: S
         </Button>
       </div>
       <div className="actions">
-        <CommandButton type="submit" busy={create.isProcessing}>
-          Save specification
+        <CommandButton type="submit" busy={command.isProcessing}>
+          {existing ? 'Save the changes' : 'Save specification'}
         </CommandButton>
+        {onCancel ? (
+          <Button variant="secondary" onClick={onCancel}>
+            Keep it as it is
+          </Button>
+        ) : null}
       </div>
-      <CommandError error={create.error} onRetry={submit} />
+      {isInUse(command.error) ? (
+        <section className="state" aria-live="polite" data-testid="specification-in-use">
+          <StatusBadge tone="warning" label="Specification in use" />
+          <p>
+            A schedule draft generated from this specification is still open. Publish or discard
+            that draft in Schedule first, or save these values as a new specification.
+          </p>
+          <p className="caption">Error code: INVALID_TRANSITION (SPECIFICATION_IN_USE)</p>
+        </section>
+      ) : (
+        <CommandError
+          error={command.error}
+          onRetry={submit}
+          onReload={
+            existing
+              ? () => {
+                  command.reset();
+                  reload();
+                }
+              : undefined
+          }
+        />
+      )}
     </form>
   );
 }
