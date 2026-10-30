@@ -19,7 +19,9 @@
  * - offline: creating, downloading and revoking are disabled;
  * - partial completion is not permitted: an export is the whole stored run or nothing.
  * Every command sends an Idempotency-Key per intent (reused on retry); revocation sends the
- * export's expected revision.
+ * export's expected revision, and its confirmed outcome names the export and its resulting state
+ * outside the row, so it stays when the revoked export leaves a filtered list (journeys.md section 3
+ * rule 4).
  */
 import { ApiError, networkError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -343,12 +345,17 @@ function SelectedRun({
   );
 }
 
+/** The confirmed outcome of a revocation, naming the export and its resulting state. */
+function revokedMessage(revoked: Schema<'ReportExport'>): string {
+  return `Export ${shortId(revoked.id)} ${revoked.status}`;
+}
+
 function RevokeExport({
   exportRecord,
   onRevoked,
 }: {
   exportRecord: Schema<'ReportExport'>;
-  onRevoked: () => void;
+  onRevoked: (revoked: Schema<'ReportExport'>) => void;
 }) {
   const { online } = useApp();
   const queryClient = useQueryClient();
@@ -364,9 +371,9 @@ function RevokeExport({
         path: { id: exportRecord.id },
         body: { reason: reason.trim(), expectedRevision: exportRecord.revision },
       })
-      .then(() => {
+      .then((revoked) => {
         setOpen(false);
-        onRevoked();
+        onRevoked(revoked);
       })
       .catch(() => undefined);
   const submit = (event: FormEvent) => {
@@ -438,6 +445,7 @@ function SessionExport({
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<ApiError | null>(null);
   const [downloaded, setDownloaded] = useState<string | null>(null);
+  const [revoked, setRevoked] = useState<string | null>(null);
 
   const refresh = useCallback(
     () =>
@@ -539,10 +547,17 @@ function SessionExport({
                   </Button>
                 ) : null}
                 {record.status === 'ready' ? (
-                  <RevokeExport exportRecord={record} onRevoked={() => onTokenSpent(handle.id)} />
+                  <RevokeExport
+                    exportRecord={record}
+                    onRevoked={(result) => {
+                      onTokenSpent(handle.id);
+                      setRevoked(revokedMessage(result));
+                    }}
+                  />
                 ) : null}
               </div>
               <CommandSuccess message={downloaded} />
+              <CommandSuccess message={revoked} />
               <CommandError
                 error={downloadError}
                 onRetry={handle.token ? () => void download() : undefined}
@@ -560,7 +575,13 @@ function SessionExport({
 type ReportExport = Schema<'ReportExport'>;
 type ExportStatus = Schema<'ReportExportStatus'>;
 
-function ListedExport({ record }: { record: ReportExport }) {
+function ListedExport({
+  record,
+  onRevoked,
+}: {
+  record: ReportExport;
+  onRevoked: (message: string) => void;
+}) {
   const now = useNow(15_000);
   const expired = now.getTime() >= new Date(record.expiresAt).getTime();
   const badge =
@@ -604,7 +625,10 @@ function ListedExport({ record }: { record: ReportExport }) {
         </div>
         {record.status === 'ready' && !expired ? (
           <div className="ia-row-actions">
-            <RevokeExport exportRecord={record} onRevoked={() => undefined} />
+            <RevokeExport
+              exportRecord={record}
+              onRevoked={(result) => onRevoked(revokedMessage(result))}
+            />
           </div>
         ) : null}
       </div>
@@ -614,6 +638,8 @@ function ListedExport({ record }: { record: ReportExport }) {
 
 function YourExports({ heldIds }: { heldIds: ReadonlySet<string> }) {
   const [status, setStatus] = useState('');
+  // Kept here, not in the row: a revoked export leaves a "ready" list when it is re-read.
+  const [revoked, setRevoked] = useState<string | null>(null);
   const pages = useApiPages({
     path: '/reports/exports',
     request: { query: { limit: 20, ...(status ? { status: status as ExportStatus } : {}) } },
@@ -628,10 +654,14 @@ function YourExports({ heldIds }: { heldIds: ReadonlySet<string> }) {
       <SelectField
         label="Export status"
         value={status}
-        onChange={setStatus}
+        onChange={(next) => {
+          setStatus(next);
+          setRevoked(null);
+        }}
         placeholder="All statuses"
         options={Object.keys(EXPORT_BADGES).map((s) => ({ value: s, label: s }))}
       />
+      <CommandSuccess message={revoked} />
       <InsightQueryBoundary
         query={pages}
         label="your exports"
@@ -648,7 +678,7 @@ function YourExports({ heldIds }: { heldIds: ReadonlySet<string> }) {
             {items
               .filter((record) => !heldIds.has(record.id))
               .map((record) => (
-                <ListedExport key={record.id} record={record} />
+                <ListedExport key={record.id} record={record} onRevoked={setRevoked} />
               ))}
           </ul>
         )}

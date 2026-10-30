@@ -286,4 +286,11 @@ describe('SCR-S-43 OperatingReportsScreen', () => {
     ).toBeInTheDocument();
     expect(within(report).queryByRole('region', { name: 'Settings this report used' })).toBeNull();
   });
+
+  it('offers only the facilities in the staff scope from GET /v1/facilities (inStaffScope)', async () => {
+    render(app({ 'GET /facilities': facilityList([{}, { inStaffScope: false }]) }).at('/reports'));
+    const select = await screen.findByLabelText('Facility (required)');
+    expect(await within(select).findByRole('option', { name: 'North Park 1' })).toBeInTheDocument();
+    expect(within(select).queryByRole('option', { name: 'North Park 2' })).toBeNull();
+  });
 });

@@ -6,13 +6,17 @@
  * - the organization's staff memberships (`GET /v1/staff-memberships`, ID-05) by person, role,
  *   facility and status, newest first with the API's cursor, each with the person's display name
  *   as the API returns it; "first administrator" is the empty state;
+ * - a person is found by name (`GET /v1/people`, adults only, names only) for assigning roles and
+ *   for the person filter, or entered by id;
  * - assign roles (`POST /v1/staff-memberships`), change roles, scope or end date
  *   (`PATCH /v1/staff-memberships/{id}` with `expectedRevision`) and end a membership immediately
  *   with a reason (`POST /v1/staff-memberships/{id}/end`); each with an Idempotency-Key per intent.
  *   They are offered when `GET /v1/me/permissions` lists `identity.manage_staff_membership`
  *   (system administrators); the API still decides and its ACCESS_DENIED is shown with its message.
  *   A STALE_REVISION offers "Reload", which re-reads that membership
- *   (`GET /v1/staff-memberships/{id}`) and keeps what was typed;
+ *   (`GET /v1/staff-memberships/{id}`) and keeps what was typed. The confirmed outcome names the
+ *   membership and its resulting state above the list, so it stays when the membership leaves the
+ *   filtered list (an ended membership under the "active" filter; journeys.md section 3 rule 4);
  * - audited privileged actions: each membership's audit history on request and the audit records
  *   browser (`GET /v1/audit-records`, itself audited); revocation takes effect for exports and
  *   sessions as the API enforces (SPK-IAM-006);
@@ -52,6 +56,7 @@ import {
   type StaffRole,
 } from '../../features/insight-admin/labels';
 import { AdminNav } from '../../features/insight-admin/nav';
+import { PersonIdField } from '../../features/insight-admin/PersonSearch';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
@@ -76,19 +81,29 @@ function scopeText(facilityIds: readonly string[], name: (id: string) => string)
   return facilityIds.length === 0 ? 'Whole organization' : facilityIds.map(name).join(', ');
 }
 
+function membershipTitleId(prefix: string, membership: StaffMembership): string {
+  return `${prefix}-${membership.id}`;
+}
+
 function MembershipSummary({
   membership,
   personName,
+  idPrefix,
 }: {
   membership: StaffMembership;
   /** The display name the API returned with the membership (null: not available to you). */
   personName?: string | null;
+  /**
+   * Prefix of the title's element id: the same membership can be listed both under "Your access"
+   * and in the staff memberships list, and each list row is named by its own title.
+   */
+  idPrefix: string;
 }) {
   const name = useFacilityName();
   const badge = MEMBERSHIP_BADGES[membership.status];
   return (
     <div className="row-text">
-      <span className="row-title" id={`membership-${membership.id}`}>
+      <span className="row-title" id={membershipTitleId(idPrefix, membership)}>
         {personName !== undefined ? `${personName ?? 'Name not available'} · ` : ''}
         Membership {shortId(membership.id)}: {membership.roles.map(roleLabel).join(', ')}
       </span>
@@ -134,7 +149,7 @@ function YourAccess() {
               <ul className="list" aria-label="Your staff memberships">
                 {data.staffMemberships.map((membership) => (
                   <li key={membership.id}>
-                    <MembershipSummary membership={membership} />
+                    <MembershipSummary membership={membership} idPrefix="your-membership" />
                   </li>
                 ))}
               </ul>
@@ -250,15 +265,17 @@ function AssignRoles() {
   return (
     <form className="ia-form" onSubmit={submit} aria-label="Assign staff roles" noValidate>
       <h3>Assign staff roles</h3>
-      <TextField
+      <PersonIdField
         label="Person id"
+        who="the staff member"
+        status="active"
         required
         value={draft.personId}
         onChange={(personId) => {
           setCheckedPerson(null);
           set({ personId });
         }}
-        hint="An active adult person record; find people under People and families."
+        hint="An active adult person record: find them by name, or enter the id."
         error={errors.personId ?? apiFields.personId}
       />
       <div>
@@ -340,7 +357,7 @@ function ChangeMembership({
   onReload,
 }: {
   membership: StaffMembership;
-  onSaved: () => void;
+  onSaved: (changed: StaffMembership) => void;
   /** Re-read this membership after STALE_REVISION; the form keeps what was typed. */
   onReload: () => void;
 }) {
@@ -368,7 +385,7 @@ function ChangeMembership({
   const send = (body: NonNullable<ReturnType<typeof build>>) =>
     void change
       .submit({ path: { id: membership.id }, body })
-      .then(() => onSaved())
+      .then((changed) => onSaved(changed))
       .catch(() => undefined);
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -431,7 +448,7 @@ function EndMembership({
   onReload,
 }: {
   membership: StaffMembership;
-  onSaved: () => void;
+  onSaved: (ended: StaffMembership) => void;
   onReload: () => void;
 }) {
   const { online } = useApp();
@@ -446,7 +463,7 @@ function EndMembership({
         path: { id: membership.id },
         body: { reason: reason.trim(), expectedRevision: membership.revision },
       })
-      .then(() => onSaved())
+      .then((ended) => onSaved(ended))
       .catch(() => undefined);
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -488,69 +505,88 @@ function EndMembership({
   );
 }
 
-function MembershipRow({ item, canManage }: { item: StaffMembershipView; canManage: boolean }) {
+function MembershipRow({
+  item,
+  canManage,
+  onOutcome,
+}: {
+  item: StaffMembershipView;
+  canManage: boolean;
+  /** A confirmed change or end, shown above the list (the row may leave a filtered list). */
+  onOutcome: (message: string) => void;
+}) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'view' | 'change' | 'end'>('view');
-  const [reloaded, setReloaded] = useState(false);
-  const [success, setSuccess] = useState<string | null>(null);
   // After STALE_REVISION: the membership as it stands now (ID-05 single read), so the next attempt
-  // carries the current revision.
+  // carries the current revision. `reloaded` keeps that read; `reloadNote` is the note about it,
+  // shown until the next attempt succeeds or the form is closed.
+  const [reloaded, setReloaded] = useState(false);
+  const [reloadNote, setReloadNote] = useState(false);
   const fresh = useApiQuery({
     path: '/staff-memberships/{id}',
     request: { path: { id: item.id } },
     enabled: reloaded,
   });
-  const membership: StaffMembershipView = fresh.data ?? item;
+  // The newer of the list row and the single read: after a save both are re-read.
+  const membership: StaffMembershipView =
+    fresh.data && fresh.data.revision >= item.revision ? fresh.data : item;
   const reload = () => {
     setReloaded(true);
+    setReloadNote(true);
     void queryClient.invalidateQueries({ queryKey: MEMBERSHIP_KEY });
   };
-  const saved = (what: string) => () => {
-    setMode('view');
-    setSuccess(what);
+  const toggle = (next: 'change' | 'end') => {
+    setReloadNote(false);
+    setMode(mode === next ? 'view' : next);
   };
+  const changed = (result: StaffMembership) => {
+    setMode('view');
+    setReloadNote(false);
+    onOutcome(
+      `Changes saved: membership ${shortId(result.id)} is ${result.status} with ${result.roles
+        .map(roleLabel)
+        .join(', ')} (revision ${result.revision})`,
+    );
+  };
+  const ended = (result: StaffMembership) => {
+    setMode('view');
+    setReloadNote(false);
+    onOutcome(`Membership ${shortId(result.id)} ${result.status}`);
+  };
+  const titleId = membershipTitleId('membership', membership);
   return (
-    <li aria-labelledby={`membership-${membership.id}`}>
-      <MembershipSummary membership={membership} personName={membership.personDisplayName} />
+    <li aria-labelledby={titleId}>
+      <MembershipSummary
+        membership={membership}
+        personName={membership.personDisplayName}
+        idPrefix="membership"
+      />
       {fresh.error ? <CommandError error={fresh.error} onRetry={reload} /> : null}
-      {reloaded && fresh.data ? (
+      {reloadNote && fresh.data ? (
         <p className="caption" role="status">
           Reloaded: revision {fresh.data.revision}. Your entries are kept; review them and save
           again.
         </p>
       ) : null}
-      <CommandSuccess message={success} />
       {membership.status === 'active' && canManage ? (
         <div className="ia-row-actions">
           <Button
             variant="secondary"
             aria-expanded={mode === 'change'}
-            onClick={() => setMode(mode === 'change' ? 'view' : 'change')}
+            onClick={() => toggle('change')}
           >
             Change roles or scope
           </Button>
-          <Button
-            variant="secondary"
-            aria-expanded={mode === 'end'}
-            onClick={() => setMode(mode === 'end' ? 'view' : 'end')}
-          >
+          <Button variant="secondary" aria-expanded={mode === 'end'} onClick={() => toggle('end')}>
             End membership
           </Button>
         </div>
       ) : null}
       {mode === 'change' && membership.status === 'active' ? (
-        <ChangeMembership
-          membership={membership}
-          onSaved={saved('Changes saved')}
-          onReload={reload}
-        />
+        <ChangeMembership membership={membership} onSaved={changed} onReload={reload} />
       ) : null}
       {mode === 'end' && membership.status === 'active' ? (
-        <EndMembership
-          membership={membership}
-          onSaved={saved('Membership ended')}
-          onReload={reload}
-        />
+        <EndMembership membership={membership} onSaved={ended} onReload={reload} />
       ) : null}
       <AuditTrail
         targetType="staff_membership"
@@ -568,7 +604,15 @@ interface ListFilters {
   status?: 'active' | 'ended';
 }
 
-function MembershipPages({ filters, canManage }: { filters: ListFilters; canManage: boolean }) {
+function MembershipPages({
+  filters,
+  canManage,
+  onOutcome,
+}: {
+  filters: ListFilters;
+  canManage: boolean;
+  onOutcome: (message: string) => void;
+}) {
   const pages = useApiPages({
     path: '/staff-memberships',
     request: { query: { limit: 25, ...filters } },
@@ -598,7 +642,12 @@ function MembershipPages({ filters, canManage }: { filters: ListFilters; canMana
         {(items) => (
           <ul className="list" aria-label="Staff memberships">
             {items.map((item) => (
-              <MembershipRow key={item.id} item={item} canManage={canManage} />
+              <MembershipRow
+                key={item.id}
+                item={item}
+                canManage={canManage}
+                onOutcome={onOutcome}
+              />
             ))}
           </ul>
         )}
@@ -616,6 +665,7 @@ function StaffMemberships({ canManage }: { canManage: boolean }) {
   const [status, setStatus] = useState('active');
   const [error, setError] = useState<string | null>(null);
   const [applied, setApplied] = useState<ListFilters>({ status: 'active' });
+  const [outcome, setOutcome] = useState<string | null>(null);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const person = personId.trim();
@@ -624,6 +674,7 @@ function StaffMemberships({ canManage }: { canManage: boolean }) {
       return;
     }
     setError(null);
+    setOutcome(null);
     setApplied({
       ...(person ? { personId: person } : {}),
       ...(role ? { role: role as StaffRole } : {}),
@@ -640,7 +691,13 @@ function StaffMemberships({ canManage }: { canManage: boolean }) {
         aria-label="Filter staff memberships"
         noValidate
       >
-        <TextField label="Person id" value={personId} onChange={setPersonId} error={error} />
+        <PersonIdField
+          label="Person id"
+          who="the staff member"
+          value={personId}
+          onChange={setPersonId}
+          error={error}
+        />
         <SelectField
           label="Role"
           value={role}
@@ -670,7 +727,13 @@ function StaffMemberships({ canManage }: { canManage: boolean }) {
           Show memberships
         </Button>
       </form>
-      <MembershipPages key={JSON.stringify(applied)} filters={applied} canManage={canManage} />
+      <CommandSuccess message={outcome} />
+      <MembershipPages
+        key={JSON.stringify(applied)}
+        filters={applied}
+        canManage={canManage}
+        onOutcome={setOutcome}
+      />
     </section>
   );
 }

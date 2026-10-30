@@ -2,16 +2,23 @@
  * SCR-S-46 audited privileged actions (§4.14, §2.1, SPK-STAFF-004; SPK-UX-008, SPK-UX-009): the
  * audit records browser over `GET /v1/audit-records` (K-08), newest first with the API's cursor.
  *
- * - Filters (target type and id, actor person, action, operation, correlation, occurred from and
- *   to) are applied when "Show records" is pressed, so each read is one deliberate audited read
- *   (the API audits every read of the audit); they stay in page state, never in the address.
+ * - Nothing is read until "Show records" is pressed. Filters (target type and id, actor person,
+ *   found by name through `GET /v1/people` or entered by id, action, operation, correlation,
+ *   occurred from and to) are applied then, and pressing it again reads the first page again, so
+ *   each read is one deliberate audited read (the API audits every read of the audit); a loaded
+ *   list is not re-read on window focus or reconnect. Filters stay in page state, never in the
+ *   address.
  * - Ids are checked before anything is sent; the API's VALIDATION_FAILED is shown with its field
  *   messages.
  * - ACCESS_DENIED (core.view_audit: general manager and system administration, Proposed) is "not
  *   available to you" with the API's message; offline shows what was loaded with its age.
  */
 import { useState, type FormEvent } from 'react';
-import { AuditRecordList, type AuditFilters } from '../../features/insight-admin/audit';
+import {
+  AuditRecordList,
+  useFreshAuditRead,
+  type AuditFilters,
+} from '../../features/insight-admin/audit';
 import { TextField } from '../../features/insight-admin/fields';
 import {
   deviceTimeZone,
@@ -19,6 +26,7 @@ import {
   UUID_PATTERN,
 } from '../../features/insight-admin/format';
 import { AdminNav } from '../../features/insight-admin/nav';
+import { PersonIdField } from '../../features/insight-admin/PersonSearch';
 import { Button } from '../../ui/Button';
 
 interface Draft {
@@ -79,18 +87,23 @@ export function buildAuditFilters(draft: Draft): {
 export function AuditRecordsScreen() {
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [applied, setApplied] = useState<AuditFilters>({});
+  // null until "Show records" is first pressed: opening the page reads nothing (§4.14).
+  const [applied, setApplied] = useState<AuditFilters | null>(null);
+  const fresh = useFreshAuditRead();
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const built = buildAuditFilters(draft);
     setErrors(built.errors);
-    if (built.filters) setApplied(built.filters);
+    if (built.filters) {
+      fresh(built.filters);
+      setApplied(built.filters);
+    }
   };
   const clear = () => {
     setDraft(EMPTY);
     setErrors({});
-    setApplied({});
+    setApplied(null);
   };
   return (
     <section aria-labelledby="audit-title" className="ia-screen">
@@ -115,8 +128,9 @@ export function AuditRecordsScreen() {
             onChange={(targetId) => set({ targetId })}
             error={errors.targetId}
           />
-          <TextField
+          <PersonIdField
             label="Actor person id"
+            who="the actor"
             value={draft.actorPersonId}
             onChange={(actorPersonId) => set({ actorPersonId })}
             error={errors.actorPersonId}
@@ -166,12 +180,19 @@ export function AuditRecordsScreen() {
       </form>
       <section className="ia-section" aria-labelledby="audit-results-title">
         <h3 id="audit-results-title">Records</h3>
-        <AuditRecordList
-          key={JSON.stringify(applied)}
-          filters={applied}
-          label="Audit records"
-          emptyText="No audited action matches these filters."
-        />
+        {applied ? (
+          <AuditRecordList
+            key={JSON.stringify(applied)}
+            filters={applied}
+            label="Audit records"
+            emptyText="No audited action matches these filters."
+          />
+        ) : (
+          <p className="caption" data-testid="audit-not-read">
+            No records are shown. Choose filters, or none for every record, and press “Show
+            records”.
+          </p>
+        )}
       </section>
     </section>
   );

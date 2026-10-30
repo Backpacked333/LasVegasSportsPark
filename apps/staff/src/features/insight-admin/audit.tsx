@@ -2,13 +2,17 @@
  * Audited privileged actions (SCR-S-46 "audited privileged actions", §4.14; K-08): records from
  * `GET /v1/audit-records`, newest first, paged with the API's cursor (§4.5, `useApiPages`), shown
  * by occurrence instant, action, target, actor, revisions, reason, correlation and operation, with
- * the details the API recorded behind a disclosure. Reading the audit is itself audited by the API,
- * so a trail is read only when the viewer opens it. ACCESS_DENIED (core.view_audit is for the
+ * the details the API recorded behind a disclosure. Reading the audit is itself audited by the API
+ * (every `GET /v1/audit-records` writes a core.view_audit record), so the audit is read only on an
+ * explicit action: opening a trail, "Show records", "Load more" or "Try again". A loaded list is
+ * never stale on its own (no re-read on window focus, reconnect or remount; it shows its age), so
+ * no read happens that nobody asked for. ACCESS_DENIED (core.view_audit is for the
  * general manager and system administration, Proposed) is shown as not available to the viewer
  * with the API's message. Filters live in page state, never in the address (§4.14).
  */
-import type { Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { pagedQueryKey, type Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
+import { useCallback, useState } from 'react';
 import { useApiPages } from '../../api/useApiPages';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
@@ -31,8 +35,36 @@ export interface AuditFilters {
   to?: string;
 }
 
-function useAuditPages(query: AuditFilters) {
-  return useApiPages({ path: '/audit-records', request: { query: { limit: 25, ...query } } });
+const PAGE_SIZE = 25;
+
+function auditRequest(filters: AuditFilters) {
+  return { query: { limit: PAGE_SIZE, ...filters } };
+}
+
+function useAuditPages(filters: AuditFilters) {
+  return useApiPages({
+    path: '/audit-records',
+    request: auditRequest(filters),
+    // Never stale: TanStack re-reads stale queries on window focus, reconnect and remount, and each
+    // re-read would be another audited read nobody asked for.
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * Forget what was read for these filters, so the next list mounted for them (or the one showing
+ * them now) reads the first page again: one deliberate audited read per explicit request.
+ */
+export function useFreshAuditRead(): (filters: AuditFilters) => void {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (filters: AuditFilters) =>
+      void queryClient.resetQueries({
+        queryKey: pagedQueryKey('/audit-records', auditRequest(filters)),
+        exact: true,
+      }),
+    [queryClient],
+  );
 }
 
 function revisionText(record: AuditRecord): string | null {
@@ -141,13 +173,18 @@ export function AuditTrail({
   subject: string;
 }) {
   const [open, setOpen] = useState(false);
+  const fresh = useFreshAuditRead();
   return (
     <div className="ia-section">
       <Button
         variant="secondary"
         aria-expanded={open}
         aria-label={`${open ? 'Hide' : 'Show'} audit history of ${subject}`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // Opening asks for the history as it is now; hiding keeps nothing re-reading.
+          if (!open) fresh({ targetType, targetId });
+          setOpen((v) => !v);
+        }}
       >
         {open ? 'Hide audit history' : 'Show audit history'}
       </Button>

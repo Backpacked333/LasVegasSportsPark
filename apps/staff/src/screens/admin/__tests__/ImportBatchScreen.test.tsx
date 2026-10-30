@@ -13,6 +13,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import {
   BATCH_1,
+  MIGRATION_OPERATOR_ACTIONS,
   REPORT_1,
   uuid,
   importBatch,
@@ -22,11 +23,12 @@ import {
   page,
   reconciliationReport,
 } from '../../../features/insight-admin/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, mePermissions } from '../../../testing/test-app';
 
 function app(batch: ReturnType<typeof importBatch>, routes: Record<string, FakeHandler> = {}) {
   return createTestApp({
     routes: {
+      'GET /me/permissions': mePermissions({ actions: MIGRATION_OPERATOR_ACTIONS }),
       'GET /import-batches/{id}': ok(batch),
       'GET /import-batches/{id}/rows': page([
         importRow(1),
@@ -448,6 +450,84 @@ describe('SCR-S-48 ImportBatchScreen', () => {
         (r) => r.method === 'POST' && r.route === '/import-batches/{id}/reconciliation-reports',
       ),
     ).toBe(false);
+  });
+
+  it('SPK-UX-005: offers each next step only when GET /v1/me/permissions lists its action', async () => {
+    // A support operator reads batches and decides exceptions, but does not validate, stage or abort.
+    const test = app(importBatch(BATCH_1, 'received'), {
+      'GET /me/permissions': mePermissions({
+        staffRoles: ['support_operator'],
+        actions: [
+          'migration.read_batch',
+          'migration.read_exceptions',
+          'migration.decide_exception',
+        ],
+      }),
+      'GET /import-exceptions': page([importException('ambiguous_relationship')]),
+    });
+    render(test.at(at));
+    expect(
+      await screen.findByText('Validating this batch is not available to you.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Appending a chunk is not available to you.')).toBeInTheDocument();
+    expect(screen.getByText('Aborting this batch is not available to you.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Validate (seal and dry run)' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Append chunk' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Abort the batch' })).toBeNull();
+    const queue = await screen.findByRole('list', { name: 'Review exceptions of this batch' });
+    expect(
+      within(queue).getByRole('button', { name: 'Decide Ambiguous relationship X-3' }),
+    ).toBeInTheDocument();
+    expect(test.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  it('a reviewed batch: apply and abort are offered only to an operator', async () => {
+    render(
+      app(importBatch(BATCH_1, 'reviewed'), {
+        'GET /me/permissions': mePermissions({
+          staffRoles: ['finance_operator'],
+          actions: ['migration.read_batch', 'migration.reconcile'],
+        }),
+      }).at(at),
+    );
+    expect(
+      await screen.findByText('Applying this batch is not available to you.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply the batch' })).toBeNull();
+  });
+
+  it('shows a failed permissions read with its code and Try again, and offers no step', async () => {
+    render(
+      app(importBatch(BATCH_1, 'validated'), {
+        'GET /me/permissions': () =>
+          fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { message: 'Try again later.' })),
+      }).at(at),
+    );
+    expect(
+      (await screen.findAllByText('Error code: INTERNAL_ERROR. Reference: test-correlation-id'))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: 'Try again' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Complete the review' })).toBeNull();
+  });
+
+  it('still shows the API refusal (ACCESS_DENIED) of an offered step with its message', async () => {
+    const user = userEvent.setup();
+    render(
+      app(importBatch(BATCH_1, 'received'), {
+        'POST /import-batches/{id}/validate': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', {
+              message: 'You are not permitted to perform this action.',
+              nextAction: 'contact_support_or_request_access',
+            }),
+          ),
+      }).at(at),
+    );
+    await user.click(await screen.findByRole('button', { name: 'Validate (seal and dry run)' }));
+    expect(await screen.findByText('Not available to you')).toBeInTheDocument();
+    expect(screen.getByText('You are not permitted to perform this action.')).toBeInTheDocument();
   });
 
   it('says there is no reconciliation report yet for an applied batch, without a read', async () => {

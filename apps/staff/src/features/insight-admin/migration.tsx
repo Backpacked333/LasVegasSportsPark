@@ -2,6 +2,9 @@
  * Shared parts of SCR-S-48 Migration imports and reconciliation (§5.4, §5.5, §5.6, SPK-AT-024,
  * DEC-014, DEC-067; SPK-UX-008): review-queue exceptions with their decision form, and a
  * reconciliation report with its four levels, discrepancies (never netted) and per-area approvals.
+ * Deciding an exception and recording a sign-off are offered only when `GET /v1/me/permissions`
+ * lists migration.decide_exception or migration.approve_reconciliation for the viewer's roles; the
+ * API still decides each one (which queue or area is the viewer's) and its ACCESS_DENIED is shown.
  * Staged payloads are never rendered: a row is shown by entity type, external id, outcome and
  * reasons only, so imported personal and child data is not repeated on screen (§4.14).
  */
@@ -13,6 +16,7 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError, CommandSuccess, PendingNote } from './feedback';
+import { ActionGate } from './permission';
 import { CheckboxGroup, RadioGroup, SelectField, TextField } from './fields';
 import { formatInstant, formatMinor, formatScalar, shortId } from './format';
 import {
@@ -233,7 +237,7 @@ export function ExceptionCard({ exception }: { exception: ImportException }) {
         ) : null}
       </div>
       {exception.status === 'open' ? (
-        <>
+        <ActionGate actionId="migration.decide_exception" what="Deciding this exception">
           <Button
             variant="secondary"
             aria-expanded={open}
@@ -243,7 +247,7 @@ export function ExceptionCard({ exception }: { exception: ImportException }) {
             {open ? 'Close decision' : 'Decide'}
           </Button>
           {open ? <DecideException exception={exception} /> : null}
-        </>
+        </ActionGate>
       ) : null}
     </li>
   );
@@ -304,50 +308,52 @@ function ApproveArea({ report }: { report: Report }) {
     });
   };
   return (
-    <form className="ia-form" onSubmit={submit} aria-label="Record an area sign-off" noValidate>
-      <h4>Record an area sign-off</h4>
-      <SelectField
-        label="Area"
-        required
-        value={area}
-        onChange={setArea}
-        placeholder="Choose an area"
-        options={open.map((a) => ({ value: a, label: RECONCILIATION_AREA_LABELS[a] }))}
-        error={errors.area}
-      />
-      <RadioGroup
-        legend="Decision"
-        name="area-decision"
-        required
-        value={decision}
-        onChange={setDecision}
-        options={[
-          { value: 'approved', label: 'Approve' },
-          { value: 'rejected', label: 'Reject' },
-        ]}
-        error={errors.decision}
-      />
-      <TextField
-        label="Reason"
-        value={reason}
-        onChange={setReason}
-        hint="Needed to reject, or to approve an area with discrepancies; they stay listed and are never netted."
-      />
-      <div>
-        <Button type="submit" busy={approve.isProcessing} disabled={!online}>
-          Record sign-off
-        </Button>
-      </div>
-      <CommandSuccess message={success} />
-      <CommandError
-        error={approve.error}
-        onRetry={() => {
-          const body = build();
-          if (body) send(body);
-        }}
-        onReload={reload}
-      />
-    </form>
+    <ActionGate actionId="migration.approve_reconciliation" what="Recording an area sign-off">
+      <form className="ia-form" onSubmit={submit} aria-label="Record an area sign-off" noValidate>
+        <h4>Record an area sign-off</h4>
+        <SelectField
+          label="Area"
+          required
+          value={area}
+          onChange={setArea}
+          placeholder="Choose an area"
+          options={open.map((a) => ({ value: a, label: RECONCILIATION_AREA_LABELS[a] }))}
+          error={errors.area}
+        />
+        <RadioGroup
+          legend="Decision"
+          name="area-decision"
+          required
+          value={decision}
+          onChange={setDecision}
+          options={[
+            { value: 'approved', label: 'Approve' },
+            { value: 'rejected', label: 'Reject' },
+          ]}
+          error={errors.decision}
+        />
+        <TextField
+          label="Reason"
+          value={reason}
+          onChange={setReason}
+          hint="Needed to reject, or to approve an area with discrepancies; they stay listed and are never netted."
+        />
+        <div>
+          <Button type="submit" busy={approve.isProcessing} disabled={!online}>
+            Record sign-off
+          </Button>
+        </div>
+        <CommandSuccess message={success} />
+        <CommandError
+          error={approve.error}
+          onRetry={() => {
+            const body = build();
+            if (body) send(body);
+          }}
+          onReload={reload}
+        />
+      </form>
+    </ActionGate>
   );
 }
 

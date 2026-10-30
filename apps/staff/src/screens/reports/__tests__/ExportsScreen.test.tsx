@@ -198,6 +198,50 @@ describe('SCR-S-45 ExportsScreen', () => {
         expectedRevision: 1,
       }),
     );
+    expect(await screen.findByText(`Export ${EXPORT_1.slice(0, 8)} revoked`)).toBeInTheDocument();
+  });
+
+  it('journeys rule 4: revoking from "Your exports" is confirmed after the export leaves the "ready" list', async () => {
+    const user = userEvent.setup();
+    let revoked = false;
+    const test = app({
+      // Like the API: the status filter applies, so a revoked export leaves the "ready" list.
+      'GET /reports/exports': (request) => {
+        const record = revoked
+          ? reportExport('revoked', { revision: 2, revokeReason: 'Sent to the wrong person' })
+          : reportExport('ready');
+        const items =
+          request.query.status && request.query.status !== record.status ? [] : [record];
+        return fakeResponse(200, { items, nextCursor: null });
+      },
+      'POST /reports/exports/{id}/revoke': () => {
+        revoked = true;
+        return fakeResponse(200, reportExport('revoked', { revision: 2 }));
+      },
+    });
+    render(test.at('/reports/exports'));
+    await screen.findByRole('list', { name: 'Your exports' });
+    await user.selectOptions(screen.getByLabelText('Export status'), 'ready');
+    const section = screen.getByRole('region', { name: 'Your exports' });
+    const list = await within(section).findByRole('list', { name: 'Your exports' });
+    await user.click(
+      await within(list).findByRole('button', { name: `Revoke export ${EXPORT_1.slice(0, 8)}` }),
+    );
+    await user.type(
+      within(section).getByLabelText('Reason for revoking (required)'),
+      'Sent to the wrong person',
+    );
+    await user.click(within(section).getByRole('button', { name: 'Confirm revocation' }));
+    expect(
+      await within(section).findByText(`Export ${EXPORT_1.slice(0, 8)} revoked`),
+    ).toBeInTheDocument();
+    expect(await within(section).findByText('No export with this status')).toBeInTheDocument();
+    expect(within(section).getByRole('status')).toHaveTextContent(
+      `Export ${EXPORT_1.slice(0, 8)} revoked`,
+    );
+    expect(
+      test.fake.requests.find((r) => r.route === '/reports/exports/{id}/revoke')?.body,
+    ).toEqual({ reason: 'Sent to the wrong person', expectedRevision: 1 });
   });
 
   it('treats an export past its expiry as expired, with no download', async () => {

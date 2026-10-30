@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { filenameFrom } from '../download';
 import { formatMinor, isValidTimeZone, minorDigits, parseMajorToMinor } from '../format';
+import { chunkIds, MAX_IDS_PER_READ } from '../names';
 import { buildBaseParams } from '../ReportParameters';
 import { MAX_ROWS_PER_REQUEST, parseStagingDocument } from '../staging';
 import { buildInsightParams } from '../../../screens/reports/InsightReportsScreen';
@@ -133,5 +134,18 @@ describe('export file names', () => {
       '.._.._etc_passwd',
     );
     expect(filenameFrom(null, 'fallback.json')).toBe('fallback.json');
+  });
+});
+
+describe('display names in reads of at most 100 ids (ID-02, §4.10)', () => {
+  it('splits the ids into chunks of 100 in order of first appearance, without repeats or blanks', () => {
+    const ids = Array.from({ length: 250 }, (_, i) => `id-${String(i).padStart(3, '0')}`);
+    const chunks = chunkIds([...ids, null, undefined, '', ids[0], ids[120]]);
+    expect(MAX_IDS_PER_READ).toBe(100);
+    expect(chunks.map((c) => c.length)).toEqual([100, 100, 50]);
+    expect(chunks.flat()).toEqual(ids);
+    // Another page of a list adds ids at the end: the earlier full chunks keep their key.
+    expect(chunkIds([...ids, 'id-999'])[0]).toEqual(chunks[0]);
+    expect(chunkIds([])).toEqual([]);
   });
 });

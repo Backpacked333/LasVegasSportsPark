@@ -188,6 +188,39 @@ export function exportCreated(): Schema<'ReportExportCreated'> {
   };
 }
 
+/**
+ * The migration commands a migration operator's roles allow (`GET /v1/me/permissions` actions;
+ * migration.actions.ts: general manager and system administrator).
+ */
+export const MIGRATION_OPERATOR_ACTIONS = [
+  'migration.read_batch',
+  'migration.stage_batch',
+  'migration.validate_batch',
+  'migration.review_batch',
+  'migration.apply_batch',
+  'migration.abort_batch',
+  'migration.read_exceptions',
+  'migration.decide_exception',
+  'migration.reconcile',
+  'migration.read_reconciliation',
+  'migration.approve_reconciliation',
+];
+
+/** A person search result (`GET /v1/people`, names only). */
+export function personSearchResult(
+  overrides: Partial<Schema<'PersonSearchResult'>> = {},
+): Schema<'PersonSearchResult'> {
+  return {
+    id: PERSON_1,
+    givenName: 'Alex',
+    familyName: 'Rivera',
+    kind: 'adult',
+    status: 'active',
+    matchedOn: 'name',
+    ...overrides,
+  };
+}
+
 export const OUTCOMES_ZERO = { created: 0, matched: 0, updated: 0, skipped: 0, exception: 0 };
 
 export function importBatch(
@@ -276,8 +309,7 @@ export function importException(
     decision: null,
     resolution: null,
     decisionReason: null,
-    // Published as `ActorSnapshot & (Record<string, never> | null)`: the null is real at runtime.
-    decidedBy: null as unknown as Schema<'ImportException'>['decidedBy'],
+    decidedBy: null,
     decidedAt: null,
     revision: 4,
     createdAt: '2026-10-21T09:00:00.000Z',

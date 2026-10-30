@@ -13,7 +13,11 @@
  *   the capability's applicability decisions (none preselected) and a reason; it sends the switch's
  *   revision as `expectedRevision` once it has one, and one Idempotency-Key per intent (reused on
  *   retry). NOT_AN_APPLICABILITY_DECISION, STALE_REVISION and INVALID_TRANSITION (already in that
- *   state) are shown with the API's code; the last two offer "Reload".
+ *   state) are shown with the API's code; the last two offer "Reload", which re-reads the switches
+ *   and keeps the decision and reason typed (SPK-UX-008 stale version). The body is built from the
+ *   switch as it stands then (its revision and whether it is on); when it changed since the form
+ *   was opened, the form says what changed, and when it is now in the other state, the form turns
+ *   it the other way only if the administrator sends it again.
  * - A change re-reads `GET /v1/me/permissions` so every gated screen follows the new switch.
  * - The audit history of each switch is read on request (`GET /v1/audit-records`, itself audited).
  * Offline, the switches stay readable with their age and changes are disabled (§4.15).
@@ -62,12 +66,34 @@ function ownerOf(capability: string): string {
     : DECISIONS.capabilities.owner;
 }
 
+interface Draft {
+  decision: string;
+  reason: string;
+}
+
+const EMPTY_DRAFT: Draft = { decision: '', reason: '' };
+
+/** The switch as it was when the form was opened, to say what changed after a reload. */
+interface OpenedAs {
+  enabled: boolean;
+  revision: number | null;
+}
+
 function ChangeCapability({
   capability,
+  openedAs,
+  draft,
+  onDraft,
+  names,
   onDone,
   onCancel,
 }: {
+  /** The switch as it stands now (re-read on Reload); the form is never remounted by a reload. */
   capability: Capability;
+  openedAs: OpenedAs;
+  draft: Draft;
+  onDraft: (draft: Draft) => void;
+  names: DisplayNames;
   onDone: (message: string) => void;
   onCancel: () => void;
 }) {
@@ -81,21 +107,22 @@ function ChangeCapability({
     invalidate,
   });
   const command = turningOn ? enable : disable;
-  const [decision, setDecision] = useState('');
-  const [reason, setReason] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const flipped = capability.enabled !== openedAs.enabled;
+  const changedSince = flipped || capability.revision !== openedAs.revision;
 
   const build = () => {
     const next: Record<string, string> = {};
-    if (!decision) next.decision = 'Choose the decision that settles this.';
-    if (!reason.trim()) next.reason = 'Enter the reason for this change.';
+    if (!draft.decision) next.decision = 'Choose the decision that settles this.';
+    if (!draft.reason.trim()) next.reason = 'Enter the reason for this change.';
     setErrors(next);
     if (Object.keys(next).length > 0) return null;
     return {
-      decisionReference: decision,
-      reason: reason.trim(),
-      // A switch that was never changed has no revision yet; the state machine still refuses a
-      // second "turn on" (INVALID_TRANSITION), so nothing is applied twice.
+      decisionReference: draft.decision,
+      reason: draft.reason.trim(),
+      // The switch's current revision (after a reload, the re-read one). A switch that was never
+      // changed has no revision yet; the state machine still refuses a second "turn on"
+      // (INVALID_TRANSITION), so nothing is applied twice.
       ...(capability.revision !== null ? { expectedRevision: capability.revision } : {}),
     };
   };
@@ -104,7 +131,7 @@ function ChangeCapability({
       .submit({ path: { capability: capability.capability }, body })
       .then((changed) =>
         onDone(
-          `${label} turned ${changed.enabled ? 'on' : 'off'} (${changed.decisionReference ?? decision})`,
+          `${label} turned ${changed.enabled ? 'on' : 'off'} (${changed.decisionReference ?? draft.decision})`,
         ),
       )
       .catch(() => undefined);
@@ -125,12 +152,26 @@ function ChangeCapability({
       aria-label={`${turningOn ? 'Turn on' : 'Turn off'} ${label}`}
       noValidate
     >
+      {changedSince ? (
+        <p className="caption" role="status" data-testid="capability-changed">
+          {flipped
+            ? `Changed since you opened this form: ${label} is now turned ${capability.enabled ? 'on' : 'off'}`
+            : `Reloaded: ${label} is still turned ${capability.enabled ? 'on' : 'off'}`}
+          {capability.changedAt
+            ? ` (last change ${formatInstant(capability.changedAt)} naming ${capability.decisionReference ?? 'no decision'} by ${personText(names, capability.changedByPersonId)}, revision ${capability.revision})`
+            : ''}
+          .{' '}
+          {flipped
+            ? `Your decision and reason are kept; sending this form now turns it ${turningOn ? 'on' : 'off'}.`
+            : 'Your decision and reason are kept; review them and send again.'}
+        </p>
+      ) : null}
       <RadioGroup
         legend="Decision that settles this"
         name={`decision-${capability.capability}`}
         required
-        value={decision}
-        onChange={setDecision}
+        value={draft.decision}
+        onChange={(decision) => onDraft({ ...draft, decision })}
         options={capability.applicabilityReferences.map((ref) => ({
           value: ref,
           label: ref,
@@ -145,8 +186,8 @@ function ChangeCapability({
       <TextField
         label="Reason"
         required
-        value={reason}
-        onChange={setReason}
+        value={draft.reason}
+        onChange={(reason) => onDraft({ ...draft, reason })}
         hint="Recorded with the change, in its history and in the audit."
         error={errors.reason}
       />
@@ -208,7 +249,9 @@ function ManageNote({ capability }: { capability: Capability }) {
 function CapabilityRow({ capability, names }: { capability: Capability; names: DisplayNames }) {
   const permissions = usePermissions();
   const canManage = permissions.isPermitted(MANAGE_ACTION) === true;
-  const [open, setOpen] = useState(false);
+  // The form's state lives here, so a reload of the switches (a new revision) never resets it.
+  const [openedAs, setOpenedAs] = useState<OpenedAs | null>(null);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [success, setSuccess] = useState<string | null>(null);
   const label = capabilityLabel(capability.capability);
   const own = capability.applicabilityReferences.filter((ref) => ref !== 'DEC-016');
@@ -248,13 +291,20 @@ function CapabilityRow({ capability, names }: { capability: Capability; names: D
       </div>
       <CommandSuccess message={success} />
       {canManage ? (
-        open ? (
+        openedAs ? (
           <ChangeCapability
-            key={capability.revision ?? 0}
             capability={capability}
-            onCancel={() => setOpen(false)}
+            openedAs={openedAs}
+            draft={draft}
+            onDraft={setDraft}
+            names={names}
+            onCancel={() => {
+              setOpenedAs(null);
+              setDraft(EMPTY_DRAFT);
+            }}
             onDone={(message) => {
-              setOpen(false);
+              setOpenedAs(null);
+              setDraft(EMPTY_DRAFT);
               setSuccess(message);
             }}
           />
@@ -263,7 +313,7 @@ function CapabilityRow({ capability, names }: { capability: Capability; names: D
             variant="secondary"
             onClick={() => {
               setSuccess(null);
-              setOpen(true);
+              setOpenedAs({ enabled: capability.enabled, revision: capability.revision });
             }}
           >
             {capability.enabled ? `Turn off ${label}` : `Turn on ${label}`}

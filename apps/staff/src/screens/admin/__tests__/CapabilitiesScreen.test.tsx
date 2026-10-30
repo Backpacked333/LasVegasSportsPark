@@ -244,33 +244,132 @@ describe('SCR-S-47 CapabilitiesScreen', () => {
     ).toBeInTheDocument();
   });
 
-  it('STALE_REVISION offers Reload, which re-reads the switches', async () => {
+  it('STALE_REVISION offers Reload, which re-reads the switch and keeps what was typed; the next attempt sends the new revision', async () => {
     const user = userEvent.setup();
+    let reloaded = false;
+    let posts = 0;
     const test = app({
-      'POST /admin/capabilities/{capability}/enable': () =>
-        fakeResponse(
+      'GET /admin/capabilities': () =>
+        fakeResponse(200, {
+          items: [
+            capability('rentals', {
+              enabled: true,
+              decisionReference: 'DEC-016',
+              changedByPersonId: PERSON_1,
+              changedAt: NOW_ISO,
+              revision: reloaded ? 4 : 3,
+            }),
+          ],
+        }),
+      'POST /admin/capabilities/{capability}/disable': () => {
+        posts += 1;
+        if (posts === 1) {
+          reloaded = true;
+          return fakeResponse(
+            409,
+            apiErrorBody('STALE_REVISION', {
+              nextAction: 'reload_and_retry',
+              message: 'The capability changed.',
+              details: { expectedRevision: 3, currentRevision: 4 },
+            }),
+          );
+        }
+        return fakeResponse(
+          200,
+          capability('rentals', { enabled: false, decisionReference: 'DEC-076', revision: 5 }),
+        );
+      },
+    });
+    render(test.at('/admin/capabilities'));
+    const rentals = await row('Rentals');
+    await user.click(within(rentals).getByRole('button', { name: 'Turn off Rentals' }));
+    const form = within(rentals).getByRole('form', { name: 'Turn off Rentals' });
+    await user.click(within(form).getByRole('radio', { name: /DEC-076/ }));
+    await user.type(within(form).getByLabelText('Reason (required)'), 'Season ended');
+    await user.click(within(form).getByRole('button', { name: 'Turn off Rentals' }));
+    expect(await within(form).findByText(/Error code: STALE_REVISION/)).toBeInTheDocument();
+    await user.click(within(form).getByRole('button', { name: 'Reload' }));
+    expect(
+      await within(rentals).findByText(/Reloaded: Rentals is still turned on .*revision 4\)/),
+    ).toBeInTheDocument();
+    // The same form, with what was typed.
+    const kept = within(rentals).getByRole('form', { name: 'Turn off Rentals' });
+    expect(within(kept).getByLabelText('Reason (required)')).toHaveValue('Season ended');
+    expect(within(kept).getByRole('radio', { name: /DEC-076/ })).toBeChecked();
+    await user.click(within(kept).getByRole('button', { name: 'Turn off Rentals' }));
+    await waitFor(() => expect(posts).toBe(2));
+    const sent = test.fake.requests.filter(
+      (r) => r.route === '/admin/capabilities/{capability}/disable',
+    );
+    expect(sent[0]?.body).toEqual({
+      decisionReference: 'DEC-076',
+      reason: 'Season ended',
+      expectedRevision: 3,
+    });
+    expect(sent[1]?.body).toEqual({
+      decisionReference: 'DEC-076',
+      reason: 'Season ended',
+      expectedRevision: 4,
+    });
+    // A refused attempt ended its intent: the second one is a new intent with a new key.
+    expect(sent[1]?.headers['idempotency-key']).not.toBe(sent[0]?.headers['idempotency-key']);
+    expect(await screen.findByText('Rentals turned off (DEC-076)')).toBeInTheDocument();
+  });
+
+  it('INVALID_TRANSITION: after Reload the form says the switch was changed meanwhile and keeps the reason', async () => {
+    const user = userEvent.setup();
+    let changedElsewhere = false;
+    const test = app({
+      'GET /admin/capabilities': () =>
+        fakeResponse(200, {
+          items: [
+            changedElsewhere
+              ? capability('rentals', {
+                  enabled: true,
+                  decisionReference: 'DEC-076',
+                  reason: 'Approved',
+                  changedByPersonId: PERSON_1,
+                  changedAt: NOW_ISO,
+                  revision: 1,
+                })
+              : capability('rentals'),
+          ],
+        }),
+      'POST /admin/capabilities/{capability}/enable': () => {
+        changedElsewhere = true;
+        return fakeResponse(
           409,
-          apiErrorBody('STALE_REVISION', {
+          apiErrorBody('INVALID_TRANSITION', {
             nextAction: 'reload_and_retry',
-            message: 'The capability changed.',
+            message: 'The capability is already enabled.',
           }),
-        ),
+        );
+      },
     });
     render(test.at('/admin/capabilities'));
     const rentals = await row('Rentals');
     await user.click(within(rentals).getByRole('button', { name: 'Turn on Rentals' }));
     const form = within(rentals).getByRole('form', { name: 'Turn on Rentals' });
-    await user.click(within(form).getByRole('radio', { name: /DEC-016/ }));
-    await user.type(within(form).getByLabelText('Reason (required)'), 'Approved');
+    await user.click(within(form).getByRole('radio', { name: /DEC-076/ }));
+    await user.type(within(form).getByLabelText('Reason (required)'), 'Approved for spring');
     await user.click(within(form).getByRole('button', { name: 'Turn on Rentals' }));
-    expect(await within(form).findByText(/Error code: STALE_REVISION/)).toBeInTheDocument();
-    const reads = test.fake.requests.filter((r) => r.route === '/admin/capabilities').length;
+    expect(await within(form).findByText(/Error code: INVALID_TRANSITION/)).toBeInTheDocument();
+    // Never changed: no revision was sent.
+    expect(
+      test.fake.requests.find((r) => r.route === '/admin/capabilities/{capability}/enable')?.body,
+    ).toEqual({ decisionReference: 'DEC-076', reason: 'Approved for spring' });
     await user.click(within(form).getByRole('button', { name: 'Reload' }));
-    await waitFor(() =>
-      expect(
-        test.fake.requests.filter((r) => r.route === '/admin/capabilities').length,
-      ).toBeGreaterThan(reads),
+    const note = await within(rentals).findByTestId('capability-changed');
+    expect(note).toHaveTextContent(
+      'Changed since you opened this form: Rentals is now turned on (last change',
     );
+    expect(note).toHaveTextContent('revision 1');
+    expect(note).toHaveTextContent('sending this form now turns it off');
+    const flipped = within(rentals).getByRole('form', { name: 'Turn off Rentals' });
+    expect(within(flipped).getByLabelText('Reason (required)')).toHaveValue('Approved for spring');
+    expect(within(flipped).getByRole('button', { name: 'Turn off Rentals' })).toBeInTheDocument();
+    // Nothing more was sent without the administrator.
+    expect(test.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(1);
   });
 
   it('§4.9: a change that got no answer is retried with the same idempotency key', async () => {

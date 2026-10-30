@@ -5,7 +5,11 @@
  * errors and review decisions (`GET /v1/import-batches/{id}`, `/rows`, `/v1/import-exceptions`).
  *
  * The next step follows the batch state machine (received → validated → reviewed → applied, or
- * aborted before any apply); the API authorizes each command and its ACCESS_DENIED is shown:
+ * aborted before any apply). Each step is offered only when `GET /v1/me/permissions` lists its
+ * action for the viewer's roles (migration.validate_batch, stage_batch, review_batch, apply_batch,
+ * abort_batch, reconcile, decide_exception, approve_reconciliation; batches carry no
+ * `availableActions`), shown as "not available to you" otherwise; the API still authorizes each
+ * command and its ACCESS_DENIED is shown:
  * validate (seal and dry-run; a checksum or row-count mismatch is a validation failure), append a
  * chunk while received, complete the review (expected revision; refused while exceptions are open),
  * apply (processing "Importing"; repeatable: matched records create nothing, charge nothing and
@@ -53,6 +57,7 @@ import {
   ReconciliationReportView,
 } from '../../features/insight-admin/migration';
 import { MigrationNav } from '../../features/insight-admin/nav';
+import { ActionGate } from '../../features/insight-admin/permission';
 import { ExceptionsPage } from './ImportReviewScreen';
 import { parseStagingDocument, readFileText } from '../../features/insight-admin/staging';
 import { useApp } from '../../providers/AppProviders';
@@ -240,9 +245,7 @@ function ApplyAction({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) 
       .then((next) => {
         const c = next.outcomeCounts;
         onDone(
-          c
-            ? `Batch ${next.status}: ${c.created} created, ${c.matched} matched, ${c.updated} updated, ${c.skipped} skipped, ${c.exception} exceptions`
-            : `Batch ${next.status}`,
+          `Batch ${next.status}: ${c.created} created, ${c.matched} matched, ${c.updated} updated, ${c.skipped} skipped, ${c.exception} exceptions`,
         );
         return refresh();
       })
@@ -436,7 +439,9 @@ function Reconciliation({ batch }: { batch: ImportBatch }) {
   const latestId = generatedId ?? batch.latestReconciliationReportId;
   return (
     <>
-      <ReconcileAction batch={batch} onGenerated={setGeneratedId} />
+      <ActionGate actionId="migration.reconcile" what="Reconciling this batch">
+        <ReconcileAction batch={batch} onGenerated={setGeneratedId} />
+      </ActionGate>
       <section className="ia-section" aria-labelledby="reconciliation-reports-title">
         <h4 id="reconciliation-reports-title">Reconciliation reports</h4>
         {latestId ? (
@@ -453,27 +458,43 @@ function Reconciliation({ batch }: { batch: ImportBatch }) {
   );
 }
 
+function GatedAbort({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) {
+  return (
+    <ActionGate actionId="migration.abort_batch" what="Aborting this batch">
+      <AbortAction batch={batch} onDone={onDone} />
+    </ActionGate>
+  );
+}
+
 function NextSteps({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) {
   return (
     <section className="ia-section" aria-labelledby="next-steps-title">
       <h3 id="next-steps-title">Next step</h3>
       {batch.status === 'received' ? (
         <>
-          <ValidateAction batch={batch} onDone={onDone} />
-          <AppendChunk batch={batch} />
-          <AbortAction batch={batch} onDone={onDone} />
+          <ActionGate actionId="migration.validate_batch" what="Validating this batch">
+            <ValidateAction batch={batch} onDone={onDone} />
+          </ActionGate>
+          <ActionGate actionId="migration.stage_batch" what="Appending a chunk">
+            <AppendChunk batch={batch} />
+          </ActionGate>
+          <GatedAbort batch={batch} onDone={onDone} />
         </>
       ) : null}
       {batch.status === 'validated' ? (
         <>
-          <ReviewAction batch={batch} onDone={onDone} />
-          <AbortAction batch={batch} onDone={onDone} />
+          <ActionGate actionId="migration.review_batch" what="Completing the review">
+            <ReviewAction batch={batch} onDone={onDone} />
+          </ActionGate>
+          <GatedAbort batch={batch} onDone={onDone} />
         </>
       ) : null}
       {batch.status === 'reviewed' ? (
         <>
-          <ApplyAction batch={batch} onDone={onDone} />
-          {batch.applyStartedAt ? null : <AbortAction batch={batch} onDone={onDone} />}
+          <ActionGate actionId="migration.apply_batch" what="Applying this batch">
+            <ApplyAction batch={batch} onDone={onDone} />
+          </ActionGate>
+          {batch.applyStartedAt ? null : <GatedAbort batch={batch} onDone={onDone} />}
         </>
       ) : null}
       {batch.status === 'applied' ? <Reconciliation batch={batch} /> : null}
@@ -492,6 +513,7 @@ function CountsLine({
   counts,
 }: {
   label: string;
+  /** Planned counts are null until the batch is validated; final counts are always present. */
   counts: Schema<'ImportOutcomeCounts'> | null;
 }) {
   if (!counts) return null;

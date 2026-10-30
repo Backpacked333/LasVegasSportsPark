@@ -4,8 +4,10 @@
  * names), row outcomes and open review exceptions (`GET /v1/import-batches`), and staging a new
  * snapshot from the extraction's staging document (`POST /v1/import-batches`, Idempotency-Key per
  * intent). Staging and re-importing never charge or notify; a batch whose checksum matches an
- * earlier one is marked as a re-import of the same snapshot. The staging document's rows are
- * personal data: they are sent as read and never shown, logged or kept by this page (§4.14).
+ * earlier one is marked as a re-import of the same snapshot. Staging is offered only when
+ * `GET /v1/me/permissions` lists migration.stage_batch (the API still decides). The staging
+ * document's rows are personal data: they are sent as read and never shown, logged or kept by this
+ * page (§4.14).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
@@ -33,6 +35,7 @@ import {
 } from '../../features/insight-admin/staging';
 import { BATCH_BADGES, DECISIONS } from '../../features/insight-admin/labels';
 import { MigrationNav } from '../../features/insight-admin/nav';
+import { ActionGate } from '../../features/insight-admin/permission';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -232,10 +235,9 @@ function BatchRow({ batch }: { batch: ImportBatch }) {
           Checksum {batch.checksum ?? batch.declaredChecksum ?? 'not sealed yet'}
         </span>
         <span className="caption">
-          {counts
-            ? `Outcomes: ${counts.created} created, ${counts.matched} matched, ${counts.updated} updated, ${counts.skipped} skipped, ${counts.exception} exceptions · `
-            : ''}
-          {batch.exceptions.open} open for review
+          Outcomes: {counts.created} created, {counts.matched} matched, {counts.updated} updated,{' '}
+          {counts.skipped} skipped, {counts.exception} exceptions · {batch.exceptions.open} open for
+          review
         </span>
         {batch.sameChecksumBatchIds.length > 0 ? (
           <span>
@@ -332,7 +334,9 @@ export function MigrationImportsScreen() {
           />
         ))}
       </section>
-      <StageBatch />
+      <ActionGate actionId="migration.stage_batch" what="Staging a snapshot">
+        <StageBatch />
+      </ActionGate>
     </section>
   );
 }

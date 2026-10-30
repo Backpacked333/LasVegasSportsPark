@@ -1,44 +1,109 @@
 /**
  * Display names of staff people shown on the Administration screens (SCR-S-46, SCR-S-47): who
- * changed a capability switch, who acted in an audit record. One `GET /v1/person-names` read per
- * set of ids (ID-02; names only, never a date of birth or contact point, §4.14); a person the
- * viewer may not see is left out by the API and shown as "not available" here (§4.10). Nothing is
- * logged or put in a route.
+ * changed a capability switch, who acted in an audit record. `GET /v1/person-names` reads at most
+ * 100 ids at a time (ID-02; names only, never a date of birth or contact point, §4.14), so the ids
+ * are read in chunks of 100, one query per chunk. A person the viewer may not see is left out of
+ * the API's answer and shown as "not available" here (§4.10); that is said only for an id the API
+ * was asked about, never for one still loading or not asked yet. Nothing is logged or put in a
+ * route.
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
-import { useApiQuery } from '../../api/useApiQuery';
+import {
+  apiQueryKey,
+  type ApiError,
+  type ApiResponse,
+  type ResponseBody,
+  type Schema,
+} from '@sportspark/api-client';
+import { useQueries } from '@tanstack/react-query';
+import { useCallback, useMemo } from 'react';
+import { useApi } from '../../providers/AppProviders';
 
 export type PersonName = Schema<'PersonName'>;
 
 /** The API reads at most 100 ids at a time (PersonNamesQuery). */
-const MAX_IDS = 100;
+export const MAX_IDS_PER_READ = 100;
+
+const NAME_STALE_MS = 5 * 60_000;
 
 export interface DisplayNames {
-  /** The name, `null` when the API left the person out, `undefined` while loading or failed. */
+  /**
+   * The name; `null` when the API was asked and left the person out (not available to you);
+   * `undefined` while loading, after a failed read, or for an id not asked about.
+   */
   nameOf(personId: string): string | null | undefined;
   loading: boolean;
   error: ApiError | null;
   refetch: () => void;
 }
 
+/**
+ * The ids in chunks of at most 100, in order of first appearance (so loading another page of a list
+ * adds a chunk instead of re-reading every earlier one); each chunk is sorted for a stable key.
+ */
+export function chunkIds(ids: readonly (string | null | undefined)[]): string[][] {
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += MAX_IDS_PER_READ) {
+    chunks.push(unique.slice(i, i + MAX_IDS_PER_READ).sort());
+  }
+  return chunks;
+}
+
+type NamesResponse = ApiResponse<ResponseBody<'/person-names', 'get'>>;
+
 export function useDisplayNames(ids: readonly (string | null | undefined)[]): DisplayNames {
-  const unique = [...new Set(ids.filter((id): id is string => !!id))].sort().slice(0, MAX_IDS);
-  const query = useApiQuery({
-    path: '/person-names',
-    request: { query: { ids: unique } },
-    enabled: unique.length > 0,
-    staleTime: 5 * 60_000,
-  });
-  const byId = new Map((query.data?.items ?? []).map((p) => [p.personId, p.displayName]));
-  return {
-    nameOf: (personId) => {
-      if (!query.data) return undefined;
-      return byId.get(personId) ?? null;
+  const api = useApi();
+  const signature = chunkIds(ids)
+    .map((chunk) => chunk.join(','))
+    .join('|');
+  const chunks = useMemo(
+    () => (signature ? signature.split('|').map((chunk) => chunk.split(',')) : []),
+    [signature],
+  );
+  const combine = useCallback(
+    (
+      results: readonly {
+        data: NamesResponse | undefined;
+        error: Error | null;
+        isLoading: boolean;
+        refetch: () => unknown;
+      }[],
+    ): DisplayNames => {
+      const answered = new Map<string, string | null>();
+      chunks.forEach((chunk, index) => {
+        const data = results[index]?.data?.data;
+        if (!data) return;
+        const byId = new Map(data.items.map((p) => [p.personId, p.displayName]));
+        for (const id of chunk) answered.set(id, byId.get(id) ?? null);
+      });
+      const error = (results.find((r) => r.error)?.error as ApiError | undefined) ?? null;
+      return {
+        nameOf: (personId) => answered.get(personId),
+        loading: results.some((r) => r.isLoading),
+        error,
+        refetch: () => {
+          for (const r of results) if (r.error) void r.refetch();
+        },
+      };
     },
-    loading: unique.length > 0 && query.isLoading,
-    error: query.error ?? null,
-    refetch: () => void query.refetch(),
-  };
+    [chunks],
+  );
+  return useQueries({
+    queries: chunks.map((chunk) => {
+      const request = { query: { ids: chunk } };
+      return {
+        queryKey: apiQueryKey('/person-names', request),
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          (api.request as (method: 'get', path: string, options: object) => Promise<NamesResponse>)(
+            'get',
+            '/person-names',
+            { ...request, signal },
+          ),
+        staleTime: NAME_STALE_MS,
+      };
+    }),
+    combine,
+  });
 }
 
 /** "Name (role)" text for a person reference: the name, or what is known instead. */

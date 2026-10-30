@@ -4,7 +4,10 @@
  * decides who may make them; ACCESS_DENIED is shown with its message; commands are offered only
  * when `GET /v1/me/permissions` lists identity.manage_staff_membership), §4.9 idempotency keys and
  * expected revisions, STALE_REVISION with a Reload that re-reads the membership, the audit history
- * on request, DEC-018 multifactor status pending, child records never named.
+ * on request, DEC-018 multifactor status pending, child records never named. A person is found by
+ * name (`GET /v1/people`, adults only); the confirmed outcome stays above the list when the
+ * membership leaves the filtered list; facility choices come from `GET /v1/facilities` within the
+ * staff scope.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -18,6 +21,7 @@ import {
   facilityList,
   ok,
   page,
+  personSearchResult,
   staffMembership,
   staffMembershipView,
 } from '../../../features/insight-admin/__tests__/fixtures';
@@ -292,22 +296,29 @@ describe('SCR-S-46 AccountsRolesScreen', () => {
     });
     expect(sent[1]?.body).toMatchObject({ expectedRevision: 2 });
     expect(sent[1]?.headers['idempotency-key']).not.toBe(sent[0]?.headers['idempotency-key']);
-    expect(await within(row).findByText('Changes saved')).toBeInTheDocument();
+    const section = screen.getByRole('region', { name: 'Staff role assignments' });
+    expect(
+      await within(section).findByText(
+        `Changes saved: membership ${MEMBERSHIP_1.slice(0, 8)} is active with Scheduler, Front desk (revision 3)`,
+      ),
+    ).toBeInTheDocument();
+    // The note about the reload no longer asks to save again.
+    await waitFor(() => expect(within(section).queryByText(/Reloaded: revision/)).toBeNull());
   });
 
-  it('ends a membership with a reason and the expected revision', async () => {
+  it('ends a membership with a reason and the expected revision, and confirms it after the row leaves the active list', async () => {
     const user = userEvent.setup();
     let ended = false;
     const test = app({
-      'GET /staff-memberships': () =>
-        fakeResponse(200, {
-          items: [
-            staffMembershipView(
-              ended ? { status: 'ended', effectiveTo: NOW_ISO, revision: 2 } : {},
-            ),
-          ],
-          nextCursor: null,
-        }),
+      // Like the API: the status filter applies, so an ended membership leaves the active list.
+      'GET /staff-memberships': (request) => {
+        const membership = staffMembershipView(
+          ended ? { status: 'ended', effectiveTo: NOW_ISO, revision: 2 } : {},
+        );
+        const items =
+          request.query.status && request.query.status !== membership.status ? [] : [membership];
+        return fakeResponse(200, { items, nextCursor: null });
+      },
       'POST /staff-memberships/{id}/end': () => {
         ended = true;
         return fakeResponse(
@@ -328,7 +339,15 @@ describe('SCR-S-46 AccountsRolesScreen', () => {
       'Left the organization',
     );
     await user.click(within(row).getByRole('button', { name: 'End membership now' }));
-    expect(await within(await listedMembership()).findByText('ended')).toBeInTheDocument();
+    const section = screen.getByRole('region', { name: 'Staff role assignments' });
+    expect(
+      await within(section).findByText(`Membership ${MEMBERSHIP_1.slice(0, 8)} ended`),
+    ).toBeInTheDocument();
+    // The row left the active list; the confirmation stays.
+    expect(await within(section).findByText('No membership matches')).toBeInTheDocument();
+    expect(within(section).getByRole('status')).toHaveTextContent(
+      `Membership ${MEMBERSHIP_1.slice(0, 8)} ended`,
+    );
     expect(test.fake.requests.find((r) => r.route === '/staff-memberships/{id}/end')?.body).toEqual(
       { reason: 'Left the organization', expectedRevision: 1 },
     );
@@ -425,6 +444,142 @@ describe('SCR-S-46 AccountsRolesScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Check person' }));
     await waitFor(() =>
       expect(screen.getByTestId('state-unavailable')).toHaveTextContent('Not available'),
+    );
+  });
+
+  it('names each membership row by its own title when your own membership is also listed', async () => {
+    const me = staffMe([FACILITY_A]);
+    (me.body as { staffMemberships: unknown[] }).staffMemberships = [staffMembership()];
+    render(
+      app({ 'GET /me': me, 'GET /staff-memberships': page([staffMembershipView()]) }).at(
+        '/admin/accounts',
+      ),
+    );
+    const list = await screen.findByRole('list', { name: 'Staff memberships' });
+    expect(
+      within(list).getByRole('listitem', {
+        name: `Alex Rivera · Membership ${MEMBERSHIP_1.slice(0, 8)}: Scheduler`,
+      }),
+    ).toBeInTheDocument();
+    await screen.findByRole('list', { name: 'Your staff memberships' });
+    expect(document.querySelectorAll(`[id="membership-${MEMBERSHIP_1}"]`)).toHaveLength(1);
+    expect(document.querySelectorAll(`[id="your-membership-${MEMBERSHIP_1}"]`)).toHaveLength(1);
+  });
+
+  it('finds the person to assign by name (active adults, names only); Enter searches and sends nothing', async () => {
+    const user = userEvent.setup();
+    const test = app({ 'GET /people': page([personSearchResult()]) });
+    render(test.at('/admin/accounts'));
+    const form = await screen.findByRole('form', { name: 'Assign staff roles' });
+    const search = within(form).getByRole('group', { name: 'Find the staff member' });
+    await user.type(within(search).getByLabelText('Find the staff member by name'), 'Al{Enter}');
+    await user.click(
+      await within(search).findByRole('button', { name: 'Use Alex Rivera as the staff member' }),
+    );
+    expect(within(form).getByLabelText('Person id (required)')).toHaveValue(PERSON_1);
+    expect(within(form).getByText('Chosen: Alex Rivera')).toBeInTheDocument();
+    expect(test.fake.requests.find((r) => r.route === '/people')?.query).toMatchObject({
+      query: 'Al',
+      kind: 'adult',
+      status: 'active',
+    });
+    // Enter in the search never submitted the assignment.
+    expect(test.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    expect(within(form).queryByText('Choose at least one role.')).toBeNull();
+  });
+
+  it('person search: too short, no match, and the API refusal are each said plainly', async () => {
+    const user = userEvent.setup();
+    let denied = false;
+    render(
+      app({
+        'GET /people': () =>
+          denied
+            ? fakeResponse(
+                403,
+                apiErrorBody('ACCESS_DENIED', { message: 'You may not search people.' }),
+              )
+            : fakeResponse(200, { items: [], nextCursor: null }),
+      }).at('/admin/accounts'),
+    );
+    const form = await screen.findByRole('form', { name: 'Assign staff roles' });
+    const search = within(form).getByRole('group', { name: 'Find the staff member' });
+    const field = within(search).getByLabelText('Find the staff member by name');
+    await user.type(field, 'A');
+    await user.click(within(search).getByRole('button', { name: 'Search for the staff member' }));
+    expect(within(search).getByText('Enter two to one hundred characters.')).toBeInTheDocument();
+    await user.type(field, 'x');
+    await user.click(within(search).getByRole('button', { name: 'Search for the staff member' }));
+    expect(
+      await within(search).findByText(/No adult person matches “Ax” with status active/),
+    ).toBeInTheDocument();
+    denied = true;
+    await user.type(field, 'y');
+    await user.click(within(search).getByRole('button', { name: 'Search for the staff member' }));
+    expect(await within(search).findByText('Not available to you')).toBeInTheDocument();
+    expect(within(search).getByText(/You may not search people\./)).toBeInTheDocument();
+  });
+
+  it('filters the membership list by a person found by name', async () => {
+    const user = userEvent.setup();
+    const test = app({ 'GET /people': page([personSearchResult()]) });
+    render(test.at('/admin/accounts'));
+    const filters = await screen.findByRole('form', { name: 'Filter staff memberships' });
+    const search = within(filters).getByRole('group', { name: 'Find the staff member' });
+    await user.type(within(search).getByLabelText('Find the staff member by name'), 'Al{Enter}');
+    await user.click(
+      await within(search).findByRole('button', { name: 'Use Alex Rivera as the staff member' }),
+    );
+    expect(within(filters).getByLabelText('Person id')).toHaveValue(PERSON_1);
+    await user.click(within(filters).getByRole('button', { name: 'Show memberships' }));
+    await waitFor(() =>
+      expect(
+        test.fake.requests.some(
+          (r) => r.route === '/staff-memberships' && r.query.personId === PERSON_1,
+        ),
+      ).toBe(true),
+    );
+    // The person filter search asks for adults of any status (ended memberships too).
+    expect(test.fake.requests.find((r) => r.route === '/people')?.query.status).toBeUndefined();
+  });
+
+  it('offers only facilities in the staff scope (GET /v1/facilities inStaffScope)', async () => {
+    render(
+      app({ 'GET /facilities': facilityList([{}, { inStaffScope: false }]) }).at('/admin/accounts'),
+    );
+    const form = await screen.findByRole('form', { name: 'Assign staff roles' });
+    expect(await within(form).findByRole('checkbox', { name: 'North Park 1' })).toBeInTheDocument();
+    expect(within(form).queryByRole('checkbox', { name: 'North Park 2' })).toBeNull();
+    const filters = screen.getByRole('form', { name: 'Filter staff memberships' });
+    expect(within(filters).getByRole('option', { name: 'North Park 1' })).toBeInTheDocument();
+    expect(within(filters).queryByRole('option', { name: 'North Park 2' })).toBeNull();
+  });
+
+  it('a failed facility directory read is shown with its code and Try again, and assigning waits', async () => {
+    const user = userEvent.setup();
+    let failing = true;
+    const test = app({
+      'GET /facilities': () =>
+        failing
+          ? fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { message: 'Try again later.' }))
+          : fakeResponse(200, facilityList().body),
+    });
+    render(test.at('/admin/accounts'));
+    const form = await screen.findByRole('form', { name: 'Assign staff roles' });
+    expect(
+      await within(form).findByText(
+        'The facilities could not be read, so a facility scope cannot be chosen yet.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(form).getByText('Error code: INTERNAL_ERROR. Reference: test-correlation-id'),
+    ).toBeInTheDocument();
+    expect(within(form).getByRole('button', { name: 'Assign roles' })).toBeDisabled();
+    failing = false;
+    await user.click(within(form).getByRole('button', { name: 'Try again' }));
+    expect(await within(form).findByRole('checkbox', { name: 'North Park 1' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(form).getByRole('button', { name: 'Assign roles' })).toBeEnabled(),
     );
   });
 });
