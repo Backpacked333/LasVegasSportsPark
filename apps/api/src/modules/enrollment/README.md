@@ -16,7 +16,7 @@ Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 
 SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
 **Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
-`0500` to `0513`; `0503` came from the review stage, `0510` to `0513` from the stage-5 review)
+`0500` to `0514`; `0503` came from the review stage, `0510` to `0514` from the stage-5 review)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
@@ -334,8 +334,8 @@ benefits, terms, deposits) are configuration in the catalog; nothing here suppli
 | `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`)                                       | —                | `package-g-foundation.spec.ts`                              |
 | `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal                                           | 0505, 0507, 0513 | `package-g-foundation.spec.ts`, `memberships.spec.ts`       |
 | `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506       | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
-| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508, 0512       | `bookings.spec.ts`                                          |
-| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508, 0512       | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
+| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508, 0512, 0514 | `bookings.spec.ts`                                          |
+| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508, 0512, 0514 | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
 | `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511        | `youth-progression.spec.ts`                                 |
 
 Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
@@ -393,9 +393,21 @@ mirrored by a database transition guard.
   occurrence that already started keeps its events, requirements and accepted assignments, so the
   work done can still be completed (SPK-SCHED-007); a held booking whose basket is in checkout answers 409
   `CHECKOUT_IN_PROGRESS`, and one whose basket is already paid but not yet confirmed 409
-  `BOOKING_CONFIRMATION_PENDING`, before anything is written (§4.11). Job `enrollment.booking_lifecycle` (failure owner `scheduler`):
-  undecided requests expire at their start, an unstaffed booking that starts raises the critical
-  `enrollment.booking_started_unstaffed`, ended bookings complete. Reads:
+  `BOOKING_CONFIRMATION_PENDING`, before anything is written (§4.11). A booking follows its
+  scheduling events (handler `enrollment.booking_follow_event` on `scheduling.event_changed`,
+  failure owner `scheduler`; the events are re-read, so a late or replayed change gives the same
+  answer): when none of its occurrences takes place any more (a closure, any cancellation) it is
+  `canceled`, a held basket is released, its staffing exceptions are settled and, when money was
+  taken or is moving, `enrollment.booking_canceled_by_schedule` (owner `finance_operator`) names
+  the enrollment and the order so the consequence is decided under DEC-009 instead of executed; a
+  lost occurrence of a continuing booking raises `enrollment.booking_occurrence_canceled` and is
+  left out of the staffing coverage; a moved occurrence moves the booking's times. A closure
+  preview names the booker (`via: booking`) and the order a paid booking went through, and the
+  booker is in the event's notice audience (`SESSION_AUDIENCE_IMPL`). Job
+  `enrollment.booking_lifecycle` (failure owner `scheduler`): undecided requests expire at their
+  start, an unstaffed booking that starts raises the critical `enrollment.booking_started_unstaffed`
+  once per unstaffed episode (`started_unstaffed_at`, 0514; covered again clears it), ended
+  bookings complete, and a booking whose every occurrence was cancelled is never completed. Reads:
   `GET /v1/offerings/{id}/booking-availability`, `/v1/me/bookings`, `/v1/bookings/{id}` (booker or
   staff; anyone else NOT_FOUND), `/v1/bookings` (staff). `BOOKING_QUERY_IMPL` is provided (IF-36).
 - **Youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006; owner Proposed).** Approved

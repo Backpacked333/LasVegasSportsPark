@@ -131,6 +131,8 @@ export interface BookingsTable {
   decision_reason: string | null;
   ended_at: NullableTimestamp;
   end_reason: string | null;
+  /** Migration 0514: the started-unstaffed exception was raised for this awaiting_staff episode. */
+  started_unstaffed_at: NullableTimestamp;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

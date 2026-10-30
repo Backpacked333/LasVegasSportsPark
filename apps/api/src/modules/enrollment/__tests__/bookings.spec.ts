@@ -5,7 +5,7 @@ import {
   type PolicyVersion,
 } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Outbox, UnitOfWork } from '../../../kernel';
+import { OperationalExceptions, Outbox, UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { POLICY_PORT, createPolicyVersionFixture, type PolicyPort } from '../../catalog';
 import { EventsService, createScheduledEvent, seedResource } from '../../scheduling';
@@ -18,7 +18,8 @@ import {
   type BookingQueryPort,
   type EnrollmentPort,
 } from '../enrollment.ports';
-import { BOOKING_LIFECYCLE_JOB } from '../services/enrollment-jobs';
+import { BookingsService } from '../services/bookings.service';
+import { BOOKING_LIFECYCLE_JOB, EnrollmentJobs } from '../services/enrollment-jobs';
 import { definitionWithScope } from './package-g-support';
 import { useBookingTerms } from './stage3-doubles';
 import {
@@ -389,6 +390,235 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
       const completed = await post(t, `/v1/assignments/${past.id}/complete`, manager.header, {});
       expect(completed.status, JSON.stringify(completed.body)).toBe(200);
       expect((await assignmentOf(events[0]!.id)).status).toBe('completed');
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
+
+  /** A paid rental with an accepted supervisor on each week, confirmed (fields[2], from day 70). */
+  async function staffedPaidRental(weeks: number, day: number) {
+    const setup = await rental({
+      price: 6_000,
+      staffing: [{ kind: 'supervisor', role: 'field_supervisor', count: 1, qualifications: [] }],
+    });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(day).toISOString(),
+      end: new Date(start(day).getTime() + HOUR).toISOString(),
+      ...(weeks > 1 ? { recurrence: { interval: 1, count: weeks } } : {}),
+      resourceIds: [fields[2]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    await pay(row.basket_id!, row.enrollment_id!);
+    const events = await t.db
+      .selectFrom('events')
+      .select(['id', 'scheduled_start', 'scheduled_end'])
+      .where('id', 'in', row.scheduling_event_ids)
+      .orderBy('scheduled_start')
+      .execute();
+    for (const event of events) await accept(event.id, 'field_supervisor', 'supervisor');
+    const confirmed = await t.http
+      .get(`/v1/bookings/${booked.body.id as string}`)
+      .set(customer.header);
+    expect(confirmed.body.status).toBe('confirmed');
+    const enrollment = await t.db
+      .selectFrom('enrollments')
+      .select(['id', 'order_ref'])
+      .where('id', '=', row.enrollment_id!)
+      .executeTakeFirstOrThrow();
+    return { setup, customer, booking: confirmed.body, row, events, enrollment };
+  }
+
+  async function closeAndApply(from: Date, to: Date) {
+    const closure = await post(t, '/v1/closures', scheduler.header, {
+      facilityId: t.facilityId,
+      resourceId: fields[2],
+      interval: { start: from.toISOString(), end: to.toISOString() },
+      reason: 'Flooded field',
+      source: 'manual',
+    });
+    expect(closure.status, JSON.stringify(closure.body)).toBe(201);
+    const applied = await post(
+      t,
+      `/v1/closures/${closure.body.id as string}/apply`,
+      scheduler.header,
+      {
+        mode: 'cancel_affected',
+        expectedRevision: closure.body.revision,
+      },
+    );
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    await drain(t);
+    return closure.body as {
+      impact: {
+        customers: Array<{ personId: string; via: string[] }>;
+        obligations: Array<{ type: string; id: string }>;
+      };
+    };
+  }
+
+  /**
+   * One run of enrollment.booking_lifecycle at the clock's time, called directly so a run at a
+   * later test time leaves no job lease behind for the tests that follow.
+   */
+  async function lifecycle(): Promise<void> {
+    const jobs = t.app.get(EnrollmentJobs);
+    let result = { processed: 0, remaining: 1 };
+    for (let pass = 0; pass < 10 && result.remaining > 0; pass += 1) {
+      result = await jobs.bookingLifecycle({ now: t.clock.now(), batchSize: 50 });
+    }
+  }
+
+  const exceptionsOf = (bookingId: string) =>
+    t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'status', 'owner_queue', 'details'])
+      .where('affected_type', '=', 'booking')
+      .where('affected_id', '=', bookingId)
+      .orderBy('category')
+      .execute();
+
+  it('SPK-SCHED-009 / SPK-COND-003: a closure that cancels a paid rental cancels the booking, names its booker and order, tells the booker and never completes it', async () => {
+    const { customer, booking, row, events, enrollment } = await staffedPaidRental(1, 70);
+    const closure = await closeAndApply(
+      new Date(events[0]!.scheduled_start.getTime() - 3 * HOUR),
+      new Date(events[0]!.scheduled_end.getTime() + 3 * HOUR),
+    );
+    // The preview named the booker and the order the booking was paid through.
+    expect(closure.impact.customers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ personId: customer.personId, via: ['booking'] }),
+      ]),
+    );
+    expect(closure.impact.obligations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'order', id: enrollment.order_ref }),
+      ]),
+    );
+    const after = await t.http.get(`/v1/bookings/${booking.id as string}`).set(customer.header);
+    expect(after.body.status).toBe('canceled');
+    // Its money has an owner; no staffing exception is left open for a booking that will not happen.
+    const exceptions = await exceptionsOf(booking.id);
+    const open = exceptions.filter((e) => e.status === 'open');
+    expect(open.map((e) => e.category)).toEqual(['enrollment.booking_canceled_by_schedule']);
+    expect(open[0]).toMatchObject({
+      owner_queue: 'finance_operator',
+      details: { enrollmentId: row.enrollment_id, orderRef: enrollment.order_ref },
+    });
+    // The booker was told.
+    const notices = await t.db
+      .selectFrom('notifications')
+      .innerJoin(
+        'notification_recipients',
+        'notification_recipients.notification_id',
+        'notifications.id',
+      )
+      .select(['notifications.kind'])
+      .where('notifications.subject_id', '=', events[0]!.id)
+      .where('notification_recipients.person_id', '=', customer.personId)
+      .execute();
+    expect(notices.map((n) => n.kind)).toContain('cancellation');
+    // At its start and after its end the lifecycle job neither raises "started unstaffed" nor
+    // completes it or its enrollment.
+    t.clock.set(new Date(events[0]!.scheduled_end.getTime() + HOUR));
+    try {
+      await lifecycle();
+      await drain(t);
+      const later = await t.db
+        .selectFrom('bookings')
+        .select('status')
+        .where('id', '=', booking.id)
+        .executeTakeFirstOrThrow();
+      expect(later.status).toBe('canceled');
+      const enrollmentAfter = await t.db
+        .selectFrom('enrollments')
+        .select('status')
+        .where('id', '=', row.enrollment_id!)
+        .executeTakeFirstOrThrow();
+      expect(enrollmentAfter.status).not.toBe('completed');
+      expect((await exceptionsOf(booking.id)).map((e) => e.category)).not.toContain(
+        'enrollment.booking_started_unstaffed',
+      );
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
+
+  it('SPK-SCHED-009: a closure that cancels one week of a recurring rental keeps the booking confirmed and gives the lost week an owner', async () => {
+    const { booking, events } = await staffedPaidRental(3, 84);
+    await closeAndApply(
+      new Date(events[1]!.scheduled_start.getTime() - HOUR),
+      new Date(events[1]!.scheduled_end.getTime() + HOUR),
+    );
+    const row = await t.db
+      .selectFrom('bookings')
+      .select(['status'])
+      .where('id', '=', booking.id)
+      .executeTakeFirstOrThrow();
+    expect(row.status).toBe('confirmed');
+    const open = (await exceptionsOf(booking.id)).filter((e) => e.status === 'open');
+    expect(open.map((e) => e.category)).toEqual(['enrollment.booking_occurrence_canceled']);
+    expect(open[0]!.details).toMatchObject({ eventId: events[1]!.id });
+  });
+
+  it('SPK-UX-006 / §4.12: a booking that started unstaffed raises its critical exception once, even after it is resolved', async () => {
+    const setup = await rental({
+      price: 4_500,
+      staffing: [{ kind: 'supervisor', role: 'field_supervisor', count: 1, qualifications: [] }],
+    });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(100).toISOString(),
+      end: new Date(start(100).getTime() + HOUR).toISOString(),
+      recurrence: { interval: 1, count: 3 },
+      resourceIds: [fields[2]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    await pay(row.basket_id!, row.enrollment_id!);
+    t.clock.set(new Date(start(100).getTime() + 10 * 60_000));
+    try {
+      const started = () =>
+        t.db
+          .selectFrom('operational_exceptions')
+          .select(['id', 'status'])
+          .where('category', '=', 'enrollment.booking_started_unstaffed')
+          .where('affected_id', '=', row.id)
+          .execute();
+      await lifecycle();
+      const raised = await started();
+      expect(raised).toHaveLength(1);
+      // A scheduler arranges cover off-system and resolves it.
+      await t.app
+        .get(UnitOfWork)
+        .run(({ trx }) =>
+          t.app
+            .get(OperationalExceptions)
+            .transition(
+              trx,
+              systemPrincipal(t.organizationId, 'test.scheduler'),
+              raised[0]!.id,
+              'resolved',
+              { reason: 'Cover arranged by phone' },
+            ),
+        );
+      t.clock.advance(10 * 60_000);
+      await lifecycle();
+      expect(await started()).toHaveLength(1);
+      // The booking is no longer due for the job until it ends.
+      const due = await t.app.get(BookingsService).lifecycleDue(t.clock.now(), 50);
+      expect(due.map((d) => d.id)).not.toContain(row.id);
     } finally {
       t.clock.set(new Date(CLOCK_START));
     }

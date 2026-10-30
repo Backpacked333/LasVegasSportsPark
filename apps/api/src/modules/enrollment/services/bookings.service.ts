@@ -11,6 +11,7 @@ import {
   type CreateBookingInput,
   type DeclineBookingInput,
   type EligibilityResult,
+  type Event as SchedulingEvent,
   type ListBookingsQuery,
   type ListMyBookingsQuery,
   type Page,
@@ -1064,11 +1065,15 @@ export class BookingsService implements BookingQueryPort {
   // Staffing coverage and follow-ups (handlers)
   // -------------------------------------------------------------------------------------------
 
-  /** Whether every mandatory staff slot of every event is held by an accepted assignee. */
+  /**
+   * Whether every mandatory staff slot of every occurrence still taking place is held by an
+   * accepted assignee. A cancelled occurrence (a closure, ASYNC-01) needs no staff.
+   */
   async covered(trx: Trx | undefined, row: BookingRow): Promise<boolean> {
     const staffing = row.staffing as unknown as StaffingRequirement[];
     if (staffing.length === 0) return true;
-    for (const eventId of row.scheduling_event_ids) {
+    const { live } = await this.currentEvents(row);
+    for (const eventId of live.map((e) => e.id)) {
       const roles = await this.coverage.coverage(row.organization_id, 'event', eventId, trx);
       for (const requirement of staffing) {
         const role = roles.find((r) => r.role === requirement.role);
@@ -1088,7 +1093,14 @@ export class BookingsService implements BookingQueryPort {
     const status = BookingMachine.next(row.status, event);
     await trx
       .updateTable('bookings')
-      .set({ status, ...extra, revision: row.revision + 1 })
+      .set({
+        status,
+        ...extra,
+        // ASYNC-10: a booking covered again starts a new episode; a later loss of staff after its
+        // start is raised anew by the lifecycle job.
+        ...(status === 'confirmed' ? { started_unstaffed_at: null } : {}),
+        revision: row.revision + 1,
+      })
       .where('organization_id', '=', row.organization_id)
       .where('id', '=', row.id)
       .where('revision', '=', row.revision)
@@ -1195,6 +1207,11 @@ export class BookingsService implements BookingQueryPort {
       .forUpdate()
       .execute();
     for (const row of rows) {
+      if ((await this.currentEvents(row)).live.length === 0) {
+        // Nothing of it takes place any more: it follows its events, not its staffing (ASYNC-01).
+        await this.followEvents(trx, row, null, null, correlationId);
+        continue;
+      }
       const covered = await this.covered(trx, row);
       if (row.status === 'awaiting_staff' && covered) {
         await this.transition(trx, row, 'cover', correlationId);
@@ -1223,7 +1240,12 @@ export class BookingsService implements BookingQueryPort {
       .where((eb) =>
         eb.or([
           eb.and([eb('status', '=', 'requested'), eb('first_start', '<=', now)]),
-          eb.and([eb('status', '=', 'awaiting_staff'), eb('first_start', '<=', now)]),
+          // ASYNC-10: an unstaffed booking is due once per episode, not on every run to its end.
+          eb.and([
+            eb('status', '=', 'awaiting_staff'),
+            eb('first_start', '<=', now),
+            eb('started_unstaffed_at', 'is', null),
+          ]),
           eb.and([eb('status', 'in', ['confirmed', 'awaiting_staff']), eb('last_end', '<=', now)]),
         ]),
       )
@@ -1241,6 +1263,17 @@ export class BookingsService implements BookingQueryPort {
     if (row.status === 'requested' && new Date(row.first_start) <= now) {
       await this.transition(trx, row, 'expire', null, { ended_at: now, end_reason: 'not_decided' });
       await this.settle(trx, organizationId, 'enrollment.booking_request_pending', id, 'expired');
+      return true;
+    }
+    if (
+      (row.status === 'confirmed' || row.status === 'awaiting_staff') &&
+      (new Date(row.last_end) <= now || new Date(row.first_start) <= now) &&
+      (await this.currentEvents(row)).live.length === 0
+    ) {
+      // ASYNC-01: every occurrence was cancelled (a closure); it is never recorded as completed
+      // or as started without its staff. It follows its events, even if their change notice has
+      // not been handled yet.
+      await this.followEvents(trx, row, null, null, null);
       return true;
     }
     if (
@@ -1269,8 +1302,12 @@ export class BookingsService implements BookingQueryPort {
       }
       return true;
     }
-    if (row.status === 'awaiting_staff' && new Date(row.first_start) <= now) {
-      const raised = await this.exceptions.raise(trx, {
+    if (
+      row.status === 'awaiting_staff' &&
+      new Date(row.first_start) <= now &&
+      !row.started_unstaffed_at
+    ) {
+      await this.exceptions.raise(trx, {
         organizationId,
         facilityId: row.facility_id,
         category: 'enrollment.booking_started_unstaffed',
@@ -1282,9 +1319,234 @@ export class BookingsService implements BookingQueryPort {
         dedupeKey: `booking_started_unstaffed:${row.id}`,
         details: { bookingId: row.id, eventIds: row.scheduling_event_ids },
       });
-      return !raised.deduplicated;
+      // Raised (or already open) for this episode: the job does not raise it again, even after
+      // a scheduler resolves it, until the booking is covered and loses its staff again.
+      await trx
+        .updateTable('bookings')
+        .set({ started_unstaffed_at: now })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.id)
+        .execute();
+      return true;
     }
     return false;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Following the scheduling events (ASYNC-01, SPK-SCHED-009, SPK-COND-003, §4.12)
+  // -------------------------------------------------------------------------------------------
+
+  /** The booking's scheduling events as scheduling holds them now. */
+  private async currentEvents(
+    row: BookingRow,
+  ): Promise<{ live: SchedulingEvent[]; canceled: SchedulingEvent[] }> {
+    const system = this.system(row.organization_id);
+    const live: SchedulingEvent[] = [];
+    const canceled: SchedulingEvent[] = [];
+    for (const eventId of row.scheduling_event_ids) {
+      const event = await this.events.getEvent(system, eventId);
+      (event.status === 'canceled' ? canceled : live).push(event);
+    }
+    return { live, canceled };
+  }
+
+  /**
+   * scheduling.event_changed of an event a live booking reserves (handler
+   * `enrollment.booking_follow_event`). The events are read as they are now, so a late or
+   * replayed change re-derives the same answer (§4.12): a booking none of whose occurrences takes
+   * place is cancelled; a lost occurrence of a continuing one is an owned exception; a moved
+   * occurrence moves the booking's times.
+   */
+  async onSchedulingEventChanged(
+    trx: Trx,
+    organizationId: string,
+    payload: { eventId: string; change: string; reason: string | null; closureId: string | null },
+    correlationId: string | null,
+  ): Promise<void> {
+    if (!['canceled', 'moved', 'resized'].includes(payload.change)) return;
+    const rows = await trx
+      .selectFrom('bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where(sql<boolean>`scheduling_event_ids @> array[${payload.eventId}]::uuid[]`)
+      .where('status', 'in', ['held', 'awaiting_staff', 'confirmed'])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    for (const row of rows) {
+      await this.followEvents(trx, row, payload.reason, payload.closureId, correlationId);
+    }
+  }
+
+  private async followEvents(
+    trx: Trx,
+    row: BookingRow,
+    reason: string | null,
+    closureId: string | null,
+    correlationId: string | null,
+  ): Promise<void> {
+    const organizationId = row.organization_id;
+    const { live, canceled } = await this.currentEvents(row);
+    if (live.length === 0) {
+      await this.endBySchedule(trx, row, reason, closureId, correlationId);
+      return;
+    }
+    let current = row;
+    // The booking's times follow its occurrences that still take place (moves, resizes).
+    const firstStart = new Date(Math.min(...live.map((e) => Date.parse(e.scheduledStart))));
+    const lastEnd = new Date(Math.max(...live.map((e) => Date.parse(e.scheduledEnd))));
+    const occurrences = [...live, ...canceled]
+      .sort((a, b) => Date.parse(a.scheduledStart) - Date.parse(b.scheduledStart))
+      .map((e) => ({ start: iso(e.scheduledStart), end: iso(e.scheduledEnd) }));
+    if (
+      firstStart.getTime() !== new Date(row.first_start).getTime() ||
+      lastEnd.getTime() !== new Date(row.last_end).getTime() ||
+      JSON.stringify(occurrences) !== JSON.stringify(row.occurrences)
+    ) {
+      await trx
+        .updateTable('bookings')
+        .set({
+          first_start: firstStart,
+          last_end: lastEnd,
+          occurrences: json(occurrences),
+          revision: row.revision + 1,
+        })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.id)
+        .where('revision', '=', row.revision)
+        .execute();
+      current = (await this.load(trx, organizationId, row.id))!;
+      await this.audit.record(trx, {
+        organizationId,
+        actor: this.system(organizationId),
+        action: 'enrollment.booking_follow_schedule',
+        targetType: 'booking',
+        targetId: row.id,
+        beforeRevision: row.revision,
+        afterRevision: current.revision,
+        reason,
+        correlationId,
+        details: {
+          firstStart: firstStart.toISOString(),
+          lastEnd: lastEnd.toISOString(),
+          canceledEventIds: canceled.map((e) => e.id),
+        },
+      });
+      await this.changed(trx, current, correlationId);
+    }
+    // A lost occurrence of a continuing booking: its money is DEC-009 (pending), so it has an
+    // owner instead of a silent partial charge.
+    for (const event of canceled) {
+      if (new Date(event.scheduledStart) <= this.clock.now()) continue;
+      await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: current.facility_id,
+        category: 'enrollment.booking_occurrence_canceled',
+        severity: 'high',
+        title: `An occurrence of a ${current.kind} was canceled by the schedule`,
+        affectedType: 'booking',
+        affectedId: current.id,
+        ownerQueue: current.enrollment_id ? 'finance_operator' : 'scheduler',
+        dedupeKey: `booking_occurrence_canceled:${current.id}:${event.id}`,
+        details: await this.moneyFacts(trx, current, {
+          eventId: event.id,
+          closureId,
+          reason,
+        }),
+      });
+    }
+    // Coverage is re-read without the cancelled occurrences.
+    if (current.status === 'awaiting_staff' && (await this.covered(trx, current))) {
+      await this.transition(trx, current, 'cover', correlationId);
+      await this.settle(
+        trx,
+        organizationId,
+        'enrollment.booking_awaiting_staff',
+        current.id,
+        'staffed',
+      );
+    }
+  }
+
+  /** None of the booking's occurrences takes place: it is cancelled and its money has an owner. */
+  private async endBySchedule(
+    trx: Trx,
+    row: BookingRow,
+    reason: string | null,
+    closureId: string | null,
+    correlationId: string | null,
+  ): Promise<void> {
+    const organizationId = row.organization_id;
+    const system = this.system(organizationId);
+    const endReason = reason ?? 'Every occurrence was canceled by the schedule.';
+    await this.transition(trx, row, 'cancel', correlationId, {
+      ended_at: this.clock.now(),
+      end_reason: endReason,
+    });
+    await this.releaseReservations(organizationId, row, endReason, correlationId);
+    // Money taken or moving: a held basket is released; a checkout under way or a paid booking
+    // is an owned exception naming the order and the enrollment, so the consequence is decided
+    // under DEC-009 rather than executed here.
+    let moneyAtStake = row.status !== 'held';
+    if (row.status === 'held' && row.basket_id) {
+      const basket = await this.baskets.load(trx, organizationId, row.basket_id, true);
+      if (basket?.status === 'held') {
+        await this.baskets.releaseInTrx(
+          trx,
+          organizationId,
+          basket,
+          endReason,
+          system,
+          correlationId,
+          'released',
+        );
+      } else if (basket && ['checking_out', 'fulfilled'].includes(basket.status)) {
+        moneyAtStake = true;
+      }
+    }
+    for (const category of [
+      'enrollment.booking_request_pending',
+      'enrollment.booking_awaiting_staff',
+      'enrollment.booking_started_unstaffed',
+      'enrollment.booking_occurrence_canceled',
+    ]) {
+      await this.settle(trx, organizationId, category, row.id, 'canceled by the schedule');
+    }
+    if (moneyAtStake) {
+      await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: row.facility_id,
+        category: 'enrollment.booking_canceled_by_schedule',
+        severity: 'high',
+        title: `A paid ${row.kind} was canceled by the schedule; its money needs a decision`,
+        affectedType: 'booking',
+        affectedId: row.id,
+        ownerQueue: 'finance_operator',
+        dedupeKey: `booking_canceled_by_schedule:${row.id}`,
+        details: await this.moneyFacts(trx, row, { eventId: null, closureId, reason: endReason }),
+      });
+    }
+  }
+
+  /** The money facts an owned exception names: enrollment, order and booker (DEC-009). */
+  private async moneyFacts(
+    trx: Trx,
+    row: BookingRow,
+    extra: { eventId: string | null; closureId: string | null; reason: string | null },
+  ): Promise<Record<string, unknown>> {
+    const enrollment = row.enrollment_id
+      ? await this.enrollments.load(trx, row.organization_id, row.enrollment_id)
+      : undefined;
+    return {
+      bookingId: row.id,
+      bookerPersonId: row.booker_person_id,
+      enrollmentId: row.enrollment_id,
+      enrollmentStatus: enrollment?.status ?? null,
+      orderRef: enrollment?.order_ref ?? null,
+      basketId: row.basket_id,
+      eventIds: row.scheduling_event_ids,
+      ...extra,
+    };
   }
 
   // -------------------------------------------------------------------------------------------
