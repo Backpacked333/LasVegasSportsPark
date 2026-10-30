@@ -384,6 +384,93 @@ describe('youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006)', () => {
     }
   });
 
+  it('§4.9: a stale expectedRevision on template retirement and recommendation withdrawal answers STALE_REVISION and writes nothing', async () => {
+    const template = await post(t, '/v1/assessment-templates', author.header, {
+      programId,
+      name: 'Agility',
+      skillAreas: [{ key: 'balance', label: 'Balance' }],
+      scale: { kind: 'ordinal', levels: ['Emerging', 'Secure'] },
+    });
+    expect(template.status, JSON.stringify(template.body)).toBe(201);
+    const templateId = template.body.id as string;
+    const approved = await post(
+      t,
+      `/v1/assessment-templates/${templateId}/approve`,
+      author.header,
+      {
+        expectedRevision: template.body.revision,
+      },
+    );
+    expect(approved.status).toBe(200);
+    // Retiring on the pre-approval read is stale.
+    const staleRetire = await post(
+      t,
+      `/v1/assessment-templates/${templateId}/retire`,
+      author.header,
+      {
+        reason: 'No longer used',
+        expectedRevision: template.body.revision,
+      },
+    );
+    expect(staleRetire.status).toBe(409);
+    expect(staleRetire.body.code).toBe('STALE_REVISION');
+    const templateRow = await t.db
+      .selectFrom('assessment_templates')
+      .select(['status', 'revision'])
+      .where('id', '=', templateId)
+      .executeTakeFirstOrThrow();
+    expect(templateRow).toEqual({ status: 'approved', revision: approved.body.revision });
+    const retired = await post(t, `/v1/assessment-templates/${templateId}/retire`, author.header, {
+      reason: 'No longer used',
+      expectedRevision: approved.body.revision,
+    });
+    expect(retired.status, JSON.stringify(retired.body)).toBe(200);
+    expect(retired.body.status).toBe('retired');
+
+    const created = await post(t, '/v1/progression-recommendations', coach.header, {
+      participantPersonId: kid,
+      fromOfferingId: setup.offeringId,
+      recommendedProgramId: programId,
+      suitability: 'Try the advanced group.',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const recommendationId = created.body.id as string;
+    const shared = await post(
+      t,
+      `/v1/progression-recommendations/${recommendationId}/share`,
+      coach.header,
+      { expectedRevision: created.body.revision },
+    );
+    expect(shared.status).toBe(200);
+    // Withdrawing on the pre-share read is stale.
+    const staleWithdraw = await post(
+      t,
+      `/v1/progression-recommendations/${recommendationId}/withdraw`,
+      coach.header,
+      { reason: 'Changed my mind', expectedRevision: created.body.revision },
+    );
+    expect(staleWithdraw.status).toBe(409);
+    expect(staleWithdraw.body.code).toBe('STALE_REVISION');
+    const recommendationRow = await t.db
+      .selectFrom('progression_recommendations')
+      .select(['status', 'revision', 'withdrawn_reason'])
+      .where('id', '=', recommendationId)
+      .executeTakeFirstOrThrow();
+    expect(recommendationRow).toEqual({
+      status: 'shared',
+      revision: shared.body.revision,
+      withdrawn_reason: null,
+    });
+    const withdrawn = await post(
+      t,
+      `/v1/progression-recommendations/${recommendationId}/withdraw`,
+      coach.header,
+      { reason: 'Changed my mind', expectedRevision: shared.body.revision },
+    );
+    expect(withdrawn.status, JSON.stringify(withdrawn.body)).toBe(200);
+    expect(withdrawn.body.status).toBe('withdrawn');
+  });
+
   it('SPK-YOUTH-005: only staff of the offering author assessments', async () => {
     const outsiderCoach = await staff(t, ['coach']);
     const refused = await post(t, '/v1/assessments', outsiderCoach.header, {

@@ -336,10 +336,18 @@ export class YouthProgressionService {
   async retireTemplate(
     principal: Principal,
     id: string,
-    input: { reason: string },
+    input: { reason: string; expectedRevision?: number },
     correlationId: string | null,
   ): Promise<AssessmentTemplate> {
-    return this.templateTransition(principal, id, 'retire', {}, input.reason, correlationId);
+    // §4.9: a stale retirement fails rather than overwrite newer work.
+    return this.templateTransition(
+      principal,
+      id,
+      'retire',
+      { expectedRevision: input.expectedRevision },
+      input.reason,
+      correlationId,
+    );
   }
 
   private async templateTransition(
@@ -810,14 +818,15 @@ export class YouthProgressionService {
   async withdrawRecommendation(
     principal: Principal,
     id: string,
-    input: { reason: string },
+    input: { reason: string; expectedRevision?: number },
     correlationId: string | null,
   ): Promise<ProgressionRecommendation> {
+    // §4.9: a stale withdrawal fails rather than overwrite newer work.
     return this.recommendationTransition(
       principal,
       id,
       'withdraw',
-      {},
+      { expectedRevision: input.expectedRevision },
       input.reason,
       correlationId,
     );
