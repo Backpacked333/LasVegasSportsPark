@@ -369,7 +369,8 @@ register closed.
   trigger only while the sale is open; tenders never exceed the total and attach only to an open
   sale; a card tender names its payment attempt, an external one its evidence (SPK-PAY-012); a
   return never exceeds a line's sold quantity or the paid amount (constraint trigger, two
-  concurrent returns cannot both pass, also under PostgreSQL); a cash return names an open drawer
+  concurrent returns cannot both pass, also under PostgreSQL; since `0610` the units one return
+  names for the same line are summed first, MONEY-10); a cash return names an open drawer
   session; machine guards refuse every transition the `PosSale`, `PosTender`, `PosRegisterSession`
   machines (`finance.state-machines.ts`) do not allow.
 - Taxes and fees come only from approved catalog `tax_fee` policy versions (CAT-02, DEC-057):

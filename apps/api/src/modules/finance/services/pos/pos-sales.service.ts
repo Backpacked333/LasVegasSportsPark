@@ -569,6 +569,9 @@ export class PosSalesService {
         .where('sale_id', '=', sale.id)
         .execute();
       const units = returnedUnits(earlier);
+      // MONEY-10: units this return already names for a line count as taken, so naming a line
+      // twice never returns more than was sold (the database trigger refuses it as well).
+      const named = new Map<string, number>();
       const returned: PosReturnLineRecord[] = [];
       for (const requested of input.lines) {
         const line = byId.get(requested.saleLineId);
@@ -577,7 +580,8 @@ export class PosSalesService {
             code: 'LINE_NOT_ON_SALE',
             saleLineId: requested.saleLineId,
           });
-        const already = units.get(line.id) ?? 0;
+        const already = (units.get(line.id) ?? 0) + (named.get(line.id) ?? 0);
+        named.set(line.id, (named.get(line.id) ?? 0) + requested.quantity);
         if (already + requested.quantity > line.quantity) {
           throw errors.validation('More units are returned than were sold.', {
             code: 'RETURN_EXCEEDS_QUANTITY',

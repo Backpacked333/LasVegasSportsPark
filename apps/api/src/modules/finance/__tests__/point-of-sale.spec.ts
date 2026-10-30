@@ -1,10 +1,11 @@
-import { newId } from '@sportspark/contracts';
+import { newId, type DomainError } from '@sportspark/contracts';
 import { json, pgErrorCode } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { databaseConstraintOf } from '../../../kernel';
-import type { TestApp } from '../../../testing';
+import { staffPrincipal, type TestApp } from '../../../testing';
 import { authHeaderForPerson, createStaffMemberFixture } from '../../identity';
 import { FakePaymentTokens, fakeFeeFor } from '../providers/fake-payment.provider';
+import { PosSalesService } from '../services/pos/pos-sales.service';
 import { approveTaxFee } from './stage3-doubles';
 import {
   adult,
@@ -1029,6 +1030,89 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
     const all = await listed(manager.header, '/v1/pos-registers');
     expect(all).toEqual(expect.arrayContaining([home.body.id, away.body.id]));
     expect(await listed(manager.header, '/v1/pos-products')).toContain(annexProduct.body.id);
+  });
+
+  it('§4.7 invariant 6 (MONEY-10): one return naming a sale line twice cannot take more units than were sold', async () => {
+    const plain = await product(1_000);
+    const { sessionId } = await openSession();
+    const s = await sale(sessionId);
+    await line(s.id, plain, 1);
+    const paid = await post(t, `/v1/pos-sales/${s.id}/lines`, desk.header, {
+      productId: plain,
+      quantity: 1,
+    });
+    const [a, b] = paid.body.lines as Array<{ id: string }>;
+    const tendered = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+      kind: 'cash',
+      amountMinor: 2_000,
+    });
+    expect(tendered.body.status).toBe('paid');
+    const share = { quantity: 1, amountMinor: 1_000, baseMinor: 1_000, charges: [] };
+    const twiceA = () =>
+      t.db
+        .insertInto('pos_returns')
+        .values({
+          id: newId(),
+          organization_id: t.organizationId,
+          sale_id: s.id,
+          currency: 'USD',
+          lines: json([
+            { saleLineId: a?.id, ...share },
+            { saleLineId: a?.id, ...share },
+          ]),
+          amount_minor: 2_000,
+          tender_kind: 'cash',
+          refund_attempt_id: null,
+          register_session_id: sessionId,
+          evidence: null,
+          reason: 'direct',
+          approved_by: json({}),
+          approved_by_person_id: finance.personId,
+          returned_at: new Date(),
+        })
+        .execute();
+    // The database refuses it whoever writes it ...
+    expect(await refusedBy(twiceA())).toBe('23514:pos_returns_within_quantity');
+    // ... and the service counts the units it names together before it gets there.
+    // A finance operator acting in-process, past the HTTP schema that lists each line once.
+    const operator = staffPrincipal(t.organizationId, ['finance_operator'], {
+      personId: finance.personId,
+      accountId: finance.accountId,
+    });
+    const viaService = await t.app
+      .get(PosSalesService)
+      .createReturn(
+        operator,
+        s.id,
+        {
+          lines: [
+            { saleLineId: a?.id as string, quantity: 1 },
+            { saleLineId: a?.id as string, quantity: 1 },
+          ],
+          tenderKind: 'cash',
+          reason: 'Duplicate line',
+        },
+        null,
+      )
+      .then(
+        () => 'accepted',
+        (error: DomainError) => (error.details as { code?: string } | undefined)?.code,
+      );
+    expect(viaService).toBe('RETURN_EXCEEDS_QUANTITY');
+    expect(
+      await t.db.selectFrom('pos_returns').select('id').where('sale_id', '=', s.id).execute(),
+    ).toHaveLength(0);
+    // Each line returned once is fine.
+    const both = await post(t, `/v1/pos-sales/${s.id}/returns`, finance.header, {
+      lines: [
+        { saleLineId: a?.id, quantity: 1 },
+        { saleLineId: b?.id, quantity: 1 },
+      ],
+      tenderKind: 'cash',
+      reason: 'Both back',
+    });
+    expect(both.status, JSON.stringify(both.body)).toBe(201);
+    expect(both.body.status).toBe('returned');
   });
 
   it('§4.7 invariant 6: two concurrent returns of the whole sale — exactly one is recorded', async () => {
