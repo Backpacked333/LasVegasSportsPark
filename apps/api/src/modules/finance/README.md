@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0608` and `0680`)
+`0600`–`0612` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -28,7 +28,8 @@ registers `FINANCIAL_STANDING_IMPL` (entry's `FinancialStandingPort`, FIN-03) an
 another module's tables (§4.2); composite foreign keys reference their rows read-only.
 
 **Status: implemented** — verified by `apps/api/src/modules/finance/__tests__` (PGlite and
-`TEST_DATABASE_URL` PostgreSQL) and the unit specs next to the code
+`TEST_DATABASE_URL` PostgreSQL; stage-5 review fixes in `money-guards.spec.ts`,
+`pos-money.spec.ts` and the specs named in each note) and the unit specs next to the code
 (`pricing/quote-calculator.spec.ts`, `ledger/ledger.service.spec.ts`,
 `providers/fake-payment.provider.spec.ts`, `providers/fake-accounting.provider.spec.ts`,
 `services/pos/pos-charges.spec.ts`, `services/customer-scope.spec.ts`). Statements below are
