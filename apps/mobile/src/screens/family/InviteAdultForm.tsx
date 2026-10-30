@@ -16,14 +16,23 @@
  * and the token only, no names (§4.14). The sender can withdraw the invitation
  * (`POST /v1/invitations/{id}/revoke`, with a reason and the expected revision) here or later
  * from "Invitations you sent" (SentInvitationsSection), which lists it with its state.
+ *
+ * The token is returned only in the first answer (§4.14). When that answer is lost and "Check
+ * again" repeats the request under the same key, the API answers IDEMPOTENCY_SECRET_WITHHELD
+ * naming the invitation it created: the form shows it as created (ui/SecretWithheld), reads
+ * "Invitations you sent" again, and offers "Revoke and issue a new link", which revokes that
+ * invitation and creates the same one again under a new key. "Create invitation" is held back
+ * meanwhile, so a second pending invitation is never created beside one nobody has a link for.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
+import { secretWithheldOf } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { buildAppLink } from '../../links/link-targets';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
@@ -45,6 +54,10 @@ type InvitationIssued = Schema<'InvitationIssued'>;
 
 export const SHARE_MESSAGE =
   'You have been invited to hold permissions in the Sportspark app. Open this link to review and accept:';
+
+/** The audit reason of a revoke after the invitation's one-time link was lost (§4.14). */
+export const WITHHELD_REVOKE_REASON =
+  'The invitation link was not received by the app; revoked to issue a new one.';
 
 export function InviteAdultForm({
   subjectPersonId,
@@ -74,6 +87,8 @@ export function InviteAdultForm({
     invalidate: [INVITATION_KEYS.familyList],
   });
 
+  // The invitation was created but its link was lost: revoke and issue again, never a second one.
+  const withheld = invite.error !== null && secretWithheldOf(invite.error) !== null;
   const contactError = contactFormatError(contactKind, contactValue);
   const permissionsError =
     selected.length === 0 ? 'Choose at least one permission to pass on.' : null;
@@ -216,15 +231,33 @@ export function InviteAdultForm({
           label="Create invitation"
           onPress={() => void submit()}
           busy={invite.isProcessing}
-          disabled={offline}
-          accessibilityHint={offline ? 'Needs a connection' : undefined}
+          disabled={offline || withheld}
+          accessibilityHint={
+            offline
+              ? 'Needs a connection'
+              : withheld
+                ? 'The invitation was already created; revoke it and issue a new link below'
+                : undefined
+          }
         />
         <Button label="Cancel" variant="secondary" onPress={onClose} />
       </View>
       {offline ? (
         <Paragraph muted>Inviting needs a connection. Your choices are kept.</Paragraph>
       ) : null}
-      {invite.error ? <CommandError error={invite.error} onRetry={() => void submit()} /> : null}
+      {invite.error && withheld ? (
+        <SecretWithheld
+          error={invite.error}
+          what="invitation"
+          listName="Invitations you sent"
+          revokePath="/invitations/{id}/revoke"
+          revokeReason={WITHHELD_REVOKE_REASON}
+          invalidate={[INVITATION_KEYS.familyList]}
+          onReissue={() => void submit()}
+        />
+      ) : invite.error ? (
+        <CommandError error={invite.error} onRetry={() => void submit()} />
+      ) : null}
     </View>
   );
 }

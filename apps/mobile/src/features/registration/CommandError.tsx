@@ -5,12 +5,15 @@
  *
  * - Protected NOT_FOUND, ACCESS_DENIED and PARTICIPANT_AUTHORITY_REQUIRED read as "not available";
  *   nothing says the record exists (§4.10, §4.14).
- * - No connection or no answer: the command may or may not have taken effect, so "Try again"
- *   repeats the same intent with the same idempotency key (§4.9) and nothing happens twice.
+ * - No definite answer (`mayHaveTakenEffect`: no connection or no answer after sending,
+ *   IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx): the command may or may not have taken
+ *   effect, so "Try again" repeats the same intent with the same idempotency key (§4.9) and
+ *   nothing happens twice. Payment uncertainty is shown by the payment screens themselves.
  * - ELIGIBILITY_FAILED lists the API's reasons and permitted alternatives (SPK-REG-002).
  */
 import { presentationForError, recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text, View } from 'react-native';
+import { mayHaveTakenEffect } from '../../api/command-outcome';
 import { StateView } from '../../ui/StateView';
 import { colors, spacing, type } from '../../ui/theme';
 
@@ -84,7 +87,7 @@ export function CommandError({
   const details = (error.details ?? {}) as ReasonDetails;
   const reasons = error.code === 'ELIGIBILITY_FAILED' ? messagesOf(details.reasons) : [];
   const alternatives = error.code === 'ELIGIBILITY_FAILED' ? messagesOf(details.alternatives) : [];
-  const mayHaveHappened = error.isOffline;
+  const mayHaveHappened = mayHaveTakenEffect(error) && error.code !== 'PAYMENT_OUTCOME_UNKNOWN';
   return (
     <View testID={testID}>
       <StateView

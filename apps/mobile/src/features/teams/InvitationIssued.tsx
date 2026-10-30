@@ -18,6 +18,13 @@ import { invitationStatus } from './status';
 
 type Issued = Schema<'TeamInvitationIssued'>;
 
+/**
+ * The audit reason of a revoke after a team invitation's one-time link was lost: a retry under the
+ * same key was answered IDEMPOTENCY_SECRET_WITHHELD (§4.14, ui/SecretWithheld).
+ */
+export const WITHHELD_REVOKE_REASON =
+  'The invitation link was not received by the app; revoked by the captain to issue a new one.';
+
 export function teamInvitationLink(invitationId: string, token: string): string {
   const query = new URLSearchParams({ to: 'team-invitation', id: invitationId, token });
   return `sportspark://link?${query.toString()}`;

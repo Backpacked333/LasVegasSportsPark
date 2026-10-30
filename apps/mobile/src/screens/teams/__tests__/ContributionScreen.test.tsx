@@ -13,7 +13,7 @@ import {
   obligation,
   paymentAttempt,
 } from '../../../features/teams/testing/fixtures';
-import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
+import { createTeamsTestApp, dropAnswers } from '../../../features/teams/testing/teams-test-app';
 import { ContributionScreen } from '../ContributionScreen';
 
 const outcome = (status: string, overrides = {}) => ({
@@ -24,16 +24,22 @@ const outcome = (status: string, overrides = {}) => ({
   ...overrides,
 });
 
-function renderContribution(routes: Record<string, unknown> = {}) {
+function renderContribution(
+  routes: Record<string, unknown> = {},
+  prepare: (app: ReturnType<typeof createTeamsTestApp>) => void = () => undefined,
+) {
   const app = createTeamsTestApp({
     routes: {
       'GET /contribution-requests/{id}': { status: 200, body: contributionRequest() },
       ...(routes as Record<string, never>),
     },
   });
+  prepare(app);
   render(<ContributionScreen requestId={IDS.contribution} />, { wrapper: app.wrapper });
   return app;
 }
+
+const PAY_URL = /\/contribution-requests\/[^/]+\/pay$/;
 
 describe('SCR-C-25 ContributionScreen', () => {
   it('SPK-CAP-002: shows the player’s own amount and the team totals, never other players’ payments', async () => {
@@ -120,6 +126,80 @@ describe('SCR-C-25 ContributionScreen', () => {
     ).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
   });
+
+  it('SPK-PAY-007: a connection lost after sending is "No answer yet", keeps the payment methods hidden, and "Check again" repeats the same request under the same key', async () => {
+    const app = renderContribution(
+      {
+        'POST /contribution-requests/{id}/pay': { status: 201, body: outcome('processing') },
+        'GET /payments/{id}': { status: 200, body: paymentAttempt({ status: 'processing' }) },
+        'GET /me/payments': { status: 200, body: { items: [], nextCursor: null } },
+      },
+      (created) => dropAnswers(created, 'POST', PAY_URL),
+    );
+    fireEvent.press(await screen.findByRole('radio', { name: 'Development payment: succeeds' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: NETWORK_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    // Another method would change the request and send it under a new key: never offered.
+    expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
+    // What the API recorded is read again at once, so an attempt it holds is shown.
+    await waitFor(() => expect(app.requestsTo('GET', '/me/payments')).toHaveLength(2));
+    await app.settle();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();
+    const keys = app.keysOf('POST', '/contribution-requests/{id}/pay');
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    expect(app.bodiesOf('POST', '/contribution-requests/{id}/pay')).toEqual([
+      { paymentMethodToken: 'pm_fake_visa' },
+      { paymentMethodToken: 'pm_fake_visa' },
+    ]);
+    expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
+    await app.settle();
+  });
+
+  it.each([
+    ['IDEMPOTENCY_IN_PROGRESS', 409, 'retry_later_with_same_key'],
+    ['INTERNAL_ERROR', 500, 'retry_or_contact_support'],
+  ])(
+    'SPK-PAY-007: %s may have taken the payment: paying stays locked and is checked under the same key',
+    async (code, status, nextAction) => {
+      let posts = 0;
+      const app = renderContribution({
+        'POST /contribution-requests/{id}/pay': () => {
+          posts += 1;
+          return posts === 1
+            ? fakeResponse(status, apiErrorBody(code, { nextAction }))
+            : fakeResponse(201, outcome('succeeded'));
+        },
+        'GET /me/payments': { status: 200, body: { items: [], nextCursor: null } },
+      });
+      fireEvent.press(await screen.findByRole('radio', { name: 'Development payment: succeeds' }));
+      await act(async () => {
+        fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+      });
+      expect(
+        await screen.findByLabelText('No answer yet: this may already have been recorded'),
+      ).toBeOnTheScreen();
+      expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
+      await app.settle();
+      await act(async () => {
+        fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+      });
+      expect(await screen.findByLabelText('Paid')).toBeOnTheScreen();
+      const [first, second] = app.keysOf('POST', '/contribution-requests/{id}/pay');
+      expect(second).toBe(first);
+      await app.settle();
+    },
+  );
 
   it('SPK-PAY-004: a guardian paying a child’s contribution sees the child named, not "your"', async () => {
     const CHILD = '0192f1a0-0000-7000-8000-00000000ce01';

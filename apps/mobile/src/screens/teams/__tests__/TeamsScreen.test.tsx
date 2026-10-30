@@ -267,7 +267,7 @@ describe('SCR-C-21 TeamsScreen', () => {
       );
       fireEvent.press(screen.getByRole('button', { name: 'Decline invitation' }));
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
-      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(
         await screen.findByLabelText('Declined the invitation to join Canyon Hawks'),
       ).toBeOnTheScreen();

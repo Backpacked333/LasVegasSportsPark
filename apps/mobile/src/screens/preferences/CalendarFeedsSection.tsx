@@ -8,17 +8,26 @@
  *
  * People in a feed: the person's own activities, plus anyone the API says they may view (the API
  * re-checks `view` on every fetch).
+ *
+ * The link is returned only in the first answer to creating (§4.14). When that answer is lost and
+ * "Check again" repeats the request under the same key, the API answers IDEMPOTENCY_SECRET_WITHHELD
+ * naming the feed it created: the section shows it as created, lists the feeds again, and offers
+ * "Revoke and issue a new link", which revokes that feed and creates the same one again under a
+ * new key (ui/SecretWithheld). "Create calendar feed" is held back meanwhile, so no second feed is
+ * created beside one nobody has the link for.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
+import { secretWithheldOf } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import {
@@ -36,6 +45,9 @@ type CalendarFeedCreated = Schema<'CalendarFeedCreated'>;
 const FEEDS_KEY = ['api', '/me/calendar-feeds'] as const;
 export const FEED_REVOKED_TEXT =
   'Feed link revoked. Events already copied to your calendar are not removed.';
+/** The audit reason of a revoke after the feed's one-time link was lost (§4.14). */
+export const WITHHELD_REVOKE_REASON =
+  'The feed link was not received by the app; revoked to issue a new one.';
 
 /** The API's origin plus the feed path (`/v1/calendar-feeds/<token>.ics`). */
 export function feedUrl(apiBaseUrl: string, path: string): string {
@@ -189,6 +201,8 @@ function CreateFeed() {
   const [people, setPeople] = useState<readonly string[]>([]);
   const create = useApiCommand('post', '/me/calendar-feeds', { invalidate: [FEEDS_KEY] });
   const viewable = (me.data?.authorities ?? []).filter((a) => a.permissions.includes('view'));
+  // The feed was created but its link was lost: revoke and issue again, never a second feed.
+  const withheld = create.error !== null && secretWithheldOf(create.error) !== null;
   const labelError = label.trim().length > 100 ? 'Use 100 characters or fewer.' : null;
 
   const submit = async () => {
@@ -254,11 +268,29 @@ function CreateFeed() {
           variant="secondary"
           onPress={() => void submit()}
           busy={create.isProcessing}
-          disabled={offline}
-          accessibilityHint={offline ? 'Needs a connection' : undefined}
+          disabled={offline || withheld}
+          accessibilityHint={
+            offline
+              ? 'Needs a connection'
+              : withheld
+                ? 'The feed was already created; revoke it and issue a new link below'
+                : undefined
+          }
         />
       </View>
-      {create.error ? <CommandError error={create.error} onRetry={() => void submit()} /> : null}
+      {create.error && withheld ? (
+        <SecretWithheld
+          error={create.error}
+          what="calendar feed"
+          listName="Calendar feed"
+          revokePath="/me/calendar-feeds/{id}/revoke"
+          revokeReason={WITHHELD_REVOKE_REASON}
+          invalidate={[FEEDS_KEY]}
+          onReissue={() => void submit()}
+        />
+      ) : create.error ? (
+        <CommandError error={create.error} onRetry={() => void submit()} />
+      ) : null}
     </View>
   );
 }

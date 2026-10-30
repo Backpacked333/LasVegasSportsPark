@@ -15,7 +15,10 @@
  * manager of the prior entry is told renewal is not available for this team now (the API gives no
  * reason, for example an entry not approved yet), anyone else that only its captain renews it. A
  * created or renewed entry is listed on SCR-C-21 from `GET /v1/me/team-entries`. Payment, when
- * the league bills the team, is SCR-C-14, not this screen.
+ * the league bills the team, is SCR-C-14, not this screen. A suggested player whose invitation was
+ * created but whose link was lost (IDEMPOTENCY_SECRET_WITHHELD after "Check again") is shown as
+ * created, and "Revoke and issue a new link" revokes it and invites them again under a new key;
+ * "Invite" is not offered again beside it (ui/SecretWithheld).
  *
  * States: loading; empty (no open season; no prior team to renew); ready; validation failure
  * (team name rules, registration closed: the API's reasons); permission restriction (renewal only
@@ -27,10 +30,11 @@ import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { secretWithheldOf } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateRange, formatInstant } from '../../features/teams/format';
-import { InvitationIssued } from '../../features/teams/InvitationIssued';
+import { InvitationIssued, WITHHELD_REVOKE_REASON } from '../../features/teams/InvitationIssued';
 import {
   hasManagementView,
   MY_TEAMS_KEY,
@@ -60,6 +64,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
@@ -144,6 +149,7 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
       </Body>
       {created.suggestedPlayers.map((player) => {
         const state = invite.states[player.personId];
+        const withheld = state?.status === 'failed' && secretWithheldOf(state.error) !== null;
         return (
           <View key={player.personId} style={styles.suggestion}>
             {state?.status === 'succeeded' ? (
@@ -152,6 +158,20 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
                 recipient={player.displayName}
                 teamName={teamName}
               />
+            ) : withheld ? (
+              <>
+                <Body>{player.displayName}</Body>
+                <SecretWithheld
+                  error={state.error}
+                  what="invitation"
+                  listName="Open invitations on the team's roster"
+                  revokePath="/team-invitations/{id}/revoke"
+                  revokeReason={WITHHELD_REVOKE_REASON}
+                  invalidate={[['api', '/team-entries/{id}']]}
+                  onReissue={() => send(player.personId)}
+                  testID={`suggested-${player.personId}-withheld`}
+                />
+              </>
             ) : (
               <>
                 <Body>{player.displayName}</Body>
@@ -164,7 +184,7 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
                 />
               </>
             )}
-            {state?.status === 'failed' ? (
+            {state?.status === 'failed' && !withheld ? (
               <CommandFailure
                 error={state.error}
                 onRetry={() => send(player.personId)}

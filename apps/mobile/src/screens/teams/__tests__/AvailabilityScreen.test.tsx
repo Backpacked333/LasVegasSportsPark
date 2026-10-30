@@ -192,7 +192,7 @@ describe('SCR-C-24 AvailabilityScreen', () => {
       },
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Unavailable' }));
-    fireEvent.press(await screen.findByRole('button', { name: 'Try again' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
     expect(await screen.findByText('Your answer: Unavailable')).toBeOnTheScreen();
     const [first, second] = app.keysOf('POST', '/fixtures/{id}/availability');
     expect(second).toBe(first);
@@ -320,7 +320,7 @@ describe('SCR-C-24 AvailabilityScreen', () => {
       );
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByLabelText(/^Asked /)).toBeNull();
-      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(await screen.findByLabelText('Asked 1 person without an answer')).toBeOnTheScreen();
       const keys = app.keysOf('POST', '/fixtures/{id}/availability-requests');
       expect(keys).toHaveLength(2);

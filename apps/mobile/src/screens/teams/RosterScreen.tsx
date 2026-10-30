@@ -24,17 +24,23 @@
  * invalid; roster limit reached per the rule set); permission restriction (the API's NOT_FOUND or
  * ACCESS_DENIED: not available); stale version (an invitation already accepted or revoked: reload);
  * offline (invite disabled, the draft kept); processing (sending); success ("Open until <date>");
- * partial completion per recipient; recovery: a failed send is retried under the same key.
+ * partial completion per recipient; recovery: a failed send is retried under the same key. When
+ * that retry finds the invitation already created (IDEMPOTENCY_SECRET_WITHHELD: its link was in
+ * the lost first answer and is never returned again, §4.14), the recipient reads "Created, but the
+ * link cannot be shown again", the open invitations are read again, and "Revoke and issue a new
+ * link" revokes it and invites the recipient again under a new key (ui/SecretWithheld); "Send"
+ * skips that recipient meanwhile, so no second invitation is attempted beside it.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { secretWithheldOf } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay } from '../../features/teams/format';
-import { InvitationIssued } from '../../features/teams/InvitationIssued';
+import { InvitationIssued, WITHHELD_REVOKE_REASON } from '../../features/teams/InvitationIssued';
 import {
   notAvailableNow,
   rosterNames,
@@ -68,6 +74,7 @@ import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 
@@ -119,11 +126,18 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
         ...(message.trim() ? { message: message.trim() } : {}),
       },
     });
+  // Created already, its link lost (IDEMPOTENCY_SECRET_WITHHELD): revoked and issued again from
+  // its own notice, never sent again from here.
+  const withheld = (key: string) => {
+    const state = invite.states[key];
+    return state?.status === 'failed' && secretWithheldOf(state.error) !== null;
+  };
   const sendAll = async () => {
     setAttempted(true);
     for (const recipient of recipients) {
       const state = invite.states[recipient.key];
       if (state?.status === 'succeeded' || state?.status === 'processing') continue;
+      if (withheld(recipient.key)) continue;
       if (recipientError(recipient)) continue;
       // One request at a time, in order: each recipient is its own intent and outcome.
       await sendOne(recipient);
@@ -131,7 +145,7 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
   };
   const sending = Object.values(invite.states).some((s) => s.status === 'processing');
   const pendingCount = recipients.filter(
-    (r) => invite.states[r.key]?.status !== 'succeeded',
+    (r) => invite.states[r.key]?.status !== 'succeeded' && !withheld(r.key),
   ).length;
 
   return (
@@ -176,7 +190,18 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
               error={localError}
             />
             {state?.status === 'processing' ? <Body muted>Sending…</Body> : null}
-            {state?.status === 'failed' ? (
+            {state?.status === 'failed' && withheld(recipient.key) ? (
+              <SecretWithheld
+                error={state.error}
+                what="invitation"
+                listName="Open invitations"
+                revokePath="/team-invitations/{id}/revoke"
+                revokeReason={WITHHELD_REVOKE_REASON}
+                invalidate={[WORKSPACE_KEY, ROSTER_KEY]}
+                onReissue={() => void sendOne(recipient)}
+                testID={`recipient-${index + 1}-withheld`}
+              />
+            ) : state?.status === 'failed' ? (
               <CommandFailure
                 error={state.error}
                 onRetry={() => void sendOne(recipient)}

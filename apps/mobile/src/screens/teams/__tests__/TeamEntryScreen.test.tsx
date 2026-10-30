@@ -17,7 +17,8 @@ import {
   teamEntry,
   workspace,
 } from '../../../features/teams/testing/fixtures';
-import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
+import { WITHHELD_REVOKE_REASON } from '../../../features/teams/InvitationIssued';
+import { createTeamsTestApp, dropAnswers } from '../../../features/teams/testing/teams-test-app';
 import { TeamEntryScreen, divisionCriteriaText } from '../TeamEntryScreen';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -180,6 +181,93 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     expect(
       app.fake.requests.filter((r) => r.method !== 'GET' && r.path.includes(IDS.priorEntry)),
     ).toHaveLength(0);
+    await app.settle();
+  });
+
+  it('§4.14: a suggested player whose invitation link was lost is not invited twice; it is revoked and issued again', async () => {
+    const lost = '0192f1a0-0000-7000-8000-000000000777';
+    let posts = 0;
+    const app = createTeamsTestApp({
+      routes: routes({
+        'GET /team-entries/{id}': { status: 200, body: prior },
+        'POST /team-entries': {
+          status: 201,
+          body: created({
+            renewedFromEntryId: IDS.priorEntry,
+            suggestedPlayers: [
+              {
+                personId: IDS.player2,
+                displayName: 'Pat Player',
+                lastStatus: 'active',
+                lastEffectiveTo: '2026-12-13T12:00:00.000Z',
+              },
+            ],
+          }),
+        },
+        'POST /team-entries/{id}/invitations': () => {
+          posts += 1;
+          return posts <= 2
+            ? fakeResponse(
+                409,
+                apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+                  nextAction: 'revoke_and_reissue',
+                  details: { resourceId: lost },
+                }),
+              )
+            : fakeResponse(201, {
+                ...invitation({
+                  teamEntryId: IDS.newEntry,
+                  recipientContact: null,
+                  recipientPersonId: IDS.player2,
+                }),
+                token: 'tok_renewal_abcdefghijklmnop',
+                eligibilityPreview: null,
+              });
+        },
+        'POST /team-invitations/{id}/revoke': {
+          status: 200,
+          body: invitation({ id: lost, status: 'revoked' }),
+        },
+      }),
+    });
+    dropAnswers(app, 'POST', /\/team-entries\/[^/]+\/invitations$/);
+    render(<TeamEntryScreen renewFrom={IDS.priorEntry} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Team: Desert Foxes')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Renew the team entry' }));
+    });
+    const suggestions = await screen.findByTestId('suggested-players');
+    await act(async () => {
+      fireEvent.press(within(suggestions).getByRole('button', { name: 'Invite Pat Player' }));
+    });
+    expect(
+      await within(suggestions).findByLabelText(
+        'No answer yet: this may already have been recorded',
+      ),
+    ).toBeOnTheScreen();
+    await act(async () => {
+      fireEvent.press(within(suggestions).getByRole('button', { name: 'Check again' }));
+    });
+    expect(
+      await within(suggestions).findByLabelText('Created, but the link cannot be shown again'),
+    ).toBeOnTheScreen();
+    // "Invite" is not offered beside the invitation that was created.
+    expect(within(suggestions).queryByRole('button', { name: 'Invite Pat Player' })).toBeNull();
+    await act(async () => {
+      fireEvent.press(
+        within(suggestions).getByRole('button', { name: 'Revoke and issue a new link' }),
+      );
+    });
+    expect(await screen.findByText('Invitation for Pat Player.')).toBeOnTheScreen();
+    expect(app.requestsTo('POST', '/team-invitations/{id}/revoke')[0]?.params.id).toBe(lost);
+    expect(app.bodiesOf('POST', '/team-invitations/{id}/revoke')).toEqual([
+      { reason: WITHHELD_REVOKE_REASON },
+    ]);
+    const keys = app.keysOf('POST', '/team-entries/{id}/invitations');
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
     await app.settle();
   });
 
