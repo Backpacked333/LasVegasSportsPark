@@ -196,7 +196,8 @@ export class WorkforceModule implements OnModuleInit {
       },
       { failureOwner: 'program_manager' },
     );
-    // WRK-04, SPK-COMMS-002 (assignment_offer), IF-22: this module's own notices to assignees.
+    // WRK-04, SPK-COMMS-002 (offer, schedule change, cancellation), SPK-COMMS-005, IF-22: this
+    // module's own notices to assignees.
     this.registry.on<EventPayload<typeof WorkforceEvents.assignmentChanged>>(
       WorkforceEvents.assignmentChanged.type,
       'workforce.assignment_offer_notice',

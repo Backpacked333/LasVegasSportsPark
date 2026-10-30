@@ -1149,6 +1149,8 @@ export class AssignmentsService {
           after: { start: start.toISOString(), end: end.toISOString() },
         },
       });
+      // previousStatus = status marks the retime; the previous times let the assignee's notice show
+      // the old and new details (SPK-COMMS-002 schedule change, SPK-COMMS-005, WRK-04).
       await this.notify(
         trx,
         updated,
@@ -1156,6 +1158,7 @@ export class AssignmentsService {
         'The activity was rescheduled.',
         event.correlationId,
         null,
+        { start: new Date(row.scheduled_start), end: new Date(row.scheduled_end) },
       );
     }
   }
@@ -1210,6 +1213,9 @@ export class AssignmentsService {
       reason,
       correlationId: event.correlationId,
       operationId,
+      previousTimes: retimeTo
+        ? { start: new Date(row.scheduled_start), end: new Date(row.scheduled_end) }
+        : null,
       details: {
         sourceEventId: event.id,
         sourceEventType: event.type,
@@ -1371,6 +1377,8 @@ export class AssignmentsService {
       correlationId: string | null;
       operationId?: string | null;
       details?: Record<string, unknown>;
+      /** The change also moved the assignment from these times (see `notify`). */
+      previousTimes?: { start: Date; end: Date } | null;
     },
   ): Promise<AssignmentRow> {
     try {
@@ -1418,10 +1426,16 @@ export class AssignmentsService {
       options.reason,
       options.correlationId,
       options.operationId ?? null,
+      options.previousTimes ?? null,
     );
     return updated;
   }
 
+  /**
+   * `previousTimes`: the assignment's times before this change, when the change moved it (a retime,
+   * or a withdrawal because the new time conflicts), so the assignee's notice can show the old and
+   * new practical details (SPK-COMMS-005, WRK-04).
+   */
   private async notify(
     trx: Trx,
     row: AssignmentRow,
@@ -1429,6 +1443,7 @@ export class AssignmentsService {
     reason: string | null,
     correlationId: string | null,
     operationId: string | null,
+    previousTimes: { start: Date; end: Date } | null = null,
   ): Promise<void> {
     await this.outbox.enqueue(trx, WorkforceEvents.assignmentChanged, {
       organizationId: row.organization_id,
@@ -1452,6 +1467,8 @@ export class AssignmentsService {
         scheduledEnd: new Date(row.scheduled_end).toISOString(),
         replacesAssignmentId: row.replaces_assignment_id,
         reason,
+        previousScheduledStart: previousTimes ? previousTimes.start.toISOString() : null,
+        previousScheduledEnd: previousTimes ? previousTimes.end.toISOString() : null,
       },
     });
   }
