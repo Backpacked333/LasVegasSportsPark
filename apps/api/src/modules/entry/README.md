@@ -150,12 +150,17 @@ enforced by the kernel for every command.
 
 - Provided: `ATTENDANCE_PORT` (`effectiveAttendance`, `openVisitOf`) for reporting, trials and the
   Today workspace.
-- Consumed: `FINANCIAL_STANDING_PORT` — answered by finance's `ParticipationStandingService`
-  (`standingOf(person, {offeringId, at})`: due, open obligations of the participant, `related` when
-  one belongs to the activity's offering) when the finance module is part of the application. An
-  explicit `FINANCIAL_STANDING_IMPL` takes precedence (tests script it); without either, every
-  standing is `unknown`, shown as an `info` issue that never blocks. Blocking on an unrelated
-  balance stays governed by `blockOnUnrelatedBalance: false` (DEC-056).
+- Consumed: `FINANCIAL_STANDING_PORT` — resolves `FINANCIAL_STANDING_IMPL` first, which finance
+  registers as `FinancialStandingService` (FIN-03, IF-39), so in the assembled application the
+  standing is finance's real answer (`standingOf(person, {offeringId, at})`: due, open obligations
+  of the participant and of everyone merged into them, `related` when one belongs to the
+  activity's offering; `unknown` only on a failed read). A test may register its own
+  `FINANCIAL_STANDING_IMPL` instead. Without it, finance's `ParticipationStandingService` answers
+  when it is in the container; without either, every standing is `unknown`, shown as an `info`
+  issue that never blocks. Blocking on an unrelated balance stays governed by
+  `blockOnUnrelatedBalance: false` (POL-017, DEC-056). Evidence:
+  `apps/api/src/__tests__/cross-module-ports.spec.ts` ("SPK-ENTRY-004: the arrival standing comes
+  from finance (clear, or an outstanding unrelated balance)").
 - Provider port (§5.2): `FakeAccessControlProvider` is the deterministic hardware adapter —
   `granted` (success), `denied` (failure), `unknown` (timeout), duplicate deliveries; HMAC-signed.
   It is also the only `ACCESS_DEVICE_PORT` adapter (IF-38, refused in production): `sendCommand`
