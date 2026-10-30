@@ -133,6 +133,8 @@ export interface OrderLinesTable {
 }
 
 export type InstallmentPlanStatus = 'active' | 'completed' | 'defaulted' | 'canceled';
+/** Why a plan is held (0613, MONEY-04): its registrations were all canceled (DEC-009 pending). */
+export type InstallmentPlanHoldReason = 'registrations_canceled';
 export interface InstallmentPlansTable {
   id: string;
   organization_id: string;
@@ -150,6 +152,9 @@ export interface InstallmentPlansTable {
   completed_at: NullableTimestamp;
   defaulted_at: NullableTimestamp;
   canceled_at: NullableTimestamp;
+  /** 0613 (MONEY-04): recorded once, with its reason; a held plan is never collected or noticed. */
+  held_at: Generated<Date | null>;
+  hold_reason: Generated<InstallmentPlanHoldReason | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

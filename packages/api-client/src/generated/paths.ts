@@ -34779,7 +34779,7 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Take a cash, external or card tender (card through the provider, §4.11)
+         * Take a cash, external or card tender on an open sale (card through the provider, §4.11; not gated by the switch, DEC-016)
          * @description FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).
          */
         post: {
@@ -54059,6 +54059,12 @@ export type components = {
                 authorizedByPersonId: string | null;
             };
             currency: string;
+            hold?: {
+                /** Format: date-time */
+                heldAt: string;
+                /** @enum {string} */
+                reason: "registrations_canceled";
+            } | null;
             /** Format: uuid */
             id: string;
             installments: components["schemas"]["Installment"][];
@@ -55517,6 +55523,7 @@ export type components = {
          */
         PaymentAttemptStatus: "created" | "action_required" | "processing" | "succeeded" | "failed" | "canceled" | "unknown";
         PaymentDetail: components["schemas"]["PaymentAttempt"] & {
+            compensatedMinor?: number;
             refundableMinor: number;
             refunds: components["schemas"]["PaymentRefundSummary"][];
         };
@@ -57001,6 +57008,7 @@ export type components = {
         Refundable: {
             availableMinor: number;
             capturedMinor: number;
+            compensatedMinor?: number;
             currency: string;
             refundedMinor: number;
             reservedMinor: number;

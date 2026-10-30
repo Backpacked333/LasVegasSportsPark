@@ -190,6 +190,7 @@ export class PaymentsService {
           Number(refundable.reserved_minor) -
           Number(refundable.compensated_minor)
         : 0,
+      compensatedMinor: refundable ? Number(refundable.compensated_minor) : 0,
       refunds: refunds.map((r) => ({
         id: r.id,
         status: r.status,

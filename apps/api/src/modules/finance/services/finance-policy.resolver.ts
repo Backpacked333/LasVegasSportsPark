@@ -31,7 +31,8 @@ type InstallmentTerm = keyof typeof INSTALLMENT_TERMS;
 /**
  * MONEY-08 (SPK-PAY-002, SPK-PAY-006, §6.7): one `defaults` entry per term an approved
  * installment version leaves out, naming the engineering default that applies in its place, so a
- * quote never says it follows an approved version for a term that version did not state.
+ * quote never says it follows an approved version for a term that version did not state. The
+ * numeric terms are listed here; the boolean `enabled` term is recorded by `build`.
  */
 function termDefaults(
   content: Record<string, unknown>,
@@ -110,7 +111,14 @@ export class FinancePolicyResolver {
     };
     if (installment) {
       const c = installment.content;
-      if (typeof c['enabled'] === 'boolean') config.installments.enabled = c['enabled'];
+      if (typeof c['enabled'] === 'boolean') {
+        config.installments.enabled = c['enabled'];
+      } else {
+        // MONEY-08: whether installments are offered at all is a term too.
+        defaults.push(
+          `installment.enabled: engineering default ${String(this.defaults.installments.enabled)} (POL-016, DEC-008)`,
+        );
+      }
       config.installments.maxInstallments =
         positiveInt(c['maxInstallments']) ?? config.installments.maxInstallments;
       config.installments.intervalDays =

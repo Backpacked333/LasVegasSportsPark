@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0612` and `0680`)
+`0600`–`0613` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -45,12 +45,12 @@ verified unless marked proposed or pending. Stage-3 work items FIN-01..FIN-07 ar
 | `orders` / `order_lines`       | The purchase with its price and policy basis (lines append-only); `payment_status` (`awaiting_payment/paid/canceled`) and `fulfillment_status` (`pending/fulfilled/recovery_required/compensated/canceled`) are independent facts                                                               |
 | `obligations`                  | Debtor person or team entry; mode `individual/single_team_payer/team_with_contributions`; responsible payer; source; amount, allocated, currency, due date; `open/settled/written_off/canceled`                                                                                                 |
 | `contribution_requests`        | A player asked to contribute toward ONE team obligation (composite key carries the obligation's mode); amount asked, status `requested/paid/canceled`, paying receipt                                                                                                                           |
-| `installment_plans`            | Order, payer, total, count, payment authorization (opaque method reference, never returned), retry policy, notice policy, policy version, `active/completed/defaulted/canceled`                                                                                                                 |
+| `installment_plans`            | Order, payer, total, count, payment authorization (opaque method reference, never returned), retry policy, notice policy, policy version, `active/completed/defaulted/canceled`; hold time and reason (`0613`, MONEY-04)                                                                        |
 | `installments`                 | One obligation each; amount, due date and original due date, `scheduled/paid/failed/canceled`, attempts, failure reason, next retry, extensions, notice sent                                                                                                                                    |
 | `checkouts`                    | CheckoutMachine status, payment kind (`provider/cash/none`), holds, enrollments, current payment attempt or tender, operation, failure and recovery details (plan, refund, credit, exception)                                                                                                   |
 | `payment_attempts`             | PaymentAttemptMachine status, purpose (`checkout/obligation/contribution/installment`), provider, opaque payment-method reference, provider reference, action payload, failure reason, fee, evidence source/inbox event/sequence, submitted, unknown                                            |
 | `receipts`                     | Money actually received (one per payment attempt or tender): amount = allocated + visible excess, processor fee, journal — append-only                                                                                                                                                          |
-| `payment_refundables`          | Per captured payment: captured, refunded, reserved                                                                                                                                                                                                                                              |
+| `payment_refundables`          | Per captured payment: captured, refunded, reserved, compensated (`0612`)                                                                                                                                                                                                                        |
 | `refund_attempts`              | RefundMachine status, reservation status (`reserved/settled/released`), purpose (`customer_refund/compensation`), provider reference, evidence, operation                                                                                                                                       |
 | `credits`                      | Owner, currency, original and remaining, permitted uses, source (`overpayment/compensation/goodwill/adjustment`), expiry, `pending_approval/active/exhausted/expired/revoked`                                                                                                                   |
 | `credit_redemptions`           | Append-only `redeem` and `reversal` rows per consuming reference                                                                                                                                                                                                                                |
@@ -77,6 +77,10 @@ carry `revision` and `touch_updated_at`.
   migration passes the imported balance's mapping id — and a second credit for it is refused with
   `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
   and reference; one reversal per journal, entry and redemption.
+- **SPK-PAY-006, §4.11 step 10 (`0613`, MONEY-04):** a plan's hold is a time and a reason set
+  together, recorded once and never changed or cleared (`installment_plans_hold_recorded`), and no
+  installment payment attempt can name an installment of a held plan
+  (`payment_attempts_installment_plan_held`).
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
   (`refunded + reserved + compensated <= captured`, `0612`); captured is fixed, refunded and
   compensated (what a compensation credit took, MONEY-02) only accumulate.
@@ -223,7 +227,10 @@ contribution's amount and status, never a player's payment or method.
   what was received and not already returned (per captured payment: captured less refunded; a cash
   tender in full) and consumes those refundable funds, so a later refund is refused beyond what is
   left; while a refund of the payment is still reserved staff get `REFUND_PENDING` and the
-  automatic credit path leaves the checkout in recovery (MONEY-02). Completing a compensation
+  automatic credit path leaves the checkout in recovery (MONEY-02). What a compensation credit took
+  is shown beside what was captured, refunded and reserved (`compensatedMinor` on a refund's
+  `refundable`, on `GET /payments/{id}` and in the `REFUND_EXCEEDS_REFUNDABLE` and
+  `REFUND_PENDING` details), so an operator sees the money went back as credit. Completing a compensation
   restores the credits redeemed at checkout (booked refunds → credits payable, the receivable is
   not reopened) and cancels the installment plan, its scheduled installments and open obligations.
 - **Refunds (SPK-PAY-008, SPK-AT-007):** reserved by conditional UPDATE before execution; of two
@@ -246,12 +253,17 @@ contribution's amount and status, never a player's payment or method.
   evaluated separately, POL-017); extensions reset the attempts and the notice, which goes out the
   plan's lead time before the new date; nothing is collected while the checkout's own payment is
   pending or its registration is not fulfilled; retry and notice terms come from the policy the
-  quote recorded. Once every registration the order made is canceled, nothing more is collected:
-  the worker skips the plan and raises `finance.installment_registration_canceled` (one per plan,
-  finance operator), and a staff collection answers `INSTALLMENT_REGISTRATION_CANCELED`; whether
-  the remaining installments are owed follows the cancellation policy (DEC-009 **Pending
-  decision**). Collection and extension lock the obligation before its installment, the order the
-  capture path uses (MONEY-04, MONEY-07).
+  quote recorded. Once every registration the order made is canceled, the plan is held (MONEY-04):
+  the first collection or notice that finds it records the hold on the plan (`hold` on
+  `GET /installment-plans/{id}`, `0613`) and raises `finance.installment_registration_canceled`
+  once (finance operator). A held plan is never collected (the worker no longer selects it, a
+  staff collection answers `INSTALLMENT_REGISTRATION_CANCELED`, and the database refuses an
+  installment charge for it) and its payer is sent no installment notice. Resolving the exception
+  neither lifts the hold nor raises it again; no command ends a hold yet: whether the remaining
+  installments are owed follows the cancellation policy (DEC-009 **Pending decision**). Until that
+  decision a held plan's open installment obligations still count as owed: once one falls due,
+  financial standing (FIN-03) reports the participant `outstanding`. Collection and extension
+  lock the obligation before its installment, the order the capture path uses (MONEY-07).
 - **Cash (SPK-PAY-012):** permitted staff only, facility-scoped, with evidence; against an existing
   obligation or through the checkout (holds and capacity apply); reconciled per cash drawer.
 - **Reconciliation (SPK-PAY-010/011):** balances are computed from journal entries; the report
@@ -364,7 +376,8 @@ session, starting a sale or adding a line are refused (`ACCESS_DENIED`,
 `details.code: CAPABILITY_DISABLED`); a tender settling an existing open sale, retiring, closing a
 session, voids, returns and reads are never gated (DEC-016), so a sale partly paid (a card tender
 cannot be voided) when the switch is turned off is still completed, returned, and its session and
-register closed.
+register closed through the API. The staff dashboard's sale page does not offer that yet: it
+hides the tender form whenever the switch is off (staff-client follow-up, not done).
 
 | Method   | Path                                                                                                             | Who (action)                                                                    |
 | -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -513,7 +526,8 @@ outcome recording and reconciliation are never gated.
   DEC-056), so it is never a pass or a block until the policy is approved.
 - The money side of transfers and cancellations is answered (consequence) but not executed
   automatically (no automatic refund, credit or charge from enrollment's commands); a plan whose
-  registrations were all canceled stops collecting and waits for the finance operator (DEC-009).
+  registrations were all canceled is held (no collection, no notice) and waits for the finance
+  operator, with no command yet to end the hold, write off or cancel its installments (DEC-009).
 - Point of sale and accounting export: see [Stage 3](#stage-3-fin-01fin-07) for their own gaps.
 
 ## Kernel limitations worked around here

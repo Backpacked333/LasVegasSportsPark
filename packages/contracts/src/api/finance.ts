@@ -315,10 +315,17 @@ export type PaymentRefundSummary = z.infer<typeof PaymentRefundSummarySchema>;
 
 /**
  * GET /v1/payments/{id} (FIN-02, SPK-PAY-008, SCR-S-37): the attempt with what can still be
- * refunded (captured minus refunded minus reserved; 0 when nothing was captured) and its refunds.
+ * refunded (captured minus refunded minus reserved minus what a compensation credit took; 0 when
+ * nothing was captured) and its refunds.
  */
 export const PaymentDetailSchema = PaymentAttemptSchema.extend({
   refundableMinor: z.number().int(),
+  /**
+   * MONEY-02: what a compensation credit took from this payment (returned as credit, so no longer
+   * refundable). Always sent; optional only so clients built on the earlier contract keep
+   * compiling.
+   */
+  compensatedMinor: z.number().int().optional(),
   refunds: z.array(PaymentRefundSummarySchema),
 }).openapi('PaymentDetail');
 export type PaymentDetail = z.infer<typeof PaymentDetailSchema>;
@@ -645,6 +652,13 @@ export const RefundableSchema = z
     capturedMinor: z.number().int(),
     refundedMinor: z.number().int(),
     reservedMinor: z.number().int(),
+    /**
+     * MONEY-02 (SPK-PAY-008, SPK-PAY-009): what a compensation credit took from this payment; it
+     * went back as credit and is no longer refundable. Always sent; optional only so clients built
+     * on the earlier contract keep compiling.
+     */
+    compensatedMinor: z.number().int().optional(),
+    /** captured − refunded − reserved − compensated. */
     availableMinor: z.number().int(),
     currency: CurrencyCode,
   })
@@ -846,6 +860,16 @@ export const InstallmentPlanSchema = z
     retryPolicy: z.object({ maxAttempts: z.number().int(), retryIntervalHours: z.number().int() }),
     noticePolicy: z.object({ daysBefore: z.number().int() }),
     outstandingMinor: z.number().int(),
+    /**
+     * MONEY-04 (SPK-PAY-006, §4.11 step 10; DEC-009 pending): set once every registration the plan
+     * pays for was canceled. A held plan is neither collected nor noticed; its open installments
+     * stay owed until the finance operator's decision. Always sent (null when not held); optional
+     * only so clients built on the earlier contract keep compiling.
+     */
+    hold: z
+      .object({ reason: z.enum(['registrations_canceled']), heldAt: Instant })
+      .nullable()
+      .optional(),
     installments: z.array(InstallmentSchema),
     revision: Revision,
   })

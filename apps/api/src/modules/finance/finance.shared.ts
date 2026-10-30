@@ -266,6 +266,7 @@ export function toRefundable(row: RefundableRow): Refundable {
     capturedMinor: row.captured_minor,
     refundedMinor: row.refunded_minor,
     reservedMinor: row.reserved_minor,
+    compensatedMinor: row.compensated_minor,
     // MONEY-02: funds a compensation credit took are no longer refundable.
     availableMinor:
       row.captured_minor - row.refunded_minor - row.reserved_minor - row.compensated_minor,
@@ -369,6 +370,8 @@ export function toInstallmentPlan(
     retryPolicy: { maxAttempts: retry.maxAttempts, retryIntervalHours: retry.retryIntervalHours },
     noticePolicy: { daysBefore: notice.daysBefore },
     outstandingMinor,
+    hold:
+      row.held_at && row.hold_reason ? { reason: row.hold_reason, heldAt: iso(row.held_at) } : null,
     installments: installments.map(toInstallment),
     revision: row.revision,
   };

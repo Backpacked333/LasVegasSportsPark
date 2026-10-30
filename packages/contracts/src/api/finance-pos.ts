@@ -10,9 +10,11 @@ import { PaymentMethodToken } from './finance';
  * Finance point of sale (FIN-06; §3.16 POS row "products, prices, approved taxes, tenders,
  * receipts, returns, permissions, reconciliation"; SPK-PAY-002, SPK-PAY-008, SPK-PAY-010,
  * SPK-PAY-012). Behind the per-organization capability `point_of_sale` (DEC-016, DEC-079): with
- * the switch off, products, registers, opening sessions, new sales, lines and tenders are refused
- * (ACCESS_DENIED, `details.code CAPABILITY_DISABLED`); returns, voids, closing a session, reads
- * and provider outcomes stay available. Prices come from the product, never from the request
+ * the switch off, creating or changing products, creating registers, opening sessions, new sales
+ * and lines are refused (ACCESS_DENIED, `details.code CAPABILITY_DISABLED`); a tender settling an
+ * existing open sale, retiring a product or register, closing a session, voids, returns, reads and
+ * provider outcomes stay available, so a sale started before the switch was turned off can still
+ * be paid, returned and its session closed. Prices come from the product, never from the request
  * (SPK-PAY-001); taxes and fees only from approved catalog `tax_fee` policy versions (DEC-057).
  * Registrations, memberships, packages and bookings are never sold here (SPK-PAY-012).
  */
@@ -568,7 +570,8 @@ register({
 register({
   method: 'post',
   path: '/pos-sales/{id}/tenders',
-  summary: 'Take a cash, external or card tender (card through the provider, §4.11)',
+  summary:
+    'Take a cash, external or card tender on an open sale (card through the provider, §4.11; not gated by the switch, DEC-016)',
   body: AddPosTenderBody,
   response: PosSaleSchema,
 });

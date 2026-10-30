@@ -244,13 +244,18 @@ export class RefundsService {
         throw errors.refundPending({
           availableMinor: unreserved - current.reserved_minor,
           reservedMinor: current.reserved_minor,
+          compensatedMinor: current.compensated_minor,
         });
       }
+      // The details name every part of what was captured, so an operator sees money a
+      // compensation credit already returned (MONEY-02) instead of an unexplained gap.
       throw errors.resourceConflict('The refund exceeds the refundable amount.', {
         code: 'REFUND_EXCEEDS_REFUNDABLE',
         availableMinor: unreserved - current.reserved_minor,
         capturedMinor: current.captured_minor,
         refundedMinor: current.refunded_minor,
+        reservedMinor: current.reserved_minor,
+        compensatedMinor: current.compensated_minor,
       });
     }
     const payment = await trx

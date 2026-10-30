@@ -1,7 +1,7 @@
 import { newId } from '@sportspark/contracts';
 import { json, pgErrorCode } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { UnitOfWork, databaseConstraintOf } from '../../../kernel';
+import { OperationalExceptions, UnitOfWork, databaseConstraintOf } from '../../../kernel';
 import { staffPrincipal, type TestApp } from '../../../testing';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import { MoneyFacts } from '../services/money-facts.service';
@@ -329,7 +329,8 @@ describe('money guards: one way to pay a debt at a time (§4.11, SPK-PAY-005/006
     expect(collect.body.code).toBe('PAYMENT_OUTCOME_UNKNOWN');
   });
 
-  it('SPK-PAY-006, §4.11 step 10 (MONEY-04): no installment is collected once every registration of the plan was canceled; the finance operator owns the decision', async () => {
+  /** A three-installment plan whose only registration the payer then canceled (MONEY-04). */
+  async function canceledPlan() {
     const { parent, checkout } = await checkoutWith(
       FakePaymentTokens.succeed,
       30_000,
@@ -364,18 +365,53 @@ describe('money guards: one way to pay a debt at a time (§4.11, SPK-PAY-005/006
       },
     });
     expect(canceled.body.status).toBe('canceled');
+    const installments = await t.db
+      .selectFrom('installments')
+      .innerJoin('installment_plans', 'installment_plans.id', 'installments.plan_id')
+      .select([
+        'installments.id as id',
+        'installments.obligation_id as obligation_id',
+        'installment_plans.id as plan_id',
+      ])
+      .where('installment_plans.order_id', '=', checkout.orderId)
+      .orderBy('installments.sequence')
+      .execute();
+    return { parent, checkout, planId: installments[0]?.plan_id as string, installments };
+  }
+
+  const attemptPurposes = async (orderId: string) =>
+    (
+      await t.db
+        .selectFrom('payment_attempts')
+        .select('purpose')
+        .where('order_id', '=', orderId)
+        .execute()
+    ).map((a) => a.purpose);
+
+  const holdExceptions = (planId: string) =>
+    t.db
+      .selectFrom('operational_exceptions')
+      .select(['id', 'status', 'revision', 'owner_queue', 'affected_type'])
+      .where('category', '=', 'finance.installment_registration_canceled')
+      .where('affected_id', '=', planId)
+      .execute();
+
+  const noticesOf = (installmentIds: string[]) =>
+    t.db
+      .selectFrom('outbox_events')
+      .select('id')
+      .where('event_type', '=', 'finance.installment_notice')
+      .where('aggregate_id', 'in', installmentIds)
+      .execute();
+
+  it('SPK-PAY-006, §4.11 step 10 (MONEY-04): no installment is collected once every registration of the plan was canceled; the finance operator owns the decision', async () => {
+    const { checkout } = await canceledPlan();
     await drain(t);
-    const attemptsOfOrder = async () =>
-      (
-        await t.db
-          .selectFrom('payment_attempts')
-          .select('purpose')
-          .where('order_id', '=', checkout.orderId)
-          .execute()
-      ).map((a) => a.purpose);
+    const attemptsOfOrder = () => attemptPurposes(checkout.orderId);
     expect(await attemptsOfOrder()).toEqual(['checkout']);
     t.clock.advance(31 * DAY);
     await drain(t);
+    await worker(t).runOnce();
     await worker(t).runOnce();
     expect(await attemptsOfOrder()).toEqual(['checkout']);
     const installments = await t.db
@@ -408,5 +444,120 @@ describe('money guards: one way to pay a debt at a time (§4.11, SPK-PAY-005/006
     expect(manual.status).toBe(409);
     expect(manual.body.details).toMatchObject({ code: 'INSTALLMENT_REGISTRATION_CANCELED' });
     expect(await attemptsOfOrder()).toEqual(['checkout']);
+    // The hold is recorded on the plan, and the plan says so.
+    const plan = await t.http
+      .get(`/v1/installment-plans/${installments[0]?.plan_id as string}`)
+      .set(finance.header);
+    expect(plan.body).toMatchObject({
+      status: 'active',
+      hold: { reason: 'registrations_canceled' },
+    });
+    expect(await holdExceptions(installments[0]?.plan_id as string)).toHaveLength(1);
+  });
+
+  it('SPK-PAY-006 (MONEY-04): a held plan sends no installment notice, and once its exception is resolved nothing raises it again', async () => {
+    const { checkout, planId, installments } = await canceledPlan();
+    const later = installments.slice(1).map((i) => i.id);
+    // The second installment's notice time (three days before it falls due): the plan is held
+    // there, so the payer is never told of a charge that will not be made.
+    t.clock.advance(28 * DAY);
+    await drain(t);
+    expect(await noticesOf(later)).toEqual([]);
+    const unsent = await t.db
+      .selectFrom('installments')
+      .select('notice_sent_at')
+      .where('id', 'in', later)
+      .execute();
+    expect(unsent.every((i) => i.notice_sent_at === null)).toBe(true);
+    const raised = await holdExceptions(planId);
+    expect(raised).toMatchObject([{ status: 'open', owner_queue: 'finance_operator' }]);
+    const held = await t.http.get(`/v1/installment-plans/${planId}`).set(finance.header);
+    expect(held.body.hold).toEqual({
+      reason: 'registrations_canceled',
+      heldAt: t.clock.now().toISOString(),
+    });
+    // The finance operator resolves the exception (the kernel transition the exceptions routes use) ...
+    const operator = staffPrincipal(t.organizationId, ['finance_operator'], {
+      personId: finance.personId,
+    });
+    await t.app.get(UnitOfWork).run(({ trx }) =>
+      t.app
+        .get(OperationalExceptions)
+        .transition(trx, operator, raised[0]?.id as string, 'resolved', {
+          expectedRevision: raised[0]?.revision,
+          reason: 'Owed amount to be settled with the family by phone',
+          resolution: { contacted: 'phone' },
+        }),
+    );
+    // ... and neither the sweep, nor a staff collection, nor the next notice raises it again.
+    t.clock.advance(4 * DAY);
+    await worker(t).runOnce();
+    await worker(t).runOnce();
+    const manual = await post(
+      t,
+      `/v1/installments/${later[0] as string}/collect`,
+      finance.header,
+      {},
+    );
+    expect(manual.body.details).toMatchObject({ code: 'INSTALLMENT_REGISTRATION_CANCELED' });
+    t.clock.advance(30 * DAY);
+    await drain(t);
+    await worker(t).runOnce();
+    expect(await holdExceptions(planId)).toMatchObject([{ status: 'resolved' }]);
+    expect(await noticesOf(later)).toEqual([]);
+    expect(await attemptPurposes(checkout.orderId)).toEqual(['checkout']);
+    // The database keeps the hold: it is never cleared, and no installment charge can name the
+    // held plan's installments.
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('installment_plans')
+          .set({ held_at: null, hold_reason: null })
+          .where('id', '=', planId)
+          .execute(),
+      ),
+    ).toBe('23514:installment_plans_hold_recorded');
+    const third = installments[2] as { id: string; obligation_id: string };
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('payment_attempts')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            purpose: 'installment',
+            checkout_id: null,
+            order_id: checkout.orderId,
+            obligation_id: third.obligation_id,
+            contribution_request_id: null,
+            installment_id: third.id,
+            payer_person_id: (
+              await t.db
+                .selectFrom('installment_plans')
+                .select('payer_person_id')
+                .where('id', '=', planId)
+                .executeTakeFirstOrThrow()
+            ).payer_person_id,
+            amount_minor: 10_000,
+            currency: 'USD',
+            provider: 'fake-payments',
+            payment_method_ref: 'pm_fake_visa',
+            provider_reference: null,
+            status: 'created',
+            action_required_payload: null,
+            failure_reason: null,
+            processor_fee_minor: null,
+            evidence_source: null,
+            evidence_inbox_event_id: null,
+            evidence_sequence: null,
+            requested_by: json({ kind: 'system' }),
+            requested_by_person_id: null,
+            submitted_at: null,
+            unknown_since: null,
+            resolved_at: null,
+          })
+          .execute(),
+      ),
+    ).toBe('23514:payment_attempts_installment_plan_held');
   });
 });

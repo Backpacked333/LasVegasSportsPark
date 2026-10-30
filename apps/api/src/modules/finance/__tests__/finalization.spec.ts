@@ -565,6 +565,8 @@ describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with 
     expect(policies.installmentPolicyVersionId).toEqual(expect.any(String));
     expect(policies.defaults).toEqual(
       expect.arrayContaining([
+        // The version does not say whether installments are offered: that is a default too.
+        'installment.enabled: engineering default true (POL-016, DEC-008)',
         'installment.intervalDays: engineering default 30 (POL-016, DEC-008)',
         'installment.retryIntervalHours: engineering default 72 (POL-016, DEC-008)',
         'installment.noticeDaysBefore: engineering default 3 (POL-016, DEC-008)',
@@ -572,5 +574,18 @@ describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with 
     );
     expect(policies.defaults.some((d) => d.startsWith('installment.retryMaxAttempts'))).toBe(false);
     expect(policies.defaults.some((d) => d.startsWith('installment:'))).toBe(false);
+    // A version that states `enabled` records no default for it.
+    await createPolicyVersionFixture(t, {
+      kind: 'installment',
+      key: 'finance',
+      version: 10,
+      content: { enabled: true, retryMaxAttempts: 4, maxInstallments: 3 },
+    });
+    const stated = await installmentQuote();
+    const statedDefaults = (stated['policies'] as { defaults: string[] }).defaults;
+    expect(statedDefaults.some((d) => d.startsWith('installment.enabled'))).toBe(false);
+    expect(statedDefaults).toContain(
+      'installment.intervalDays: engineering default 30 (POL-016, DEC-008)',
+    );
   });
 });
