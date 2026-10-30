@@ -78,6 +78,7 @@ PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** u
 | `fee_submissions`         | Assignment, person, `rate_basis` jsonb, computed and submitted amounts (bigint minor units + currency), status `submitted → approved/adjusted/rejected → exported`, approver and instant, current approved amount, rejection reason, `export_batch_id`; one live submission per assignment                                                                                                                                                                                                                       |
 | `fee_adjustments`         | Append-only (`forbid_mutation`): sequence, previous and adjusted amount, currency, reason, actor, instant                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `fee_export_batches`      | Append-only: currency, count, total, the exported lines, actor, operation                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `assignment_notices`      | Migration 0705, append-only (`forbid_mutation`): what the assignee was told about an assignment (WRK-04): per-assignment `sequence` (unique), the communications kind, the `notification_id` it became (no foreign key: that table is created later, by migration 1000, and owned by communications), the source event (unique), and the time it stated                                                                                                                                                          |
 
 Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.ts`):
 
@@ -91,7 +92,9 @@ Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.t
 - Check constraints: machine states, each state's fact, `committed_end` equals scheduled end plus
   turnaround, access only for temporary/substitute work, target/FK agreement.
 - Every workforce table refuses `DELETE` (SPK-STAFF-004: expiry never removes historical work
-  records); `fee_adjustments` and `fee_export_batches` also refuse `UPDATE`.
+  records); `fee_adjustments`, `fee_export_batches` and `assignment_notices` also refuse
+  `UPDATE`; `assignment_notices` holds one row per (assignment, sequence), per notification and
+  per source event (test in `__tests__/assignment-notices.spec.ts`).
 - `fee_submissions (organization_id, export_batch_id, currency)` references the batch's
   `(organization_id, id, currency)`: a submission exports only in its own currency; a fee
   adjustment likewise names its submission with the submission's currency (`0703`).
@@ -303,26 +306,45 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
 - **WRK-04 assignment notices** (SPK-COMMS-002 assignment offer, schedule change and
   cancellation, SPK-COMMS-005, SPK-STAFF-002, IF-22): handler `workforce.assignment_offer_notice`
   on this module's own `workforce.assignment_changed` composes and queues, in the handler's
-  transaction, one notice (operational, not protected, addressed to the assignee by id, subject
-  `assignment`) with `sourceEventId` = the event id:
+  transaction and under the assignment's row lock, at most one notice (operational, not
+  protected, addressed to the assignee by id, subject `assignment`) with `sourceEventId` = the
+  event id, and records it in `assignment_notices` (migration 0705) with the time it stated:
   - `assignment_offer` on a move into `offered` while the offer still stands;
   - `schedule_changed` when an offered or accepted assignment moves with its activity (a retime
-    keeps the status; the event's `previousScheduledStart`/`previousScheduledEnd` carry the old
-    times): the text gives the new and the previous time, and `detailsBefore`/`detailsAfter` hold
-    both (facility, zone, slot, start, end). A delivery whose times are no longer the
-    assignment's (it moved again since) composes nothing: the newer move's event tells the current
-    time;
-  - `cancellation` on the withdrawal of an accepted assignment by anyone but the assignee (staff, a
-    replacement, a follow-up, a retirement, or a move into a conflict, whose notice names the
-    accepted time and the activity's new time). Being a superseding kind, it suppresses an unsent
-    move notice about the assignment and points a sent one at itself (SPK-COMMS-005).
+    keeps the status): the text gives the new time and the time the assignee was **last told**,
+    and `detailsBefore`/`detailsAfter` hold both. "Last told" is the newest recorded notice whose
+    notification was dispatched, or is still unsent and not made obsolete by the new one (an
+    unsent offer notice is never superseded); a move notice suppressed unsent is never the
+    previous time. Nothing is composed when nothing was told yet (an offer notice still to come
+    states the current time) or when the newest notice already states the current time (a late,
+    repeated or reordered delivery). A move undone before its notice went out composes "time
+    unchanged", which supersedes the unsent move notice;
+  - `cancellation` on the withdrawal of an offered or accepted assignment by anyone but the
+    assignee (staff, a replacement, a follow-up such as a canceled or postponed activity, a
+    retirement, or a move into a conflict): named by the time the assignee was last told, plus the
+    activity's current time when it moved since. An offer is only withdrawn-noticed when its offer
+    notice was composed. The assignee's own decline or withdrawal composes a short confirmation
+    only when an unsent move notice about the assignment is still waiting, to make it obsolete.
+    Being a superseding kind, a cancellation suppresses an unsent move notice about the
+    assignment and points a sent one at itself (SPK-COMMS-005), so "accept or decline it" or "you
+    remain assigned" never arrives after the offer or the assignment is gone. An unsent
+    `assignment_offer` notice is not a superseded kind in the communications policy, so it is
+    still delivered, before the cancellation that follows it.
 
   The slot, facility and times are read from the assignment row in the handler's transaction,
   never from the payload, so a late delivery never states a time that no longer holds (§4.12).
-  The text names the role, slot, activity, facility and the facility-local time with its zone. A
-  replay composes nothing (the dispatcher's consumption record; the notices' unique source-event
-  key). Offer deadlines and reminders are not added (pending DEC-011). Tests:
-  `__tests__/assignment-notices.spec.ts`.
+  The status of earlier notices is read through `NotificationsService.load` (never the
+  communications tables), and which kinds an unsent notice is superseded by comes from the
+  injected `COMMUNICATIONS_POLICY`. Limit (verified by reading, not tested): the status read is
+  not locked, so a move notice dispatched in the instant between that read and the new notice's
+  queueing is pointed at the new notice, which then names the time told before it. The text
+  names the role, slot, activity, facility and the facility-local time with its zone;
+  `detailsBefore`/`detailsAfter` carry the fields clients read for schedule notices (`title`,
+  `status`, `scheduledStart`, `scheduledEnd`, `timezone`, `facilityId`, `resources: []`) plus a
+  facility-local `summary`, `role` and `slot`, so a client's "over already" expiry applies to
+  them. A replay composes nothing (the dispatcher's consumption record; the notices' and
+  `assignment_notices`' unique source-event keys). Offer deadlines and reminders are not added
+  (pending DEC-011). Tests: `__tests__/assignment-notices.spec.ts`.
 
 - **WRK-05 person merges** (SPK-IAM-007, SPK-STAFF-001, §4.2, IF-21, IF-09): no assignment,
   qualification or availability row is rewritten. Qualification checks (proposals, acceptance,

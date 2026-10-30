@@ -18,7 +18,8 @@ export const WorkforceEvents = {
   /**
    * Every assignment transition and retime. This module's own handler
    * `workforce.assignment_offer_notice` tells the assignee of offers, of moves of an offered or
-   * accepted assignment and of withdrawals of accepted work (WRK-04, SPK-COMMS-002/005).
+   * accepted assignment and of withdrawals of offered or accepted work (WRK-04,
+   * SPK-COMMS-002/005).
    */
   assignmentChanged: defineEvent(
     'workforce.assignment_changed',
