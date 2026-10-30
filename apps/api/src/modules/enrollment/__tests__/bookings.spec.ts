@@ -664,7 +664,7 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     }
   });
 
-  it('the database refuses a requested booking that reserves something and a held one without its events', async () => {
+  it('§4.3: the database refuses a requested booking that reserves something, a held one without its events and a series of no organization', async () => {
     const setup = await rental();
     const customer = await booker(setup);
     const policy = await terms('instant');
@@ -699,5 +699,7 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     expect(await reject({ status: 'requested', scheduling_event_ids: [newId()] })).toBe('23514');
     expect(await reject({ status: 'held' })).toBe('23514');
     expect(await reject({ status: 'requested', kind: 'party' })).toBe('23514');
+    // §4.3 composite references (INTEGRITY-07): a series that does not exist in this organization.
+    expect(await reject({ status: 'requested', scheduling_series_id: newId() })).toBe('23503');
   });
 });
