@@ -240,7 +240,11 @@ Payloads carry identifiers only (§4.14).
   result and the `enrollment_transferred` payload, and a non-`none` consequence opens an
   operational exception for `finance_operator` (`enrollment.transfer_consequence_pending`) until
   DEC-009 decides how finance settles it. **Verified**, `__tests__/transfer-consequence.spec.ts`.
-  Cancellation has the same preview (`cancellation-preview`).
+  Cancellation has the same preview (`cancellation-preview`). A membership, session package,
+  rental or party (the intents behind a capability switch) is not transferred: preview and commit
+  answer 409 `NOT_TRANSFERABLE`, because a transfer moves none of their lifecycle (term, credits,
+  reservation) and their transfer rules are DEC-009; cancel and buy or book the new one.
+  **Verified**, `memberships.spec.ts`, `session-packages.spec.ts`.
 - **Placement (SPK-PLACE-002/003):** candidates and proposals reserve nothing; assignment
   re-evaluates eligibility, holds a place in every team-entry roster pool configured for the team
   (the same pools a `join_team` registration naming the team holds, SPK-REG-005; **Verified**,

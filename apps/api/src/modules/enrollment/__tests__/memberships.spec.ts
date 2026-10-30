@@ -169,6 +169,54 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
     expect(outside.status).toBe(422);
   });
 
+  it('K-12 / DEC-016 / SPK-COND-001: a membership is not transferred, even with the switch off, so no termless membership is confirmed', async () => {
+    const member = await adult(t);
+    const { enrollmentId } = await join(member, includedWeekly(2));
+    const other = await membershipOffering(t, includedWeekly(2), {
+      startsOn: '2026-11-01',
+      endsOn: '2027-01-31',
+    });
+    await acknowledge(t, other, member.personId, member.personId);
+    const before = await t.db
+      .selectFrom('enrollments')
+      .select(['status', 'revision', 'membership_starts_at'])
+      .where('id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(before.status).toBe('confirmed');
+    await t.disableCapability('memberships');
+    try {
+      const refused = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, member.header, {
+        targetOfferingId: other.offeringId,
+        expectedRevision: before.revision,
+        commit: true,
+      });
+      expect(refused.status).toBe(409);
+      expect(refused.body.details).toMatchObject({
+        code: 'NOT_TRANSFERABLE',
+        intent: 'membership',
+      });
+    } finally {
+      await t.enableCapability('memberships');
+    }
+    const preview = await t.http
+      .get(`/v1/enrollments/${enrollmentId}/transfer-preview?targetOfferingId=${other.offeringId}`)
+      .set(frontDesk.header);
+    expect(preview.status).toBe(409);
+    expect(preview.body.details.code).toBe('NOT_TRANSFERABLE');
+    const created = await t.db
+      .selectFrom('enrollments')
+      .select('id')
+      .where('transferred_from_enrollment_id', '=', enrollmentId)
+      .execute();
+    expect(created).toEqual([]);
+    const after = await t.db
+      .selectFrom('enrollments')
+      .select(['status', 'revision', 'membership_starts_at'])
+      .where('id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(after).toEqual(before);
+  });
+
   it('SPK-COND-001: an active membership without a session booking does not admit at check-in', async () => {
     const member = await adult(t);
     const unlimited = await join(member, {

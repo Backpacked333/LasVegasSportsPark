@@ -455,6 +455,47 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
     expect(local).toBe('2027-01-01, 00:00');
   });
 
+  it('K-12 / SPK-COND-002: a package purchase is not transferred, so its credits are never orphaned', async () => {
+    const buyer = await adult(t);
+    const { enrollmentId, entitlementId } = await buy(buyer, 4);
+    const other = await packageOffering(t, {
+      credits: 4,
+      appliesTo: { offeringIds: [target.offeringId] },
+    });
+    await acknowledge(t, other, buyer.personId, buyer.personId);
+    const preview = await t.http
+      .get(`/v1/enrollments/${enrollmentId}/transfer-preview?targetOfferingId=${other.offeringId}`)
+      .set(buyer.header);
+    expect(preview.status).toBe(409);
+    expect(preview.body.details).toMatchObject({
+      code: 'NOT_TRANSFERABLE',
+      intent: 'package_purchase',
+    });
+    for (const actor of [buyer, frontDesk]) {
+      const committed = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, actor.header, {
+        targetOfferingId: other.offeringId,
+        expectedRevision: 2,
+        commit: true,
+      });
+      expect(committed.status).toBe(409);
+      expect(committed.body.details.code).toBe('NOT_TRANSFERABLE');
+    }
+    await drain(t);
+    // Nothing moved: the purchase stands with its active credits, and no second purchase exists.
+    const source = await t.db
+      .selectFrom('enrollments')
+      .select(['status', 'transferred_to_enrollment_id'])
+      .where('id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(source).toEqual({ status: 'confirmed', transferred_to_enrollment_id: null });
+    const entitlements = await t.db
+      .selectFrom('package_entitlements')
+      .select(['id', 'status'])
+      .where('participant_person_id', '=', buyer.personId)
+      .execute();
+    expect(entitlements).toEqual([{ id: entitlementId, status: 'active' }]);
+  });
+
   it('staff list packages in facility scope; a customer list needs a participant', async () => {
     const listed = await t.http.get('/v1/package-entitlements?limit=2').set(frontDesk.header);
     expect(listed.status).toBe(200);
