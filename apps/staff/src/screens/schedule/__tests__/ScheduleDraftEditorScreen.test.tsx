@@ -38,7 +38,7 @@ const MOVE = {
 };
 const DRAFT = draft({ id: 'd1', changes: [MOVE] });
 
-/** Echoes an autosave like the API: revision + 1, changes renumbered, base revisions captured. */
+/** Echoes an autosave: revision + 1, changes renumbered, every target at base revision 1. */
 function echoSave(request: FakeRequest) {
   const body = request.body as {
     expectedRevision: number;
@@ -60,6 +60,43 @@ function echoSave(request: FakeRequest) {
       })),
     }),
   );
+}
+
+/**
+ * An autosave answered like the API (SPK-SCHED-005): a target already in the saved draft keeps
+ * the base revision it captured; a target new to the draft captures the event's current revision.
+ */
+function apiLikeSave(server: { revision: number }) {
+  let saved: Record<string, number> = { 'e-game': 1 };
+  return (request: FakeRequest) => {
+    const body = request.body as {
+      expectedRevision: number;
+      changes: Array<Record<string, unknown>>;
+    };
+    const next: Record<string, number> = {};
+    for (const c of body.changes) {
+      const target = c.targetEventId as string | undefined;
+      if (target) next[target] = saved[target] ?? server.revision;
+    }
+    saved = next;
+    return fakeResponse(
+      200,
+      draft({
+        id: 'd1',
+        revision: body.expectedRevision + 1,
+        lastSavedAt: '2026-10-24T12:01:00.000Z',
+        baseRevision: { capturedAt: '2026-10-24T12:00:00.000Z', eventRevisions: next },
+        changes: body.changes.map((c, i) => ({
+          sequence: i + 1,
+          kind: c.kind as 'create',
+          targetEventId: (c.targetEventId as string | undefined) ?? null,
+          baseEventRevision: c.targetEventId ? (next[c.targetEventId as string] ?? null) : null,
+          proposed: (c.proposed as object | undefined) ?? {},
+          resourceIds: (c.resourceIds as string[] | undefined) ?? [],
+        })),
+      }),
+    );
+  };
 }
 
 /** The series behind the recurring test events; its revision is what series edits are based on (§4.9). */
@@ -283,10 +320,14 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
     expect(validate?.body).toEqual({ expectedRevision: 3 });
   });
 
-  it('rebase required: an event changed since the draft captured it pauses autosave until the user rebases', async () => {
+  it('SPK-SCHED-005 rebase required: a changed event is flagged, saving keeps its base, and publishing waits for a rebase', async () => {
     const user = userEvent.setup();
+    const server = { revision: 2 };
     const app = createTestApp({
-      routes: routes({ 'GET /events/{id}': { status: 200, body: { ...GAME, revision: 2 } } }),
+      routes: routes({
+        'GET /events/{id}': () => fakeResponse(200, { ...GAME, revision: server.revision }),
+        'PATCH /schedule-drafts/{id}': apiLikeSave(server),
+      }),
     });
     render(app.at('/schedule/drafts/d1'));
     const change = await screen.findByTestId('draft-change-1');
@@ -294,41 +335,128 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
     expect(
       within(change).getByText('Base revision 1; event now at revision 2'),
     ).toBeInTheDocument();
+    expect(change).toHaveTextContent('publishing is refused until the change is rebased');
+    // Autosave goes on: the API keeps the base the change captured (it never rebases silently).
     await user.type(screen.getByLabelText('Draft name'), ' (v2)');
     await user.tab();
-    expect(await screen.findByText('Not saved: rebase required')).toBeInTheDocument();
-    expect(patches(app)).toHaveLength(0);
-    await user.click(within(change).getByRole('button', { name: 'Rebase onto the current event' }));
     await waitFor(() => expect(patches(app)).toHaveLength(1));
-    expect(patches(app)[0]?.body).toMatchObject({ name: 'Week 9 changes (v2)' });
+    expect(patches(app)[0]?.body).toMatchObject({
+      name: 'Week 9 changes (v2)',
+      changes: [{ kind: 'move', targetEventId: 'e-game' }],
+    });
+    expect(await screen.findByText(/All changes saved/)).toBeInTheDocument();
+    expect(within(change).getByText('Rebase required')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Review and publish (after the flagged changes are rebased)',
+      }),
+    ).toBeDisabled();
   });
 
-  it('SPK-SCHED-005: a rebase acknowledges one event revision; a further change to the event pauses autosave again', async () => {
+  it('SPK-SCHED-005: "Rebase" saves without the event, then with it again, so the current revision is captured', async () => {
     const user = userEvent.setup();
+    const server = { revision: 2 };
     const app = createTestApp({
-      routes: routes({ 'GET /events/{id}': { status: 200, body: { ...GAME, revision: 2 } } }),
+      routes: routes({
+        'GET /events/{id}': () => fakeResponse(200, { ...GAME, revision: server.revision }),
+        'PATCH /schedule-drafts/{id}': apiLikeSave(server),
+      }),
     });
     render(app.at('/schedule/drafts/d1'));
     const change = await screen.findByTestId('draft-change-1');
     await user.click(
       await within(change).findByRole('button', { name: 'Rebase onto the current event' }),
     );
-    await waitFor(() => expect(patches(app)).toHaveLength(1));
-    expect(await screen.findByText(/All changes saved/)).toBeInTheDocument();
-    // The target event changes again elsewhere.
-    app.fake.set('GET /events/{id}', { status: 200, body: { ...GAME, revision: 3 } });
-    await act(async () => {
-      await app.queryClient.invalidateQueries({ queryKey: ['api', '/events/{id}'] });
+    await waitFor(() => expect(patches(app)).toHaveLength(2));
+    const [first, second] = patches(app);
+    expect(first?.body).toMatchObject({ expectedRevision: 3, changes: [] });
+    expect(second?.body).toMatchObject({
+      expectedRevision: 4,
+      changes: [{ kind: 'move', targetEventId: 'e-game', proposed: MOVE.proposed }],
     });
-    expect(
-      await within(screen.getByTestId('draft-change-1')).findByRole('button', {
-        name: 'Rebase onto the current event',
+    // Two intents, two keys (§4.9).
+    expect(first?.headers['idempotency-key']).not.toBe(second?.headers['idempotency-key']);
+    expect(await screen.findByText(/All changes saved/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('draft-change-1')).getByText(
+          'Base revision 2; event now at revision 2',
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(within(screen.getByTestId('draft-change-1')).queryByText('Rebase required')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Review and publish' })).toHaveAttribute(
+      'href',
+      '/schedule/drafts/d1/publish',
+    );
+  });
+
+  it('SPK-SCHED-005: a rebase never goes past what the user reviewed; a newer revision is flagged again', async () => {
+    const user = userEvent.setup();
+    const server = { revision: 2 };
+    const app = createTestApp({
+      routes: routes({
+        'GET /events/{id}': () => fakeResponse(200, { ...GAME, revision: server.revision }),
+        'PATCH /schedule-drafts/{id}': apiLikeSave(server),
       }),
+    });
+    render(app.at('/schedule/drafts/d1'));
+    const change = await screen.findByTestId('draft-change-1');
+    const rebase = await within(change).findByRole('button', {
+      name: 'Rebase onto the current event',
+    });
+    // The event changes again on the server after the user reviewed revision 2.
+    server.revision = 3;
+    await user.click(rebase);
+    await waitFor(() => expect(patches(app)).toHaveLength(2));
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('draft-change-1')).getByText(
+          'Base revision 3; event now at revision 3',
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(within(screen.getByTestId('draft-change-1')).getByText('Rebase required')).toBeVisible();
+    expect(
+      screen.getByRole('button', {
+        name: 'Review and publish (after the flagged changes are rebased)',
+      }),
+    ).toBeDisabled();
+  });
+
+  it('SPK-SCHED-005: a rebase interrupted after its first save resumes the second on retry; nothing reads as saved meanwhile', async () => {
+    const user = userEvent.setup();
+    const server = { revision: 2 };
+    const save = apiLikeSave(server);
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /events/{id}': () => fakeResponse(200, { ...GAME, revision: server.revision }),
+        'PATCH /schedule-drafts/{id}': (request) => {
+          calls += 1;
+          return calls === 2 ? fakeResponse(500, apiErrorBody('INTERNAL_ERROR')) : save(request);
+        },
+      }),
+    });
+    render(app.at('/schedule/drafts/d1'));
+    const change = await screen.findByTestId('draft-change-1');
+    await user.click(
+      await within(change).findByRole('button', { name: 'Rebase onto the current event' }),
+    );
+    expect(
+      await screen.findByText('Autosave failed. Your edits are kept on this page.'),
     ).toBeInTheDocument();
-    await user.type(screen.getByLabelText('Draft name'), ' (v3)');
-    await user.tab();
-    expect(await screen.findByText('Not saved: rebase required')).toBeInTheDocument();
-    expect(patches(app)).toHaveLength(1);
+    expect(screen.queryByText(/All changes saved/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(patches(app)).toHaveLength(3));
+    expect(patches(app)[2]?.body).toMatchObject({
+      changes: [{ kind: 'move', targetEventId: 'e-game' }],
+    });
+    // The retry repeats the same intent with the same key (§4.9).
+    expect(patches(app)[2]?.headers['idempotency-key']).toBe(
+      patches(app)[1]?.headers['idempotency-key'],
+    );
+    expect(await screen.findByText(/All changes saved/)).toBeInTheDocument();
   });
 
   it('SPK-SCHED-007: a "this and future" change is previewed and adds exactly the listed events', async () => {

@@ -1,7 +1,9 @@
 /**
  * SCR-S-03 Schedule calendar and resource view: SPK-SCHED-001/002 (whole pitch and subdivision
  * relationships, shared space), SPK-SCHED-003 (occupied interval with buffers), SPK-SCHED-008
- * (facility-local day window and times), SPK-FAC-003 (restrictions shown), SPK-UX-008 states.
+ * (facility-local day window and times from the facility directory), SPK-FAC-003 (restrictions
+ * shown), program sessions by facility (CAT-01 `GET /v1/sessions`), cursor pages ("Load more
+ * events"), SPK-UX-008 states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -14,16 +16,12 @@ import {
   PITCH,
   closure,
   event,
+  facilityDirectory,
+  facilitySummary,
   oneFacilityRoutes,
   page,
 } from '../../../features/schedule-facilities/test-fixtures';
-import {
-  FACILITY_A,
-  FACILITY_B,
-  createTestApp,
-  staffMe,
-  todayFeed,
-} from '../../../testing/test-app';
+import { FACILITY_A, FACILITY_B, createTestApp, staffMe } from '../../../testing/test-app';
 
 const GAME = event({
   id: 'e-game',
@@ -39,12 +37,28 @@ const SMALL = event({
   scheduledStart: '2026-10-24T17:00:00.000Z',
   scheduledEnd: '2026-10-24T18:00:00.000Z',
 });
+const SESSION_ID = '0192f1a0-0000-7000-8000-0000000005e1';
+const OFFERING_ID = '0192f1a0-0000-7000-8000-0000000000f1';
+/** A program session at facility A, 16:00 to 17:00 in Los Angeles (FacilitySession, CAT-01). */
+const SESSION = {
+  sessionId: SESSION_ID,
+  offeringId: OFFERING_ID,
+  offeringName: 'U8 Saturday skills',
+  sequence: 3,
+  title: null,
+  scheduledStart: '2026-10-24T23:00:00.000Z',
+  scheduledEnd: '2026-10-25T00:00:00.000Z',
+  status: 'scheduled' as const,
+  facilityId: FACILITY_A,
+  timezone: 'America/Los_Angeles',
+};
 
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     ...oneFacilityRoutes(),
     'GET /resources': { status: 200, body: INVENTORY },
     'GET /events': page([GAME, SMALL]),
+    'GET /sessions': page([SESSION]),
     'GET /closures': {
       status: 200,
       body: [
@@ -206,9 +220,11 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
       }),
     });
     render(app.at('/schedule/calendar'));
-    expect(
-      await screen.findByText(/Showing the first 200 events in this range; more exist/),
-    ).toBeInTheDocument();
+    expect(await screen.findByTestId('events-truncated')).toHaveTextContent(
+      'Showing the 0 events loaded so far; more exist in this range and are not shown yet, so a space may look free when it is not.',
+    );
+    expect(screen.queryByRole('heading', { name: 'No events in this range' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Load more events' })).toBeInTheDocument();
     expect(screen.queryByText(/Choose one space/)).toBeNull();
     expect(screen.getByTestId(`calendar-resource-${PITCH}`)).not.toHaveTextContent(
       'Free for the whole range.',
@@ -289,18 +305,169 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     expect(await screen.findByTestId('calendar-event-e-game')).toBeInTheDocument();
   });
 
-  it('asks which facility when the viewer works in more than one', async () => {
+  it('asks which facility when the viewer works in more than one, with each time zone from the facility directory', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
         ...routes(),
         'GET /me': staffMe([FACILITY_A, FACILITY_B]),
-        'GET /today': todayFeed(),
+        'GET /facilities': facilityDirectory([
+          facilitySummary({ id: FACILITY_A }),
+          facilitySummary({
+            id: FACILITY_B,
+            name: 'Desert Dome',
+            timezone: 'America/Phoenix',
+            status: 'closed',
+          }),
+        ]),
       },
     });
     render(app.at('/schedule/calendar'));
-    await user.click(await screen.findByRole('button', { name: 'Use North Park 1' }));
+    const choices = await screen.findByRole('list', { name: 'Facilities' });
+    expect(within(choices).getByText('Time zone America/Phoenix')).toBeInTheDocument();
+    expect(within(choices).getByText('Facility status: closed')).toBeInTheDocument();
+    await user.click(within(choices).getByRole('button', { name: 'Use North Park 1' }));
     expect(await screen.findByTestId('calendar-event-e-game')).toBeInTheDocument();
+  });
+
+  it('SPK-SCHED-008: the facility zone comes from GET /v1/facilities, not the Today feed', async () => {
+    // The Today feed (oneFacilityRoutes) still says Los Angeles; the directory says New York.
+    const app = createTestApp({
+      routes: routes({
+        'GET /facilities': facilityDirectory([
+          facilitySummary({ id: FACILITY_A, timezone: 'America/New_York' }),
+        ]),
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    // 18:00 to 19:30 in Los Angeles is 21:00 to 22:30 in New York.
+    expect(await screen.findByTestId('calendar-event-e-game')).toHaveTextContent(
+      '21:00 to 22:30 EDT',
+    );
+    expect(app.fake.requests.find((r) => r.route === '/events')?.query).toMatchObject({
+      start: '2026-10-24T04:00:00.000Z',
+      end: '2026-10-25T04:00:00.000Z',
+    });
+  });
+
+  it('facility directory error: the facility in scope is still offered, in UTC, with the code and a retry', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /facilities': () => fakeResponse(503, apiErrorBody('SERVICE_UNAVAILABLE')),
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    const notice = await screen.findByTestId('zone-unknown');
+    expect(notice).toHaveTextContent(
+      'the facility directory could not be read: SERVICE_UNAVAILABLE',
+    );
+    expect(notice).toHaveTextContent('so times are shown in UTC');
+    expect(await screen.findByTestId('calendar-event-e-game')).toHaveTextContent(
+      '01:00 to 02:30 UTC',
+    );
+    app.fake.set('GET /facilities', facilityDirectory());
+    await user.click(within(notice).getByRole('button', { name: 'Load facilities again' }));
+    await waitFor(() => expect(screen.queryByTestId('zone-unknown')).toBeNull());
+    expect(await screen.findByTestId('calendar-event-e-game')).toHaveTextContent(
+      '18:00 to 19:30 PDT',
+    );
+  });
+
+  it('a closed facility is marked by its directory status, in text', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /facilities': facilityDirectory([
+          facilitySummary({ id: FACILITY_A, status: 'closed' }),
+        ]),
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    expect(await screen.findByTestId('facility-status')).toHaveTextContent(
+      'Facility status: closed',
+    );
+  });
+
+  it('§4.5: "Load more events" asks for the next page with the API cursor and shows it without a change banner', async () => {
+    const user = userEvent.setup();
+    const LATE = event({
+      id: 'e-late',
+      title: 'Late futsal',
+      resourceIds: [HALF_A],
+      scheduledStart: '2026-10-25T04:00:00.000Z',
+      scheduledEnd: '2026-10-25T05:00:00.000Z',
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': (request) =>
+          request.query.cursor === 'page-2'
+            ? fakeResponse(200, { items: [LATE], nextCursor: null })
+            : fakeResponse(200, { items: [GAME, SMALL], nextCursor: 'page-2' }),
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    expect(await screen.findByTestId('events-truncated')).toHaveTextContent(
+      'Showing the 2 events loaded so far',
+    );
+    await user.click(screen.getByRole('button', { name: 'Load more events' }));
+    expect(await screen.findByTestId('calendar-event-e-late')).toHaveTextContent('Late futsal');
+    const reads = app.fake.requests.filter((r) => r.route === '/events');
+    expect(reads.at(-1)?.query).toMatchObject({ cursor: 'page-2', limit: '200' });
+    expect(screen.queryByTestId('events-truncated')).toBeNull();
+    expect(screen.queryByTestId('schedule-changed')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Load more events' })).toBeNull();
+  });
+
+  it('CAT-01: lists the program sessions at the facility in the same window, in the facility zone', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(app.at('/schedule/calendar'));
+    const row = await screen.findByTestId(`facility-session-${SESSION_ID}`);
+    expect(row).toHaveTextContent('U8 Saturday skills: session 3');
+    expect(row).toHaveTextContent('16:00 to 17:00 PDT');
+    expect(within(row).getByText('scheduled')).toBeInTheDocument();
+    expect(
+      within(row).getByRole('link', { name: 'Offering setup for U8 Saturday skills' }),
+    ).toHaveAttribute('href', `/programs/offerings/${OFFERING_ID}`);
+    expect(app.fake.requests.find((r) => r.route === '/sessions')?.query).toMatchObject({
+      facilityId: FACILITY_A,
+      from: '2026-10-24T07:00:00.000Z',
+      to: '2026-10-25T07:00:00.000Z',
+    });
+  });
+
+  it('sessions not available to the viewer (ACCESS_DENIED) leave the rest of the calendar in place', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /sessions': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', { details: { action: 'catalog.read_catalog' } }),
+          ),
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    const sessions = await screen.findByTestId('facility-sessions');
+    expect(
+      await within(sessions).findByText(
+        /Program sessions at this facility are not available to you/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('calendar-event-e-game')).toBeInTheDocument();
+  });
+
+  it('sessions error: the code with a retry; an empty window says so', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'GET /sessions': () => fakeResponse(500, apiErrorBody('INTERNAL_ERROR')) }),
+    });
+    render(app.at('/schedule/calendar'));
+    const sessions = await screen.findByTestId('facility-sessions');
+    expect(await within(sessions).findByText(/Error code: INTERNAL_ERROR/)).toBeInTheDocument();
+    app.fake.set('GET /sessions', page([]));
+    await user.click(within(sessions).getByRole('button', { name: 'Try again' }));
+    expect(
+      await within(sessions).findByRole('heading', { name: 'No program sessions in this range' }),
+    ).toBeInTheDocument();
   });
 
   it('offline: keeps the cached schedule with its age and disables refresh', async () => {

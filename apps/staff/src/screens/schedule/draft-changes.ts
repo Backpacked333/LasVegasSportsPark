@@ -25,7 +25,10 @@ export const CHANGE_KIND_LABEL: Record<DraftChangeInput['kind'], string> = {
   resource_change: 'Relocate',
 };
 
-/** The saved change as autosave input (the API re-captures base revisions on save). */
+/**
+ * The saved change as autosave input. Autosave sends no base revision: the API keeps the one a
+ * target captured when it entered the draft, and captures the current one for a new target.
+ */
 export function toInput(change: DraftChange): DraftChangeInput {
   const input: DraftChangeInput = { kind: change.kind, proposed: change.proposed };
   if (change.targetEventId) input.targetEventId = change.targetEventId;
