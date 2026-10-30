@@ -425,15 +425,153 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     );
   });
 
-  it('marks person lookup without a pass as not available (no person search in the API)', async () => {
-    const app = createTestApp({ routes: routes() });
+  it('SPK-IAM-002 / SPK-ENTRY-001: looks a person up without a pass and records arrival and check-in separately', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': {
+          status: 200,
+          body: {
+            items: [
+              {
+                id: CHILD_1,
+                givenName: 'Alex',
+                familyName: 'Rivera',
+                kind: 'child',
+                status: 'active',
+                matchedOn: 'name',
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+        'GET /sessions': {
+          status: 200,
+          body: {
+            items: [
+              {
+                sessionId: SESSION_1,
+                offeringId: OFFERING,
+                offeringName: 'Junior skills',
+                sequence: 2,
+                title: null,
+                scheduledStart: '2026-10-24T16:00:00.000Z',
+                scheduledEnd: '2026-10-24T17:00:00.000Z',
+                status: 'scheduled',
+                facilityId: FACILITY_A,
+                timezone: 'America/Los_Angeles',
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+        'POST /visits': {
+          status: 201,
+          body: { visits: [{ ...visit(VISIT_1, CHILD_1), passId: null }] },
+        },
+        'POST /session-checkins': {
+          status: 201,
+          body: checkin(CHECKIN_1, CHILD_1, SESSION_1, 'held', [
+            {
+              code: 'no_participation',
+              severity: 'blocking',
+              message: 'Alex has no enrollment or booking for this session.',
+              nextAction: 'register_or_book',
+              reference: null,
+            },
+          ]),
+        },
+      }),
+    });
     render(app.at('/arrival'));
-    expect(await screen.findByText('Find a person without a pass')).toBeInTheDocument();
-    expect(screen.getByText(/does not offer a person search/)).toBeInTheDocument();
+    const search = await screen.findByRole('search', { name: 'Find a person' });
+    // The API's minimum is two characters: nothing is sent before.
+    await user.type(within(search).getByLabelText('Find a person'), 'A');
+    await user.click(within(search).getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('Type at least 2 characters.')).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/people')).toHaveLength(0);
+    await user.type(within(search).getByLabelText('Find a person'), 'le');
+    await user.click(within(search).getByRole('button', { name: 'Search' }));
+    await user.click(await screen.findByRole('button', { name: 'Select Alex Rivera' }));
+    expect(app.fake.requests.find((r) => r.route === '/people')?.query.query).toBe('Ale');
+
+    // Finding someone records nothing; the arrival needs a chosen category.
+    const panel = screen.getByRole('region', { name: 'Arrival for Alex Rivera' });
+    expect(app.fake.requests.filter((r) => r.route === '/visits')).toHaveLength(0);
+    await user.click(within(panel).getByRole('button', { name: 'Record arrival' }));
+    expect(within(panel).getByText('Choose a visitor category.')).toBeInTheDocument();
+    await user.selectOptions(
+      within(panel).getByLabelText('Visitor category for Alex Rivera'),
+      'participant',
+    );
+    await user.click(within(panel).getByRole('button', { name: 'Record arrival' }));
+    expect(await within(panel).findByText('Arrived')).toBeInTheDocument();
+    const visits = app.fake.requests.filter((r) => r.route === '/visits');
+    expect(visits[0]?.body).toEqual({
+      facilityId: FACILITY_A,
+      arrivals: [{ personId: CHILD_1, visitorCategory: 'participant' }],
+    });
+
+    // The check-in is its own record; the API's issue is shown as it states it (SPK-ENTRY-004).
+    await waitFor(() =>
+      expect(
+        within(panel).getByRole('option', { name: /Junior skills, session 2/ }),
+      ).toBeInTheDocument(),
+    );
+    await user.selectOptions(
+      within(panel).getByLabelText('Session to check Alex Rivera in to'),
+      SESSION_1,
+    );
+    await user.click(within(panel).getByRole('button', { name: 'Check in' }));
+    expect(
+      await within(panel).findByText('Check-in held: Junior skills, session 2'),
+    ).toBeInTheDocument();
+    expect(within(panel).getByText('Blocking')).toBeInTheDocument();
+    const checkins = app.fake.requests.filter((r) => r.route === '/session-checkins');
+    expect(checkins[0]?.body).toEqual({
+      personId: CHILD_1,
+      activity: { type: 'session', offeringId: OFFERING, sessionId: SESSION_1 },
+      visitId: VISIT_1,
+    });
+    expect(checkins[0]?.headers['idempotency-key']).not.toEqual(
+      visits[0]?.headers['idempotency-key'],
+    );
+  });
+
+  it('shows the person search as not available when the role may not search', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', { message: 'You need identity.lookup_person.' }),
+          ),
+      }),
+    });
+    render(app.at('/arrival'));
+    const search = await screen.findByRole('search', { name: 'Find a person' });
+    await user.type(within(search).getByLabelText('Find a person'), 'Alex');
+    await user.click(within(search).getByRole('button', { name: 'Search' }));
+    const unavailable = await screen.findByTestId('person-search-unavailable');
+    expect(unavailable).toHaveTextContent('Person search not available');
+    expect(unavailable).toHaveTextContent('Error code: ACCESS_DENIED');
     expect(
       screen.getByRole('navigation', { name: 'Arrival and attendance screens' }),
     ).toBeInTheDocument();
     expect(await screen.findByTestId('occupancy')).toHaveTextContent('Not verified occupancy.');
+  });
+
+  it('says when nobody matches the search', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'GET /people': { status: 200, body: { items: [], nextCursor: null } } }),
+    });
+    render(app.at('/arrival'));
+    const search = await screen.findByRole('search', { name: 'Find a person' });
+    await user.type(within(search).getByLabelText('Find a person'), 'Zed');
+    await user.click(within(search).getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('Nobody found')).toBeInTheDocument();
   });
 
   it('asks for a facility when the viewer works across several', async () => {

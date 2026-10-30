@@ -5,12 +5,16 @@
  * by the API), synchronises once (`POST /v1/offline-sync`), and keeps conflicting or rejected
  * observations for review with the API's reason. Offline is the normal state of this screen.
  *
- * Not available from the API: device approval and encrypted roster issuance (entry module known
- * gaps, DEC-032 pending), and a list of past synchronisation batches (no read endpoint), so the
- * review list holds what this device synchronised.
+ * The stored outcome of a synchronised batch is read again with `GET /v1/offline-sync/{id}`
+ * (ENT-01): this device remembers the ids of the batches it sent, and desk readers may open any
+ * batch by its reference (OfflineBatch.tsx). There is no list of every device's batches.
+ *
+ * Not available from the API: device approval and a server-issued, encrypted roster snapshot
+ * (entry module known gaps; DEC-023, DEC-032, DEC-033 pending). The snapshot reference stays the
+ * device's own label for the read it queued against, with the server's time of that read.
  */
 import { formatAge } from '@sportspark/api-client';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ARRIVAL_TABS, AreaTabs, type AreaTab } from '../../features/operations/AreaTabs';
 import { nameOf, usePersonNames } from '../../features/operations/context';
 import { CommandError } from '../../features/operations/feedback';
@@ -22,6 +26,7 @@ import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { OfflineBatchView, SyncedBatches } from './OfflineBatch';
 
 function personOf(item: OfflineItem): string {
   return item.kind === 'release' ? item.childPersonId : item.personId;
@@ -175,12 +180,35 @@ export function OfflineQueueScreen({
                 >
                   Dismiss from this device
                 </Button>
+                {r.serverBatchId ? (
+                  <ReviewBatch batchId={r.serverBatchId} label={eventLabel(r.queued.item)} />
+                ) : null}
               </li>
             ))}
           </ul>
         )}
       </section>
+
+      <SyncedBatches batches={state.synced ?? []} />
     </section>
+  );
+}
+
+/** The stored outcome of the batch a kept item came back in (ENT-01). */
+function ReviewBatch({ batchId, label }: { batchId: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        variant="secondary"
+        aria-expanded={open}
+        aria-label={`${open ? 'Hide' : 'Show'} the batch outcome: ${label}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? 'Hide the batch outcome' : 'Show the batch outcome'}
+      </Button>
+      {open ? <OfflineBatchView batchId={batchId} /> : null}
+    </>
   );
 }
 

@@ -6,6 +6,15 @@
  *   (`POST /v1/releases`); the dashboard never decides it and never shows cached authority (the
  *   pass scan's `holderMayCollect` is not displayed). Schedule visibility and payment permission
  *   do not establish pickup authority; the API's denial reason says so.
+ * - For a session (the coach's own, or one the desk chooses) the collecting adult is identified
+ *   first with the collector check (`POST /v1/releases/collector-checks`, ENT-02): read-only, it
+ *   records nothing and names the collector only when their pass is active, they hold `collect`
+ *   over this child now and the child takes part in the session. Every other answer is the same
+ *   "not confirmed" with no name, so the check reveals nothing about the pass or its holder
+ *   (§4.10, §4.14). The release then re-checks authority and the record names the grant it relied
+ *   on (`authorityGrantId`, staff readers only).
+ * - Children on site without a session (desk only): the collector is identified by the desk pass
+ *   scan, and authority is checked when the release is recorded.
  * - The record shows child, collecting person, verification outcome, staff actor, time,
  *   restriction or escalation, and release outcome. One child at a time: partial completion is
  *   per child (one released, one escalated).
@@ -28,7 +37,7 @@ import {
   TextField,
   fieldErrorsOf,
 } from '../../features/operations/fields';
-import { formatInstant } from '../../features/operations/format';
+import { formatInstant, shortRef } from '../../features/operations/format';
 import { VERIFICATION_OUTCOME } from '../../features/operations/labels';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -38,14 +47,16 @@ import { StatusBadge } from '../../ui/StatusBadge';
 
 type PassScan = Schema<'PassScan'>;
 type RecordedRelease = Schema<'RecordedRelease'>;
+type CollectorCheck = Schema<'CollectorCheck'>;
 
 type Collector =
-  { kind: 'person'; personId: string; name: string } | { kind: 'description'; description: string };
+  | { kind: 'person'; personId: string; name: string; checkedAt?: string }
+  | { kind: 'description'; description: string };
 
 export interface ReleasePanelProps {
   facilityId: string;
   timezone: string | null;
-  /** The assigned session (SCR-W-09): children come from its attendance. */
+  /** The session children are released from (SCR-W-09, or chosen at the desk). */
   activity?: ActivityRef;
 }
 
@@ -76,8 +87,14 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
   const [scanned, setScanned] = useState<PassScan | null>(null);
   const [childId, setChildId] = useState<string | null>(null);
   const [released, setReleased] = useState<string[]>([]);
-  // Names of everyone identified by a pass scan in this panel (collectors included).
+  // Names of everyone identified in this panel (scanned people, checked collectors).
   const [knownNames, setKnownNames] = useState<ReadonlyMap<string, string>>(new Map());
+  const remember = (entries: readonly (readonly [string, string])[]) =>
+    setKnownNames((prev) => {
+      const next = new Map(prev);
+      for (const [id, name] of entries) next.set(id, name);
+      return next;
+    });
   const commands = useKeyedCommands({
     invalidate: [
       ['api', '/visits'],
@@ -99,6 +116,14 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
   });
   const source = (activity ? attendance : onSite) as QueryLike<unknown>;
 
+  // ENT-01: the session's attendance names its people; anyone else is named by the names read.
+  const attendanceNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of attendance.data?.people ?? [])
+      if (p.displayName) map.set(p.personId, p.displayName);
+    return map;
+  }, [attendance.data]);
+
   const candidateIds = useMemo(() => {
     const ids = new Set<string>();
     if (activity) {
@@ -109,10 +134,7 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
       for (const v of onSite.data?.items ?? []) {
         if (v.personId && v.visitorCategory === 'participant') ids.add(v.personId);
       }
-    }
-    // A scanned household child is a candidate only at the desk and only when on site; in an
-    // activity (SCR-W-09) the candidates are this session's present or late people only.
-    if (!activity) {
+      // A scanned household child is a candidate at the desk only when on site.
       for (const p of scanned?.people ?? []) {
         if (p.kind === 'child' && p.onSite) ids.add(p.personId);
       }
@@ -120,15 +142,15 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
     return [...ids];
   }, [activity, attendance.data, onSite.data, scanned]);
   const names = usePersonNames(candidateIds);
-  const childName = (id: string) => knownNames.get(id) ?? nameOf(names, id);
+  const childName = (id: string) =>
+    knownNames.get(id) ?? attendanceNames.get(id) ?? nameOf(names, id);
   const collectorLabel = (r: RecordedRelease['release']) =>
     r.collectorPersonId
       ? (knownNames.get(r.collectorPersonId) ?? 'the identified collector')
       : (r.collectorDescription ?? 'the described collector');
-  // Only children: a person record the viewer can read with kind "child", or a scanned dependent.
-  // In an activity, every present or late person comes from the coach's own session attendance:
-  // keep them even when the name is not readable (a coach may not read child records), labelled
-  // with a short reference, so the empty state never hides children who are present.
+  // Only children: a person the names read gives with kind "child", or a scanned dependent. In a
+  // session every present or late person comes from its own attendance: keep them even when the
+  // kind is not readable (the collector check says when someone is not a child).
   const children = candidateIds.filter((id) => {
     const scannedPerson = scanned?.people.find((p) => p.personId === id);
     if (scannedPerson) return scannedPerson.kind === 'child';
@@ -140,22 +162,21 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
 
   return (
     <div className="ops-release">
-      <CollectorIdentification
-        facilityId={facilityId}
-        collector={collector}
-        onCollector={(c, scan) => {
-          setCollector(c);
-          setScanned(scan);
-          if (scan) {
-            setKnownNames((prev) => {
-              const next = new Map(prev);
-              for (const p of scan.people)
-                next.set(p.personId, `${p.givenName} ${p.familyName}`.trim());
-              return next;
-            });
-          }
-        }}
-      />
+      {activity ? null : (
+        <CollectorByPassScan
+          facilityId={facilityId}
+          collector={collector}
+          onCollector={(c, scan) => {
+            setCollector(c);
+            setScanned(scan);
+            if (scan) {
+              remember(
+                scan.people.map((p) => [p.personId, `${p.givenName} ${p.familyName}`.trim()]),
+              );
+            }
+          }}
+        />
+      )}
       <section className="ops-section" aria-labelledby="awaiting-title">
         <h3 id="awaiting-title">Children awaiting release</h3>
         <QueryBoundary
@@ -196,8 +217,8 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
           activity={activity}
           childPersonId={childId}
           childName={childName(childId)}
-          collector={collector}
-          timezone={timezone}
+          deskCollector={collector}
+          onChecked={(c) => remember([[c.personId, c.displayName]])}
           commands={commands}
           onReleased={() => {
             // Released: the child leaves the waiting list; the record stays below.
@@ -217,7 +238,8 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
   );
 }
 
-function CollectorIdentification({
+/** Desk only, children on site without a session: identify the collector by the pass scan. */
+function CollectorByPassScan({
   facilityId,
   collector,
   onCollector,
@@ -265,7 +287,8 @@ function CollectorIdentification({
         </p>
       ) : (
         <p className="caption">
-          Identify the adult collecting the child. Their authority is checked when you release.
+          Identify the adult collecting the child. Their authority is checked when you release. To
+          check authority before releasing, release from the child&rsquo;s session.
         </p>
       )}
       <form
@@ -315,27 +338,152 @@ function CollectorIdentification({
           })}
         </fieldset>
       ) : null}
+      <DescribeCollector
+        value={description}
+        onChange={setDescription}
+        onUse={(d) => onCollector({ kind: 'description', description: d }, scan)}
+      />
+    </section>
+  );
+}
+
+function DescribeCollector({
+  value,
+  onChange,
+  onUse,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onUse: (description: string) => void;
+}) {
+  return (
+    <form
+      className="ops-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (value.trim()) onUse(value.trim());
+      }}
+    >
+      <TextField
+        label="Or describe a collector without a pass"
+        value={value}
+        onChange={onChange}
+        hint="Without a verified record, current pickup authority cannot be established online; the release will be denied or escalated."
+      />
+      <div className="ops-actions">
+        <Button type="submit" variant="secondary" disabled={!value.trim()}>
+          Use this description
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * ENT-02 (SPK-ENTRY-007, SPK-AT-016): identify the collecting adult for this child and session by
+ * their pass before anything is recorded. The pass reference travels in the body only.
+ */
+function CollectorCheckStep({
+  activity,
+  childPersonId,
+  childName,
+  collector,
+  onCollector,
+}: {
+  activity: ActivityRef;
+  childPersonId: string;
+  childName: string;
+  collector: Collector | null;
+  onCollector: (collector: Collector | null, check: CollectorCheck | null) => void;
+}) {
+  const [reference, setReference] = useState('');
+  const [description, setDescription] = useState('');
+  const check = useApiCommand('post', '/releases/collector-checks');
+  const result = check.data;
+  const runCheck = () =>
+    void check
+      .submit({
+        body: { activity, participantPersonId: childPersonId, passReference: reference.trim() },
+      })
+      .then((r) => {
+        setReference('');
+        onCollector(
+          r.mayCollect && r.collector
+            ? {
+                kind: 'person',
+                personId: r.collector.personId,
+                name: r.collector.displayName,
+                checkedAt: r.checkedAt,
+              }
+            : null,
+          r,
+        );
+      })
+      .catch(() => undefined);
+  return (
+    <div className="ops-section" role="group" aria-label={`Collecting person for ${childName}`}>
+      <h4>Collecting person</h4>
       <form
         className="ops-form"
         onSubmit={(event) => {
           event.preventDefault();
-          if (description.trim())
-            onCollector({ kind: 'description', description: description.trim() }, scan);
+          if (reference.trim()) runCheck();
         }}
       >
         <TextField
-          label="Or describe a collector without a pass"
-          value={description}
-          onChange={setDescription}
-          hint="Without a verified record, current pickup authority cannot be established online; the release will be denied or escalated."
+          label="Collecting person's pass reference"
+          value={reference}
+          onChange={setReference}
+          hint="Scan the pass of the adult who is collecting. Checking records nothing."
         />
         <div className="ops-actions">
-          <Button type="submit" variant="secondary" disabled={!description.trim()}>
-            Use this description
+          <Button
+            type="submit"
+            variant="secondary"
+            busy={check.isProcessing}
+            disabled={!reference.trim()}
+          >
+            Check the collector
           </Button>
         </div>
       </form>
-    </section>
+      {check.error ? (
+        <CommandError error={check.error} onRetry={runCheck} subject="This check" />
+      ) : null}
+      {result ? (
+        <div data-testid="collector-check" role="status">
+          {result.mayCollect && result.collector ? (
+            <StatusBadge tone="success" label={`May collect: ${result.collector.displayName}`} />
+          ) : (
+            <StatusBadge tone="danger" label={`Not confirmed to collect ${childName}`} />
+          )}
+          <p className="caption">
+            Checked {formatInstant(result.checkedAt)}.{' '}
+            {result.mayCollect
+              ? ''
+              : 'This pass does not show current pickup authority for this child in this session. Record the release to deny or escalate it.'}
+          </p>
+          {result.restrictions.length > 0 ? (
+            <ul className="ops-history" aria-label="Collector check notes">
+              {result.restrictions.map((r) => (
+                <li key={r.code}>{r.message}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+      {collector?.kind === 'description' ? (
+        <p data-testid="collector">
+          Collecting: <strong>{collector.description}</strong> (no verified record: authority cannot
+          be confirmed online)
+        </p>
+      ) : null}
+      <DescribeCollector
+        value={description}
+        onChange={setDescription}
+        onUse={(d) => onCollector({ kind: 'description', description: d }, null)}
+      />
+    </div>
   );
 }
 
@@ -344,7 +492,8 @@ function ReleaseForm({
   activity,
   childPersonId,
   childName,
-  collector,
+  deskCollector,
+  onChecked,
   commands,
   onReleased,
 }: {
@@ -352,25 +501,35 @@ function ReleaseForm({
   activity?: ActivityRef;
   childPersonId: string;
   childName: string;
-  collector: Collector | null;
-  timezone: string | null;
+  /** Desk without a session: the collector identified by the pass scan above. */
+  deskCollector: Collector | null;
+  onChecked: (collector: { personId: string; displayName: string }) => void;
   commands: ReturnType<typeof useKeyedCommands>;
   onReleased: () => void;
 }) {
   const now = useNow();
+  const [checked, setChecked] = useState<Collector | null>(null);
+  const [checkAnswered, setCheckAnswered] = useState(false);
   const [withhold, setWithhold] = useState(false);
   const [restrictionNotes, setRestrictionNotes] = useState('');
   const [escalate, setEscalate] = useState(false);
   const [escalationNotes, setEscalationNotes] = useState('');
   const [problems, setProblems] = useState<{ collector?: string; restriction?: string }>({});
+  const collector = activity ? checked : deskCollector;
   const key = `release|${childPersonId}`;
   const outcome = commands.outcome(key);
   const apiErrors = fieldErrorsOf(outcome.error);
 
   const submit = async () => {
     const next: typeof problems = {};
-    if (!collector)
-      next.collector = 'Identify the collecting person: scan their pass or describe them.';
+    if (!collector) {
+      next.collector =
+        activity && checkAnswered
+          ? 'The checked pass does not confirm a collector. Describe the collecting person to record a denial or escalation.'
+          : activity
+            ? 'Identify the collecting person: check their pass or describe them.'
+            : 'Identify the collecting person: scan their pass or describe them.';
+    }
     if (withhold && !restrictionNotes.trim()) next.restriction = 'Say why the release is withheld.';
     setProblems(next);
     if (!collector || Object.keys(next).length > 0) return;
@@ -397,9 +556,24 @@ function ReleaseForm({
   return (
     <section className="ops-section" aria-labelledby="release-form-title">
       <h3 id="release-form-title">Release {childName}</h3>
+      {activity ? (
+        <CollectorCheckStep
+          activity={activity}
+          childPersonId={childPersonId}
+          childName={childName}
+          collector={checked}
+          onCollector={(c, check) => {
+            setChecked(c);
+            setCheckAnswered(check !== null);
+            if (c?.kind === 'person') onChecked({ personId: c.personId, displayName: c.name });
+            setProblems((p) => ({ ...p, collector: undefined }));
+          }}
+        />
+      ) : null}
       <p className="caption">
-        Checked against current pickup authority at {formatInstant(now.toISOString())} when you
-        confirm.
+        {collector?.kind === 'person' && collector.checkedAt
+          ? `Collector confirmed at ${formatInstant(collector.checkedAt)}; pickup authority is checked again when you confirm.`
+          : `Checked against current pickup authority at ${formatInstant(now.toISOString())} when you confirm.`}
       </p>
       {problems.collector ? (
         <p className="error-text" role="alert">
@@ -511,6 +685,11 @@ function ReleaseRecordView({
           />
         )}
         <StatusBadge tone={verification.tone} label={verification.label} />
+        {r.authorityGrantId ? (
+          <span className="caption" data-testid="authority-grant">
+            Authority relied on: collect permission, grant {shortRef(r.authorityGrantId)}.
+          </span>
+        ) : null}
         {r.denialReason ? <span>{r.denialReason}</span> : null}
         {r.collectorPermissions.length > 0 ? (
           <span className="caption">

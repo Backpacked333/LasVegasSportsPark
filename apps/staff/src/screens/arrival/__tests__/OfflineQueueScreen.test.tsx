@@ -4,7 +4,7 @@
  * §4.15 (identifier, actor, event, observed time and snapshot per item; items of another account
  * wait for that account).
  */
-import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
+import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -17,8 +17,9 @@ import {
   CHILD_2,
   OFFERING,
   SESSION_1,
+  nameEntry,
   oneFacilityMe,
-  person,
+  personNames,
   syncBatch,
 } from '../../../features/operations/testing';
 import { FACILITY_A, TEST_SESSION, createTestApp } from '../../../testing/test-app';
@@ -69,11 +70,11 @@ function seed() {
   window.localStorage.setItem(OFFLINE_QUEUE_STORAGE_KEY, JSON.stringify(state));
 }
 
-const people = (req: FakeRequest) =>
-  fakeResponse(
-    200,
-    person(req.params.id ?? '', req.params.id === CHILD_1 ? 'Alex' : 'Blake', 'Rivera').body,
-  );
+const people = personNames([
+  nameEntry(CHILD_1, 'Alex', 'Rivera'),
+  nameEntry(CHILD_2, 'Blake', 'Rivera'),
+]);
+const BATCH_ID = '0192f1a0-0000-7000-8000-0000000000d1';
 
 describe('SCR-S-31 OfflineQueueScreen', () => {
   beforeEach(() => window.localStorage.clear());
@@ -81,7 +82,7 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
   it('shows each queued item with its fields and keeps another account’s items for that account', async () => {
     seed();
     const app = createTestApp({
-      routes: { 'GET /me': oneFacilityMe(), 'GET /people/{id}': people },
+      routes: { 'GET /me': oneFacilityMe(), 'GET /person-names': people },
     });
     render(app.at('/arrival/offline'));
     const table = await screen.findByRole('table');
@@ -99,7 +100,7 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     const app = createTestApp({
       routes: {
         'GET /me': oneFacilityMe(),
-        'GET /people/{id}': people,
+        'GET /person-names': people,
         'POST /offline-sync': {
           status: 201,
           body: syncBatch([
@@ -135,7 +136,7 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     const app = createTestApp({
       routes: {
         'GET /me': oneFacilityMe(),
-        'GET /people/{id}': people,
+        'GET /person-names': people,
         'POST /offline-sync': () => {
           calls += 1;
           return calls === 1
@@ -172,7 +173,7 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     const app = createTestApp({
       routes: {
         'GET /me': oneFacilityMe(),
-        'GET /people/{id}': people,
+        'GET /person-names': people,
         'POST /offline-sync': {
           status: 403,
           body: apiErrorBody('ACCESS_DENIED', {
@@ -193,5 +194,72 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     render(app.at('/arrival/offline'));
     expect(await screen.findByText('Nothing queued')).toBeInTheDocument();
     expect(screen.getByText('Nothing to review')).toBeInTheDocument();
+  });
+
+  it('ENT-01 / §4.15: reads a synchronised batch again with its per-item outcomes', async () => {
+    seed();
+    const user = userEvent.setup();
+    const stored = {
+      ...syncBatch([
+        {
+          clientObservationId: OBS_MINE,
+          kind: 'attendance',
+          outcome: 'accepted_with_conflict',
+          reason: 'conflicting_observation',
+        },
+      ]),
+      stale: true,
+      snapshotAgeSeconds: 9000,
+      exceptionIds: ['0192f1a0-0000-7000-8000-0000000000e9'],
+    };
+    const app = createTestApp({
+      routes: {
+        'GET /me': oneFacilityMe(),
+        'GET /person-names': people,
+        'POST /offline-sync': { status: 201, body: stored },
+        'GET /offline-sync/{id}': { status: 200, body: stored },
+      },
+    });
+    render(app.at('/arrival/offline'));
+    const batches = await screen.findByRole('list', { name: 'Synchronised batches' });
+    const row = within(batches).getAllByRole('listitem')[0] as HTMLElement;
+    expect(row).toHaveTextContent('1 item: 0 synchronised, 1 for review');
+    await user.click(within(row).getByRole('button', { name: /Show outcomes of Batch/ }));
+    const detail = await screen.findByRole('list', { name: 'Item outcomes' });
+    expect(
+      within(detail).getByText('Recorded with a conflict: kept for review'),
+    ).toBeInTheDocument();
+    expect(within(detail).getByText(/conflicting_observation/)).toBeInTheDocument();
+    expect(screen.getByText('Older than the maximum roster age: flagged')).toBeInTheDocument();
+    expect(screen.getByText(/1 follow-up is raised in the Today workspace/)).toBeInTheDocument();
+    const read = app.fake.requests.find((r) => r.route === '/offline-sync/{id}');
+    expect(read?.params.id).toBe(BATCH_ID);
+    // The kept item links to the same stored outcome.
+    expect(
+      screen.getByRole('button', { name: 'Show the batch outcome: Attendance: Present' }),
+    ).toBeInTheDocument();
+  });
+
+  it('opens a batch by reference after validating it, and shows a refused one as not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me': oneFacilityMe(),
+        'GET /offline-sync/{id}': {
+          status: 404,
+          body: apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' }),
+        },
+      },
+    });
+    render(app.at('/arrival/offline'));
+    await user.type(await screen.findByLabelText('Batch reference'), 'not-a-reference');
+    await user.click(screen.getByRole('button', { name: 'Open batch' }));
+    expect(await screen.findByText('Enter the full batch reference.')).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/offline-sync/{id}')).toHaveLength(0);
+    await user.clear(screen.getByLabelText('Batch reference'));
+    await user.type(screen.getByLabelText('Batch reference'), BATCH_ID);
+    await user.click(screen.getByRole('button', { name: 'Open batch' }));
+    const batch = await screen.findByTestId('offline-batch');
+    await waitFor(() => expect(within(batch).getByTestId('state-unavailable')).toBeInTheDocument());
   });
 });

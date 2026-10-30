@@ -1,21 +1,26 @@
 /**
  * SCR-S-30 Supervised release: SPK-AT-016 (an adult who may pay but may not collect is denied,
  * with the API's reason and the permissions held as evidence), SPK-ENTRY-007 (authority checked
- * online at release, record fields shown), §4.15 (offline release unavailable; the outage
- * procedure is pending DEC-005/DEC-034, cached authority never asserted).
+ * online at release, record fields shown; from a session, the collector is checked first with
+ * the read-only collector check and the record names the grant relied on), §4.15 (offline
+ * release unavailable; the outage procedure is pending DEC-005/DEC-034, cached authority never
+ * asserted).
  */
-import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { apiErrorBody, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   ADULT,
   CHILD_1,
+  OFFERING,
   PASS,
+  SESSION_1,
   VISIT_1,
   actor,
+  nameEntry,
   oneFacilityMe,
-  person,
+  personNames,
   scanPerson,
   visit,
 } from '../../../features/operations/testing';
@@ -63,13 +68,11 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
   return {
     'GET /me': oneFacilityMe(),
     'GET /visits': { status: 200, body: { items: [visit(VISIT_1, CHILD_1)], nextCursor: null } },
-    'GET /people/{id}': (req) =>
-      fakeResponse(
-        200,
-        req.params.id === CHILD_1
-          ? person(CHILD_1, 'Alex', 'Rivera').body
-          : person(req.params.id ?? '', 'Sam', 'Rivera', 'adult').body,
-      ),
+    'GET /person-names': personNames([
+      nameEntry(CHILD_1, 'Alex', 'Rivera'),
+      nameEntry(ADULT, 'Sam', 'Rivera', 'adult'),
+    ]),
+    'GET /sessions': { status: 200, body: { items: [], nextCursor: null } },
     'POST /passes/scan': {
       status: 200,
       body: {
@@ -214,5 +217,211 @@ describe('SCR-S-30 SupervisedReleaseScreen', () => {
     });
     render(app.at('/arrival/release'));
     expect(await screen.findByText('No children awaiting release')).toBeInTheDocument();
+  });
+
+  describe('from a session (collector check first, ENT-02)', () => {
+    const GRANT = '0192f1a0-0000-7000-8000-0000000000b9';
+    const sessionRoutes = (extra: Record<string, FakeHandler> = {}) =>
+      routes({
+        'GET /sessions': {
+          status: 200,
+          body: {
+            items: [
+              {
+                sessionId: SESSION_1,
+                offeringId: OFFERING,
+                offeringName: 'Junior skills',
+                sequence: 1,
+                title: null,
+                scheduledStart: '2026-10-24T16:00:00.000Z',
+                scheduledEnd: '2026-10-24T17:00:00.000Z',
+                status: 'scheduled',
+                facilityId: FACILITY_A,
+                timezone: 'America/Los_Angeles',
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+        'GET /attendance': {
+          status: 200,
+          body: {
+            activity: {
+              type: 'session',
+              id: SESSION_1,
+              offeringId: OFFERING,
+              sessionId: SESSION_1,
+              eventId: null,
+            },
+            people: [
+              {
+                personId: CHILD_1,
+                givenName: 'Alex',
+                familyName: 'Rivera',
+                displayName: 'Alex Rivera',
+                effectiveState: 'present',
+                status: 'recorded',
+                currentObservationIds: [],
+                history: [],
+              },
+            ],
+          },
+        },
+        ...extra,
+      });
+
+    async function chooseSessionChild(user: ReturnType<typeof userEvent.setup>) {
+      const from = await screen.findByLabelText('Release from');
+      await waitFor(() =>
+        expect(
+          within(from).getByRole('option', { name: /Junior skills, session 1/ }),
+        ).toBeInTheDocument(),
+      );
+      await user.selectOptions(from, SESSION_1);
+      await user.click(await screen.findByRole('radio', { name: 'Alex Rivera' }));
+    }
+
+    it('SPK-ENTRY-007: names the collector the check confirms, then records the release with the grant relied on', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: sessionRoutes({
+          'POST /releases/collector-checks': {
+            status: 200,
+            body: {
+              mayCollect: true,
+              collector: { personId: ADULT, displayName: 'Sam Rivera' },
+              checkedAt: '2026-10-24T12:00:00.000Z',
+              restrictions: [
+                {
+                  code: 'authority_rechecked_at_release',
+                  message: 'Pickup authority is checked again when the release is recorded.',
+                },
+              ],
+            },
+          },
+          'POST /releases': {
+            status: 201,
+            body: release('verified', {
+              authorityGrantId: GRANT,
+              activity: {
+                type: 'session',
+                id: SESSION_1,
+                offeringId: OFFERING,
+                sessionId: SESSION_1,
+                eventId: null,
+              },
+            }),
+          },
+        }),
+      });
+      render(app.at('/arrival/release'));
+      await chooseSessionChild(user);
+      const group = screen.getByRole('group', { name: 'Collecting person for Alex Rivera' });
+      await user.type(
+        within(group).getByLabelText("Collecting person's pass reference"),
+        'spp_0123456789abcdef',
+      );
+      await user.click(within(group).getByRole('button', { name: 'Check the collector' }));
+      expect(await screen.findByText('May collect: Sam Rivera')).toBeInTheDocument();
+      expect(screen.getByText(/checked again when the release is recorded/)).toBeInTheDocument();
+      // Read-only: the reference travels in the body, nothing is recorded yet.
+      const check = app.fake.requests.find((r) => r.route === '/releases/collector-checks');
+      expect(check?.body).toEqual({
+        activity: { type: 'session', offeringId: OFFERING, sessionId: SESSION_1 },
+        participantPersonId: CHILD_1,
+        passReference: 'spp_0123456789abcdef',
+      });
+      expect(check?.path).not.toContain('spp_');
+      expect(app.fake.requests.some((r) => r.route === '/releases')).toBe(false);
+
+      await user.click(screen.getByRole('button', { name: 'Check authority and release' }));
+      expect(await screen.findByText('Released to Sam Rivera')).toBeInTheDocument();
+      expect(screen.getByTestId('authority-grant')).toHaveTextContent(
+        'Authority relied on: collect permission, grant ref 0192f1a0.',
+      );
+      const post = app.fake.requests.find((r) => r.route === '/releases');
+      expect(post?.body).toMatchObject({
+        childPersonId: CHILD_1,
+        collector: { personId: ADULT },
+        activity: { type: 'session', offeringId: OFFERING, sessionId: SESSION_1 },
+      });
+    });
+
+    it('SPK-AT-016: a pass that does not confirm authority names nobody; the release is recorded as denied', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: sessionRoutes({
+          'POST /releases/collector-checks': {
+            status: 200,
+            body: {
+              mayCollect: false,
+              collector: null,
+              checkedAt: '2026-10-24T12:00:00.000Z',
+              restrictions: [],
+            },
+          },
+          'POST /releases': {
+            status: 201,
+            body: release('denied', {
+              collectorPersonId: null,
+              collectorDescription: 'Adult with a payer pass',
+              collectorPermissions: [],
+            }),
+          },
+        }),
+      });
+      render(app.at('/arrival/release'));
+      await chooseSessionChild(user);
+      const group = screen.getByRole('group', { name: 'Collecting person for Alex Rivera' });
+      await user.type(
+        within(group).getByLabelText("Collecting person's pass reference"),
+        'spp_0123456789abcdef',
+      );
+      await user.click(within(group).getByRole('button', { name: 'Check the collector' }));
+      expect(await screen.findByText('Not confirmed to collect Alex Rivera')).toBeInTheDocument();
+      // Nothing about the pass or its holder is revealed.
+      expect(screen.queryByText(/Sam/)).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Check authority and release' }));
+      expect(screen.getByText(/The checked pass does not confirm a collector/)).toBeInTheDocument();
+      expect(app.fake.requests.some((r) => r.route === '/releases')).toBe(false);
+      await user.type(
+        within(group).getByLabelText('Or describe a collector without a pass'),
+        'Adult with a payer pass',
+      );
+      await user.click(within(group).getByRole('button', { name: 'Use this description' }));
+      await user.click(screen.getByRole('button', { name: 'Check authority and release' }));
+      const record = await screen.findByRole('listitem', {
+        name: 'Release record for Alex Rivera',
+      });
+      expect(
+        within(record).getByText('Release denied: not authorised to collect'),
+      ).toBeInTheDocument();
+      const post = app.fake.requests.find((r) => r.route === '/releases');
+      expect(post?.body).toMatchObject({ collector: { description: 'Adult with a payer pass' } });
+    });
+
+    it('shows a refused collector check as not available with its code', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: sessionRoutes({
+          'POST /releases/collector-checks': {
+            status: 403,
+            body: apiErrorBody('ACCESS_DENIED', {
+              message: 'You need entry.record_release here.',
+              nextAction: 'contact_support_or_request_access',
+            }),
+          },
+        }),
+      });
+      render(app.at('/arrival/release'));
+      await chooseSessionChild(user);
+      await user.type(
+        screen.getByLabelText("Collecting person's pass reference"),
+        'spp_0123456789abcdef',
+      );
+      await user.click(screen.getByRole('button', { name: 'Check the collector' }));
+      const unavailable = await screen.findByTestId('command-unavailable');
+      expect(unavailable).toHaveTextContent('Error code: ACCESS_DENIED');
+    });
   });
 });

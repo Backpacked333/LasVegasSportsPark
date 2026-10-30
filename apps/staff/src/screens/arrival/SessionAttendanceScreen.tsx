@@ -1,12 +1,9 @@
 /**
  * SCR-S-29 Session attendance and corrections (SPK-ENTRY-005, SPK-ENTRY-008, §4.7 invariant 9,
- * §4.15). The activity comes from the query string (opaque ids, from the scanner, a session link
- * or the workspace); without one, today's scheduled events of the facility are listed to choose
- * from (`GET /v1/events` over the facility-local day from the Today feed).
- *
- * Program sessions cannot be listed here: the API lists sessions only per offering
- * (`GET /v1/offerings/{id}/sessions`), and the expected-arrivals report names a session without
- * its offering, so a session is opened from the arrival scanner or a session link.
+ * §4.15, SPK-SCHED-008). The activity comes from the query string (opaque ids, from the scanner,
+ * a session link or the workspace); without one, today's program sessions at the facility
+ * (`GET /v1/sessions`, CAT-01, paged, in the facility's time zone) and today's scheduled events
+ * (`GET /v1/events`) over the facility-local day from the Today feed are listed to choose from.
  */
 import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
@@ -21,7 +18,8 @@ import { useOperatingFacility } from '../../features/operations/context';
 import { ChooseFacility } from '../../features/operations/feedback';
 import { formatRange, humanize } from '../../features/operations/format';
 import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
-import { useNow } from '../../providers/AppProviders';
+import { sessionTitle, useDayWindow, useTodaySessions } from '../../features/operations/sessions';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { AttendancePanel } from './AttendancePanel';
@@ -121,12 +119,9 @@ function ActivityPicker({
   window: { start: string; end: string } | null;
   ready: boolean;
 }) {
-  const now = useNow(60_000);
-  // Without the Today feed's facility window, fall back to the next 24 hours from now.
-  const range = window ?? {
-    start: new Date(now.getTime() - 2 * 3_600_000).toISOString(),
-    end: new Date(now.getTime() + 22 * 3_600_000).toISOString(),
-  };
+  // Without the Today feed's facility window, the 24 hours around now.
+  const range = useDayWindow(window);
+  const sessions = useTodaySessions({ facilityId, window, enabled: ready });
   const events = useApiQuery({
     path: '/events',
     request: {
@@ -135,45 +130,79 @@ function ActivityPicker({
     enabled: ready,
   });
   return (
-    <div className="ops-section">
-      <h3>Today’s activities</h3>
-      <p className="caption">
-        Program sessions open from the arrival scanner or a session link: the service lists sessions
-        only per offering.
-      </p>
-      <QueryBoundary
-        query={events}
-        label="today's activities"
-        isEmpty={(data) =>
-          data.items.filter((e) => e.kind !== 'maintenance' && e.kind !== 'block').length === 0
-        }
-        empty={{
-          title: 'No activity in progress',
-          description: 'No published activity is scheduled at this facility today.',
-        }}
-      >
-        {(data) => (
-          <ul className="list" aria-label="Activities today">
-            {data.items
-              .filter((e) => e.kind !== 'maintenance' && e.kind !== 'block')
-              .map((e) => (
-                <li key={e.id}>
+    <>
+      <div className="ops-section">
+        <h3>Today’s program sessions</h3>
+        <QueryBoundary
+          query={sessions}
+          label="today's sessions"
+          isEmpty={(items) => items.length === 0}
+          empty={{
+            title: 'No session today',
+            description: 'No program session is scheduled at this facility today.',
+          }}
+        >
+          {(items) => (
+            <ul className="list" aria-label="Sessions today">
+              {items.map((s) => (
+                <li key={s.sessionId}>
                   <div className="row-text">
                     <Link
-                      to={`/arrival/attendance${activitySearch({ type: 'event', eventId: e.id })}`}
+                      to={`/arrival/attendance${activitySearch({
+                        type: 'session',
+                        offeringId: s.offeringId,
+                        sessionId: s.sessionId,
+                      })}`}
                     >
-                      {e.title}
+                      {sessionTitle(s)}
                     </Link>
                     <span className="caption">
-                      {humanize(e.kind)} ·{' '}
-                      {formatRange(e.scheduledStart, e.scheduledEnd, e.timezone ?? timezone)}
+                      {formatRange(s.scheduledStart, s.scheduledEnd, s.timezone ?? timezone)}
                     </span>
                   </div>
                 </li>
               ))}
-          </ul>
-        )}
-      </QueryBoundary>
-    </div>
+            </ul>
+          )}
+        </QueryBoundary>
+        <LoadMore pages={sessions} label="sessions" />
+      </div>
+      <div className="ops-section">
+        <h3>Today’s activities</h3>
+        <QueryBoundary
+          query={events}
+          label="today's activities"
+          isEmpty={(data) =>
+            data.items.filter((e) => e.kind !== 'maintenance' && e.kind !== 'block').length === 0
+          }
+          empty={{
+            title: 'No activity in progress',
+            description: 'No published activity is scheduled at this facility today.',
+          }}
+        >
+          {(data) => (
+            <ul className="list" aria-label="Activities today">
+              {data.items
+                .filter((e) => e.kind !== 'maintenance' && e.kind !== 'block')
+                .map((e) => (
+                  <li key={e.id}>
+                    <div className="row-text">
+                      <Link
+                        to={`/arrival/attendance${activitySearch({ type: 'event', eventId: e.id })}`}
+                      >
+                        {e.title}
+                      </Link>
+                      <span className="caption">
+                        {humanize(e.kind)} ·{' '}
+                        {formatRange(e.scheduledStart, e.scheduledEnd, e.timezone ?? timezone)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+            </ul>
+          )}
+        </QueryBoundary>
+      </div>
+    </>
   );
 }
