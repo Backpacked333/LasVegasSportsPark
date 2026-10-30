@@ -22,8 +22,8 @@ import { FeeApprovalsScreen } from '../../screens/staff/FeeApprovalsScreen';
 import { AssignmentWorkspaceScreen } from '../../screens/workspace/AssignmentWorkspaceScreen';
 import { MatchReportScreen } from '../../screens/workspace/MatchReportScreen';
 import { MyFeesScreen } from '../../screens/workspace/MyFeesScreen';
+import { AssessmentsScreen } from '../../screens/workspace/assessments/AssessmentsScreen';
 import {
-  AssessmentsScreen,
   WorkspaceAttendanceScreen,
   WorkspaceMessageScreen,
   WorkspaceReleaseScreen,

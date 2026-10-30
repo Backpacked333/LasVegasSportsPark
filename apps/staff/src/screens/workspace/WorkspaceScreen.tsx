@@ -7,8 +7,8 @@
  * attendance, match reports, messages and fees (SCR-W-02 to SCR-W-09) open from each card
  * (AssignmentWorkspaceScreen). The offline queue status (SCR-W-10) shows above the list.
  *
- * Times: the workspace payload carries no facility timezone, so times are shown in the device's
- * time zone with the zone named, not presented as facility-local time (SPK-SCHED-008).
+ * Times: each activity's facility time zone from the workspace payload (WRK-01
+ * `activity.facility.timezone`, SPK-SCHED-008), with the zone named.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -37,7 +37,9 @@ export const ASSIGNMENT_BADGE: Record<AssignmentStatus, { tone: StatusTone; labe
 
 const ASSIGNMENTS_KEY = ['api', '/me/assignments'] as const;
 
-export function formatActivityTime(start: string, end: string): string {
+/** The activity's time in its facility's zone (SPK-SCHED-008), the zone named. */
+export function formatActivityTime(start: string, end: string, timeZone?: string | null): string {
+  const zone = timeZone ? { timeZone } : {};
   const fmt = new Intl.DateTimeFormat(undefined, {
     weekday: 'short',
     day: 'numeric',
@@ -45,9 +47,19 @@ export function formatActivityTime(start: string, end: string): string {
     hour: '2-digit',
     minute: '2-digit',
     timeZoneName: 'short',
+    ...zone,
   });
-  const endFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+  const endFmt = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    ...zone,
+  });
   return `${fmt.format(new Date(start))} to ${endFmt.format(new Date(end))}`;
+}
+
+/** The facility time zone of a workspace activity (WRK-01). */
+export function activityZone(item: WorkspaceAssignment): string | null {
+  return item.activity.facility?.timezone ?? null;
 }
 
 function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
@@ -81,7 +93,12 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
           {item.activity.title}
         </Link>
         <span className="caption">
-          {formatActivityTime(item.activity.scheduledStart, item.activity.scheduledEnd)} ·{' '}
+          {formatActivityTime(
+            item.activity.scheduledStart,
+            item.activity.scheduledEnd,
+            activityZone(item),
+          )}{' '}
+          · {item.activity.facility?.name ? `${item.activity.facility.name} · ` : ''}
           {item.assignment.role}
         </span>
         {participants ? <span className="caption">{participants}</span> : null}

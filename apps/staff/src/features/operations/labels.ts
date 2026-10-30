@@ -137,3 +137,32 @@ export const VISITOR_CATEGORY_LABEL: Record<
   staff: 'Staff',
   contractor: 'Contractor',
 };
+
+/** SPK-YOUTH-005 assessment review states (ENR-14 AssessmentMachine). */
+export const ASSESSMENT_STATUS: Record<Schema<'AssessmentStatus'>, Badge> = {
+  draft: { tone: 'neutral', label: 'Draft' },
+  submitted: { tone: 'pending', label: 'Submitted for review' },
+  returned: { tone: 'warning', label: 'Returned for changes' },
+  published: { tone: 'success', label: 'Published to the family' },
+  recorded: { tone: 'info', label: 'Recorded (staff only)' },
+  withdrawn: { tone: 'neutral', label: 'Withdrawn' },
+};
+
+/** SPK-YOUTH-005: private coaching notes and family-visible feedback stay separate. */
+export const ASSESSMENT_VISIBILITY: Record<Schema<'AssessmentVisibility'>, string> = {
+  staff_only: 'Staff only',
+  family: 'Family-visible feedback once approved',
+};
+
+/** SPK-YOUTH-006 recommendation states (ENR-14 ProgressionRecommendationMachine). */
+export const RECOMMENDATION_STATUS: Record<Schema<'ProgressionRecommendation'>['status'], Badge> = {
+  draft: { tone: 'neutral', label: 'Draft (not shared)' },
+  shared: { tone: 'success', label: 'Shared with the family' },
+  withdrawn: { tone: 'neutral', label: 'Withdrawn' },
+};
+
+export const TEMPLATE_STATUS: Record<Schema<'AssessmentTemplate'>['status'], Badge> = {
+  draft: { tone: 'neutral', label: 'Draft template' },
+  approved: { tone: 'success', label: 'Approved template' },
+  retired: { tone: 'neutral', label: 'Retired template' },
+};

@@ -1,10 +1,11 @@
 /**
- * SCR-W-04 Session attendance (coach), SCR-W-05 Match report, SCR-W-06 Permitted communication,
- * SCR-W-07 Assessments, SCR-W-08 Hours and fee records, SCR-W-09 Supervised release (coach)
- * (SPK-UX-007, SPK-ENTRY-001, SPK-ENTRY-005, SPK-ENTRY-007, SPK-STAFF-005, SPK-STAFF-006,
- * SPK-RESULT-001, §1.7, DEC-012, DEC-054, DEC-065).
+ * SCR-W-04 Session attendance (coach), SCR-W-05 Match report (cards from the match sheet,
+ * CMP-06), SCR-W-06 Permitted communication, SCR-W-08 Hours and fee records, SCR-W-09 Supervised
+ * release (coach; collector check first, ENT-02) (SPK-UX-007, SPK-ENTRY-001, SPK-ENTRY-005,
+ * SPK-ENTRY-007, SPK-STAFF-005, SPK-STAFF-006, SPK-RESULT-001, SPK-DISC-001, §1.7, DEC-012,
+ * DEC-065). SCR-W-07 is tested in assessments/__tests__.
  */
-import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -17,8 +18,9 @@ import {
   assignmentRecord,
   feeSubmission,
   myAssignments,
+  nameEntry,
   oneFacilityMe,
-  person,
+  personNames,
   workspaceItem,
 } from '../../../features/operations/testing';
 import { createTestApp } from '../../../testing/test-app';
@@ -43,8 +45,7 @@ function routes(
   return {
     'GET /me': oneFacilityMe(),
     'GET /me/assignments': myAssignments(items),
-    'GET /people/{id}': (req) =>
-      fakeResponse(200, person(req.params.id ?? '', 'Alex', 'Rivera').body),
+    'GET /person-names': personNames([nameEntry(CHILD_1, 'Alex', 'Rivera')]),
     ...extra,
   };
 }
@@ -206,7 +207,8 @@ describe('SCR-W-05 MatchReportScreen', () => {
       within(form).getByLabelText('Incident 1 narrative (restricted)'),
       'Captain argued with the assistant.',
     );
-    expect(within(form).getByText('Cards are not available here yet')).toBeInTheDocument();
+    // No match sheet for this viewer: cards are not offered.
+    expect(within(form).getByText('Cards are not available')).toBeInTheDocument();
     expect(within(form).getByText(/DEC-065/)).toBeInTheDocument();
     await user.click(within(form).getByRole('button', { name: 'Submit report' }));
     expect(await within(form).findByTestId('command-success')).toHaveTextContent(
@@ -343,8 +345,8 @@ describe('SCR-W-04 / SCR-W-09 for a coach who may not read child records', () =>
     const app = createTestApp({
       routes: routes([workspaceItem(SESSION_ASSIGNMENT, [])], {
         'GET /me': coachMe(),
-        'GET /people/{id}': () =>
-          fakeResponse(404, { code: 'NOT_FOUND', message: 'x', nextAction: 'verify_reference' }),
+        // The names read leaves out a child the coach may not view.
+        'GET /person-names': personNames([]),
         'GET /attendance': presentAttendance,
       }),
     });
@@ -358,7 +360,7 @@ describe('SCR-W-04 / SCR-W-09 for a coach who may not read child records', () =>
   });
 });
 
-describe('SCR-W-06 / SCR-W-07 not offered by the API', () => {
+describe('SCR-W-06 not offered by the API', () => {
   beforeEach(() => window.localStorage.clear());
 
   it('SCR-W-06: messaging from the workspace is shown as not available with the pending decision', async () => {
@@ -366,12 +368,6 @@ describe('SCR-W-06 / SCR-W-07 not offered by the API', () => {
     render(app.at(`${BASE}/message`));
     expect(await screen.findByText('Messaging is not available here yet')).toBeInTheDocument();
     expect(screen.getByText(/DEC-012, DEC-062/)).toBeInTheDocument();
-  });
-
-  it('SCR-W-07: assessments are a pending decision', async () => {
-    const app = createTestApp({ routes: routes([]) });
-    render(app.at('/workspace/assessments'));
-    expect(await screen.findByText(/DEC-054/)).toBeInTheDocument();
   });
 });
 
@@ -461,5 +457,218 @@ describe('SCR-W-09 WorkspaceReleaseScreen', () => {
     render(app.at(`${BASE}/release`));
     expect(await screen.findByRole('radio', { name: 'Alex Rivera' })).toBeInTheDocument();
     expect(app.fake.requests.some((r) => r.route === '/visits')).toBe(false);
+  });
+});
+
+describe('SCR-W-05 cards from the match sheet (CMP-06)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  const PLAYER = '0192f1a0-0000-7000-8000-0000000007a1';
+  const sheet = {
+    fixtureId: FIXTURE_1,
+    scheduledStart: '2026-10-24T18:00:00.000Z',
+    status: 'scheduled',
+    venue: null,
+    view: 'full',
+    sides: [
+      {
+        entryId: '0192f1a0-0000-7000-8000-0000000004a1',
+        teamName: 'Red',
+        players: [
+          {
+            personId: PLAYER,
+            displayName: 'Jo Park',
+            jerseyNumber: 7,
+            playingStatus: 'active',
+            roles: ['captain'],
+          },
+        ],
+      },
+      { entryId: '0192f1a0-0000-7000-8000-0000000004a2', teamName: 'Blue', players: [] },
+    ],
+  };
+
+  it('SPK-DISC-001: records a card against a player of the match sheet', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': { status: 200, body: [] },
+        'GET /fixtures/{id}/match-sheet': { status: 200, body: sheet },
+        'POST /fixtures/{id}/results': {
+          status: 201,
+          body: {
+            id: '0192f1a0-0000-7000-8000-0000000005a3',
+            fixtureId: FIXTURE_1,
+            revisionNo: 1,
+            status: 'submitted',
+            classification: 'completed',
+            homeScore: 1,
+            awayScore: 0,
+            submittedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Referee' },
+            submittedAt: '2026-10-24T12:00:00.000Z',
+          },
+        },
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const form = await screen.findByRole('form', { name: 'Match report' });
+    await user.click(await within(form).findByRole('button', { name: 'Add a card' }));
+    await user.click(within(form).getByRole('radio', { name: 'Completed' }));
+    await user.type(within(form).getByLabelText('Red score'), '1');
+    await user.type(within(form).getByLabelText('Blue score'), '0');
+    await user.click(within(form).getByRole('button', { name: 'Submit report' }));
+    expect(
+      within(form).getByText('Each card needs a team, a player and a kind.'),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    await user.selectOptions(within(form).getByLabelText('Card 1 team'), sheet.sides[0]!.entryId);
+    await user.selectOptions(within(form).getByLabelText('Card 1 player'), PLAYER);
+    await user.selectOptions(within(form).getByLabelText('Card 1 kind'), 'yellow');
+    await user.type(within(form).getByLabelText('Card 1 minute (optional)'), '34');
+    await user.click(within(form).getByRole('button', { name: 'Submit report' }));
+    await within(form).findByTestId('command-success');
+    const post = app.fake.requests.find(
+      (r) => r.route === '/fixtures/{id}/results' && r.method === 'POST',
+    );
+    expect((post?.body as { cards: unknown[] }).cards).toEqual([
+      {
+        teamEntryId: sheet.sides[0]!.entryId,
+        personId: PLAYER,
+        kind: 'yellow',
+        minute: 34,
+      },
+    ]);
+  });
+
+  it('offers no card on a captain’s view without person ids', async () => {
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': { status: 200, body: [] },
+        'GET /fixtures/{id}/match-sheet': {
+          status: 200,
+          body: {
+            ...sheet,
+            view: 'captain',
+            sides: sheet.sides.map((side) => ({
+              ...side,
+              players: side.players.map((p) => ({
+                ...p,
+                personId: null,
+                playingStatus: null,
+                roles: [],
+              })),
+            })),
+          },
+        },
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const form = await screen.findByRole('form', { name: 'Match report' });
+    expect(await within(form).findByText('Cards are not available')).toBeInTheDocument();
+    expect(within(form).queryByRole('button', { name: 'Add a card' })).toBeNull();
+  });
+});
+
+describe('SCR-W-09 collector check (ENT-02)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('SPK-AT-016: the coach checks the collector by pass before recording; a pass without authority names nobody', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes([workspaceItem(SESSION_ASSIGNMENT, [])], {
+        'GET /attendance': {
+          status: 200,
+          body: {
+            activity: {
+              type: 'session',
+              id: SESSION_1,
+              offeringId: OFFERING,
+              sessionId: SESSION_1,
+              eventId: null,
+            },
+            people: [
+              {
+                personId: CHILD_1,
+                givenName: 'Alex',
+                familyName: 'Rivera',
+                displayName: 'Alex Rivera',
+                effectiveState: 'present',
+                status: 'recorded',
+                currentObservationIds: [],
+                history: [],
+              },
+            ],
+          },
+        },
+        'POST /releases/collector-checks': {
+          status: 200,
+          body: {
+            mayCollect: false,
+            collector: null,
+            checkedAt: '2026-10-24T12:00:00.000Z',
+            restrictions: [],
+          },
+        },
+      }),
+    });
+    render(app.at(`${BASE}/release`));
+    await user.click(await screen.findByRole('radio', { name: 'Alex Rivera' }));
+    await user.type(
+      screen.getByLabelText("Collecting person's pass reference"),
+      'spp_0123456789abcdef',
+    );
+    await user.click(screen.getByRole('button', { name: 'Check the collector' }));
+    expect(await screen.findByText('Not confirmed to collect Alex Rivera')).toBeInTheDocument();
+    const check = app.fake.requests.find((r) => r.route === '/releases/collector-checks');
+    expect(check?.body).toMatchObject({
+      activity: { type: 'session', offeringId: OFFERING, sessionId: SESSION_1 },
+      participantPersonId: CHILD_1,
+    });
+    // The desk-only pass scan is never used from the workspace.
+    expect(app.fake.requests.some((r) => r.route === '/passes/scan')).toBe(false);
+  });
+
+  it('shows a refused check (not the assigned coach) as not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes([workspaceItem(SESSION_ASSIGNMENT, [])], {
+        'GET /attendance': {
+          status: 200,
+          body: {
+            activity: {
+              type: 'session',
+              id: SESSION_1,
+              offeringId: OFFERING,
+              sessionId: SESSION_1,
+              eventId: null,
+            },
+            people: [
+              {
+                personId: CHILD_1,
+                givenName: 'Alex',
+                familyName: 'Rivera',
+                displayName: 'Alex Rivera',
+                effectiveState: 'late',
+                status: 'recorded',
+                currentObservationIds: [],
+                history: [],
+              },
+            ],
+          },
+        },
+        'POST /releases/collector-checks': () =>
+          fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' })),
+      }),
+    });
+    render(app.at(`${BASE}/release`));
+    await user.click(await screen.findByRole('radio', { name: 'Alex Rivera' }));
+    await user.type(
+      screen.getByLabelText("Collecting person's pass reference"),
+      'spp_0123456789abcdef',
+    );
+    await user.click(screen.getByRole('button', { name: 'Check the collector' }));
+    const unavailable = await screen.findByTestId('command-unavailable');
+    expect(unavailable).toHaveTextContent('This check is not available');
+    expect(unavailable).toHaveTextContent('Error code: NOT_FOUND');
   });
 });
