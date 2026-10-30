@@ -1,4 +1,5 @@
-import { DomainError, systemPrincipal } from '@sportspark/contracts';
+import { DomainError, newId, systemPrincipal } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -11,6 +12,7 @@ import {
   BookingMachine,
   PackageEntitlementMachine,
 } from '../enrollment.state-machines';
+import { createCapacityPoolFixture } from '../testing/enrollment-fixtures';
 import { definitionWithScope, membershipOffering, packageOffering } from './package-g-support';
 import {
   acknowledge,
@@ -19,6 +21,7 @@ import {
   enrollmentTestApp,
   offering,
   post,
+  staff,
   type Actor,
 } from './support';
 
@@ -72,6 +75,118 @@ describe('Package G enrollment foundation (ENR-10)', () => {
     expect(lines).toEqual([]);
     await t.disableCapability('rentals');
     await t.disableCapability('parties');
+  });
+
+  it('CAPABILITIES-04 / SPK-COND-003: nobody waits for a bare rental or party; an entry recorded earlier is never offered, and enabling rentals retires it with a notice', async () => {
+    const admin = await staff(t, ['system_administrator']);
+    const manager = await staff(t, ['program_manager']);
+    const renter = await adult(t);
+    const rental = await offering(t, {
+      kind: 'rental',
+      basePriceMinor: 5_000,
+      ageBand: { minAgeYears: 18 },
+    });
+    // A waitlist for a rental or party is refused at join, whichever switch is on.
+    await t.enableCapability('parties');
+    for (const intent of ['rental_request', 'party_request']) {
+      const refused = await post(t, '/v1/waitlist-entries', renter.header, {
+        offeringId: rental.offeringId,
+        participantPersonId: renter.personId,
+        intent,
+      });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+      expect(refused.body.details).toMatchObject({ code: 'BOOKING_REQUIRED', path: 'intent' });
+    }
+    await t.disableCapability('parties');
+    expect(
+      await t.db
+        .selectFrom('waitlist_entries')
+        .select('id')
+        .where('offering_id', '=', rental.offeringId)
+        .execute(),
+    ).toEqual([]);
+
+    // An entry recorded before such joins were refused, waiting for the rental's free resource.
+    const poolId = await createCapacityPoolFixture(t, {
+      offeringId: rental.offeringId,
+      unit: 'rental_resources',
+      capacity: 1,
+    });
+    const legacyId = newId();
+    await t.db
+      .insertInto('waitlist_entries')
+      .values({
+        id: legacyId,
+        organization_id: t.organizationId,
+        offering_id: rental.offeringId,
+        pool_id: poolId,
+        session_id: null,
+        participant_person_id: renter.personId,
+        intent: 'rental_request',
+        joined_at: t.clock.now(),
+        queued_at: t.clock.now(),
+        requested_by: json({ kind: 'customer', personId: renter.personId }),
+        requested_by_person_id: renter.personId,
+        payer_person_id: renter.personId,
+        accepted_enrollment_id: null,
+        withdrawn_at: null,
+        removed_at: null,
+        removal_reason: null,
+      })
+      .execute();
+    const staffOffer = await post(t, `/v1/waitlist-entries/${legacyId}/offer`, manager.header, {
+      reason: 'Resource free',
+      expectedRevision: 1,
+    });
+    expect(staffOffer.status, JSON.stringify(staffOffer.body)).toBe(400);
+    expect(staffOffer.body.details.code).toBe('BOOKING_REQUIRED');
+
+    // Enabling rentals (core.capability_changed) resumes the rental queues: the free resource is
+    // not offered to the entry (its acceptance could only open a bare line), which leaves the queue
+    // with the reason, and the renter is told to request the booking.
+    const enabled = await post(t, '/v1/admin/capabilities/rentals/enable', admin.header, {
+      decisionReference: 'DEC-076',
+      reason: 'The operator decided rentals apply',
+    });
+    expect(enabled.status, JSON.stringify(enabled.body)).toBe(200);
+    try {
+      await drain(t);
+      expect(
+        await t.db
+          .selectFrom('waitlist_offers')
+          .select('id')
+          .where('waitlist_entry_id', '=', legacyId)
+          .execute(),
+      ).toEqual([]);
+      expect(
+        await t.db
+          .selectFrom('waitlist_entries')
+          .select(['status', 'removal_reason', 'offer_count'])
+          .where('id', '=', legacyId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ status: 'removed', removal_reason: 'booking_required', offer_count: 0 });
+      expect(
+        await t.db
+          .selectFrom('notifications')
+          .select(['kind', 'body'])
+          .where('subject_id', '=', legacyId)
+          .execute(),
+      ).toEqual([
+        expect.objectContaining({
+          kind: 'registration_outcome',
+          body: expect.stringContaining('Request the booking instead'),
+        }),
+      ]);
+      expect(
+        await t.db
+          .selectFrom('capacity_pools')
+          .select(['held', 'committed'])
+          .where('id', '=', poolId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ held: 0, committed: 0 });
+    } finally {
+      await t.disableCapability('rentals');
+    }
   });
 
   it('DEC-016: adding a membership line while memberships is disabled answers CAPABILITY_DISABLED; releasing an existing line still works', async () => {

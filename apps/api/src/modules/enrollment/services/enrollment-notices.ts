@@ -155,4 +155,61 @@ export class EnrollmentNotices {
         : `The registration for ${offering?.name ?? 'the activity'} was not approved. Contact the facility for details.`,
     });
   }
+
+  /**
+   * enrollment.waitlist_left → `registration_outcome` when offer generation retired an entry no
+   * offer could ever be accepted for (CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01): the family
+   * learns that they no longer wait, why, and what to do instead. Other departures send nothing
+   * here: the family withdrew or declined, staff removed the entry with their own reason, or the
+   * participant already holds the place (`equivalent_entitlement`).
+   */
+  async waitlistRetired(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof EnrollmentEvents.waitlistLeft>>,
+  ): Promise<void> {
+    if (event.payload.status !== 'removed') return;
+    const organizationId = event.organizationId;
+    const entry = await trx
+      .selectFrom('waitlist_entries')
+      .select(['offering_id', 'participant_person_id', 'removal_reason', 'status'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', event.payload.waitlistEntryId)
+      .executeTakeFirst();
+    const copy = entry?.removal_reason ? RETIREMENT_NOTICES.get(entry.removal_reason) : undefined;
+    if (!entry || entry.status !== 'removed' || !copy) return;
+    const offering = await this.offeringFacts(trx, organizationId, entry.offering_id);
+    await this.compose(
+      trx,
+      enrollmentSystem(organizationId, 'enrollment.notify_waitlist_retired'),
+      event,
+      {
+        kind: 'registration_outcome',
+        facilityId: offering?.facilityId,
+        subject: { type: 'waitlist_entry', id: event.payload.waitlistEntryId },
+        audience: { subjectPersonIds: [entry.participant_person_id] },
+        protected: true,
+        title: 'No longer on the waitlist',
+        body: copy(offering?.name ?? 'the activity you were waiting for'),
+      },
+    );
+  }
 }
+
+/** Notice copy per retirement reason (`WaitlistRetirementReason` other than an equivalent place). */
+const RETIREMENT_NOTICES = new Map<string, (offeringName: string) => string>([
+  [
+    'session_payment_unavailable',
+    (name) =>
+      `The session of ${name} you were waiting for now has a price, and a single session cannot be paid for in the app yet, so you are no longer on its waitlist. A session that owes nothing can still be booked.`,
+  ],
+  [
+    'booking_required',
+    (name) =>
+      `${name} is requested as a booking with its space, equipment and staff, not from a waitlist, so you are no longer on its waitlist. Request the booking instead.`,
+  ],
+  [
+    'makeup_redemption_required',
+    (name) =>
+      `A makeup seat in ${name} is taken by redeeming the makeup for a session with a free seat, not from a waitlist, so you are no longer on its waitlist.`,
+  ],
+]);

@@ -77,6 +77,28 @@ export type WaitlistEntryRow = Selectable<WaitlistEntriesTable>;
 export type WaitlistOfferRow = Selectable<WaitlistOffersTable>;
 
 /**
+ * Why the module itself takes a live entry off its queue (SPK-REG-008 status `removed`, recorded as
+ * `removal_reason`): the participant already holds what it waits for, or the entry could never be
+ * accepted (CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01). Staff removals record their own reason.
+ */
+export type WaitlistRetirementReason =
+  | 'equivalent_entitlement'
+  | 'booking_required'
+  | 'makeup_redemption_required'
+  | 'session_payment_unavailable';
+
+/**
+ * Refusals of `assertObtainable` that end an entry instead of holding its queue: no later change of
+ * a capability switch makes such an entry acceptable (a rental or party needs its booking, a makeup
+ * its entitlement), and a session seat that owes money has no payment path (GAPS-TRIAGE-01).
+ */
+const RETIRING_REFUSALS = new Map<string, WaitlistRetirementReason>([
+  ['BOOKING_REQUIRED', 'booking_required'],
+  ['MAKEUP_REDEMPTION_REQUIRED', 'makeup_redemption_required'],
+  ['SESSION_PAYMENT_UNAVAILABLE', 'session_payment_unavailable'],
+]);
+
+/**
  * Waitlists (§4.4 WaitlistEntry/WaitlistOffer, SPK-REG-008, SPK-AT-006). An entry records the
  * participant, offering (or session), priority basis, preferences, status and offer history. When
  * capacity comes back (`enrollment.capacity_released`) offers go out by priority, each reserving
@@ -109,23 +131,58 @@ export class WaitlistService implements WaitlistPort {
   // What a waiter may still be given (CAPABILITIES-03, GAPS-TRIAGE-01)
   // -------------------------------------------------------------------------------------------
 
-  /** The session booking kind accepting an offer of a session queue creates. */
-  private sessionKindOf(intent: WaitlistEntryRow['intent']): 'trial' | 'makeup' | 'pickup' {
-    return intent === 'trial' ? 'trial' : intent === 'makeup' ? 'makeup' : 'pickup';
+  /**
+   * The session booking kind accepting an offer of a session queue creates: a pickup seat, or a
+   * trial seat. A makeup is never booked from a queue (`intentRefusal`).
+   */
+  private sessionKindOf(intent: WaitlistEntryRow['intent']): 'trial' | 'pickup' {
+    return intent === 'trial' ? 'trial' : 'pickup';
   }
 
   /**
-   * CAPABILITIES-03, GAPS-TRIAGE-01: refuses waiting for, being offered or accepting a place that
-   * could not be taken now. A Package G intent needs its switch (DEC-016; pickup DEC-082,
-   * memberships DEC-072, session packages DEC-074), and the seat a session queue's acceptance books
-   * (priced from the offering, as `accept` books it) must owe nothing: a single session cannot be
-   * paid for yet (`SESSION_PAYMENT_UNAVAILABLE`).
+   * CAPABILITIES-04, SPK-YOUTH-004: intents no waitlist offer could ever be accepted for, whatever
+   * the queue's state. A rental or party exists only with its reservation and staffing
+   * (POST /v1/bookings, SPK-COND-003), so accepting would open a bare line `openForLine` refuses.
+   * A makeup seat is taken by redeeming the makeup entitlement, whose redemption history records
+   * it (POST /v1/makeup-entitlements/{id}/redeem); an entry carries no entitlement, so accepting
+   * would book a seat no entitlement pays for (priced from the parent term or camp, or free for a
+   * child who holds no makeup at all). Join refuses them; an entry recorded earlier is retired.
+   */
+  private intentRefusal(intent: WaitlistEntryRow['intent']): DomainError | null {
+    if (BOOKING_INTENTS.includes(intent)) {
+      return errors.validation(
+        'A rental or party is requested with its space, equipment and staff: POST /v1/bookings.',
+        { code: 'BOOKING_REQUIRED', path: 'intent' },
+      );
+    }
+    if (intent === 'makeup') {
+      return errors.validation(
+        'A makeup seat is taken by redeeming the makeup entitlement for a session with a free seat, not from a waitlist.',
+        {
+          code: 'MAKEUP_REDEMPTION_REQUIRED',
+          path: 'intent',
+          command: SESSION_INTENT_COMMANDS.makeup,
+        },
+      );
+    }
+    return null;
+  }
+
+  /**
+   * CAPABILITIES-03, CAPABILITIES-04, GAPS-TRIAGE-01: refuses waiting for, being offered or
+   * accepting a place that could not be taken now. The intent must be one a queue can give
+   * (`intentRefusal`: 400 `BOOKING_REQUIRED`, `MAKEUP_REDEMPTION_REQUIRED`); a Package G intent
+   * needs its switch (DEC-016; pickup DEC-082, memberships DEC-072, session packages DEC-074); and
+   * the seat a session queue's acceptance books (priced from the offering, as `accept` books it)
+   * must owe nothing: a single session cannot be paid for yet (`SESSION_PAYMENT_UNAVAILABLE`).
    */
   private async assertObtainable(
     trx: Trx,
     organizationId: string,
     entry: { intent: WaitlistEntryRow['intent']; offering_id: string; session_id: string | null },
   ): Promise<void> {
+    const refusal = this.intentRefusal(entry.intent);
+    if (refusal) throw refusal;
     const capability = INTENT_CAPABILITIES[entry.intent];
     if (capability) await this.capabilities.require(organizationId, capability, trx);
     if (entry.session_id) {
@@ -138,20 +195,26 @@ export class WaitlistService implements WaitlistPort {
     }
   }
 
-  /** Whether `assertObtainable` lets the entry be offered (offer generation holds the queue otherwise). */
-  private async obtainable(
+  /**
+   * What offer generation does with a waiting entry (`assertObtainable`): offer it; hold the whole
+   * queue while the intent's switch is off (re-enabling it resumes the queue, `resumeQueuesOf`);
+   * or retire it with the reason it could never be accepted (`RETIRING_REFUSALS`).
+   */
+  private async offerability(
     trx: Trx,
     organizationId: string,
     entry: WaitlistEntryRow,
-  ): Promise<boolean> {
+  ): Promise<'offer' | 'hold' | WaitlistRetirementReason> {
     try {
       await this.assertObtainable(trx, organizationId, entry);
-      return true;
+      return 'offer';
     } catch (error) {
       const code = DomainError.is(error)
         ? (error.details as { code?: unknown } | undefined)?.code
         : undefined;
-      if (code === 'CAPABILITY_DISABLED' || code === 'SESSION_PAYMENT_UNAVAILABLE') return false;
+      if (code === 'CAPABILITY_DISABLED') return 'hold';
+      const retirement = typeof code === 'string' ? RETIRING_REFUSALS.get(code) : undefined;
+      if (retirement) return retirement;
       throw error;
     }
   }
@@ -272,6 +335,10 @@ export class WaitlistService implements WaitlistPort {
     correlationId: string | null,
   ): Promise<WaitlistEntry> {
     const organizationId = organizationOf(principal);
+    // CAPABILITIES-04, SPK-COND-003, SPK-YOUTH-004: nobody waits for a bare rental or party line
+    // (POST /v1/bookings) or for a makeup seat (redeemed from its entitlement).
+    const refusal = this.intentRefusal(input.intent);
+    if (refusal) throw refusal;
     const sessionScoped = SESSION_INTENT_COMMANDS[input.intent] !== undefined;
     if (sessionScoped && !input.sessionId) {
       throw errors.validation(`A ${input.intent} waitlist is per session: sessionId is required.`, {
@@ -283,14 +350,6 @@ export class WaitlistService implements WaitlistPort {
       (input.priorityBasis !== undefined || input.priorityRank !== undefined)
     ) {
       throw errors.accessDenied('Only staff set a waitlist priority.');
-    }
-    // CAPABILITIES-04, SPK-COND-003: a rental or party exists only with its reservation and
-    // staffing (POST /v1/bookings); nobody waits for a bare rental or party line.
-    if (BOOKING_INTENTS.includes(input.intent)) {
-      throw errors.validation(
-        'A rental or party is requested with its space, equipment and staff: POST /v1/bookings.',
-        { code: 'BOOKING_REQUIRED', path: 'intent' },
-      );
     }
     const session = sessionScoped
       ? await this.sessions.get(organizationId, input.offeringId, input.sessionId as string)
@@ -642,10 +701,13 @@ export class WaitlistService implements WaitlistPort {
    * row lock serializes concurrent generators; every offer holds each pool its participant needs,
    * so it reserves a defined place until expiry (SPK-REG-008). Generation stops at the first entry
    * that cannot be served so a lower-priority entry is never offered first. Replay-safe: with no
-   * free place left nothing more is offered. A queue whose place could not be accepted now (its
-   * capability switch is off, or its session seat would owe money) is held as it is: no offer is
-   * made, so nobody loses their place to an offer they could not accept, and re-enabling the
-   * switch offers the free places again (`resumeQueuesOf`, CAPABILITIES-03).
+   * free place left nothing more is offered. A queue whose capability switch is off is held as it
+   * is: no offer is made, so nobody loses their place to an offer they could not accept, and
+   * re-enabling the switch offers the free places again (`resumeQueuesOf`, CAPABILITIES-03). An
+   * entry no offer could ever be accepted for (a rental or party, a makeup, or a session seat that
+   * owes money, GAPS-TRIAGE-01) leaves the queue with that reason and a notice
+   * (`enrollment.notify_waitlist_retired`) instead of blocking it or being offered a place its
+   * acceptance would refuse; it may join again once the seat can be booked.
    */
   async offerFromPool(
     trx: Trx,
@@ -686,7 +748,20 @@ export class WaitlistService implements WaitlistPort {
         continue;
       }
       if (existing === 'pending') continue;
-      if (!(await this.obtainable(trx, organizationId, entry))) break;
+      const offerability = await this.offerability(trx, organizationId, entry);
+      if (offerability === 'hold') break;
+      if (offerability !== 'offer') {
+        await this.retireEntry(
+          trx,
+          organizationId,
+          entry,
+          system,
+          correlationId,
+          false,
+          offerability,
+        );
+        continue;
+      }
       const required = await this.requiredPools(trx, organizationId, entry);
       if (required.length === 0) continue;
       if (required.some((p) => p.capacity - p.committed - p.held < 1)) break;
@@ -849,6 +924,10 @@ export class WaitlistService implements WaitlistPort {
       if (entry.status !== 'waiting') {
         throw errors.invalidTransition('WaitlistEntry', entry.status, 'offer');
       }
+      // CAPABILITIES-04, SPK-YOUTH-004: an entry no offer could ever be accepted for (recorded
+      // before such entries were refused at join) is refused here and retired by offer generation.
+      const refusal = this.intentRefusal(entry.intent);
+      if (refusal) throw refusal;
       const queue = await this.waitingQuery(
         trx,
         organizationId,
@@ -862,6 +941,7 @@ export class WaitlistService implements WaitlistPort {
         (snapshot ??= await this.evaluator.snapshot(trx, organizationId, entry.offering_id));
       let next: { entry: WaitlistEntryRow; required: PoolRow[] } | null = null;
       for (const candidate of queue) {
+        if (this.intentRefusal(candidate.intent)) continue;
         if (await this.entitlementOf(trx, organizationId, candidate, snapshotOf)) continue;
         const required = await this.requiredPools(trx, organizationId, candidate);
         if (required.length === 0) continue;
@@ -944,11 +1024,14 @@ export class WaitlistService implements WaitlistPort {
   }
 
   /**
-   * SPK-REG-008: an entry whose participant now holds an equivalent confirmed entitlement leaves
-   * the queue (`removed`, reason `equivalent_entitlement`): an open offer is declined, which gives
-   * its places back and offers them to the next waiter, and a waiting entry stops counting against
-   * newcomers under waitlist-first (DEC-006). `nudge` re-runs offer generation for the entry's pool
-   * when it has a free place (the follow-up path; the generator itself continues its own loop).
+   * SPK-REG-008: an entry the module takes off its queue (`removed`, with `reason`): its
+   * participant now holds an equivalent confirmed entitlement (`equivalent_entitlement`), or offer
+   * generation found it could never be accepted (the other `WaitlistRetirementReason`s, whose
+   * notice `enrollment.notify_waitlist_retired` composes from `enrollment.waitlist_left`). An open
+   * offer is declined, which gives its places back and offers them to the next waiter, and a waiting
+   * entry stops counting against newcomers under waitlist-first (DEC-006). `nudge` re-runs offer
+   * generation for the entry's pool when it has a free place (the follow-up path; the generator
+   * itself continues its own loop).
    */
   private async retireEntry(
     trx: Trx,
@@ -957,8 +1040,8 @@ export class WaitlistService implements WaitlistPort {
     actor: Principal,
     correlationId: string | null,
     nudge: boolean,
+    reason: WaitlistRetirementReason = 'equivalent_entitlement',
   ): Promise<void> {
-    const reason = 'equivalent_entitlement';
     if (entry.status === 'offered') {
       const open = await trx
         .selectFrom('waitlist_offers')
@@ -1146,9 +1229,10 @@ export class WaitlistService implements WaitlistPort {
       assertExpectedRevision(input.expectedRevision, offer.revision);
       if (offer.status !== 'offered')
         throw errors.invalidTransition('WaitlistOffer', offer.status, 'accept');
-      // CAPABILITIES-03 (DEC-016), GAPS-TRIAGE-01: accepting is the new commitment. Refused, the
-      // offer stays `offered` with its place held until it is declined or expires (expiry is
-      // never gated).
+      // CAPABILITIES-03 (DEC-016), CAPABILITIES-04, GAPS-TRIAGE-01: accepting is the new
+      // commitment. Refused, the offer stays `offered` with its place held until it is declined or
+      // expires (expiry is never gated); an entry it requeues that can never be accepted is then
+      // retired by offer generation.
       await this.assertObtainable(trx, organizationId, entry);
       if (new Date(offer.expires_at).getTime() <= now.getTime()) {
         throw errors.capacityUnavailable('This offer has expired; its place was released.', {

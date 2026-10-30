@@ -1,4 +1,5 @@
-import { systemPrincipal } from '@sportspark/contracts';
+import { newId, systemPrincipal } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -252,6 +253,154 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         .execute();
       expect(seats.every((p) => p.held === 0 && p.committed === 0)).toBe(true);
     });
+
+    it('GAPS-TRIAGE-01 / SPK-REG-008: a pickup queue whose seat became priced makes no offer: acceptance and the staff offer are refused, and offer generation retires the waiter with a notice', async () => {
+      const finance = await staff(t, ['finance_operator']);
+      const manager = await staff(t, ['program_manager']);
+      const one = await offering(t, {
+        kind: 'pickup',
+        programId: program,
+        basePriceMinor: 0,
+        capacityUnits: [{ unit: 'seats', limit: 1 }],
+      });
+      const seat = await session(one, '2026-11-16T02:00:00Z');
+      const players: Actor[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const actor = await adult(t);
+        await acknowledge(t, one, actor.personId, actor.personId);
+        players.push(actor);
+      }
+      const [a, c, d] = players as [Actor, Actor, Actor];
+      const join = async (actor: Actor) => {
+        const joined = await post(t, '/v1/waitlist-entries', actor.header, {
+          offeringId: one.offeringId,
+          participantPersonId: actor.personId,
+          intent: 'pickup',
+          sessionId: seat,
+        });
+        expect(joined.status, JSON.stringify(joined.body)).toBe(201);
+        return joined.body as { id: string; revision: number };
+      };
+      const entryOf = async (actor: Actor, id: string) =>
+        (await t.http.get(`/v1/waitlist-entries/${id}`).set(actor.header)).body as {
+          status: string;
+          revision: number;
+          offers: Array<{ id: string; status: string; revision: number }>;
+        };
+      const notices = (subjectId: string) =>
+        t.db
+          .selectFrom('notifications')
+          .select(['kind', 'title', 'body'])
+          .where('subject_id', '=', subjectId)
+          .execute();
+      const pool = () =>
+        t.db
+          .selectFrom('capacity_pools')
+          .select(['held', 'committed'])
+          .where('scope_id', '=', seat)
+          .executeTakeFirstOrThrow();
+
+      // The only seat is booked (free); C, then D, wait for it. A cancels and C is offered it.
+      const booked = await post(t, '/v1/session-bookings', a.header, {
+        offeringId: one.offeringId,
+        sessionId: seat,
+        participantPersonId: a.personId,
+      });
+      expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+      const cEntry = await join(c);
+      const dEntry = await join(d);
+      expect(
+        (
+          await post(t, `/v1/session-bookings/${booked.body.id as string}/cancel`, a.header, {
+            expectedRevision: booked.body.revision,
+            reason: 'Cannot make it',
+          })
+        ).status,
+      ).toBe(200);
+      await drain(t);
+      const offered = await entryOf(c, cEntry.id);
+      expect(offered.status).toBe('offered');
+      const offer = offered.offers[0]!;
+
+      // Finance prices the offering from now on (SPK-PAY-002: a new version, never a rewrite).
+      const rule = await post(t, `/v1/offerings/${one.offeringId}/price-rules`, finance.header, {
+        effectiveFrom: new Date(t.clock.now().getTime() + 60_000).toISOString(),
+        basePriceMinor: 1_500,
+        currency: 'USD',
+        chargeLines: [],
+      });
+      expect(rule.status, JSON.stringify(rule.body)).toBe(201);
+      t.clock.advance(2 * 60_000);
+
+      // The offer made while the seat was free cannot be accepted now: nothing is booked, and the
+      // offer stays open with its seat held until it is declined or expires.
+      const refused = await post(t, `/v1/waitlist-offers/${offer.id}/accept`, c.header, {
+        expectedRevision: offer.revision,
+      });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+      expect(refused.body.details).toMatchObject({
+        code: 'SESSION_PAYMENT_UNAVAILABLE',
+        kind: 'pickup',
+        amountMinor: 1_500,
+        currency: 'USD',
+        pendingDecisions: ['POL-045', 'DEC-082'],
+      });
+      expect(await entryOf(c, cEntry.id)).toMatchObject({
+        status: 'offered',
+        offers: [expect.objectContaining({ id: offer.id, status: 'offered' })],
+      });
+      expect(
+        await t.db
+          .selectFrom('session_bookings')
+          .select('id')
+          .where('session_id', '=', seat)
+          .where('participant_person_id', '=', c.personId)
+          .execute(),
+      ).toEqual([]);
+      expect(await pool()).toEqual({ held: 1, committed: 0 });
+
+      // Staff cannot offer the seat to the next waiter either.
+      const staffOffer = await post(t, `/v1/waitlist-entries/${dEntry.id}/offer`, manager.header, {
+        reason: 'Seat freed',
+        expectedRevision: dEntry.revision,
+      });
+      expect(staffOffer.status, JSON.stringify(staffOffer.body)).toBe(409);
+      expect(staffOffer.body.details).toMatchObject({
+        code: 'SESSION_PAYMENT_UNAVAILABLE',
+        pendingDecisions: ['POL-045', 'DEC-082'],
+      });
+
+      // C declines; the freed seat is not offered to D, who could not book it: D leaves the queue
+      // with the reason and is told why, and the seat is free again.
+      expect(
+        (
+          await post(t, `/v1/waitlist-offers/${offer.id}/decline`, c.header, {
+            expectedRevision: offer.revision,
+          })
+        ).status,
+      ).toBe(200);
+      await drain(t);
+      const retired = await t.db
+        .selectFrom('waitlist_entries')
+        .select(['status', 'removal_reason', 'offer_count'])
+        .where('id', '=', dEntry.id)
+        .executeTakeFirstOrThrow();
+      expect(retired).toEqual({
+        status: 'removed',
+        removal_reason: 'session_payment_unavailable',
+        offer_count: 0,
+      });
+      expect(await notices(dEntry.id)).toEqual([
+        expect.objectContaining({
+          kind: 'registration_outcome',
+          title: 'No longer on the waitlist',
+          body: expect.stringContaining('now has a price'),
+        }),
+      ]);
+      expect(await pool()).toEqual({ held: 0, committed: 0 });
+      // C, who declined, is not told anything more about the queue they left.
+      expect(await notices(cEntry.id)).toEqual([]);
+    });
   });
 
   describe('SPK-YOUTH-004 / SPK-AT-020: makeup entitlements', () => {
@@ -350,6 +499,142 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         sessionId: sessions[1],
       });
       expect(again.status).toBe(201);
+    });
+
+    it('SPK-YOUTH-004 / GAPS-TRIAGE-01: a makeup seat is redeemed, never waited for: the join is refused, and an entry recorded earlier is retired with a notice instead of being offered', async () => {
+      const manager = await staff(t, ['program_manager']);
+      // A priced term (SPK-PAY-001) with one seat per session; its first session's seat is
+      // taken by a redeemed makeup.
+      const small = await offering(t, {
+        basePriceMinor: 18_000,
+        capacityUnits: [{ unit: 'seats', limit: 1 }],
+      });
+      const first = await child(t, [parent]);
+      const second = await child(t, [parent]);
+      for (const participant of [first, second]) {
+        await acknowledge(t, small, participant, parent.personId);
+      }
+      const seat = await session(small, '2026-11-24T23:00:00Z');
+      const makeup = await post(t, '/v1/makeup-entitlements', frontDesk.header, {
+        participantPersonId: first,
+        originKind: 'session_canceled',
+        originatingSessionId: seat,
+        eligibleOfferingIds: [small.offeringId],
+        expiresAt: new Date(t.clock.now().getTime() + 30 * DAY).toISOString(),
+        redemptionLimit: 1,
+        reason: 'Pitch closed for frost',
+      });
+      expect(makeup.status, JSON.stringify(makeup.body)).toBe(201);
+      const redeemed = await post(
+        t,
+        `/v1/makeup-entitlements/${makeup.body.id as string}/redeem`,
+        parent.header,
+        { offeringId: small.offeringId, sessionId: seat },
+      );
+      expect(redeemed.status, JSON.stringify(redeemed.body)).toBe(201);
+
+      // Waiting for a makeup seat is refused, naming the command that takes one; never the pickup
+      // payment decisions or the term price.
+      const joined = await post(t, '/v1/waitlist-entries', parent.header, {
+        offeringId: small.offeringId,
+        participantPersonId: second,
+        intent: 'makeup',
+        sessionId: seat,
+      });
+      expect(joined.status, JSON.stringify(joined.body)).toBe(400);
+      expect(joined.body).toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: {
+          code: 'MAKEUP_REDEMPTION_REQUIRED',
+          command: 'POST /v1/makeup-entitlements/{id}/redeem',
+        },
+      });
+      expect(JSON.stringify(joined.body)).not.toContain('POL-045');
+      expect(
+        await t.db
+          .selectFrom('waitlist_entries')
+          .select('id')
+          .where('participant_person_id', '=', second)
+          .execute(),
+      ).toEqual([]);
+
+      // An entry recorded before such joins were refused is never offered the seat.
+      const pool = await t.db
+        .selectFrom('capacity_pools')
+        .select('id')
+        .where('scope_id', '=', seat)
+        .executeTakeFirstOrThrow();
+      const legacyId = newId();
+      await t.db
+        .insertInto('waitlist_entries')
+        .values({
+          id: legacyId,
+          organization_id: t.organizationId,
+          offering_id: small.offeringId,
+          pool_id: pool.id,
+          session_id: seat,
+          participant_person_id: second,
+          intent: 'makeup',
+          joined_at: t.clock.now(),
+          queued_at: t.clock.now(),
+          requested_by: json({ kind: 'customer', personId: parent.personId }),
+          requested_by_person_id: parent.personId,
+          payer_person_id: parent.personId,
+          accepted_enrollment_id: null,
+          withdrawn_at: null,
+          removed_at: null,
+          removal_reason: null,
+        })
+        .execute();
+      const staffOffer = await post(t, `/v1/waitlist-entries/${legacyId}/offer`, manager.header, {
+        reason: 'Seat freed',
+        expectedRevision: 1,
+      });
+      expect(staffOffer.status, JSON.stringify(staffOffer.body)).toBe(400);
+      expect(staffOffer.body.details.code).toBe('MAKEUP_REDEMPTION_REQUIRED');
+      // The makeup booking is cancelled: the freed seat goes to nobody from the queue; the entry
+      // leaves it with the reason and the family is told how a makeup seat is taken.
+      expect(
+        (
+          await post(
+            t,
+            `/v1/session-bookings/${redeemed.body.id as string}/cancel`,
+            parent.header,
+            { expectedRevision: redeemed.body.revision, reason: 'Sick' },
+          )
+        ).status,
+      ).toBe(200);
+      await drain(t);
+      expect(
+        await t.db
+          .selectFrom('waitlist_entries')
+          .select(['status', 'removal_reason', 'offer_count'])
+          .where('id', '=', legacyId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({
+        status: 'removed',
+        removal_reason: 'makeup_redemption_required',
+        offer_count: 0,
+      });
+      expect(
+        await t.db
+          .selectFrom('notifications')
+          .select(['kind', 'body'])
+          .where('subject_id', '=', legacyId)
+          .execute(),
+      ).toEqual([
+        expect.objectContaining({
+          kind: 'registration_outcome',
+          body: expect.stringContaining('redeeming the makeup'),
+        }),
+      ]);
+      expect(
+        await t.db
+          .selectFrom('capacity_pools')
+          .select(['held', 'committed'])
+          .where('id', '=', pool.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ held: 0, committed: 0 });
     });
 
     it('redeems only in eligible replacements, before expiry, and never for another household', async () => {

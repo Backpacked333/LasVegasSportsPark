@@ -519,6 +519,15 @@ export class EnrollmentModule implements OnModuleInit {
       (event, ctx) => runWithTransaction(ctx.trx, () => this.notices.waitlistOffer(ctx.trx, event)),
       { failureOwner: 'program_manager' },
     );
+    // CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01: a waiter offer generation retired because no
+    // offer could ever be accepted is told why (replay composes nothing new: one notice per event).
+    this.registry.on<EventPayload<typeof EnrollmentEvents.waitlistLeft>>(
+      EnrollmentEvents.waitlistLeft.type,
+      'enrollment.notify_waitlist_retired',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.waitlistRetired(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
     this.registry.on<EventPayload<typeof EnrollmentEvents.placementAssigned>>(
       EnrollmentEvents.placementAssigned.type,
       'enrollment.notify_placement',

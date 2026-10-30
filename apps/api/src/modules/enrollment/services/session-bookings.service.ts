@@ -90,26 +90,48 @@ export interface CreateBookingInTrx {
 }
 
 /**
+ * GAPS-TRIAGE-01 (§6.7): the decisions a payment path for a single session of this kind waits for.
+ * Pickup payment rules are POL-045 under DEC-082 (SPK-PLACE-004) and trial rules DEC-003
+ * (SPK-YOUTH-003). A makeup seat is never money (SPK-YOUTH-004: it is redeemed from its
+ * entitlement), and a session booked with a package credit or membership is paid by it, so neither
+ * names a pickup or trial decision.
+ */
+export function sessionPaymentDecisions(kind: SessionBookingKind): string[] {
+  if (kind === 'pickup') return ['POL-045', 'DEC-082'];
+  if (kind === 'trial') return ['DEC-003'];
+  return [];
+}
+
+/** What the family can do instead, per booking kind (plain operational copy). */
+const SESSION_PAYMENT_REMEDY: Record<SessionBookingKind, string> = {
+  pickup: 'book a session that owes nothing, or one a package credit or membership covers',
+  trial: 'choose a trial that owes nothing',
+  makeup:
+    'redeem the makeup entitlement for the session (POST /v1/makeup-entitlements/{id}/redeem)',
+  session: 'book the session with a package credit or membership that covers it',
+};
+
+/**
  * GAPS-TRIAGE-01 (SPK-PLACE-004 payment rules, SPK-YOUTH-003, SPK-PAY-001/002, §6.7): the refusal
  * of a session booking that would owe money. No payment path exists for a single session: the
- * finance checkout pays held basket lines that each carry an enrollment, and a pickup, trial or
- * makeup seat is never an enrollment (SPK-PLACE-004, SPK-YOUTH-003). The rules such a path would
- * implement are pending (pickup payment rules POL-045 under DEC-082; trial rules DEC-003), so the
- * booking is refused before any seat is held, any offer consumed or any record written, instead of
- * answering 201 for a booking nobody can pay that then expires.
+ * finance checkout pays held basket lines that each carry an enrollment, and a pickup or trial seat
+ * is never an enrollment (SPK-PLACE-004, SPK-YOUTH-003). The rules such a path would implement are
+ * pending (`sessionPaymentDecisions`), so the booking is refused before any seat is held, any offer
+ * consumed or any record written, instead of answering 201 for a booking nobody can pay that then
+ * expires.
  */
 export function sessionPaymentUnavailable(
   kind: SessionBookingKind,
   price: PriceSnapshot | null,
 ): DomainError {
   return errors.resourceConflict(
-    'This session has a price, and a single session cannot be paid for yet: book a session that owes nothing, or one a package credit or membership covers.',
+    `This ${kind === 'trial' ? 'trial' : 'session'} has a price, and a single session cannot be paid for yet: ${SESSION_PAYMENT_REMEDY[kind]}.`,
     {
       code: 'SESSION_PAYMENT_UNAVAILABLE',
       kind,
       amountMinor: price?.basePriceMinor ?? null,
       currency: price?.currency ?? null,
-      pendingDecisions: kind === 'trial' ? ['DEC-003'] : ['POL-045', 'DEC-082'],
+      pendingDecisions: sessionPaymentDecisions(kind),
     },
   );
 }
@@ -311,8 +333,9 @@ export class SessionBookingsService {
 
   /**
    * GAPS-TRIAGE-01: the price a new booking of the offering would carry, refusing one that would
-   * owe money (`SESSION_PAYMENT_UNAVAILABLE`). Waitlists call it before an entry joins or an offer
-   * is made or accepted, so nobody waits for, or is offered, a seat that cannot be booked.
+   * owe money (`SESSION_PAYMENT_UNAVAILABLE`). Pickup and trial waitlists call it before an entry
+   * joins or an offer is made or accepted, so nobody waits for, or is offered, a seat that cannot be
+   * booked (offer generation retires such waiters with a notice; see `WaitlistService`).
    */
   async assertSessionPayable(
     trx: Trx,
@@ -628,7 +651,7 @@ export class SessionBookingsService {
             code: 'PAYMENT_REQUIRED',
             amountMinor: (current ?? price)?.basePriceMinor ?? null,
             currency: (current ?? price)?.currency ?? null,
-            pendingDecisions: row.kind === 'trial' ? ['DEC-003'] : ['POL-045', 'DEC-082'],
+            pendingDecisions: sessionPaymentDecisions(row.kind),
           },
         );
       }

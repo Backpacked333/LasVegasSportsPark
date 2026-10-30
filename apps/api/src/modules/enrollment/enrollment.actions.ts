@@ -278,7 +278,8 @@ export const EnrollmentActions = defineActions({
   },
   manageMembershipSuspension: {
     id: 'enrollment.manage_membership_suspension',
-    description: 'Suspend a membership for a period, or end its suspension (ENR-12, never gated)',
+    description:
+      'Suspend a membership for a period, end its suspension, or list its suspensions with their revisions (ENR-12, GAPS-TRIAGE-02, never gated)',
     staffRoles: ['program_manager', 'front_desk', 'general_manager'],
     requirements: ['SPK-COND-001'],
   },
