@@ -1,5 +1,9 @@
 import type { Principal } from '@sportspark/contracts';
-import type { AuthorizationService, AuthorizationTargetInput } from '../../../../kernel';
+import {
+  listFacilityScope,
+  type AuthorizationService,
+  type AuthorizationTargetInput,
+} from '../../../../kernel';
 import { FinanceActions } from '../../finance.actions';
 
 /**
@@ -27,4 +31,19 @@ export async function requirePosRead(
     if (desk.allowed) return;
   }
   await authorization.require(principal, action, target);
+}
+
+/**
+ * The facilities a point-of-sale list without a `facilityId` is narrowed to (§4.3, §4.14 least
+ * privilege; the list counterpart of `requirePosRead`'s per-record facility check): the union of
+ * the facilities covered by the roles holding `finance.read_pos` and those holding
+ * `finance.operate_register`. `null` when the list is not narrowed (not a staff principal, or one
+ * of those roles is organization-wide); an empty array means the caller sees no facility's rows.
+ */
+export function posListFacilityScope(principal: Principal): readonly string[] | null {
+  if (principal.kind !== 'staff') return null;
+  const read = listFacilityScope(principal, FinanceActions.readPos);
+  const desk = listFacilityScope(principal, FinanceActions.operateRegister);
+  if (read === null || desk === null) return null;
+  return [...new Set([...read, ...desk])].sort();
 }

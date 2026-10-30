@@ -331,9 +331,11 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
 Enabled per organization by its capability switch (default off), naming its applicability
 decision: DEC-079 "Point of sale" within DEC-016 "Conditional capability applicability", both
 **Pending decision**. Disabled: creating or changing products, creating registers, opening a
-session, starting a sale, adding a line or a tender are refused (`ACCESS_DENIED`,
-`details.code: CAPABILITY_DISABLED`); retiring, closing a session, voids, returns and reads are
-never gated (DEC-016).
+session, starting a sale or adding a line are refused (`ACCESS_DENIED`,
+`details.code: CAPABILITY_DISABLED`); a tender settling an existing open sale, retiring, closing a
+session, voids, returns and reads are never gated (DEC-016), so a sale partly paid (a card tender
+cannot be voided) when the switch is turned off is still completed, returned, and its session and
+register closed.
 
 | Method   | Path                                                                                                             | Who (action)                                                                    |
 | -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -350,6 +352,12 @@ never gated (DEC-016).
   (`services/pos/pos-access.ts`), so it holds no finance-area read and `GET /v1/me/permissions`
   shows it no finance area while POS is off (SPK-UX-005). Whether a desk running a register sees
   a finance area once POS is enabled follows the kernel's **Proposed** navigation mapping.
+  `GET /pos-registers` and `GET /pos-products` without `facilityId` are narrowed to the
+  facilities the caller's `read_pos` or `operate_register` roles cover (organization-wide
+  products stay listed; §4.3, §4.14), as the per-record reads are.
+- §4.9: lines, tenders, voids and returns compare the body's `expectedRevision` with the locked
+  sale (`STALE_REVISION`), and recording a tender moves the sale's revision on, so a void or return
+  decided on a view older than another operator's tender is refused instead of applied.
 - Migration `0607_finance_point_of_sale.sql`: `pos_products` (merchandise, concession or
   service; SKU unique per organization; never a registration, SPK-PAY-012), `pos_product_charges`
   (the approved `tax_fee` policy keys of a product), `pos_registers`, `pos_register_sessions` (one

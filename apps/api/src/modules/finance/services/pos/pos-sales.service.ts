@@ -22,6 +22,7 @@ import {
   CapabilityService,
   DATABASE,
   UnitOfWork,
+  assertExpectedRevision,
   snapshotActor,
   type Clock,
   type Trx,
@@ -66,8 +67,13 @@ const TAX_FEE_KIND = 'tax_fee' as PolicyKind;
  * - A sale is numbered `<register>-<YYYYMMDD>-<n>` under its session's lock; lines take the
  *   product's price and only charges of approved `tax_fee` policy versions effective now
  *   (POLICY_PORT, DEC-057), snapshotted with the version id; a key without an approved version
- *   refuses the line (CHARGE_POLICY_NOT_APPROVED). New sales, lines and tenders need the
- *   `point_of_sale` capability; voids, returns and reads never check it.
+ *   refuses the line (CHARGE_POLICY_NOT_APPROVED). New sales and lines need the `point_of_sale`
+ *   capability; tenders settling an existing open sale, voids, returns and reads never check it
+ *   (the capability rule: settlements and reversals are never gated, DEC-016), so turning the
+ *   switch off never strands a sale that already holds a tender.
+ * - §4.9: every command on a sale compares the caller's `expectedRevision` with the locked sale
+ *   (STALE_REVISION), and a tender bumps the sale's revision, so a void or return decided on a
+ *   stale view of the sale is refused rather than overriding another operator's tender.
  * - Cash and external tenders (evidence required) settle at once; the sale is paid when settled
  *   tenders cover its total.
  * - A card tender (§4.11): unit of work 1 commits the payment attempt (purpose `pos_sale`) and a
@@ -224,6 +230,7 @@ export class PosSalesService {
       await this.capabilities.require(organizationId, 'point_of_sale', trx);
       if (sale.status !== 'open')
         throw errors.invalidTransition('PosSale', sale.status, 'add_line');
+      assertExpectedRevision(input.expectedRevision, sale.revision);
       const product = await trx
         .selectFrom('pos_products')
         .selectAll()
@@ -378,8 +385,11 @@ export class PosSalesService {
       }
       const sale = await this.finalizer.lockSale(trx, organizationId, saleId);
       await this.requireOperator(principal, sale);
-      await this.capabilities.require(organizationId, 'point_of_sale', trx);
+      // CAPABILITIES-01, DEC-016: a tender settles a sale that already exists, so it is never
+      // gated; a sale whose card tender covered part of it can be completed (then returned) after
+      // the switch is turned off, and its session and register can then be closed.
       if (sale.status !== 'open') throw errors.invalidTransition('PosSale', sale.status, 'tender');
+      assertExpectedRevision(input.expectedRevision, sale.revision);
       const remaining = await this.remaining(trx, sale);
       if (input.amountMinor > remaining) {
         throw errors.validation('The tender exceeds what remains to be paid.', {
@@ -429,6 +439,15 @@ export class PosSalesService {
           failed_at: null,
         })
         .execute();
+      // §4.9: the sale changed (its tenders and what remains), so its revision moves on and a
+      // command decided on the earlier view is refused as stale.
+      await trx
+        .updateTable('pos_sales')
+        .set({ revision: sale.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', sale.id)
+        .where('revision', '=', sale.revision)
+        .executeTakeFirstOrThrow();
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -471,6 +490,7 @@ export class PosSalesService {
       const sale = await this.finalizer.lockSale(trx, organizationId, saleId);
       await this.requireOperator(principal, sale);
       const status = PosSaleMachine.next(sale.status, 'void');
+      assertExpectedRevision(input.expectedRevision, sale.revision);
       const card = await trx
         .selectFrom('pos_tenders')
         .select('id')
@@ -534,6 +554,7 @@ export class PosSalesService {
       if (sale.status !== 'paid' && sale.status !== 'partially_returned') {
         throw errors.invalidTransition('PosSale', sale.status, 'return_part');
       }
+      assertExpectedRevision(input.expectedRevision, sale.revision);
       const lines = await trx
         .selectFrom('pos_sale_lines')
         .selectAll()
