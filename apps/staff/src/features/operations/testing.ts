@@ -42,6 +42,31 @@ export function person(id: string, givenName: string, familyName: string, kind =
   };
 }
 
+/** One `GET /v1/person-names` entry (names and kind only, §4.14). */
+export function nameEntry(
+  personId: string,
+  givenName: string,
+  familyName: string,
+  kind: 'adult' | 'child' = 'child',
+) {
+  return {
+    personId,
+    canonicalPersonId: personId,
+    givenName,
+    familyName,
+    displayName: `${givenName} ${familyName}`,
+    kind,
+  };
+}
+
+/**
+ * `GET /v1/person-names`: the names the viewer may see. The screen keeps the ones it asked for
+ * (the fake fetch keeps only the last repeated `ids` value, so the answer lists every known name).
+ */
+export function personNames(entries: ReturnType<typeof nameEntry>[]) {
+  return { status: 200, body: { items: entries } };
+}
+
 export function sessionActivity(
   sessionId: string,
   title: string,
@@ -275,6 +300,7 @@ export function workspaceItem(
       targetId: assignment.targetId,
       title: assignment.targetTitle,
       facilityId: FACILITY_A,
+      facility: { id: FACILITY_A, name: 'North Park 1', timezone: 'America/Los_Angeles' },
       scheduledStart: assignment.scheduledStart,
       scheduledEnd: assignment.scheduledEnd,
       participants:

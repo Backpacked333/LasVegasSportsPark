@@ -8,8 +8,10 @@
  *   evidence and does not invent requirements.
  * - Availability windows per person (`GET /v1/availability` needs a person): add an available or
  *   unavailable window, withdraw one with a reason (kept for history).
- * - The API has no directory of officials and coaches: people are those with qualification
- *   evidence, the viewer, or a record id typed in.
+ * - Officials and coaches come from the staff directory (`GET /v1/staff-directory`, ID-05: names,
+ *   roles and facility scopes in effect, never contacts; coaches and officials only for viewers
+ *   with the workforce directory permission), filtered by role and the selected facility, searched
+ *   by name and paged. People are chosen from it, never typed as record ids.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -40,6 +42,13 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { LoadMore } from '../../ui/LoadMore';
+import {
+  StaffPicker,
+  roleWords,
+  useStaffDirectory,
+  type StaffRole,
+} from '../../features/operations/StaffPicker';
 
 type Qualification = Schema<'Qualification'>;
 type QualificationStatus = Schema<'QualificationStatus'>;
@@ -70,6 +79,7 @@ export function AvailabilityQualificationsScreen() {
     [qualifications.data],
   );
   const names = usePersonNames(people);
+  const [availabilityFor, setAvailabilityFor] = useState<{ id: string; name: string } | null>(null);
   return (
     <section aria-labelledby="availability-title">
       <h2 id="availability-title">Availability and qualifications</h2>
@@ -105,27 +115,188 @@ export function AvailabilityQualificationsScreen() {
           {(data) => (
             <ul className="list" aria-label="Qualification evidence">
               {data.map((q) => (
-                <QualificationRow key={q.id} qualification={q} name={nameOf(names, q.personId)} />
+                <QualificationRow
+                  key={q.id}
+                  qualification={q}
+                  name={nameOf(names, q.personId)}
+                  timezone={facility.timezone}
+                />
               ))}
             </ul>
           )}
         </QueryBoundary>
         <RecordQualification />
       </section>
+      <OfficialsAndCoaches
+        facilityId={facility.facilityId}
+        ready={!facility.loading}
+        onChoose={(person) => setAvailabilityFor(person)}
+      />
       <AvailabilitySection
+        key={availabilityFor?.id ?? 'me'}
         myPersonId={facility.personId}
+        initial={availabilityFor}
         people={people.map((id) => ({ id, name: nameOf(names, id) }))}
       />
     </section>
   );
 }
 
+const STAFFING_ROLES: readonly { value: StaffRole | ''; label: string }[] = [
+  { value: '', label: 'Officials and coaches' },
+  { value: 'official', label: 'Officials' },
+  { value: 'coach', label: 'Coaches' },
+];
+
+/**
+ * SCR-S-32 "Assignment scope per official and coach" from the staff directory (ID-05). The API
+ * filters by one role, so "Officials and coaches" is two reads (role=official and role=coach),
+ * each paged by its own cursor: nothing is filtered on the client, and "nobody" is said only when
+ * the API answered an empty list with no further page.
+ */
+function OfficialsAndCoaches({
+  facilityId,
+  ready,
+  onChoose,
+}: {
+  facilityId: string | null;
+  /** The viewer's facility scope is known (`GET /me` answered). */
+  ready: boolean;
+  onChoose: (person: { id: string; name: string }) => void;
+}) {
+  const [role, setRole] = useState<StaffRole | ''>('');
+  const [search, setSearch] = useState('');
+  const roles: readonly StaffingRole[] = role ? [role as StaffingRole] : ['official', 'coach'];
+  return (
+    <section className="ops-section" aria-labelledby="officials-title">
+      <h3 id="officials-title">Officials and coaches</h3>
+      <div className="ops-form">
+        <SelectField
+          label="Role"
+          value={role}
+          onChange={(v) => setRole(v as StaffRole | '')}
+          options={STAFFING_ROLES.map((r) => ({ value: r.value, label: r.label }))}
+        />
+        <TextField
+          label="Find by name"
+          value={search}
+          onChange={setSearch}
+          type="search"
+          hint="The first letters of the given or family name."
+          onEnter={() => undefined}
+        />
+      </div>
+      {roles.map((r) => (
+        <DirectoryByRole
+          key={r}
+          role={r}
+          facilityId={facilityId}
+          search={search}
+          ready={ready}
+          titled={roles.length > 1}
+          onChoose={onChoose}
+        />
+      ))}
+    </section>
+  );
+}
+
+type StaffingRole = 'official' | 'coach';
+
+const STAFFING_WORDS: Record<StaffingRole, { plural: string; one: string }> = {
+  official: { plural: 'Officials', one: 'an official' },
+  coach: { plural: 'Coaches', one: 'a coach' },
+};
+
+function DirectoryByRole({
+  role,
+  facilityId,
+  search,
+  ready,
+  titled,
+  onChoose,
+}: {
+  role: StaffingRole;
+  facilityId: string | null;
+  search: string;
+  ready: boolean;
+  /** Both roles are shown: each list has its own heading. */
+  titled: boolean;
+  onChoose: (person: { id: string; name: string }) => void;
+}) {
+  const directory = useStaffDirectory({ facilityId, role, query: search, enabled: ready });
+  const words = STAFFING_WORDS[role];
+  const headingId = `officials-${role}-title`;
+  return (
+    <div
+      className="ops-section"
+      role="group"
+      aria-labelledby={titled ? headingId : undefined}
+      aria-label={titled ? undefined : words.plural}
+    >
+      {titled ? <h4 id={headingId}>{words.plural}</h4> : null}
+      <QueryBoundary
+        query={directory}
+        label={words.plural.toLowerCase()}
+        isEmpty={(items) => items.length === 0 && !directory.hasNextPage}
+        empty={{
+          title: `No ${words.plural.toLowerCase()}`,
+          description: facilityId
+            ? `Nobody holds ${words.one} role at this facility now (or the directory leaves them out for your role).`
+            : `Nobody holds ${words.one} role now (or the directory leaves them out for your role).`,
+        }}
+      >
+        {(items) =>
+          items.length === 0 ? (
+            <p className="caption">
+              None on the pages loaded so far; load more to see the rest of the directory.
+            </p>
+          ) : (
+            <ul className="list" aria-label={words.plural}>
+              {items.map((s) => (
+                <li key={s.personId} aria-label={s.displayName}>
+                  <div className="row-text">
+                    <span className="row-title">{s.displayName}</span>
+                    <span className="caption">
+                      {s.scopes
+                        .map(
+                          (scope) =>
+                            `${roleWords([scope.role])}: ${
+                              scope.facilityIds.length === 0
+                                ? 'every facility'
+                                : `${scope.facilityIds.length} ${scope.facilityIds.length === 1 ? 'facility' : 'facilities'}`
+                            }`,
+                        )
+                        .join(' · ')}
+                    </span>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    aria-label={`Availability of ${s.displayName}`}
+                    onClick={() => onChoose({ id: s.personId, name: s.displayName })}
+                  >
+                    Availability
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </QueryBoundary>
+      <LoadMore pages={directory} label={words.plural.toLowerCase()} />
+    </div>
+  );
+}
+
 function QualificationRow({
   qualification: q,
   name,
+  timezone,
 }: {
   qualification: Qualification;
   name: string;
+  /** The zone the validity was entered in (the operating facility's, SPK-SCHED-008). */
+  timezone: string | null;
 }) {
   const commands = useKeyedCommands({ invalidate: [QUALIFICATIONS_KEY] });
   const [reasonFor, setReasonFor] = useState<'reject' | 'revoke' | null>(null);
@@ -166,8 +337,8 @@ function QualificationRow({
         </span>
         <StatusBadge tone={badge.tone} label={badge.label} />
         <span className="caption">
-          Valid from {formatInstant(q.validFrom)}
-          {q.validTo ? ` to ${formatInstant(q.validTo)}` : ''}
+          Valid from {formatInstant(q.validFrom, timezone)}
+          {q.validTo ? ` to ${formatInstant(q.validTo, timezone)}` : ''}
           {q.evidenceReference ? ` · Evidence: ${q.evidenceReference}` : ' · No evidence reference'}
           {q.verifiedBy ? ` · Verified by ${q.verifiedBy.actorLabel}` : ''}
           {q.statusReason ? ` · ${q.statusReason}` : ''}
@@ -238,7 +409,7 @@ function QualificationRow({
 }
 
 function RecordQualification() {
-  const { timezone } = useOperatingFacility();
+  const { timezone, facilityId } = useOperatingFacility();
   const [open, setOpen] = useState(false);
   const [personId, setPersonId] = useState('');
   const [kind, setKind] = useState('');
@@ -270,7 +441,7 @@ function RecordQualification() {
     void command
       .submit({
         body: {
-          ...(personId.trim() ? { personId: personId.trim() } : {}),
+          ...(personId ? { personId } : {}),
           kind: kind.trim(),
           ...(level.trim() ? { level: level.trim() } : {}),
           ...(evidence.trim() ? { evidenceReference: evidence.trim() } : {}),
@@ -290,11 +461,12 @@ function RecordQualification() {
         submit();
       }}
     >
-      <TextField
-        label="Person (record id)"
+      <StaffPicker
+        label="Official or coach"
         value={personId}
-        onChange={setPersonId}
-        hint="Leave empty to record your own evidence."
+        onChange={(id) => setPersonId(id)}
+        facilityId={facilityId}
+        hint="Leave unchosen to record your own evidence."
         error={apiErrors.personId}
       />
       <TextField
@@ -362,15 +534,22 @@ function RecordQualification() {
 function AvailabilitySection({
   myPersonId,
   people,
+  initial,
 }: {
   myPersonId: string | null;
   people: { id: string; name: string }[];
+  /** A person chosen from the officials and coaches list. */
+  initial: { id: string; name: string } | null;
 }) {
   const now = useNow(60_000);
-  const [choice, setChoice] = useState<string>('me');
-  const [typed, setTyped] = useState('');
-  const personId =
-    choice === 'me' ? myPersonId : choice === 'other' ? typed.trim() || null : choice;
+  const { facilityId, timezone } = useOperatingFacility();
+  const [choice, setChoice] = useState<string>(initial?.id ?? 'me');
+  const [picked, setPicked] = useState('');
+  const known = [
+    ...(initial && !people.some((p) => p.id === initial.id) ? [initial] : []),
+    ...people,
+  ];
+  const personId = choice === 'me' ? myPersonId : choice === 'other' ? picked || null : choice;
   const from = useMemo(() => new Date(now.getTime() - 86_400_000).toISOString(), [now]);
   const to = useMemo(() => new Date(now.getTime() + 30 * 86_400_000).toISOString(), [now]);
   const windows = useApiQuery({
@@ -387,12 +566,17 @@ function AvailabilitySection({
         onChange={setChoice}
         options={[
           { value: 'me', label: 'Mine' },
-          ...people.map((p) => ({ value: p.id, label: p.name })),
-          { value: 'other', label: 'Another person (record id)' },
+          ...known.map((p) => ({ value: p.id, label: p.name })),
+          { value: 'other', label: 'Someone from the staff directory' },
         ]}
       />
       {choice === 'other' ? (
-        <TextField label="Person (record id)" value={typed} onChange={setTyped} />
+        <StaffPicker
+          label="Official or coach"
+          value={picked}
+          onChange={(id) => setPicked(id)}
+          facilityId={facilityId}
+        />
       ) : null}
       {personId ? (
         <>
@@ -409,7 +593,7 @@ function AvailabilitySection({
             {(data) => (
               <ul className="list" aria-label="Availability windows">
                 {data.map((w) => (
-                  <WindowRow key={w.id} window={w} />
+                  <WindowRow key={w.id} window={w} timezone={timezone} />
                 ))}
               </ul>
             )}
@@ -423,7 +607,8 @@ function AvailabilitySection({
   );
 }
 
-function WindowRow({ window: w }: { window: Availability }) {
+/** Shown in the zone windows are entered in (the operating facility's, SPK-SCHED-008). */
+function WindowRow({ window: w, timezone }: { window: Availability; timezone: string | null }) {
   const withdraw = useApiCommand('post', '/availability/{id}/withdraw', {
     invalidate: [AVAILABILITY_KEY],
   });
@@ -436,7 +621,8 @@ function WindowRow({ window: w }: { window: Availability }) {
   const [reason, setReason] = useState('');
   const [missing, setMissing] = useState(false);
   const badge = AVAILABILITY_KIND[w.kind];
-  const label = `${badge.label}, ${formatRange(w.interval.start, w.interval.end)}`;
+  const range = formatRange(w.interval.start, w.interval.end, timezone);
+  const label = `${badge.label}, ${range}`;
   const submit = () => {
     if (!reason.trim()) {
       setMissing(true);
@@ -450,11 +636,12 @@ function WindowRow({ window: w }: { window: Availability }) {
     <li aria-label={label}>
       <div className="row-text">
         <StatusBadge tone={badge.tone} label={badge.label} />
-        <span>{formatRange(w.interval.start, w.interval.end)}</span>
+        <span>{range}</span>
         {w.note ? <span className="caption">{w.note}</span> : null}
         {w.status === 'withdrawn' ? (
           <span className="caption">
-            Withdrawn {w.withdrawnAt ? formatInstant(w.withdrawnAt) : ''}: {w.withdrawnReason}
+            Withdrawn {w.withdrawnAt ? formatInstant(w.withdrawnAt, timezone) : ''}:{' '}
+            {w.withdrawnReason}
           </span>
         ) : null}
       </div>

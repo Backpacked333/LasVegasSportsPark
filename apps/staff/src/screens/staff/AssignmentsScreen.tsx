@@ -7,8 +7,14 @@
  *   as covering (SPK-STAFF-002), and the labels say so.
  * - Assignments (`GET /v1/assignments`) show all six states including "Proposed".
  * - Proposing (`POST /v1/assignments`) lets the API check qualification, availability, overlaps
- *   and turnaround (SPK-STAFF-003); its refusal is shown with its code and message. There is no
- *   person search in the API, so the person is named by their record id.
+ *   and turnaround (SPK-STAFF-003); its refusal is shown with its code and message. The person is
+ *   chosen from the staff directory (`GET /v1/staff-directory`, ID-05), narrowed to officials or
+ *   coaches by the kind of assignment and to the selected facility. The target is the uncovered
+ *   slot's activity, or chosen from the facility's sessions (`GET /v1/sessions`, which carries the
+ *   offering) and events and fixtures (`GET /v1/events`); a record id is only a fallback
+ *   (AssignmentTarget).
+ * - Times are in the facility's zone (SPK-SCHED-008): the report's scope zone, and for each
+ *   assignment the zone of its facility (`GET /v1/facilities/{id}`).
  * - The client never decides who may manage assignments: ACCESS_DENIED renders as not available.
  */
 import type { Schema } from '@sportspark/api-client';
@@ -17,7 +23,12 @@ import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, STAFF_TABS } from '../../features/operations/AreaTabs';
-import { nameOf, useOperatingFacility, usePersonNames } from '../../features/operations/context';
+import {
+  nameOf,
+  useFacilityZone,
+  useOperatingFacility,
+  usePersonNames,
+} from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import {
   CheckboxField,
@@ -38,6 +49,8 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { StaffPicker, type StaffRole } from '../../features/operations/StaffPicker';
+import { AssignmentTargetPicker, type ChosenTarget, type TargetType } from './AssignmentTarget';
 
 type Assignment = Schema<'Assignment'>;
 type AssignmentStatus = Schema<'AssignmentStatus'>;
@@ -85,6 +98,9 @@ export function AssignmentsScreen() {
 interface ProposalSeed {
   targetType?: string;
   targetId?: string;
+  /** The slot's title and start in the facility zone, shown instead of the record id. */
+  title?: string;
+  when?: string;
   kind?: string;
   role?: string;
 }
@@ -152,6 +168,10 @@ function UncoveredSlots({
                       onPropose({
                         targetType: text(row, 'targetType'),
                         targetId: text(row, 'targetId'),
+                        title: text(row, 'title'),
+                        when: text(row, 'start')
+                          ? formatInstant(text(row, 'start'), data.scope.timezone ?? timezone)
+                          : undefined,
                         kind: text(row, 'kind'),
                         role: text(row, 'role'),
                       })
@@ -230,6 +250,7 @@ function AssignmentList() {
 }
 
 function AssignmentRow({ assignment: a, name }: { assignment: Assignment; name: string }) {
+  const zone = useFacilityZone(a.facilityId);
   const badge = ASSIGNMENT_STATUS[a.status];
   return (
     <li>
@@ -238,7 +259,7 @@ function AssignmentRow({ assignment: a, name }: { assignment: Assignment; name: 
           {a.targetTitle}: {humanize(a.role)} {a.slot > 1 ? `(slot ${a.slot})` : ''}
         </Link>
         <span className="caption">
-          {formatRange(a.scheduledStart, a.scheduledEnd)} · {name} · {humanize(a.engagement)}
+          {formatRange(a.scheduledStart, a.scheduledEnd, zone)} · {name} · {humanize(a.engagement)}
         </span>
         <StatusBadge tone={badge.tone} label={badge.label} />
       </div>
@@ -259,45 +280,67 @@ const ENGAGEMENT_OPTIONS = ['regular', 'temporary', 'substitute'].map((v) => ({
   label: humanize(v),
 }));
 
+/** The directory role that holds an assignment kind (supervisors and organisers: any staff). */
+const ROLE_OF_KIND: Record<string, StaffRole | undefined> = {
+  official: 'official',
+  coach: 'coach',
+};
+
+const isTargetType = (v: string | undefined): v is TargetType =>
+  v === 'fixture' || v === 'event' || v === 'session';
+
 function ProposeForm({ seed }: { seed: ProposalSeed }) {
+  const { facilityId, timezone } = useOperatingFacility();
+  const seededTarget: ChosenTarget | null =
+    isTargetType(seed.targetType) && seed.targetId
+      ? {
+          targetType: seed.targetType,
+          targetId: seed.targetId,
+          offeringId: null,
+          title: seed.title || `The ${seed.targetType} of the uncovered slot`,
+          when: seed.when ?? null,
+        }
+      : null;
   const [personId, setPersonId] = useState('');
   const [kind, setKind] = useState(seed.kind ?? '');
   const [targetType, setTargetType] = useState(seed.targetType ?? '');
-  const [targetId, setTargetId] = useState(seed.targetId ?? '');
-  const [offeringId, setOfferingId] = useState('');
+  const [target, setTarget] = useState<ChosenTarget | null>(seededTarget);
+  const [fromSlot, setFromSlot] = useState(seededTarget !== null);
   const [role, setRole] = useState(seed.role ?? '');
   const [engagement, setEngagement] = useState('regular');
   const [turnaround, setTurnaround] = useState('');
   const [offer, setOffer] = useState(true);
   const [missing, setMissing] = useState<Record<string, string>>({});
+  const targetId = target?.targetId ?? '';
+  // A session from the uncovered slot names no offering: its requirement read does (WRK-02).
   const requirement = useApiQuery({
     path: '/assignment-requirements',
-    request: { query: { targetType: (targetType || 'session') as 'session', targetId } },
-    enabled: targetType === 'session' && targetId.length > 0,
+    request: { query: { targetType: 'session', targetId } },
+    enabled: targetType === 'session' && targetId.length > 0 && !target?.offeringId,
   });
   const sessionOffering =
-    requirement.data?.find((r) => r.offeringId)?.offeringId ?? (offeringId || null);
+    target?.offeringId ?? requirement.data?.find((r) => r.offeringId)?.offeringId ?? null;
   const command = useApiCommand('post', '/assignments', { invalidate: [['api', '/assignments']] });
   const apiErrors = fieldErrorsOf(command.error);
 
   const submit = () => {
     const next: Record<string, string> = {};
-    if (!personId.trim()) next.personId = 'Name the person by their record id.';
+    if (!personId) next.personId = 'Choose the person from the staff directory.';
     if (!kind) next.kind = 'Choose the kind of assignment.';
     if (!targetType) next.targetType = 'Choose what the assignment is for.';
-    if (!targetId.trim()) next.targetId = 'Name the fixture, event or session.';
+    else if (!targetId) next.targetId = `Choose the ${targetType}.`;
     if (!role.trim()) next.role = 'Name the role.';
-    if (targetType === 'session' && !sessionOffering)
-      next.offeringId = 'A session needs its offering.';
+    if (targetType === 'session' && targetId && !sessionOffering)
+      next.targetId = 'A session needs its offering: choose the session from the list.';
     setMissing(next);
     if (Object.keys(next).length > 0) return;
     void command
       .submit({
         body: {
-          personId: personId.trim(),
+          personId,
           kind: kind as Assignment['kind'],
           targetType: targetType as Assignment['targetType'],
-          targetId: targetId.trim(),
+          targetId,
           ...(targetType === 'session' && sessionOffering ? { offeringId: sessionOffering } : {}),
           role: role.trim(),
           engagement: engagement as Assignment['engagement'],
@@ -309,6 +352,7 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
   };
 
   const outcome = command.data;
+  const outcomeZone = useFacilityZone(outcome?.assignment.facilityId);
   return (
     <section className="ops-section" aria-labelledby="propose-title">
       <h3 id="propose-title">Propose an assignment</h3>
@@ -319,43 +363,65 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
           submit();
         }}
       >
-        <TextField
-          label="Person (record id)"
-          value={personId}
-          onChange={setPersonId}
-          required
-          hint="The service has no person search yet: copy the id from the person's record."
-          error={missing.personId ?? apiErrors.personId}
-        />
         <SelectField
           label="Kind"
           value={kind}
-          onChange={setKind}
+          onChange={(v) => {
+            setKind(v);
+            setPersonId('');
+          }}
           options={KIND_OPTIONS}
           placeholder="Choose a kind"
           error={missing.kind ?? apiErrors.kind}
         />
+        <StaffPicker
+          key={kind}
+          label="Person"
+          value={personId}
+          onChange={(id) => setPersonId(id)}
+          facilityId={facilityId}
+          role={ROLE_OF_KIND[kind]}
+          hint="The service checks qualification, availability, overlaps and turnaround when you propose."
+          error={missing.personId ?? apiErrors.personId}
+        />
         <SelectField
           label="For"
           value={targetType}
-          onChange={setTargetType}
+          onChange={(v) => {
+            setTargetType(v);
+            setTarget(null);
+            setFromSlot(false);
+          }}
           options={TARGET_OPTIONS}
           placeholder="Choose a target"
           error={missing.targetType ?? apiErrors.targetType}
         />
-        <TextField
-          label="Fixture, event or session (record id)"
-          value={targetId}
-          onChange={setTargetId}
-          required
-          error={missing.targetId ?? apiErrors.targetId}
-        />
-        {targetType === 'session' && !requirement.data?.some((r) => r.offeringId) ? (
-          <TextField
-            label="Offering (record id)"
-            value={offeringId}
-            onChange={setOfferingId}
-            error={missing.offeringId ?? apiErrors.offeringId}
+        {fromSlot && target ? (
+          <div className="ops-section" role="group" aria-label="The uncovered slot">
+            <p data-testid="proposal-target">
+              <strong>{target.title}</strong>
+              {target.when ? ` · ${target.when}` : ''} (from the uncovered slot)
+            </p>
+            <div className="ops-actions">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setTarget(null);
+                  setFromSlot(false);
+                }}
+              >
+                Choose another {humanize(target.targetType).toLowerCase()}
+              </Button>
+            </div>
+          </div>
+        ) : isTargetType(targetType) ? (
+          <AssignmentTargetPicker
+            key={targetType}
+            targetType={targetType}
+            facilityId={facilityId}
+            value={target}
+            onChange={setTarget}
+            error={missing.targetId ?? apiErrors.targetId ?? apiErrors.offeringId}
           />
         ) : null}
         <TextField
@@ -394,7 +460,9 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
       {outcome ? (
         <CommandSuccess label={ASSIGNMENT_STATUS[outcome.assignment.status].label}>
           <Link to={`/staff/assignments/${outcome.assignment.id}`}>Manage this assignment</Link>
-          {outcome.uncovered ? <UncoveredNotice notice={outcome.uncovered} /> : null}
+          {outcome.uncovered ? (
+            <UncoveredNotice notice={outcome.uncovered} timezone={outcomeZone ?? timezone} />
+          ) : null}
         </CommandSuccess>
       ) : null}
     </section>
@@ -403,14 +471,17 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
 
 export function UncoveredNotice({
   notice,
+  timezone,
 }: {
   notice: NonNullable<Schema<'UncoveredAssignmentNotice'>>;
+  /** The assignment's facility zone (SPK-SCHED-008); the device zone, labelled, when unknown. */
+  timezone?: string | null;
 }) {
   return (
     <StateView
       variant="unavailable"
       title="Slot uncovered: escalated"
-      description={`The ${humanize(notice.role).toLowerCase()} slot ${notice.slot} from ${formatInstant(notice.startsAt)} has no accepted assignment. It is raised in the Today workspace for replacement.`}
+      description={`The ${humanize(notice.role).toLowerCase()} slot ${notice.slot} from ${formatInstant(notice.startsAt, timezone)} has no accepted assignment. It is raised in the Today workspace for replacement.`}
     />
   );
 }

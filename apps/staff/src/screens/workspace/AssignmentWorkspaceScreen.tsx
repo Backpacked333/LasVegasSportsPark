@@ -11,8 +11,10 @@
  *   fixture the readiness explanation (`GET /v1/fixtures/{id}/readiness`: checks, issues with
  *   the responsible role and required action, and roster counts per side, never player personal
  *   details). Material changes come from the viewer's notices about this activity, old and new.
- * - The API gives no respond-by deadline on an offer and no field-limited player list, so neither
- *   is shown.
+ * - An accepted official of a fixture sees the field-limited player list (MatchSheet.tsx,
+ *   `GET /v1/fixtures/{id}/match-sheet`: names, numbers, playing status and team roles only).
+ * - The API gives no respond-by deadline on an offer (offer deadlines are DEC-011), so none is
+ *   shown.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -30,7 +32,8 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { MY_ASSIGNMENTS_KEY, MyAssignmentPage, type WorkspaceAssignment } from './MyAssignment';
-import { ASSIGNMENT_BADGE } from './WorkspaceScreen';
+import { MatchSheetPlayers } from './MatchSheet';
+import { ASSIGNMENT_BADGE, activityZone } from './WorkspaceScreen';
 
 export function AssignmentWorkspaceScreen() {
   return (
@@ -61,6 +64,7 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
   const [reason, setReason] = useState('');
   const [missing, setMissing] = useState(false);
   const badge = ASSIGNMENT_BADGE[a.status];
+  const zone = activityZone(item);
   const can = (action: string) => item.availableActions.includes(action);
   const path = { id: a.id };
   const error = accept.error ?? decline.error ?? withdraw.error;
@@ -95,12 +99,12 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
         {a.slot > 1 ? `, slot ${a.slot}` : ''}
       </h3>
       <StatusBadge tone={badge.tone} label={badge.label} />
-      <p>{formatRange(a.scheduledStart, a.scheduledEnd)}</p>
+      <p>{formatRange(a.scheduledStart, a.scheduledEnd, zone)}</p>
       <p className="caption">
-        You are held until {formatInstant(a.committedUntil)} including {a.turnaroundMinutes} minutes
-        of turnaround.
+        You are held until {formatInstant(a.committedUntil, zone)} including {a.turnaroundMinutes}{' '}
+        minutes of turnaround.
         {a.engagement !== 'regular'
-          ? ` ${humanize(a.engagement)} work: your access ${a.access.until ? `ends ${formatInstant(a.access.until)}` : 'is time-bounded'}.`
+          ? ` ${humanize(a.engagement)} work: your access ${a.access.until ? `ends ${formatInstant(a.access.until, zone)}` : 'is time-bounded'}.`
           : ''}
       </p>
       {a.declineReason ? <p className="caption">Declined: {a.declineReason}</p> : null}
@@ -213,7 +217,9 @@ function ActivityDetail({ item }: { item: WorkspaceAssignment }) {
                 tone={READINESS_TONE[r.status]}
                 label={`Readiness: ${humanize(r.status)}`}
               />
-              <p className="caption">Evaluated {formatInstant(r.evaluatedAt)}.</p>
+              <p className="caption">
+                Evaluated {formatInstant(r.evaluatedAt, activityZone(item))}.
+              </p>
               <ul className="ops-history" aria-label="Readiness checks">
                 {r.checks.map((c) => (
                   <li key={c.name}>
@@ -250,6 +256,11 @@ function ActivityDetail({ item }: { item: WorkspaceAssignment }) {
             </div>
           )}
         </QueryBoundary>
+      ) : null}
+      {isFixture &&
+      a.kind === 'official' &&
+      (a.status === 'accepted' || a.status === 'completed') ? (
+        <MatchSheetPlayers fixtureId={item.activity.targetId} />
       ) : null}
       {changes.length > 0 ? (
         <div>

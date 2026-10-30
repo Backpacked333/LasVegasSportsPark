@@ -4,10 +4,12 @@
  *
  * - The record with its history (offered, responded, declined with reason, withdrawn with
  *   reason, completed) and its time-bounded access (SPK-STAFF-004).
- * - Transitions are offered only where the §4.6 Assignment machine has one from the current
- *   state (offer, complete, withdraw); accept and decline belong to the assignee (SCR-W-02). Each
- *   sends the expected revision; STALE_REVISION or INVALID_TRANSITION (the official responded
- *   concurrently) reloads the record. The API decides whether the viewer may perform it.
+ * - Transitions are offered only where the API lists them for the viewer now
+ *   (`availableActions` of the staff list `GET /v1/assignments?targetType&targetId`, WRK-01: the
+ *   machine events allowed from the current state that the viewer's roles may perform at the
+ *   assignment's facility); accept and decline belong to the assignee (SCR-W-02). Each sends the
+ *   expected revision; STALE_REVISION or INVALID_TRANSITION (the official responded concurrently)
+ *   reloads the record.
  * - Replacement (`GET`/`POST /v1/assignments/{id}/replacements`): qualified, available,
  *   non-conflicting candidates with the API's reasons; offering the slot to one, optionally
  *   withdrawing the original (absent official). A slot left uncovered close to kickoff is
@@ -20,7 +22,7 @@ import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, STAFF_TABS } from '../../features/operations/AreaTabs';
-import { nameOf, usePersonNames } from '../../features/operations/context';
+import { nameOf, useFacilityZone, usePersonNames } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import {
   CheckboxField,
@@ -32,22 +34,16 @@ import { formatInstant, formatRange, humanize } from '../../features/operations/
 import { ASSIGNMENT_STATUS } from '../../features/operations/labels';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { UncoveredNotice } from './AssignmentsScreen';
 
 type Assignment = Schema<'Assignment'>;
 type AssignmentStatus = Schema<'AssignmentStatus'>;
 
-/** §4.6 AssignmentMachine (packages/contracts/src/state-machines.ts) transitions staff may request. */
-const STAFF_TRANSITIONS: Record<AssignmentStatus, readonly ('offer' | 'complete' | 'withdraw')[]> =
-  {
-    proposed: ['offer', 'withdraw'],
-    offered: ['withdraw'],
-    accepted: ['complete', 'withdraw'],
-    declined: [],
-    withdrawn: [],
-    completed: [],
-  };
+/** The staff transitions this screen offers, when the API lists them in `availableActions`. */
+const STAFF_EVENTS = ['offer', 'complete', 'withdraw'] as const;
+type StaffEvent = (typeof STAFF_EVENTS)[number];
 /** States from which the slot may need someone else (the original stays in history). */
 const REPLACEABLE: ReadonlySet<AssignmentStatus> = new Set([
   'offered',
@@ -82,6 +78,8 @@ export function AssignmentDetailScreen() {
 }
 
 function AssignmentDetail({ assignment: a }: { assignment: Assignment }) {
+  // SPK-SCHED-008: the assignment's facility zone.
+  const zone = useFacilityZone(a.facilityId);
   const names = usePersonNames([a.personId]);
   const badge = ASSIGNMENT_STATUS[a.status];
   const access = a.access;
@@ -97,36 +95,36 @@ function AssignmentDetail({ assignment: a }: { assignment: Assignment }) {
           <dt>Person</dt>
           <dd>{nameOf(names, a.personId)}</dd>
           <dt>When</dt>
-          <dd>{formatRange(a.scheduledStart, a.scheduledEnd)}</dd>
+          <dd>{formatRange(a.scheduledStart, a.scheduledEnd, zone)}</dd>
           <dt>Held until (with turnaround of {a.turnaroundMinutes} minutes)</dt>
-          <dd>{formatInstant(a.committedUntil)}</dd>
+          <dd>{formatInstant(a.committedUntil, zone)}</dd>
           <dt>Engagement</dt>
           <dd>{humanize(a.engagement)}</dd>
           <dt>Time-bounded access</dt>
           <dd>
             {humanize(access.status)}
             {access.from && access.until
-              ? `, ${formatInstant(access.from)} to ${formatInstant(access.until)}`
+              ? `, ${formatInstant(access.from, zone)} to ${formatInstant(access.until, zone)}`
               : ''}
             {access.active ? ' (in effect now)' : ''}
           </dd>
         </dl>
         <ol className="ops-history" aria-label="Assignment history">
-          {a.offeredAt ? <li>Offered {formatInstant(a.offeredAt)}</li> : null}
-          {a.acceptedAt ? <li>Accepted {formatInstant(a.acceptedAt)}</li> : null}
+          {a.offeredAt ? <li>Offered {formatInstant(a.offeredAt, zone)}</li> : null}
+          {a.acceptedAt ? <li>Accepted {formatInstant(a.acceptedAt, zone)}</li> : null}
           {a.declinedAt ? (
             <li>
-              Declined {formatInstant(a.declinedAt)}
+              Declined {formatInstant(a.declinedAt, zone)}
               {a.declineReason ? `: ${a.declineReason}` : ''}
             </li>
           ) : null}
           {a.withdrawnAt ? (
             <li>
-              Withdrawn {formatInstant(a.withdrawnAt)}
+              Withdrawn {formatInstant(a.withdrawnAt, zone)}
               {a.withdrawnReason ? `: ${a.withdrawnReason}` : ''}
             </li>
           ) : null}
-          {a.completedAt ? <li>Completed {formatInstant(a.completedAt)}</li> : null}
+          {a.completedAt ? <li>Completed {formatInstant(a.completedAt, zone)}</li> : null}
           {a.replacesAssignmentId ? (
             <li>
               Replaces{' '}
@@ -141,8 +139,27 @@ function AssignmentDetail({ assignment: a }: { assignment: Assignment }) {
   );
 }
 
+/** WRK-01: the events the viewer may perform on this assignment now, from the staff list. */
+function useAvailableActions(a: Assignment) {
+  const list = useApiQuery({
+    path: '/assignments',
+    request: { query: { targetType: a.targetType, targetId: a.targetId, limit: 50 } },
+  });
+  const item = list.data?.items.find((i) => i.id === a.id);
+  return {
+    list,
+    events: item
+      ? STAFF_EVENTS.filter((e) => item.availableActions.includes(e))
+      : list.data
+        ? []
+        : undefined,
+  };
+}
+
 function Transitions({ assignment: a }: { assignment: Assignment }) {
+  const zone = useFacilityZone(a.facilityId);
   const queryClient = useQueryClient();
+  const available = useAvailableActions(a);
   const invalidate = [
     ['api', '/assignments/{id}'],
     ['api', '/assignments'],
@@ -153,14 +170,32 @@ function Transitions({ assignment: a }: { assignment: Assignment }) {
   const [withdrawing, setWithdrawing] = useState(false);
   const [reason, setReason] = useState('');
   const [missingReason, setMissingReason] = useState(false);
-  const allowed = STAFF_TRANSITIONS[a.status];
+  const allowed: readonly StaffEvent[] = available.events ?? [];
   const reload = () => {
     offer.reset();
     complete.reset();
     withdraw.reset();
     void queryClient.invalidateQueries({ queryKey: ['api', '/assignments/{id}'] });
+    void queryClient.invalidateQueries({ queryKey: ['api', '/assignments'] });
   };
-  if (allowed.length === 0) return null;
+  if (available.events === undefined) {
+    return (
+      <section className="ops-section" aria-labelledby="transitions-title">
+        <h3 id="transitions-title">Change this assignment</h3>
+        {available.list.error ? (
+          <StateView
+            variant="error"
+            error={available.list.error}
+            onRetry={() => void available.list.refetch()}
+          />
+        ) : (
+          <StateView variant="loading" label="what you may change" />
+        )}
+      </section>
+    );
+  }
+  const last = offer.data ?? complete.data ?? withdraw.data;
+  if (allowed.length === 0 && !last) return null;
   const path = { id: a.id };
   const body = { expectedRevision: a.revision };
   const error = offer.error ?? complete.error ?? withdraw.error;
@@ -172,7 +207,6 @@ function Transitions({ assignment: a }: { assignment: Assignment }) {
     setMissingReason(false);
     void withdraw.submit({ path, body: { ...body, reason: reason.trim() } }).catch(() => undefined);
   };
-  const last = offer.data ?? complete.data ?? withdraw.data;
   return (
     <section className="ops-section" aria-labelledby="transitions-title">
       <h3 id="transitions-title">Change this assignment</h3>
@@ -228,7 +262,7 @@ function Transitions({ assignment: a }: { assignment: Assignment }) {
       {error ? <CommandError error={error} onReload={reload} subject="This assignment" /> : null}
       {last ? (
         <CommandSuccess label={ASSIGNMENT_STATUS[last.assignment.status].label}>
-          {last.uncovered ? <UncoveredNotice notice={last.uncovered} /> : null}
+          {last.uncovered ? <UncoveredNotice notice={last.uncovered} timezone={zone} /> : null}
         </CommandSuccess>
       ) : null}
     </section>
@@ -243,6 +277,7 @@ const REASON_TONE: Record<Schema<'ReplacementCandidateReason'>['severity'], Stat
 };
 
 function Replacement({ assignment: a }: { assignment: Assignment }) {
+  const zone = useFacilityZone(a.facilityId);
   const candidates = useApiQuery({
     path: '/assignments/{id}/replacements',
     request: { path: { id: a.id } },
@@ -314,7 +349,7 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
               </p>
             ) : null}
             <fieldset className="ops-fieldset">
-              <legend>Candidates (evaluated {formatInstant(data.evaluatedAt)})</legend>
+              <legend>Candidates (evaluated {formatInstant(data.evaluatedAt, zone)})</legend>
               {data.candidates.map((c) => (
                 <div key={c.personId}>
                   <label className="ops-check">
@@ -395,7 +430,9 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
             Original: {ASSIGNMENT_STATUS[command.data.original.status].label}. Readiness is
             re-evaluated by the service.
           </span>
-          {command.data.uncovered ? <UncoveredNotice notice={command.data.uncovered} /> : null}
+          {command.data.uncovered ? (
+            <UncoveredNotice notice={command.data.uncovered} timezone={zone} />
+          ) : null}
         </CommandSuccess>
       ) : null}
     </section>

@@ -15,10 +15,12 @@
  *   and synchronised once on reconnection (§4.15); check-in, payments, capacity, guardian changes,
  *   roster transfers and pickup permission need a connection.
  * - Visitor categories are the API's; which ones a facility uses is DEC-071 (pending).
- * - Looking a person up without a pass is not available: the API has no person search.
+ * - A person without a pass is looked up with the staff person search (`GET /v1/people`, as the
+ *   viewer's role allows; PersonLookupArrival), then their arrival and check-in are recorded the
+ *   same way, each chosen explicitly.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -29,11 +31,7 @@ import { useOperatingFacility } from '../../features/operations/context';
 import { ChooseFacility, CommandError, CommandSuccess } from '../../features/operations/feedback';
 import { CheckboxField, SelectField, TextField } from '../../features/operations/fields';
 import { formatRange, humanize } from '../../features/operations/format';
-import {
-  CHECKIN_STATUS,
-  ISSUE_SEVERITY,
-  VISITOR_CATEGORY_LABEL,
-} from '../../features/operations/labels';
+import { CHECKIN_STATUS, VISITOR_CATEGORY_LABEL } from '../../features/operations/labels';
 import { useOfflineQueue } from '../../features/operations/offline/OfflineQueueProvider';
 import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
 import type { RosterSnapshot } from '../../features/operations/offline/queue';
@@ -42,6 +40,8 @@ import { Button } from '../../ui/Button';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { CheckinOutcome } from './CheckinOutcome';
+import { PersonLookupArrival } from './PersonLookupArrival';
 
 type PassScan = Schema<'PassScan'>;
 type ScanPerson = Schema<'ScanPerson'>;
@@ -166,14 +166,11 @@ export function ArrivalScannerScreen() {
               <p className="caption">Error code: {scanError.code}</p>
             ) : null}
           </div>
-          <div className="ops-section">
-            <h3>Find a person without a pass</h3>
-            <StateView
-              variant="unavailable"
-              title="Not available yet"
-              description="Looking a person up is not available here: the service does not offer a person search yet. Scan the person's pass or the household pass."
-            />
-          </div>
+          <PersonLookupArrival
+            facilityId={facility.facilityId}
+            timezone={facility.timezone}
+            window={facility.window}
+          />
           {scan ? (
             <ArrivalSelection
               key={scan.result.pass.id + scan.result.scannedAt}
@@ -636,50 +633,5 @@ function HeldCheckin({
         <CommandError error={recheck.error} subject="This check-in" />
       ) : null}
     </li>
-  );
-}
-
-export function CheckinOutcome({
-  checkin,
-  title,
-  onRecheck,
-  busy,
-}: {
-  checkin: SessionCheckin;
-  title: string;
-  onRecheck?: () => void;
-  busy?: boolean;
-}) {
-  const badge = CHECKIN_STATUS[checkin.status];
-  const issues = useMemo(() => checkin.issues, [checkin.issues]);
-  return (
-    <div className="ops-section" data-testid="checkin-outcome">
-      <StatusBadge
-        tone={badge.tone}
-        label={
-          checkin.status === 'admitted' ? `Checked in to ${title}` : `${badge.label}: ${title}`
-        }
-      />
-      {issues.length > 0 ? (
-        <ul className="ops-history" aria-label={`Arrival checks for ${title}`}>
-          {issues.map((issue) => {
-            const severity = ISSUE_SEVERITY[issue.severity];
-            return (
-              <li key={`${issue.code}-${issue.reference?.id ?? ''}`}>
-                <StatusBadge tone={severity.tone} label={severity.label} /> {issue.message}{' '}
-                <span className="caption">Next: {humanize(issue.nextAction)}.</span>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
-      {checkin.status === 'held' && onRecheck ? (
-        <div className="ops-actions">
-          <Button variant="secondary" busy={busy} onClick={onRecheck}>
-            Check again
-          </Button>
-        </div>
-      ) : null}
-    </div>
   );
 }

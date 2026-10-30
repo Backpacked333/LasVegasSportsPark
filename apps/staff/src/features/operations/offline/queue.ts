@@ -14,6 +14,9 @@
  * - Items another account queued on this device stay queued until that account signs in, so the
  *   recorded actor is always the person who observed (§4.15 "actor").
  * - Conflicting and rejected items are kept for review with the API's reason (SPK-AT-018).
+ * - The server's batch id and counts of the latest synchronisations are kept (ids and numbers
+ *   only), so the stored per-item outcome can be read again with `GET /v1/offline-sync/{id}`
+ *   (ENT-01) after the response was shown.
  */
 import type { Schema } from '@sportspark/api-client';
 
@@ -44,9 +47,29 @@ export interface ReviewItem {
   outcome: 'accepted_with_conflict' | 'rejected';
   reason: string | null;
   flags: string[];
+  /** The client batch id the item was sent in. */
   batchId: string;
+  /** The API's id of the stored batch (`GET /v1/offline-sync/{id}`); absent in older queues. */
+  serverBatchId?: string;
   reviewedAt: string;
 }
+
+/** A batch the API answered, by its ids and counts only (no personal data). */
+export interface SyncedBatch {
+  id: string;
+  clientBatchId: string;
+  facilityId: string;
+  receivedAt: string;
+  items: number;
+  accepted: number;
+  conflicts: number;
+  rejected: number;
+  duplicates: number;
+  stale: number;
+}
+
+/** How many synchronised batches this device remembers. */
+export const SYNCED_BATCHES_KEPT = 20;
 
 export interface SyncSummary {
   at: string;
@@ -64,6 +87,8 @@ export interface OfflineQueueState {
   pending: QueuedItem[];
   review: ReviewItem[];
   lastSync: SyncSummary | null;
+  /** Newest first, at most SYNCED_BATCHES_KEPT. */
+  synced?: SyncedBatch[];
 }
 
 export interface PendingBatch {
@@ -186,15 +211,32 @@ export class OfflineQueueStore {
           reason: r.reason,
           flags: r.flags,
           batchId: batch.batchId,
+          serverBatchId: result.id,
           reviewedAt: now.toISOString(),
         });
       }
     }
     const sent = new Set(batch.items.map((q) => q.item.clientObservationId));
+    const synced: SyncedBatch = {
+      id: result.id,
+      clientBatchId: result.clientBatchId,
+      facilityId: result.facilityId,
+      receivedAt: result.receivedAt,
+      items: result.counts.items,
+      accepted: result.counts.accepted,
+      conflicts: result.counts.acceptedWithConflict,
+      rejected: result.counts.rejected,
+      duplicates: result.counts.duplicate,
+      stale: result.counts.stale,
+    };
     this.update({
       ...this.state,
       pending: this.state.pending.filter((q) => !sent.has(q.item.clientObservationId)),
       review: [...this.state.review, ...review],
+      synced: [synced, ...(this.state.synced ?? []).filter((b) => b.id !== result.id)].slice(
+        0,
+        SYNCED_BATCHES_KEPT,
+      ),
     });
   }
 

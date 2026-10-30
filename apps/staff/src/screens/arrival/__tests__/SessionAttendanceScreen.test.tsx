@@ -13,8 +13,9 @@ import {
   OFFERING,
   SESSION_1,
   actor,
+  nameEntry,
   oneFacilityMe,
-  person,
+  personNames,
 } from '../../../features/operations/testing';
 import { FACILITY_A, createTestApp } from '../../../testing/test-app';
 
@@ -75,6 +76,10 @@ function attendance(people: unknown[]) {
 
 const ALEX_PRESENT = {
   personId: CHILD_1,
+  // ENT-01: the attendance read names its people.
+  givenName: 'Alex',
+  familyName: 'Rivera',
+  displayName: 'Alex Rivera',
   effectiveState: 'present',
   status: 'recorded',
   currentObservationIds: [OBS_1],
@@ -102,13 +107,9 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
         },
       ],
     },
-    'GET /people/{id}': (req) =>
-      fakeResponse(
-        200,
-        req.params.id === CHILD_1
-          ? person(CHILD_1, 'Alex', 'Rivera').body
-          : person(CHILD_2, 'Blake', 'Rivera').body,
-      ),
+    // Blake is expected (a session booking) without an attendance record: named by the names read.
+    'GET /person-names': personNames([nameEntry(CHILD_2, 'Blake', 'Rivera')]),
+    'GET /sessions': { status: 200, body: { items: [], nextCursor: null } },
     ...extra,
   };
 }
@@ -206,6 +207,9 @@ describe('SCR-S-29 SessionAttendanceScreen', () => {
         'GET /attendance': attendance([
           {
             personId: CHILD_1,
+            givenName: 'Alex',
+            familyName: 'Rivera',
+            displayName: 'Alex Rivera',
             effectiveState: null,
             status: 'conflict',
             currentObservationIds: [OBS_1, OBS_2],
@@ -295,5 +299,56 @@ describe('SCR-S-29 SessionAttendanceScreen', () => {
     const events = app.fake.requests.find((r) => r.route === '/events');
     expect(events?.query.facilityId).toBe(FACILITY_A);
     expect(events?.query.start).toBe('2026-10-24T12:00:00.000Z');
+  });
+
+  it('CAT-01 / SPK-SCHED-008: lists today’s program sessions in the facility time zone to open', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': { status: 200, body: { items: [], nextCursor: null } },
+        'GET /sessions': {
+          status: 200,
+          body: {
+            items: [
+              {
+                sessionId: SESSION_1,
+                offeringId: OFFERING,
+                offeringName: 'Junior skills',
+                sequence: 3,
+                title: null,
+                scheduledStart: '2026-10-24T16:00:00.000Z',
+                scheduledEnd: '2026-10-24T17:00:00.000Z',
+                status: 'scheduled',
+                facilityId: FACILITY_A,
+                timezone: 'America/Los_Angeles',
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+      }),
+    });
+    render(app.at('/arrival/attendance'));
+    const sessions = await screen.findByRole('list', { name: 'Sessions today' });
+    const link = within(sessions).getByRole('link', { name: 'Junior skills, session 3' });
+    expect(link).toHaveAttribute(
+      'href',
+      `/arrival/attendance?type=session&offeringId=${OFFERING}&sessionId=${SESSION_1}`,
+    );
+    // Shown in the facility zone (PDT), not the device zone.
+    expect(within(sessions).getByText(/09:00 GMT-7|09:00 PDT/)).toBeInTheDocument();
+    const read = app.fake.requests.find((r) => r.route === '/sessions');
+    expect(read?.query).toMatchObject({ facilityId: FACILITY_A, status: 'scheduled' });
+  });
+
+  it('shows today’s sessions as not available when the session list is refused', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': { status: 200, body: { items: [], nextCursor: null } },
+        'GET /sessions': () => fakeResponse(403, apiErrorBody('ACCESS_DENIED')),
+      }),
+    });
+    render(app.at('/arrival/attendance'));
+    expect(await screen.findByTestId('state-unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('No activity in progress')).toBeInTheDocument();
   });
 });

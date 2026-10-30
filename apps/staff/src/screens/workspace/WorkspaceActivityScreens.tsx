@@ -10,15 +10,17 @@
  * - SCR-W-06 Permitted communication: not offered. The API lists no message action for an
  *   assignment (`availableActions`) and coaches and officials are not composer roles; the
  *   communication policy is DEC-012/DEC-062 (pending).
- * - SCR-W-07 Assessments: pending DEC-054 (Package G); the API has no assessment endpoints.
+ * - SCR-W-07 Assessments: assessments/AssessmentsScreen.tsx (behind youth_progression).
+ * - SCR-W-09 identifies the collector with the read-only collector check before the release
+ *   (ReleasePanel with the assigned session).
  */
 import { activityFromAssignment } from '../../features/operations/activity';
-import { AreaTabs, WORKSPACE_TABS } from '../../features/operations/AreaTabs';
 import { formatRange } from '../../features/operations/format';
 import { StateView } from '../../ui/StateView';
 import { AttendancePanel } from '../arrival/AttendancePanel';
 import { ReleasePanel } from '../arrival/ReleasePanel';
 import { MyAssignmentPage } from './MyAssignment';
+import { activityZone } from './WorkspaceScreen';
 
 export function WorkspaceAttendanceScreen() {
   return (
@@ -36,12 +38,16 @@ export function WorkspaceAttendanceScreen() {
         return (
           <>
             <p className="caption">
-              {formatRange(item.activity.scheduledStart, item.activity.scheduledEnd)}
+              {formatRange(
+                item.activity.scheduledStart,
+                item.activity.scheduledEnd,
+                activityZone(item),
+              )}
             </p>
             <AttendancePanel
               activity={activity}
               facilityId={item.activity.facilityId}
-              timezone={null}
+              timezone={activityZone(item)}
               title={`Record attendance: ${item.activity.title}`}
             />
           </>
@@ -67,7 +73,11 @@ export function WorkspaceReleaseScreen() {
           );
         }
         return (
-          <ReleasePanel facilityId={item.activity.facilityId} timezone={null} activity={activity} />
+          <ReleasePanel
+            facilityId={item.activity.facilityId}
+            timezone={activityZone(item)}
+            activity={activity}
+          />
         );
       }}
     </MyAssignmentPage>
@@ -95,24 +105,5 @@ export function WorkspaceMessageScreen() {
         </>
       )}
     </MyAssignmentPage>
-  );
-}
-
-export function AssessmentsScreen() {
-  return (
-    <section aria-labelledby="assessments-title">
-      <h2 id="assessments-title">Assessments</h2>
-      <AreaTabs label="Workspace screens" tabs={WORKSPACE_TABS} />
-      <StateView
-        variant="pending-decision"
-        subject="Recording assessments on approved templates"
-        decisions={['DEC-054']}
-        owner="Program manager; Operator/privacy owner"
-      />
-      <p className="caption">
-        No assessment template is approved and the service does not record assessments yet (youth
-        progression is planned for a later package), so nothing can be recorded here.
-      </p>
-    </section>
   );
 }

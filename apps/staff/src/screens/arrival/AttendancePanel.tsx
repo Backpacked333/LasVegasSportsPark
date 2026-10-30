@@ -3,8 +3,10 @@
  * SCR-W-04 (the assigned coach) (SPK-ENTRY-001, SPK-ENTRY-005, SPK-ENTRY-008, §4.7 invariant 9,
  * §4.15, SPK-AT-018).
  *
- * - `GET /v1/attendance` gives each person's current state and full history; for a session the
- *   expected participants come from confirmed enrollments and session bookings.
+ * - `GET /v1/attendance` gives each person's current state, full history and name (ENT-01, names
+ *   only); for a session the expected participants come from confirmed enrollments and session
+ *   bookings, named through `GET /v1/person-names` (a person the viewer may not view keeps a short
+ *   reference).
  * - A first observation is `POST /v1/attendance-observations`. Changing a recorded state is a
  *   correction, a new row that keeps actor, time and the required reason
  *   (`POST /v1/attendance-observations/{id}/corrections`); nothing is overwritten.
@@ -15,7 +17,7 @@
  *   synchronised once on reconnection; corrections need a connection.
  */
 import type { Schema } from '@sportspark/api-client';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
 import {
   attendanceQuery,
@@ -93,13 +95,24 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
     return [...byId.entries()].map(([personId, record]) => ({ personId, record }));
   }, [attendance.data, expectedIds]);
 
-  const names = usePersonNames(useMemo(() => people.map((p) => p.personId), [people]));
+  // ENT-01: the attendance read names its people (after authorizing the read); the expected
+  // participants without a record yet are named through the minimal names read.
+  const unnamed = useMemo(
+    () => people.filter((p) => !p.record?.displayName).map((p) => p.personId),
+    [people],
+  );
+  const names = usePersonNames(unnamed);
+  const labelOf = useCallback(
+    (personId: string, record: PersonAttendance | null) =>
+      record?.displayName ?? nameOf(names, personId),
+    [names],
+  );
   const sorted = useMemo(
     () =>
       [...people].sort((a, b) =>
-        nameOf(names, a.personId).localeCompare(nameOf(names, b.personId)),
+        labelOf(a.personId, a.record).localeCompare(labelOf(b.personId, b.record)),
       ),
-    [people, names],
+    [people, labelOf],
   );
 
   // One snapshot per roster load: queued items name the roster they were observed against.
@@ -209,7 +222,7 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
               {sorted.map(({ personId, record: rec }) => (
                 <AttendanceRow
                   key={personId}
-                  name={nameOf(names, personId)}
+                  name={labelOf(personId, rec)}
                   personId={personId}
                   record={rec}
                   timezone={timezone}

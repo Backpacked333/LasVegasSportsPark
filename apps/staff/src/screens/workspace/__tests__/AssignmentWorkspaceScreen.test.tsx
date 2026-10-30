@@ -2,7 +2,8 @@
  * SCR-W-02 Assignment offer and response, SCR-W-03 Activity detail, SCR-W-10 connectivity state
  * (SPK-UX-007, SPK-STAFF-002, SPK-STAFF-003, SPK-AT-012, SPK-READY-001, SPK-COMMS-005, §4.15):
  * only the viewer's assignments; actions only where the API lists them, with the expected
- * revision; an overlap refusal with its code; readiness counts without player details.
+ * revision; an overlap refusal with its code; readiness counts without player details; the
+ * field-limited match sheet for an accepted official (CMP-06); times in the facility zone (WRK-01).
  */
 import { apiErrorBody, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -271,5 +272,73 @@ describe('SCR-W-02 / SCR-W-03 AssignmentWorkspaceScreen', () => {
       within(status).getByText('1 observation queued on this device (not yet recorded)'),
     ).toBeInTheDocument();
     expect(within(status).getByRole('button', { name: 'Synchronise now' })).toBeInTheDocument();
+  });
+
+  it('CMP-06 / SPK-UX-007: an accepted official sees the field-limited player list', async () => {
+    const accepted = workspaceItem(assignmentRecord({ status: 'accepted', revision: 6 }), [
+      'withdraw',
+    ]);
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/assignments': myAssignments([accepted]),
+        'GET /fixtures/{id}/match-sheet': {
+          status: 200,
+          body: {
+            fixtureId: FIXTURE_1,
+            scheduledStart: '2026-10-24T18:00:00.000Z',
+            status: 'scheduled',
+            venue: null,
+            view: 'full',
+            sides: [
+              {
+                entryId: '0192f1a0-0000-7000-8000-0000000004a1',
+                teamName: 'Red',
+                players: [
+                  {
+                    personId: '0192f1a0-0000-7000-8000-0000000007a1',
+                    displayName: 'Jo Park',
+                    jerseyNumber: 7,
+                    playingStatus: 'guest',
+                    roles: ['captain', 'member'],
+                  },
+                ],
+              },
+              { entryId: '0192f1a0-0000-7000-8000-0000000004a2', teamName: 'Blue', players: [] },
+            ],
+          },
+        },
+      }),
+    });
+    render(app.at(PATH));
+    const players = await screen.findByRole('list', { name: 'Players: Red' });
+    expect(within(players).getByText('#7 Jo Park (Captain, Guest)')).toBeInTheDocument();
+    expect(screen.getByText('No player listed.')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/fixtures/{id}/match-sheet')?.params).toEqual(
+      { id: FIXTURE_1 },
+    );
+    // WRK-01 / SPK-SCHED-008: the activity's time in its facility's zone.
+    expect(screen.getByText(/11:00 (GMT-7|PDT)/)).toBeInTheDocument();
+  });
+
+  it('reads no player list before the official has accepted, and shows a refused one as not available', async () => {
+    const { unmount } = render(createTestApp({ routes: routes() }).at(PATH));
+    expect(await screen.findByText('Readiness: Warning')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Players' })).toBeNull();
+    unmount();
+    const accepted = workspaceItem(assignmentRecord({ status: 'accepted' }), []);
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/assignments': myAssignments([accepted]),
+        'GET /fixtures/{id}/match-sheet': {
+          status: 403,
+          body: apiErrorBody('ACCESS_DENIED', { nextAction: 'contact_support_or_request_access' }),
+        },
+      }),
+    });
+    render(app.at(PATH));
+    const heading = await screen.findByRole('heading', { name: 'Players' });
+    expect(
+      await within(heading.parentElement as HTMLElement).findByTestId('state-unavailable'),
+    ).toBeInTheDocument();
   });
 });
