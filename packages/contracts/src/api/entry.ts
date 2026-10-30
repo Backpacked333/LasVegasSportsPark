@@ -56,7 +56,12 @@ export const ActivityDetailSchema = z
   .openapi('ActivityDetail');
 export type ActivityDetail = z.infer<typeof ActivityDetailSchema>;
 
-/** SPK-ENTRY-004: every arrival check is an actionable issue with a next permitted action. */
+/**
+ * SPK-ENTRY-004: every arrival check is an actionable issue with a next permitted action.
+ * `desk_review_required` is never recorded: it is what a reader without finance authority (the
+ * assigned coach or official, a customer) sees instead of a blocking balance issue, so the reason
+ * and the obligation stay with the desk (SPK-UX-007, §4.14 field-level authorization).
+ */
 export const ArrivalIssueCodeSchema = z
   .enum([
     'no_participation',
@@ -67,6 +72,7 @@ export const ArrivalIssueCodeSchema = z
     'activity_canceled',
     'activity_ended',
     'not_on_site',
+    'desk_review_required',
   ])
   .openapi('ArrivalIssueCode');
 export type ArrivalIssueCode = z.infer<typeof ArrivalIssueCodeSchema>;
