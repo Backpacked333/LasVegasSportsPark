@@ -17,7 +17,9 @@ import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
 import { NotFoundScreen } from './screens/not-found/NotFoundScreen';
 import { AccessReviewScreen } from './screens/people/AccessReviewScreen';
 import { AccessReviewsScreen } from './screens/people/AccessReviewsScreen';
+import { DuplicateCandidateScreen } from './screens/people/DuplicateCandidateScreen';
 import { DuplicateReviewScreen } from './screens/people/DuplicateReviewScreen';
+import { InvitationsScreen } from './screens/people/InvitationsScreen';
 import { OpenAccessReviewScreen } from './screens/people/OpenAccessReviewScreen';
 import { PeopleScreen } from './screens/people/PeopleScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
@@ -57,6 +59,8 @@ export function AppRoutes() {
         <Route path="/people/access-reviews/new" element={<OpenAccessReviewScreen />} />
         <Route path="/people/access-reviews/:reviewId" element={<AccessReviewScreen />} />
         <Route path="/people/duplicates" element={<DuplicateReviewScreen />} />
+        <Route path="/people/duplicates/:candidateId" element={<DuplicateCandidateScreen />} />
+        <Route path="/people/invitations" element={<InvitationsScreen />} />
         <Route path="/people/:personId" element={<PersonRecordScreen />} />
         <Route path="/people/:personId/relationships" element={<RelationshipsScreen />} />
         <Route path="/admin/cases" element={<SupportCasesScreen />} />

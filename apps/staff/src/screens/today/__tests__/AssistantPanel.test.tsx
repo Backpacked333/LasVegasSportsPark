@@ -5,11 +5,11 @@
  * the command they would run and are approved, rejected (with a reason) and applied as separate
  * commands with the expected revision; denials stay inside the panel.
  */
-import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
+import { apiErrorBody, capabilityDisabledBody, fakeResponse } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { FACILITY_A, createTestApp, todayFeed } from '../../../testing/test-app';
+import { FACILITY_A, createTestApp, mePermissions, todayFeed } from '../../../testing/test-app';
 import { assistantRequest, exceptionItem, recommendation } from './fixtures';
 
 const DISABLED = () =>
@@ -31,9 +31,34 @@ function byStatus(items: ReturnType<typeof recommendation>[], nextCursor: string
     });
 }
 
+/** The organization has turned the assistant on (AUT-02, DEC-016); every switch starts off. */
+const ASSISTANT_ON = { 'GET /me/permissions': mePermissions({ enabled: ['assistant'] }) };
+
 async function openPanel(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: 'Assistant (optional)' }));
   return screen.getByRole('region', { name: 'Operational assistant (optional)' });
+}
+
+const APPLY_OPERATION = '0192f1a0-0000-7000-8000-0000000000b7';
+
+/** An approved recommendation whose apply has no known outcome (its operation recovery_required). */
+function unknownApply(overrides: Record<string, unknown> = {}) {
+  const base = recommendation();
+  return recommendation({
+    status: 'approved',
+    revision: 5,
+    apply: {
+      ...base.apply,
+      state: 'running',
+      operationId: APPLY_OPERATION,
+      lastError: {
+        code: 'APPLY_OUTCOME_UNKNOWN',
+        message: 'The owning module did not report an outcome; its records must be checked.',
+        details: { outcome: 'unknown', operationId: APPLY_OPERATION },
+      },
+    },
+    ...overrides,
+  });
 }
 
 describe('SCR-S-50 AssistantPanel', () => {
@@ -83,6 +108,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
+        ...ASSISTANT_ON,
         'GET /recommendations': { status: 200, body: { items: [], nextCursor: null } },
         'POST /assistant/requests': {
           status: 201,
@@ -128,6 +154,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
+        ...ASSISTANT_ON,
         'GET /recommendations': { status: 200, body: { items: [], nextCursor: null } },
         'POST /assistant/requests': { status: 201, body: assistantRequest() },
       },
@@ -189,6 +216,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const approved = recommendation({ status: 'approved', revision: 3 });
     const app = createTestApp({
       routes: {
+        ...ASSISTANT_ON,
         'GET /recommendations': byStatus([recommendation()]),
         'POST /recommendations/{id}/approve': { status: 200, body: approved },
         'POST /recommendations/{id}/apply': {
@@ -225,6 +253,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
+        ...ASSISTANT_ON,
         'GET /recommendations': byStatus([recommendation({ status: 'approved' })]),
         'POST /recommendations/{id}/apply': () =>
           fakeResponse(
@@ -242,20 +271,10 @@ describe('SCR-S-50 AssistantPanel', () => {
 
   it('SPK-AUTO-004: an apply whose outcome is unknown is never shown as "Not applied" and cannot be applied again', async () => {
     const user = userEvent.setup();
-    const unknown = recommendation({
-      status: 'approved',
-      apply: {
-        state: 'running',
-        operationId: null,
-        record: null,
-        lastError: {
-          code: 'APPLY_OUTCOME_UNKNOWN',
-          message: 'The owning module did not report an outcome; its records must be checked.',
-          details: { outcome: 'unknown' },
-        },
-      },
+    const unknown = unknownApply();
+    const app = createTestApp({
+      routes: { ...ASSISTANT_ON, 'GET /recommendations': byStatus([unknown]) },
     });
-    const app = createTestApp({ routes: { 'GET /recommendations': byStatus([unknown]) } });
     render(app.at('/today'));
     const panel = await openPanel(user);
     expect(await within(panel).findByText('Apply outcome: unknown')).toBeInTheDocument();
@@ -287,6 +306,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     const rec = recommendation();
     const app = createTestApp({
       routes: {
+        ...ASSISTANT_ON,
         'GET /recommendations': byStatus([rec]),
         'GET /recommendations/{id}': () =>
           fakeResponse(200, approved ? recommendation({ status: 'approved', revision: 3 }) : rec),
@@ -309,5 +329,250 @@ describe('SCR-S-50 AssistantPanel', () => {
     const awaiting = within(panel).getByRole('list', { name: 'Recommendations awaiting review' });
     await waitFor(() => expect(within(awaiting).getByText('Status: approved')).toBeInTheDocument());
     expect(within(awaiting).queryByRole('button', { name: /^Approve recommendation/ })).toBeNull();
+  });
+
+  it('DEC-016: with the organization’s assistant switch off, existing recommendations stay listed and only rejecting is offered', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { 'GET /recommendations': byStatus([recommendation()]) },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    const off = await within(panel).findByTestId('assistant-capability-off');
+    expect(within(off).getByText('Assistant turned off')).toBeInTheDocument();
+    expect(within(off).getByText(/DEC-016/)).toBeInTheDocument();
+    expect(within(off).getByText(/can still be rejected/)).toBeInTheDocument();
+    expect(within(panel).queryByRole('form', { name: 'Ask the assistant' })).toBeNull();
+    const card = await within(panel).findByRole('listitem', {
+      name: 'Tell U12 families about the pitch change',
+    });
+    expect(within(card).queryByRole('button', { name: /^Approve recommendation/ })).toBeNull();
+    expect(within(card).getByRole('button', { name: /^Reject recommendation/ })).toBeEnabled();
+    expect(within(card).getByText(/Approving and applying are turned off/)).toBeInTheDocument();
+  });
+
+  it('DEC-016: an approval answered CAPABILITY_DISABLED shows the turned-off state, not a failure', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...ASSISTANT_ON,
+        'GET /recommendations': byStatus([recommendation()]),
+        'POST /recommendations/{id}/approve': () =>
+          fakeResponse(403, capabilityDisabledBody('assistant')),
+      },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    await user.click(await within(panel).findByRole('button', { name: /^Approve recommendation/ }));
+    const card = within(panel).getByRole('listitem', {
+      name: 'Tell U12 families about the pitch change',
+    });
+    expect(await within(card).findByText('Assistant turned off')).toBeInTheDocument();
+    expect(
+      within(card).getByText(/Error code: ACCESS_DENIED \(CAPABILITY_DISABLED\)/),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText('Not available to you')).toBeNull();
+  });
+
+  it('SPK-UX-008: a failed GET /me/permissions shows its code and Try again instead of loading forever', async () => {
+    const user = userEvent.setup();
+    let permissionsOk = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': () =>
+          permissionsOk
+            ? fakeResponse(200, mePermissions({ enabled: ['assistant'] }).body)
+            : fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
+        'GET /recommendations': byStatus([recommendation()]),
+      },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    const unknown = await within(panel).findByTestId('assistant-capability-unknown');
+    expect(within(unknown).getByText(/Error code: INTERNAL_ERROR/)).toBeInTheDocument();
+    expect(within(unknown).getByText(/rejecting stays available/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/Loading whether the assistant is turned on/)).toBeNull();
+    // Until the switch is known only Reject is offered; nothing is guessed either way.
+    const card = await within(panel).findByRole('listitem', {
+      name: 'Tell U12 families about the pitch change',
+    });
+    expect(within(card).queryByRole('button', { name: /^Approve recommendation/ })).toBeNull();
+    expect(within(card).getByRole('button', { name: /^Reject recommendation/ })).toBeEnabled();
+    expect(within(panel).queryByText('Assistant turned off')).toBeNull();
+    // Try again re-reads the permissions; once the switch is known to be on, Ask and Approve appear.
+    permissionsOk = true;
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(
+      await within(panel).findByRole('form', { name: 'Ask the assistant' }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(card).getByRole('button', { name: /^Approve recommendation/ }),
+      ).toBeInTheDocument(),
+    );
+    expect(within(panel).queryByTestId('assistant-capability-unknown')).toBeNull();
+  });
+
+  it('AUT-03: a settler records the reconciled outcome of an unknown apply with evidence, a reason and the expected revision', async () => {
+    const user = userEvent.setup();
+    const settled = recommendation({
+      status: 'applied',
+      revision: 6,
+      apply: {
+        ...recommendation().apply,
+        state: 'applied',
+        settlements: [
+          {
+            id: '0192f1a0-0000-7000-8000-0000000000b8',
+            applyOperationId: APPLY_OPERATION,
+            outcome: 'applied',
+            evidence: 'Notification n-7 sent',
+            reason: 'Delivery log checked',
+            policyReferences: [],
+            settledBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Staff GM' },
+            settledAt: '2026-10-24T12:00:00.000Z',
+            auditRecordId: '0192f1a0-0000-7000-8000-0000000000ba',
+          },
+        ],
+      },
+    });
+    // The fakes reflect the settlement after the POST, as the API does: the applied
+    // recommendation leaves the "approved" list and its own read answers settled, so the card and
+    // its form go away; the outcome must still be reported (panel level).
+    let isSettled = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['automation.settle_apply'] }),
+        'GET /recommendations': (req: { query: Record<string, string> }) =>
+          byStatus([isSettled ? settled : unknownApply()])(req),
+        'GET /recommendations/{id}': () => fakeResponse(200, isSettled ? settled : unknownApply()),
+        'POST /recommendations/{id}/settle-apply': () => {
+          isSettled = true;
+          return fakeResponse(200, settled);
+        },
+      },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    const form = await within(panel).findByRole('form', {
+      name: 'Record the reconciled outcome: Tell U12 families about the pitch change',
+    });
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(
+      within(form).getByText('Choose what the owning module’s records show.'),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/recommendations/{id}/settle-apply')).toBe(
+      false,
+    );
+    await user.click(within(form).getByLabelText(/^applied: /));
+    await user.type(within(form).getByLabelText(/^Evidence/), 'Notification n-7 sent');
+    await user.type(within(form).getByLabelText(/^Reason/), 'Delivery log checked');
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(
+      await within(panel).findByText(
+        'Outcome recorded for “Tell U12 families about the pitch change”. Recommendation applied; apply applied.',
+      ),
+    ).toBeInTheDocument();
+    // The settled recommendation left "Awaiting review" after the lists were re-read.
+    await waitFor(() =>
+      expect(
+        within(panel).queryByRole('form', { name: /^Record the reconciled outcome/ }),
+      ).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(
+        within(panel).getByText('No recommendations are waiting for review.'),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      within(panel).getByText(
+        'Outcome recorded for “Tell U12 families about the pitch change”. Recommendation applied; apply applied.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(panel).getByRole('status')).toHaveTextContent(/Outcome recorded/);
+    const post = app.fake.requests.find((r) => r.route === '/recommendations/{id}/settle-apply');
+    expect(post?.body).toEqual({
+      expectedRevision: 5,
+      outcome: 'applied',
+      evidence: 'Notification n-7 sent',
+      reason: 'Delivery log checked',
+    });
+    expect(post?.headers['idempotency-key']).toMatch(/^key-/);
+  });
+
+  it('AUT-03: STALE_REVISION on a settlement offers Reload; without the role no settlement is offered', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['automation.settle_apply'] }),
+        'GET /recommendations': byStatus([unknownApply()]),
+        'POST /recommendations/{id}/settle-apply': () =>
+          fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' })),
+      },
+    });
+    const { unmount } = render(app.at('/today'));
+    const panel = await openPanel(user);
+    const form = await within(panel).findByRole('form', { name: /^Record the reconciled outcome/ });
+    await user.click(within(form).getByLabelText(/^not_applied: /));
+    await user.type(within(form).getByLabelText(/^Evidence/), 'Refund r-1 failed');
+    await user.type(within(form).getByLabelText(/^Reason/), 'Provider report');
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(await within(form).findByText(/Error code: STALE_REVISION/)).toBeInTheDocument();
+    expect(within(form).getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+    // The typed evidence stays for the next attempt.
+    expect(within(form).getByLabelText(/^Evidence/)).toHaveValue('Refund r-1 failed');
+    unmount();
+
+    const other = createTestApp({
+      routes: { 'GET /recommendations': byStatus([unknownApply()]) },
+    });
+    render(other.at('/today'));
+    const otherPanel = await openPanel(user);
+    expect(await within(otherPanel).findByText('Apply outcome: unknown')).toBeInTheDocument();
+    expect(
+      within(otherPanel).queryByRole('form', { name: /^Record the reconciled outcome/ }),
+    ).toBeNull();
+  });
+
+  it('AUT-03: recorded settlements are listed with their evidence and who recorded them', async () => {
+    const user = userEvent.setup();
+    const released = recommendation({
+      status: 'approved',
+      revision: 7,
+      apply: {
+        ...recommendation().apply,
+        lastError: {
+          code: 'APPLY_SETTLED_NOT_APPLIED',
+          message:
+            'Reconciled: the command did not take effect. The recommendation may be applied again.',
+          details: { outcome: 'not_applied' },
+        },
+        settlements: [
+          {
+            id: '0192f1a0-0000-7000-8000-0000000000bb',
+            applyOperationId: APPLY_OPERATION,
+            outcome: 'not_applied',
+            evidence: 'No notification was sent',
+            reason: 'Delivery log empty',
+            policyReferences: [],
+            settledBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Staff GM' },
+            settledAt: '2026-10-24T11:00:00.000Z',
+            auditRecordId: '0192f1a0-0000-7000-8000-0000000000bc',
+          },
+        ],
+      },
+    });
+    const app = createTestApp({
+      routes: { ...ASSISTANT_ON, 'GET /recommendations': byStatus([released]) },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    const settlements = await within(panel).findByRole('region', { name: 'Reconciled outcomes' });
+    expect(within(settlements).getByText('Outcome: not_applied')).toBeInTheDocument();
+    expect(within(settlements).getByText('Evidence: No notification was sent')).toBeInTheDocument();
+    expect(within(settlements).getByText(/Staff GM at/)).toBeInTheDocument();
+    // Released: it may be applied again, and the outcome is never shown as unknown.
+    expect(within(panel).queryByText('Apply outcome: unknown')).toBeNull();
+    expect(within(panel).getByRole('button', { name: /^Apply recommendation/ })).toBeEnabled();
   });
 });

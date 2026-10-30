@@ -1,263 +1,123 @@
 /**
- * SCR-S-23 Duplicate review and merge (SPK-IAM-007, §5.3, SPK-AT-024).
+ * SCR-S-23 Duplicate review, the queue (SPK-IAM-007, §5.3, SPK-AT-024).
  *
- * The API has no read of duplicate candidates yet (neither a list nor one candidate), so the queue
- * is shown as not available; staff flag a pair (`POST /v1/duplicate-candidates`) and review it
- * here, comparing both records side by side (`GET /v1/people/{id}`). Merging names the survivor
- * explicitly and a reason, carries the candidate's expected revision and an idempotency key, and
- * moves participation, financial ownership, source identifiers and history without importing
- * unverified permissions (the API's rule). The merge operation is followed at
- * `GET /v1/operations/{id}`, and `recovery_required` is shown as needing attention. A refusal such
- * as conflicting ownership is shown with the API's code and the input is kept. Duplicates found
- * by data migration depend on DEC-014, DEC-067 and DEC-068 (pending).
+ * - Candidates from `GET /v1/duplicate-candidates` by status (open by default, merged, dismissed),
+ *   newest first, page by page: both people by name (a child by given name only, §4.14), the
+ *   detection reasons and score, and the status as text. Each opens the candidate review
+ *   (`DuplicateCandidateScreen`). The queue is for roles holding `identity.read_duplicates`;
+ *   others see "not available to you" (an ACCESS_DENIED answer reads the same) and can still flag
+ *   a pair.
+ * - Flagging a pair (`POST /v1/duplicate-candidates`) validates two different person references
+ *   before any request, leaves the score to the API and opens the candidate it returns.
+ * - Duplicates found by data migration depend on DEC-014, DEC-067 and DEC-068 (pending).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
-import { useApiQuery } from '../../api/useApiQuery';
-import { useOperation } from '../../api/useOperation';
+import { useApiPages } from '../../api/useApiPages';
 import { withServerDefaults } from '../../api/server-defaults';
 import { PeopleNav } from '../../features/people/PeopleNav';
 import { PersonReferenceField, referenceError } from '../../features/people/PersonReferenceField';
-import { displayName, KEPT_NOT_SHOWN } from '../../features/people/people';
+import { displayName } from '../../features/people/people';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
-import { CommandError, CommandSuccess } from '../../ui/CommandFeedback';
-import { Facts, RadioGroup, TextAreaField } from '../../ui/FormFields';
+import { CommandError } from '../../ui/CommandFeedback';
+import { SelectField, TextAreaField } from '../../ui/FormFields';
+import { LoadMore } from '../../ui/LoadMore';
+import { QueryBoundary } from '../../ui/QueryBoundary';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
+import { formatDateTime } from '../../ui/time';
 
-type DuplicateCandidate = Schema<'DuplicateCandidate'>;
-type PersonMerge = Schema<'PersonMerge'>;
+type CandidateStatus = Schema<'DuplicateCandidate'>['status'];
 
-const OPERATION_TONE: Record<string, StatusTone> = {
-  pending: 'pending',
-  running: 'pending',
-  succeeded: 'success',
-  failed: 'danger',
-  recovery_required: 'danger',
-  compensated: 'warning',
+export const CANDIDATES_PAGE_SIZE = 25;
+export const READ_DUPLICATES_ACTION = 'identity.read_duplicates';
+export const CANDIDATES_KEY = ['api', '/duplicate-candidates'] as const;
+
+export const CANDIDATE_STATUS_TONE: Record<CandidateStatus, StatusTone> = {
+  open: 'pending',
+  merged: 'success',
+  dismissed: 'neutral',
 };
 
-function PersonColumn({ personId, label }: { personId: string; label: string }) {
-  const person = useApiQuery({ path: '/people/{id}', request: { path: { id: personId } } });
-  return (
-    <section className="panel" aria-label={label}>
-      <h4>{label}</h4>
-      {person.data ? (
-        <>
-          <p>
-            <Link to={`/people/${personId}`}>{displayName(person.data)}</Link>
-          </p>
-          <Facts
-            items={
-              person.data.kind === 'child'
-                ? [
-                    // §4.14: a child is compared by given name, kind and status only.
-                    ['Kind', person.data.kind],
-                    ['Status', person.data.status],
-                    ['Date of birth and contacts', KEPT_NOT_SHOWN],
-                    ['Reference', <code key="id">{personId}</code>],
-                  ]
-                : [
-                    ['Kind', person.data.kind],
-                    ['Status', person.data.status],
-                    ['Date of birth', person.data.dateOfBirth ?? 'Not recorded'],
-                    [
-                      'Contact points',
-                      person.data.contactPoints.length > 0
-                        ? person.data.contactPoints.map((c) => `${c.kind}: ${c.value}`).join('; ')
-                        : 'None',
-                    ],
-                    ['Reference', <code key="id">{personId}</code>],
-                  ]
-            }
-          />
-        </>
-      ) : person.error ? (
-        <StateView variant="unavailable" />
-      ) : (
-        <StateView variant="loading" label={label} />
-      )}
-    </section>
-  );
-}
+const CANDIDATE_STATUSES: readonly CandidateStatus[] = ['open', 'merged', 'dismissed'];
 
-function MergeOutcome({ merge }: { merge: PersonMerge }) {
-  const operation = useOperation(merge.operationId);
-  const status = operation.data?.status;
+function CandidateQueue({ status }: { status: CandidateStatus }) {
+  const pages = useApiPages({
+    path: '/duplicate-candidates',
+    request: { query: { status, limit: CANDIDATES_PAGE_SIZE } },
+  });
   return (
-    <section className="panel" aria-label="Merge outcome">
-      <CommandSuccess message="Merge recorded." />
-      <p>
-        Survivor: <Link to={`/people/${merge.survivorPersonId}`}>{merge.survivorPersonId}</Link>.
-        Merged record: <code>{merge.mergedPersonId}</code>.
-      </p>
-      <Facts
-        label="Moved to the survivor"
-        items={Object.entries(merge.moved).map(
-          ([k, v]) =>
-            [k, typeof v === 'number' ? String(v) : JSON.stringify(v)] as [string, string],
+    <>
+      <QueryBoundary
+        query={pages}
+        label="duplicate candidates"
+        isEmpty={(items) => items.length === 0}
+        empty={{ title: 'No candidates', description: `No duplicate candidate is ${status}.` }}
+        unavailableOffline={['merging and dismissing']}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Duplicate candidates">
+            {items.map((c) => (
+              <li key={c.id}>
+                <div className="row-text">
+                  <Link to={`/people/duplicates/${c.id}`} className="row-title">
+                    {displayName(c.personA)} and {displayName(c.personB)}
+                  </Link>
+                  <span className="caption">
+                    {c.reasons.join('; ')} · score {c.score} · flagged {formatDateTime(c.createdAt)}
+                  </span>
+                </div>
+                <StatusBadge tone={CANDIDATE_STATUS_TONE[c.status]} label={`Status: ${c.status}`} />
+              </li>
+            ))}
+          </ul>
         )}
-      />
-      {status ? (
-        <p>
-          <StatusBadge tone={OPERATION_TONE[status] ?? 'neutral'} label={`Operation: ${status}`} />
-          {status === 'recovery_required'
-            ? ' The merge needs attention: an administrator must complete or reverse it before the records are used.'
-            : ''}
-        </p>
-      ) : null}
-    </section>
+      </QueryBoundary>
+      <LoadMore pages={pages} label="candidates" />
+    </>
   );
 }
 
-function CandidateReview({
-  candidate,
-  onChange,
-  onStartAgain,
-}: {
-  candidate: DuplicateCandidate;
-  onChange: (c: DuplicateCandidate) => void;
-  /** The API has no read of one candidate: a stale candidate is reviewed again from the start. */
-  onStartAgain: () => void;
-}) {
-  const { online } = useApp();
-  const [survivor, setSurvivor] = useState('');
-  const [reason, setReason] = useState('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [merged, setMerged] = useState<PersonMerge | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const merge = useApiCommand('post', '/duplicate-candidates/{id}/merge');
-  const dismiss = useApiCommand('post', '/duplicate-candidates/{id}/dismiss');
-  const open = candidate.status === 'open' && !merged;
-
-  const doMerge = () => {
-    const problems: Record<string, string> = {};
-    if (!survivor) problems['survivor'] = 'Choose which record survives.';
-    if (!reason.trim()) problems['reason'] = 'Write why these records are the same person.';
-    setErrors(problems);
-    if (Object.keys(problems).length > 0) return;
-    void merge
-      .submit({
-        path: { id: candidate.id },
-        body: {
-          survivorPersonId: survivor,
-          reason: reason.trim(),
-          expectedRevision: candidate.revision,
-        },
-      })
-      .then(setMerged)
-      .catch(() => undefined);
-  };
-  const doDismiss = () => {
-    if (!reason.trim()) {
-      setErrors({ reason: 'Write why these records are different people.' });
-      return;
-    }
-    setErrors({});
-    void dismiss
-      .submit({
-        path: { id: candidate.id },
-        body: { reason: reason.trim(), expectedRevision: candidate.revision },
-      })
-      .then((c) => {
-        onChange(c);
-        setSuccess(`Candidate ${c.status}.`);
-      })
-      .catch(() => undefined);
-  };
-
+function Candidates() {
+  const permissions = usePermissions();
+  const [status, setStatus] = useState<CandidateStatus>('open');
+  if (permissions.isPermitted(READ_DUPLICATES_ACTION) === false) {
+    return (
+      <StateView
+        variant="unavailable"
+        title="Not available to you"
+        description="The candidate list is not available to your role. You can still flag a possible duplicate below."
+      />
+    );
+  }
   return (
-    <section className="panel" aria-labelledby="candidate-title">
-      <h3 id="candidate-title">Candidate</h3>
-      <span className="actions-row">
-        <StatusBadge
-          tone={candidate.status === 'open' ? 'pending' : 'neutral'}
-          label={`Status: ${candidate.status}`}
-        />
-      </span>
-      <Facts
-        items={[
-          ['Reasons', candidate.reasons.join('; ')],
-          ['Score', String(candidate.score)],
-          ['Reference', <code key="id">{candidate.id}</code>],
-        ]}
+    <>
+      <SelectField
+        label="Candidate status"
+        options={CANDIDATE_STATUSES.map((s) => ({ value: s, label: s }))}
+        value={status}
+        onChange={(v) => setStatus(v as CandidateStatus)}
       />
-      <div className="facts">
-        <PersonColumn personId={candidate.personAId} label="Record A" />
-        <PersonColumn personId={candidate.personBId} label="Record B" />
-      </div>
-      {open ? (
-        <form
-          noValidate
-          className="form"
-          aria-label="Decide this candidate"
-          onSubmit={(event) => {
-            event.preventDefault();
-            doMerge();
-          }}
-        >
-          <RadioGroup
-            legend="Surviving record"
-            name="survivor"
-            required
-            value={survivor}
-            onChange={setSurvivor}
-            error={errors['survivor']}
-            options={[
-              { value: candidate.personAId, label: 'Record A survives' },
-              { value: candidate.personBId, label: 'Record B survives' },
-            ]}
-          />
-          <p className="caption">
-            Merging moves participation, financial ownership, source identifiers and history to the
-            survivor. Permissions that were never verified are not carried over.
-          </p>
-          <TextAreaField
-            label="Reason"
-            required
-            value={reason}
-            onChange={setReason}
-            error={errors['reason']}
-            maxLength={2000}
-          />
-          <div className="actions-row">
-            <Button type="submit" busy={merge.isProcessing} disabled={!online}>
-              Merge records
-            </Button>
-            <Button
-              variant="secondary"
-              busy={dismiss.isProcessing}
-              disabled={!online}
-              onClick={doDismiss}
-            >
-              Not the same person
-            </Button>
-          </div>
-          {!online ? <p className="caption">Merging needs a connection.</p> : null}
-        </form>
-      ) : null}
-      <CommandSuccess message={success} />
-      <CommandError error={merge.error} onRetry={doMerge} onReload={onStartAgain} />
-      <CommandError error={dismiss.error} onRetry={doDismiss} onReload={onStartAgain} />
-      {merged ? <MergeOutcome merge={merged} /> : null}
-    </section>
+      <CandidateQueue key={status} status={status} />
+    </>
   );
 }
 
-export function DuplicateReviewScreen() {
+function FlagForm() {
   const { online } = useApp();
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const initialA = params.get('personA') ?? '';
   const [personA, setPersonA] = useState(isUuid(initialA) ? initialA : '');
   const [personB, setPersonB] = useState('');
   const [reasons, setReasons] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [candidate, setCandidate] = useState<DuplicateCandidate | null>(null);
-  const flag = useApiCommand('post', '/duplicate-candidates');
+  const flag = useApiCommand('post', '/duplicate-candidates', { invalidate: [CANDIDATES_KEY] });
 
   const submit = () => {
     const problems: Record<string, string> = {};
@@ -284,21 +144,62 @@ export function DuplicateReviewScreen() {
           reasons: lines,
         }),
       })
-      .then(setCandidate)
+      .then((c) => navigate(`/people/duplicates/${c.id}`))
       .catch(() => undefined);
   };
 
+  return (
+    <section className="panel" aria-labelledby="flag-title">
+      <h3 id="flag-title">Flag a possible duplicate</h3>
+      <form
+        noValidate
+        className="form"
+        aria-label="Flag a possible duplicate"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <PersonReferenceField
+          label="Record A reference"
+          required
+          value={personA}
+          onChange={setPersonA}
+          error={errors['personA']}
+        />
+        <PersonReferenceField
+          label="Record B reference"
+          required
+          value={personB}
+          onChange={setPersonB}
+          error={errors['personB']}
+        />
+        <TextAreaField
+          label="Why they may be the same person"
+          required
+          hint="One reason per line."
+          value={reasons}
+          onChange={setReasons}
+          error={errors['reasons']}
+        />
+        <Button type="submit" busy={flag.isProcessing} disabled={!online}>
+          Flag for review
+        </Button>
+      </form>
+      {!online ? <p className="caption">Flagging needs a connection.</p> : null}
+      <CommandError error={flag.error} onRetry={submit} />
+    </section>
+  );
+}
+
+export function DuplicateReviewScreen() {
   return (
     <section aria-labelledby="duplicates-title">
       <h2 id="duplicates-title">Duplicate review</h2>
       <PeopleNav />
       <section className="panel" aria-labelledby="queue-title">
         <h3 id="queue-title">Candidates</h3>
-        <StateView
-          variant="unavailable"
-          title="The candidate list is not available yet"
-          description="The API cannot list duplicate candidates yet. Flag a pair below to review and merge it."
-        />
+        <Candidates />
         <StateView
           variant="pending-decision"
           subject="Reviewing duplicates found by data migration"
@@ -306,53 +207,7 @@ export function DuplicateReviewScreen() {
           owner="Migration owner/operator"
         />
       </section>
-      {candidate ? (
-        <CandidateReview
-          candidate={candidate}
-          onChange={setCandidate}
-          onStartAgain={() => setCandidate(null)}
-        />
-      ) : (
-        <section className="panel" aria-labelledby="flag-title">
-          <h3 id="flag-title">Flag a possible duplicate</h3>
-          <form
-            noValidate
-            className="form"
-            aria-label="Flag a possible duplicate"
-            onSubmit={(event) => {
-              event.preventDefault();
-              submit();
-            }}
-          >
-            <PersonReferenceField
-              label="Record A reference"
-              required
-              value={personA}
-              onChange={setPersonA}
-              error={errors['personA']}
-            />
-            <PersonReferenceField
-              label="Record B reference"
-              required
-              value={personB}
-              onChange={setPersonB}
-              error={errors['personB']}
-            />
-            <TextAreaField
-              label="Why they may be the same person"
-              required
-              hint="One reason per line."
-              value={reasons}
-              onChange={setReasons}
-              error={errors['reasons']}
-            />
-            <Button type="submit" busy={flag.isProcessing} disabled={!online}>
-              Flag for review
-            </Button>
-          </form>
-          <CommandError error={flag.error} onRetry={submit} />
-        </section>
-      )}
+      <FlagForm />
     </section>
   );
 }

@@ -6,14 +6,16 @@
  *   restrictions), each with title, severity as text, affected record, owner queue, age, deadline,
  *   next permitted actions and resolution history; money-moved-but-not-fulfilled financial
  *   exceptions are pinned first with their owner; "Acknowledge" appears only where the API lists
- *   it and sends the exception's expected revision (§4.9);
+ *   that lifecycle step (`verb`, whether by `exceptions.manage` or the queue owner's
+ *   `exceptions.manage_own_queue`) and sends the exception's expected revision (§4.9); domain
+ *   steps link to the owning module's staff screen;
  * - per facility, only current and upcoming activities (`GET /v1/events` from now to the end of the
  *   facility-local day, times in the facility's timezone, SPK-SCHED-008) and field status
  *   (`GET /v1/facilities/{id}/operating-status`);
+ * - per facility, expected arrivals for the facility-local day from the reporting module's
+ *   `GET /v1/reports/expected-arrivals` (counts only, never names; `ExpectedArrivals.tsx`);
  * - sources the viewer may not read are listed as not available, never hidden or inferred;
  * - the optional assistant panel (SCR-S-50), which the rest of Today never depends on.
- *
- * Expected arrivals have no read in the API yet and are shown as not available.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -31,6 +33,8 @@ import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { formatDateTime, formatMinutes, formatTimeRange } from '../../ui/time';
 import '../../ui/form-fields.css';
 import { AssistantPanel } from './AssistantPanel';
+import { ExpectedArrivals } from './ExpectedArrivals';
+import { NextActionLink } from './NextActionLink';
 import {
   EXCEPTION_STATUS_TONE,
   RECOVERY_CATEGORIES,
@@ -89,12 +93,14 @@ function AcknowledgeAction({ item, exceptionId }: { item: TodayItem; exceptionId
     acknowledge.reset();
     void queryClient.invalidateQueries({ queryKey: TODAY_KEY });
   };
-  const revision = item.details['revision'];
+  // SUP-01: the item's own `revision` is the exception's (the details copy is the older form).
+  const fromDetails = item.details['revision'];
+  const revision = item.revision ?? (typeof fromDetails === 'number' ? fromDetails : null);
   const submit = () =>
     void acknowledge
       .submit({
         path: { id: exceptionId },
-        body: typeof revision === 'number' ? { expectedRevision: revision } : {},
+        body: revision !== null ? { expectedRevision: revision } : {},
       })
       .catch(() => undefined);
   return (
@@ -150,7 +156,15 @@ function IssueRow({
           {item.overdue ? <StatusBadge tone="danger" label="Overdue" /> : null}
         </span>
         {next.length > 0 ? (
-          <span className="caption">Next: {next.map((a) => a.label).join(', ')}</span>
+          <span className="caption">
+            Next:{' '}
+            {next.map((a, i) => (
+              <span key={`${a.action}-${a.href ?? i}`}>
+                {i > 0 ? ', ' : null}
+                <NextActionLink action={a} />
+              </span>
+            ))}
+          </span>
         ) : null}
         <details>
           <summary>Resolution history ({item.history.length})</summary>
@@ -387,14 +401,13 @@ function FacilityToday({ facility, now }: { facility: TodayFacility; now: Date }
       </p>
       <ActivitiesSection facility={facility} now={now} />
       <FieldStatusSection facility={facility} />
-      <section aria-label="Expected arrivals">
-        <h4>Expected arrivals</h4>
-        <StateView
-          variant="unavailable"
-          title="Not available yet"
-          description="The API does not publish expected arrivals yet. Arrival and attendance shows recorded arrivals."
-        />
-      </section>
+      <ExpectedArrivals
+        facilityId={facility.facilityId}
+        facilityName={facility.name}
+        timezone={facility.timezone}
+        localDate={facility.localDate}
+        now={now}
+      />
     </section>
   );
 }

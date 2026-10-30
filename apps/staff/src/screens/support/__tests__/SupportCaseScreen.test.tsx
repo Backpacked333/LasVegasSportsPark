@@ -4,18 +4,40 @@
  * records with their own state, history and actions; status changes are exactly the API's
  * `allowedEvents` with the expected revision; a note is history only; STALE_REVISION offers
  * Reload; an unknown action outcome says not to repeat it; a case the viewer may not see is not
- * available.
+ * available. Stage 3: the queue filters by origin (the customer's own requests) and marks customer
+ * requests; the subject is named (and a merged subject links to its surviving record); ending a
+ * case while related records or operations recover needs an acknowledgment with a reason, sent as
+ * `acknowledgeOpenRecovery` (the API refuses RELATED_RECORD_IN_RECOVERY otherwise, listing the
+ * operations); the case's audit history is offered to roles that may read the audit log.
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { FACILITY_A, createTestApp, staffMe } from '../../../testing/test-app';
+import { FACILITY_A, createTestApp, mePermissions, staffMe } from '../../../testing/test-app';
 import { CHECKOUT_ID, EXCEPTION_ID, operationalException } from '../../today/__tests__/fixtures';
 
 const CASE_ID = '0192f1a0-0000-7000-8000-000000000c01';
 const SUBJECT_ID = '0192f1a0-0000-7000-8000-000000000101';
+const SURVIVOR_ID = '0192f1a0-0000-7000-8000-000000000109';
+const OPERATION_ID = '0192f1a0-0000-7000-8000-000000000c0f';
 const ACTOR = { kind: 'staff', accountId: null, personId: null, actorLabel: 'Support Sam' };
+
+function names(...people: [string, string, string][]) {
+  return {
+    status: 200,
+    body: {
+      items: people.map(([personId, givenName, familyName]) => ({
+        personId,
+        canonicalPersonId: personId,
+        givenName,
+        familyName,
+        displayName: `${givenName} ${familyName}`,
+        kind: 'adult',
+      })),
+    },
+  };
+}
 
 function supportCase(overrides: Record<string, unknown> = {}) {
   return {
@@ -26,7 +48,7 @@ function supportCase(overrides: Record<string, unknown> = {}) {
     status: 'open',
     title: 'Charged but not registered',
     description: 'Customer says the card was charged.',
-    subject: { personId: SUBJECT_ID, householdId: null },
+    subject: { personId: SUBJECT_ID, householdId: null, canonicalPersonId: SUBJECT_ID },
     owner: { personId: null, queue: 'support_operator' },
     relatedRecords: [{ type: 'checkout', id: CHECKOUT_ID }],
     origin: { type: 'operational_exception', id: EXCEPTION_ID },
@@ -36,6 +58,7 @@ function supportCase(overrides: Record<string, unknown> = {}) {
     resolvedAt: null,
     closedAt: null,
     openedBy: ACTOR,
+    openedVia: 'staff',
     allowedEvents: ['wait_customer', 'wait_internal', 'resolve', 'close'],
     revision: 3,
     createdAt: '2026-10-24T10:00:00.000Z',
@@ -98,6 +121,10 @@ function detailRoutes(extra: Record<string, unknown> = {}) {
       status: 200,
       body: { id: CHECKOUT_ID, status: 'recovery_required' },
     },
+    'GET /person-names': names(
+      [SUBJECT_ID, 'Alex', 'Rivera'],
+      [SURVIVOR_ID, 'Alexandra', 'Rivera'],
+    ),
     ...extra,
   };
 }
@@ -126,6 +153,27 @@ describe('SCR-S-49 SupportCasesScreen', () => {
         app.fake.requests.some(
           (r) => r.route === '/cases' && r.query['status'] === 'waiting_customer',
         ),
+      ).toBe(true),
+    );
+  });
+
+  it('SPK-SUPPORT-002: filters customer-originated requests through the API and marks them', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /cases': {
+          status: 200,
+          body: { items: [supportCase({ openedVia: 'customer', origin: null })], nextCursor: null },
+        },
+      },
+    });
+    render(app.at('/admin/cases'));
+    const list = await screen.findByRole('list', { name: 'Support cases' });
+    expect(within(list).getByText('Customer request')).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Origin'), 'customer');
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some((r) => r.route === '/cases' && r.query['origin'] === 'customer'),
       ).toBe(true),
     );
   });
@@ -232,10 +280,11 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     expect(screen.getByText('Status: open')).toBeInTheDocument();
     const facts = screen.getByLabelText('Case');
     expect(within(facts).getByText('support_operator')).toBeInTheDocument();
-    expect(within(facts).getByRole('link', { name: 'Open the person record' })).toHaveAttribute(
+    expect(await within(facts).findByRole('link', { name: 'Alex Rivera' })).toHaveAttribute(
       'href',
       `/people/${SUBJECT_ID}`,
     );
+    expect(within(facts).getByText('staff')).toBeInTheDocument();
     // The related checkout is in recovery: shown beside the case.
     const related = screen.getByRole('list', { name: 'Related records' });
     expect(await within(related).findByText('State: recovery_required')).toBeInTheDocument();
@@ -313,14 +362,256 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     await user.click(
       within(panel).getByLabelText(/I understand these records are still in recovery/),
     );
+    // The acknowledgment needs a reason, recorded on the audit record.
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(
+      within(panel).getByText('Write why the case may end while these records recover.'),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/cases/{id}/transition')).toBe(false);
+    await user.type(
+      within(panel).getByLabelText(/Why the case may end now/),
+      'Finance owns the recovery',
+    );
     await user.click(within(panel).getByRole('button', { name: 'Close' }));
     expect(await within(panel).findByText('Case updated. State: closed.')).toBeInTheDocument();
     const post = app.fake.requests.find((r) => r.route === '/cases/{id}/transition');
     expect(post?.body).toEqual({
       event: 'close',
       expectedRevision: 3,
-      reason: `Ended while still in recovery: checkout ${CHECKOUT_ID} (recovery_required), operational_exception ${EXCEPTION_ID} (open)`,
+      acknowledgeOpenRecovery: true,
+      reason: `Finance owns the recovery. Still in recovery: checkout ${CHECKOUT_ID} (recovery_required), operational_exception ${EXCEPTION_ID} (open)`,
     });
+  });
+
+  it('SUP-04: an ending the API refuses with RELATED_RECORD_IN_RECOVERY lists its operations and is sent again only with an acknowledgment', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /cases/{id}': {
+          status: 200,
+          body: supportCase({ relatedRecords: [], origin: null }),
+        },
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+        'POST /cases/{id}/transition': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(
+                409,
+                apiErrorBody('RESOURCE_CONFLICT', {
+                  message: 'A record related to this case is still in recovery.',
+                  details: {
+                    code: 'RELATED_RECORD_IN_RECOVERY',
+                    operations: [
+                      {
+                        operationId: OPERATION_ID,
+                        kind: 'finance.refund',
+                        status: 'recovery_required',
+                      },
+                    ],
+                  },
+                }),
+              )
+            : fakeResponse(200, supportCase({ status: 'closed', revision: 4, allowedEvents: [] }));
+        },
+      },
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const panel = await screen.findByRole('region', { name: 'Status' });
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(await within(panel).findByText(/Error code: RESOURCE_CONFLICT/)).toBeInTheDocument();
+    const notice = await within(panel).findByRole('list', { name: 'Records still in recovery' });
+    expect(
+      within(notice).getByText(/Operation finance.refund .*: state recovery_required/),
+    ).toBeInTheDocument();
+    await user.click(
+      within(panel).getByLabelText(/I understand these records are still in recovery/),
+    );
+    await user.type(within(panel).getByLabelText(/Why the case may end now/), 'Refund reconciled');
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(await within(panel).findByText('Case updated. State: closed.')).toBeInTheDocument();
+    const posts = app.fake.requests.filter((r) => r.route === '/cases/{id}/transition');
+    expect(posts[0]?.body).toEqual({ event: 'close', expectedRevision: 3 });
+    expect(posts[1]?.body).toEqual({
+      event: 'close',
+      expectedRevision: 3,
+      acknowledgeOpenRecovery: true,
+      reason: `Refund reconciled. Still in recovery: operation ${OPERATION_ID} (recovery_required)`,
+    });
+    // A changed intent (the acknowledgment) is a new idempotency key.
+    expect(posts[1]?.headers['idempotency-key']).not.toBe(posts[0]?.headers['idempotency-key']);
+  });
+
+  it('SPK-SUPPORT-003: a closing refused with ACTION_OUTCOME_UNKNOWN names the actions to record first', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /cases/{id}': { status: 200, body: supportCase({ relatedRecords: [], origin: null }) },
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+        'POST /cases/{id}/transition': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('RESOURCE_CONFLICT', {
+              message: 'This case has an action whose outcome is not recorded yet.',
+              nextAction: 'settle_case_action',
+              details: { code: 'ACTION_OUTCOME_UNKNOWN', caseActionIds: ['act-1'] },
+            }),
+          ),
+      },
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const panel = await screen.findByRole('region', { name: 'Status' });
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(await within(panel).findByText(/Error code: RESOURCE_CONFLICT/)).toBeInTheDocument();
+    const unsettled = within(panel).getByRole('list', { name: 'Actions with an unknown outcome' });
+    expect(within(unsettled).getByRole('link', { name: 'finance.refund' })).toHaveAttribute(
+      'href',
+      '#case-action-act-1',
+    );
+  });
+
+  it('SPK-SUPPORT-003: an exception manager records an unknown action’s outcome with evidence, so the case can close', async () => {
+    const user = userEvent.setup();
+    const settledAction = {
+      ...(supportCase().actions[0] as Record<string, unknown>),
+      status: 'succeeded',
+      commandOperationId: OPERATION_ID,
+      revision: 2,
+    };
+    let settled = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['exceptions.manage'] }),
+        'GET /cases/{id}': () =>
+          fakeResponse(
+            200,
+            supportCase({
+              relatedRecords: [],
+              origin: null,
+              revision: settled ? 4 : 3,
+              actions: [settled ? settledAction : supportCase().actions[0]],
+            }),
+          ),
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+        'POST /cases/{id}/actions/{actionId}/settle': () => {
+          settled = true;
+          return fakeResponse(200, { case: supportCase({ revision: 4 }), action: settledAction });
+        },
+      },
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const form = await screen.findByRole('form', { name: 'Record the outcome: finance.refund' });
+    // Succeeded needs the command that ran; nothing is sent until the form is complete.
+    await user.click(within(form).getByLabelText(/^succeeded: /));
+    await user.type(within(form).getByLabelText(/^How the outcome was confirmed/), 'Refund shown');
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(
+      within(form).getByText(
+        'Name the command that ran: its operation or its audit record reference.',
+      ),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route?.endsWith('/settle'))).toBe(false);
+    await user.type(
+      within(form).getByLabelText(/^Operation of the command that ran/),
+      OPERATION_ID,
+    );
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(
+      await screen.findByText('Outcome recorded for finance.refund. Action: succeeded.'),
+    ).toBeInTheDocument();
+    const post = app.fake.requests.find((r) => r.route === '/cases/{id}/actions/{actionId}/settle');
+    expect(post?.params).toEqual({ id: CASE_ID, actionId: 'act-1' });
+    expect(post?.body).toEqual({
+      outcome: 'succeeded',
+      expectedRevision: 1,
+      reason: 'Refund shown',
+      operationId: OPERATION_ID,
+    });
+    expect(post?.headers['idempotency-key']).toMatch(/^key-/);
+    // The case is re-read: the action is settled and its form is gone; the outcome stays announced.
+    const actions = screen.getByRole('list', { name: 'Linked actions' });
+    await waitFor(() => expect(within(actions).getByText('Action: succeeded')).toBeInTheDocument());
+    expect(screen.queryByRole('form', { name: 'Record the outcome: finance.refund' })).toBeNull();
+    expect(
+      screen.getByText('Outcome recorded for finance.refund. Action: succeeded.'),
+    ).toBeInTheDocument();
+  });
+
+  it('records a failed outcome with a reason only; an API refusal shows its code; without the role nothing is offered', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['exceptions.manage'] }),
+        'GET /cases/{id}': {
+          status: 200,
+          body: supportCase({ relatedRecords: [], origin: null }),
+        },
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+        'POST /cases/{id}/actions/{actionId}/settle': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', {
+              message: 'This outcome belongs to a queue outside your scope.',
+            }),
+          ),
+      },
+    });
+    const first = render(app.at(`/admin/cases/${CASE_ID}`));
+    const form = await screen.findByRole('form', { name: 'Record the outcome: finance.refund' });
+    await user.click(within(form).getByLabelText(/^failed: /));
+    await user.type(
+      within(form).getByLabelText(/^How the outcome was confirmed/),
+      'No refund in finance',
+    );
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(await within(form).findByText('Not available to you')).toBeInTheDocument();
+    expect(within(form).getByText(/a queue outside your scope/)).toBeInTheDocument();
+    const post = app.fake.requests.find((r) => r.route === '/cases/{id}/actions/{actionId}/settle');
+    expect(post?.body).toEqual({
+      outcome: 'failed',
+      expectedRevision: 1,
+      reason: 'No refund in finance',
+    });
+    first.unmount();
+
+    const reader = createTestApp({
+      routes: {
+        'GET /cases/{id}': { status: 200, body: supportCase({ relatedRecords: [], origin: null }) },
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+      },
+    });
+    render(reader.at(`/admin/cases/${CASE_ID}`));
+    const actions = await screen.findByRole('list', { name: 'Linked actions' });
+    expect(
+      within(actions).getByText(/Someone who manages exceptions records its outcome/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: /^Record the outcome/ })).toBeNull();
+  });
+
+  it('Enter in the owner’s find-by-name box searches and never sends the assign command', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...detailRoutes({
+          'GET /cases/{id}': {
+            status: 200,
+            body: supportCase({ owner: { personId: SUBJECT_ID, queue: 'support_operator' } }),
+          },
+        }),
+        'GET /me/permissions': mePermissions({ actions: ['identity.lookup_person'] }),
+        'GET /people': { status: 200, body: { items: [], nextCursor: null } },
+      },
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const form = await screen.findByRole('form', { name: 'Assign the case' });
+    await user.click(
+      within(form).getByRole('button', {
+        name: 'Find by name for owner (staff person reference)',
+      }),
+    );
+    await user.type(within(form).getByLabelText('Find by name or contact'), 'Sam{Enter}');
+    await waitFor(() => expect(app.fake.requests.some((r) => r.route === '/people')).toBe(true));
+    expect(app.fake.requests.some((r) => r.route === '/cases/{id}/assign')).toBe(false);
   });
 
   it('SCR-S-49: steps that do not end the case need no acknowledgment while records are in recovery', async () => {
@@ -401,5 +692,63 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     render(app.at(`/admin/cases/${CASE_ID}`));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Status' })).toBeNull();
+  });
+
+  it('SPK-SUPPORT-002: a customer’s own request says so, and a merged subject links to the surviving record', async () => {
+    const app = createTestApp({
+      routes: detailRoutes({
+        'GET /cases/{id}': {
+          status: 200,
+          body: supportCase({
+            openedVia: 'customer',
+            subject: { personId: SUBJECT_ID, householdId: null, canonicalPersonId: SURVIVOR_ID },
+          }),
+        },
+      }),
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    expect(await screen.findByText('Customer request')).toBeInTheDocument();
+    expect(screen.getByText(/The customer opened this request/)).toBeInTheDocument();
+    const facts = screen.getByLabelText('Case');
+    expect(within(facts).getByText('customer request')).toBeInTheDocument();
+    expect(await within(facts).findByRole('link', { name: 'Alexandra Rivera' })).toHaveAttribute(
+      'href',
+      `/people/${SURVIVOR_ID}`,
+    );
+    expect(within(facts).getByText(/merged into/)).toBeInTheDocument();
+  });
+
+  it('a subject the viewer may not view is named as not available, never by id', async () => {
+    const app = createTestApp({
+      routes: detailRoutes({ 'GET /person-names': { status: 200, body: { items: [] } } }),
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const facts = await screen.findByLabelText('Case');
+    expect(await within(facts).findByText('a person not available to you')).toBeInTheDocument();
+    expect(within(facts).queryByText(SUBJECT_ID)).toBeNull();
+  });
+
+  it('offers the case’s audit history only to roles that may read the audit log', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: detailRoutes({
+        'GET /me/permissions': mePermissions({ actions: ['core.view_audit'] }),
+        'GET /audit-records': { status: 200, body: { items: [], nextCursor: null } },
+      }),
+    });
+    const first = render(app.at(`/admin/cases/${CASE_ID}`));
+    const audit = await screen.findByRole('region', { name: 'Audit history' });
+    await user.click(within(audit).getByRole('button', { name: 'Show audit history' }));
+    expect(await within(audit).findByText('No audited actions')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/audit-records')?.query).toMatchObject({
+      targetType: 'support_case',
+      targetId: CASE_ID,
+    });
+    first.unmount();
+
+    const plain = createTestApp({ routes: detailRoutes() });
+    render(plain.at(`/admin/cases/${CASE_ID}`));
+    await screen.findByRole('heading', { name: 'Charged but not registered' });
+    expect(screen.queryByRole('region', { name: 'Audit history' })).toBeNull();
   });
 });

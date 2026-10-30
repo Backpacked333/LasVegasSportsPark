@@ -1,8 +1,9 @@
 /**
- * Facility names and timezones in the viewer's scope, from the unfiltered Today feed (the same
- * cache entry the facility switcher reads). The API has no facility directory for a principal's
- * scope, so screens outside Today use this to show facility-local times (SPK-SCHED-008); when it
- * is not readable, times fall back to the device zone with the zone named.
+ * Facility names and time zones of the organization from `GET /v1/facilities` (K-04,
+ * SPK-SCHED-008), one cached read shared by the Today, People and support screens, so every
+ * facility-local time is shown in its facility's zone. Until the read answers, or when it fails,
+ * a facility is named by its reference and times fall back to the device zone with the zone named
+ * (`formatDateTime` without a zone).
  */
 import { useMemo } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -13,15 +14,17 @@ export interface FacilityDirectory {
   timezone(id: string | null | undefined): string | null;
 }
 
+export const FACILITIES_STALE_MS = 5 * 60_000;
+
 export function useFacilityDirectory(): FacilityDirectory {
-  const today = useApiQuery({ path: '/today', staleTime: 5 * 60_000 });
+  const facilities = useApiQuery({ path: '/facilities', staleTime: FACILITIES_STALE_MS });
   return useMemo(() => {
-    const facilities = today.data?.facilities ?? [];
-    const names = new Map(facilities.map((f) => [f.facilityId, f.name]));
-    const zones = new Map(facilities.map((f) => [f.facilityId, f.timezone]));
+    const items = facilities.data?.items ?? [];
+    const names = new Map(items.map((f) => [f.id, f.name]));
+    const zones = new Map(items.map((f) => [f.id, f.timezone]));
     return {
       name: (id) => (id ? facilityLabel(id, names) : null),
       timezone: (id) => (id ? (zones.get(id) ?? null) : null),
     };
-  }, [today.data]);
+  }, [facilities.data]);
 }
