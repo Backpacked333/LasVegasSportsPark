@@ -247,8 +247,8 @@ function InvitationItem({
           status: invitation.effectiveStatus,
           expiresAt: invitation.expiresAt,
         })}
-        // The id only (§4.14). The detail reads it without a token once SCR-C-17's tokenless
-        // `GET /v1/team-invitations/{id}` read (stage4-m-account) is merged; see the README.
+        // The id only (§4.14). SCR-C-17 reads it with the tokenless `GET /v1/team-invitations/{id}`
+        // (team-routes.test.tsx); accepting needs the link's token.
         onPress={() => router.push(teamInvitationRoute(invitation.id))}
         accessibilityHint="Opens the invitation, where you can accept it from the link you received"
       />

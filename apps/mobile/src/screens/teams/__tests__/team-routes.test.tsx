@@ -4,7 +4,7 @@
  * ids (§4.14), and the Teams tab opens a team's workspace.
  */
 import type { FakeHandler } from '@sportspark/api-client/testing';
-import { fireEvent, renderRouter, screen } from 'expo-router/testing-library';
+import { fireEvent, renderRouter, screen, waitFor, within } from 'expo-router/testing-library';
 import { RootNavigator } from '../../../navigation/RootNavigator';
 import {
   IDS,
@@ -21,6 +21,7 @@ import {
   ruleSet,
   season,
   standings,
+  teamInvitationView,
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 
@@ -51,8 +52,8 @@ const ROUTES: Record<string, FakeHandler> = baseRoutes({
 /** Rendering the whole router tree is slow on a shared machine; allow it time. */
 const SLOW = { timeout: 5_000 };
 
-function renderApp(initialUrl: string) {
-  const app = createTeamsTestApp({ routes: ROUTES });
+function renderApp(initialUrl: string, overrides: Record<string, FakeHandler> = {}) {
+  const app = createTeamsTestApp({ routes: { ...ROUTES, ...overrides } });
   const TestRootLayout = () => (
     <app.wrapper>
       <RootNavigator />
@@ -92,6 +93,24 @@ describe('team routes (SCR-C-21 to SCR-C-29)', () => {
     renderApp(url);
     expect(await screen.findByRole('header', { name: heading }, SLOW)).toBeOnTheScreen();
     expect(screen.queryByLabelText('Link not available')).toBeNull();
+  });
+
+  it('SCR-C-21, SCR-C-17: a listed team invitation opens its detail by id alone, read without a token', async () => {
+    const { app, router } = renderApp('/teams', {
+      'GET /me/team-invitations': {
+        status: 200,
+        body: { items: [teamInvitationView()], nextCursor: null },
+      },
+      'GET /team-invitations/{id}': { status: 200, body: teamInvitationView() },
+    });
+    fireEvent.press(await screen.findByRole('button', { name: /^Canyon Hawks/ }, SLOW));
+    await waitFor(() => expect(router.getPathname()).toBe(`/invitations/${IDS.invitation}`));
+    const params = router.getSearchParams() as Record<string, string>;
+    expect(params.type).toBe('team');
+    expect(params).not.toHaveProperty('token');
+    const details = await screen.findByLabelText('Invitation details', {}, SLOW);
+    expect(within(details).getByLabelText('Team, Canyon Hawks')).toBeOnTheScreen();
+    expect(app.requestsTo('GET', '/team-invitations/{id}').length).toBeGreaterThan(0);
   });
 
   it('a route with a malformed id is "not available" and sends no team request', async () => {
