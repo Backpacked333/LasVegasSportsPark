@@ -126,6 +126,15 @@ export function DisputeActions({ dispute }: { dispute: Dispute }) {
       setErrors(next);
       if (Object.keys(next).length > 0) return;
     }
+    if (action === 'withdraw') {
+      // §4.9, SPK-RESULT-005: league administration ending a captain's dispute names its reason
+      // (the API answers 400 VALIDATION_FAILED without one).
+      if (!reason.trim()) {
+        setErrors({ reason: 'Give the reason for withdrawing the dispute.' });
+        return;
+      }
+      setErrors({});
+    }
     void decide
       .submit({
         path: { id: dispute.id },
@@ -227,7 +236,13 @@ export function DisputeActions({ dispute }: { dispute: Dispute }) {
             send('withdraw');
           }}
         >
-          <TextAreaField label="Note" value={reason} onChange={setReason} />
+          <TextAreaField
+            label="Reason"
+            required
+            value={reason}
+            onChange={setReason}
+            error={errors.reason}
+          />
           <CommandButton type="submit" variant="secondary" busy={decide.isProcessing}>
             Record withdrawal
           </CommandButton>

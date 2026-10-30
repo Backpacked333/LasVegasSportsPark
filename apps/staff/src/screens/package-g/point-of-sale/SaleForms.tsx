@@ -21,7 +21,9 @@
  * locked until the sale is reloaded: reloading shows that payment's recovery, and a cash or
  * external tender for what remains is then a new intent (the API refuses a second card while one
  * is live, SPK-PAY-007). A command refused as stale (the sale was paid, voided or changed
- * elsewhere: STALE_REVISION, INVALID_TRANSITION) offers Reload.
+ * elsewhere: STALE_REVISION, INVALID_TRANSITION) offers Reload. Every command sends the sale's
+ * `expectedRevision` (§4.9): a line, tender, return or void decided on a sale that changed since it
+ * was read (another tender, a provider outcome) is refused as stale instead of applied to it.
  */
 import type { Schema } from '@sportspark/api-client';
 import { Suspense, useMemo, useState, type FormEvent } from 'react';
@@ -84,7 +86,7 @@ export function AddLineForm({ sale, onReload }: { sale: Sale; onReload: () => vo
     if (!productId || qty < 1) return;
     const updated = await intent.send({
       path: { id: sale.id },
-      body: { productId, quantity: qty },
+      body: { productId, quantity: qty, expectedRevision: sale.revision },
     });
     if (updated) {
       setProductId('');
@@ -211,19 +213,22 @@ export function TenderForm({ sale, onReload }: { sale: Sale; onReload: () => voi
     if (!kind || amountMinor === null) return;
     if (kind === 'external' && !evidence.trim()) return;
     if (kind === 'card' && (!token || cardNeedsCustomer)) return;
+    // §4.9: the sale as shown; a tender recorded meanwhile answers STALE_REVISION with Reload.
+    const expectedRevision = sale.revision;
     const body =
       kind === 'cash'
-        ? { kind, amountMinor }
+        ? { kind, amountMinor, expectedRevision }
         : kind === 'external'
           ? {
               kind,
               amountMinor,
+              expectedRevision,
               evidence: {
                 reference: evidence.trim(),
                 ...(notes.trim() ? { notes: notes.trim() } : {}),
               },
             }
-          : { kind, amountMinor, paymentMethodToken: token };
+          : { kind, amountMinor, paymentMethodToken: token, expectedRevision };
     const updated = await intent.send({ path: { id: sale.id }, body });
     if (updated) {
       setAmount('');
@@ -409,6 +414,7 @@ export function ReturnForm({ sale, onReload }: { sale: Sale; onReload: () => voi
         lines: requested.map((r) => ({ saleLineId: r.line.id, quantity: r.quantity })),
         tenderKind: kind as TenderKind,
         reason: reason.trim(),
+        expectedRevision: sale.revision,
         ...(kind === 'external' ? { evidence: { reference: evidence.trim() } } : {}),
         ...(kind === 'cash' && drawer.trim() ? { registerSessionId: drawer.trim() } : {}),
       },

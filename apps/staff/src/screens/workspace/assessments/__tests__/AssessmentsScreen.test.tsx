@@ -79,6 +79,7 @@ function assessment(overrides: Record<string, unknown> = {}) {
     reviewNote: null,
     reviewedAt: null,
     correctsAssessmentId: null,
+    correctionReason: null,
     revision: 3,
     createdAt: '2026-10-20T12:00:00.000Z',
     updatedAt: '2026-10-20T12:00:00.000Z',
@@ -522,6 +523,103 @@ describe('SCR-W-07 AssessmentsScreen', () => {
         { expectedRevision: 6, reason: 'Recorded twice' },
       ),
     );
+  });
+
+  it('§4.9 / §4.7 invariant 9 / SPK-YOUTH-005: a correction says why and keeps the corrected observation’s skill area and visibility', async () => {
+    const user = userEvent.setup();
+    const CORRECTION = '0192f1a0-0000-7000-8000-0000000008d2';
+    const published = assessment({ status: 'published', revision: 6 });
+    const app = createTestApp({
+      routes: routes(
+        {},
+        {
+          'GET /participants/{personId}/assessments': page([published]),
+          'POST /assessments': {
+            status: 201,
+            body: assessment({
+              id: CORRECTION,
+              scaleValue: 3,
+              observedOn: '2026-10-21',
+              correctsAssessmentId: ASSESSMENT,
+              correctionReason: 'The level was misread.',
+              revision: 1,
+            }),
+          },
+        },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    await assessAlex(user);
+    const row = await screen.findByRole('listitem', { name: 'ball_control, observed 2026-10-20' });
+    await user.click(
+      within(row).getByRole('button', {
+        name: 'Record a correction of ball_control, observed 2026-10-20',
+      }),
+    );
+    const form = within(row).getByRole('form', { name: 'Record a correction' });
+    // The corrected observation's skill area and visibility cannot be changed.
+    expect(within(form).getByLabelText('Skill area key')).toHaveValue('ball_control');
+    expect(within(form).getByLabelText('Skill area key')).toBeDisabled();
+    const family = within(form).getByRole('radio', {
+      name: 'Family-visible feedback once approved',
+    });
+    expect(family).toBeChecked();
+    expect(family).toBeDisabled();
+    expect(within(form).getByRole('radio', { name: 'Staff only' })).toBeDisabled();
+    expect(within(form).getByLabelText('Template reference')).toHaveValue(TEMPLATE);
+    await user.type(within(form).getByLabelText('Observation date'), '2026-10-21');
+    await user.clear(within(form).getByLabelText('Value on the scale'));
+    await user.type(within(form).getByLabelText('Value on the scale'), '3');
+    await user.click(within(form).getByRole('button', { name: 'Save as draft' }));
+    expect(within(form).getByText('Say why the assessment is corrected.')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/assessments')).toBe(false);
+    await user.type(
+      within(form).getByLabelText(/^Reason for the correction/),
+      '  The level was misread. ',
+    );
+    await user.click(within(form).getByRole('button', { name: 'Save as draft' }));
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/assessments')).toBe(true),
+    );
+    expect(app.fake.requests.find((r) => r.route === '/assessments')?.body).toEqual({
+      skillAreaKey: 'ball_control',
+      observedOn: '2026-10-21',
+      scaleValue: 3,
+      visibility: 'family',
+      templateId: TEMPLATE,
+      participantPersonId: CHILD_1,
+      offeringId: OFFERING,
+      correctsAssessmentId: ASSESSMENT,
+      reason: 'The level was misread.',
+    });
+  });
+
+  it('shows the reason a correction gives and keeps an edited correction draft on the same observation', async () => {
+    const user = userEvent.setup();
+    const draft = assessment({
+      id: '0192f1a0-0000-7000-8000-0000000008d3',
+      visibility: 'staff_only',
+      correctsAssessmentId: ASSESSMENT,
+      correctionReason: 'The level was misread.',
+    });
+    const app = createTestApp({
+      routes: routes({}, { 'GET /participants/{personId}/assessments': page([draft]) }),
+    });
+    render(app.at('/workspace/assessments'));
+    await assessAlex(user);
+    const row = await screen.findByRole('listitem', { name: 'ball_control, observed 2026-10-20' });
+    expect(
+      within(row).getByText('Reason for the correction: The level was misread.'),
+    ).toBeInTheDocument();
+    await user.click(
+      within(row).getByRole('button', { name: 'Edit ball_control, observed 2026-10-20' }),
+    );
+    const form = within(row).getByRole('form', { name: 'Edit the assessment' });
+    expect(within(form).getByLabelText('Skill area key')).toBeDisabled();
+    expect(within(form).getByRole('radio', { name: 'Staff only' })).toBeChecked();
+    expect(
+      within(form).getByRole('radio', { name: 'Family-visible feedback once approved' }),
+    ).toBeDisabled();
   });
 
   it('says so when the coach has no accepted session', async () => {

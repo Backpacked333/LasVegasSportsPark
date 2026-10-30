@@ -392,6 +392,38 @@ describe('SCR-S-12 decisions and appeals lists (CMP-05, SPK-DISC-003, SPK-DISC-0
     });
   });
 
+  it('§4.9 / SPK-DISC-002: league management recording an appeal’s withdrawal names its reason; none sends no request', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...disciplineRoutes,
+        'GET /appeals': ok(page([appeal()])),
+        'POST /appeals/{id}/decide': ok(appeal({ status: 'withdrawn', revision: 2 })),
+      },
+    });
+    render(app.at('/leagues/discipline'));
+    const list = await screen.findByRole('list', { name: 'Appeals' });
+    const actions = within(list).getByRole('group', { name: /Actions for appeal/ });
+    await user.click(within(actions).getByRole('button', { name: 'Record withdrawal' }));
+    const form = within(list).getByRole('form', { name: 'Record withdrawal the appeal' });
+    await user.click(within(form).getByRole('button', { name: 'Confirm: record withdrawal' }));
+    expect(within(form).getByText('Recording a withdrawal needs a reason.')).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(/^Reason/), '   ');
+    await user.click(within(form).getByRole('button', { name: 'Confirm: record withdrawal' }));
+    expect(app.fake.requests.some((r) => r.route === '/appeals/{id}/decide')).toBe(false);
+    await user.clear(within(form).getByLabelText(/^Reason/));
+    await user.type(within(form).getByLabelText(/^Reason/), 'The player withdrew it in writing.');
+    await user.click(within(form).getByRole('button', { name: 'Confirm: record withdrawal' }));
+    expect(await within(list).findByText('Appeal withdrawn')).toBeInTheDocument();
+    const sent = app.fake.requests.filter((r) => r.route === '/appeals/{id}/decide');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toEqual({
+      action: 'withdraw',
+      expectedRevision: 1,
+      reason: 'The player withdrew it in writing.',
+    });
+  });
+
   it('reports a changed appeal (STALE_REVISION) with Reload, and shows the empty state', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

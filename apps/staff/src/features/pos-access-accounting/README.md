@@ -12,8 +12,9 @@ Whether the complex uses each capability is **Pending decision** DEC-016 with DE
 sale), DEC-080 (access hardware) and DEC-081 (accounting), Product owner. Every switch starts off
 and only a system administrator changes one (K-12). Each screen is inside
 `<CapabilityGate whenOff="notice">`: while a switch is off the API keeps existing records readable
-and never gates retirements, voids, returns, closing a register session or canceling a batch, so
-those stay offered and only commands that start a new commitment are hidden. A command refused
+and never gates retirements, voids, returns, a tender settling a sale already open, closing a
+register session or canceling a batch, so those stay offered and only commands that start a new
+commitment are hidden. A command refused
 meanwhile with ACCESS_DENIED `details.code: 'CAPABILITY_DISABLED'` shows "turned off".
 
 ## Shared pieces
@@ -54,7 +55,11 @@ meanwhile with ACCESS_DENIED `details.code: 'CAPABILITY_DISABLED'` shows "turned
 - A sale (`GET /v1/pos-sales/{id}`): lines at the product's price with the approved charges the API
   applied (no price is sent, SPK-PAY-001; CHARGE_POLICY_NOT_APPROVED is a validation failure naming
   the tax), totals, tenders and returns. Cash and external tenders (evidence reference required,
-  SPK-PAY-012) and, in development builds, card tenders (`POST /v1/pos-sales/{id}/tenders`). A card
+  SPK-PAY-012) and, in development builds, card tenders (`POST /v1/pos-sales/{id}/tenders`). A
+  tender is offered on an open sale also while the switch is off (a tender settles an existing sale,
+  CAPABILITIES-01); adding a line is not. Every line, tender, return and void sends the sale's
+  `expectedRevision` (§4.9): one decided on a sale that changed meanwhile (another tender, a
+  provider outcome) is refused STALE_REVISION and offers Reload. A card
   tender with an unknown outcome leaves the sale open: "recovery required", do not take the card
   again, link to the payment attempt to reconcile (SPK-PAY-007); processing is "not paid yet" with
   no void or receipt; a declined card says nothing was taken; the sale is "paid" only when the API

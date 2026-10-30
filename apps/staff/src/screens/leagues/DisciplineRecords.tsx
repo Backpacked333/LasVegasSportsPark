@@ -5,8 +5,8 @@
  * more", nothing silently cut off) and need league management authority: anyone else sees "not
  * available" and nothing implies a record exists. Overturning a decision needs a reason and
  * `expectedRevision`; an appeal moves only along the appeal machine (review, grant, deny,
- * withdraw), and granting or denying needs a reason. The appeal procedure is pending DEC-010, so
- * no outcome is preselected and the API decides who may act.
+ * withdraw), and granting, denying or recording a withdrawal needs a reason (§4.9). The appeal
+ * procedure is pending DEC-010, so no outcome is preselected and the API decides who may act.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -236,9 +236,14 @@ function AppealActions({ appeal }: { appeal: Appeal }) {
   if (actions.length === 0) return null;
   const send = (chosen: AppealAction) => {
     setLast(chosen);
-    const needsReason = chosen === 'grant' || chosen === 'deny';
-    if (needsReason && !reason.trim()) {
-      setError('Granting or denying an appeal needs a reason.');
+    // §4.9, SPK-DISC-002: a decision and league management's withdrawal of someone else's
+    // appeal both name their reason (the API answers 400 VALIDATION_FAILED without one).
+    if (chosen !== 'review' && !reason.trim()) {
+      setError(
+        chosen === 'withdraw'
+          ? 'Recording a withdrawal needs a reason.'
+          : 'Granting or denying an appeal needs a reason.',
+      );
       return;
     }
     setError(null);
@@ -293,8 +298,8 @@ function AppealActions({ appeal }: { appeal: Appeal }) {
           }}
         >
           <TextAreaField
-            label={action === 'withdraw' ? 'Note' : 'Reason'}
-            required={action !== 'withdraw'}
+            label="Reason"
+            required
             value={reason}
             onChange={setReason}
             error={error}
