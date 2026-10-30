@@ -1,11 +1,12 @@
 /**
- * SCR-C-29 Dispute submission (SPK-RESULT-005, POL-029, DEC-010): the window from the rule set,
- * the dispute sent for the captain's entry against the official revision with reason and
- * evidence, "Disputed: under review" on success, the closed window with the draft kept, and the
- * not-eligible, offline and pending-appeal states.
+ * SCR-C-29 Dispute submission (SPK-RESULT-005, POL-029, DEC-010, CMP-12): the window from the rule
+ * set in the facility's zone, the dispute sent for the captain's entry against the official
+ * revision with reason and evidence, "Disputed: under review" on success, the closed window with
+ * the draft kept, withdrawing an open dispute with its revision, and the not-eligible, offline and
+ * pending-appeal states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { formatInstant } from '../../../features/teams/format';
 import {
   IDS,
@@ -15,6 +16,7 @@ import {
   playerWorkspace,
   result,
   ruleSet,
+  venue,
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { DisputeScreen } from '../DisputeScreen';
@@ -208,5 +210,151 @@ describe('SCR-C-29 DisputeScreen', () => {
     expect(screen.getByRole('button', { name: 'Submit the dispute' })).toBeDisabled();
     expect(screen.getByText(/Submitting a dispute needs a connection/)).toBeOnTheScreen();
     expect(screen.getByLabelText('Reason').props.value).toBe('Late goal.');
+  });
+
+  it('SPK-SCHED-008: the window closes at a time shown in the facility’s zone', async () => {
+    renderDispute({
+      'GET /fixtures/{id}': { status: 200, body: fixtureDetail({ venue: venue() }) },
+    });
+    const window = await screen.findByTestId('dispute-window');
+    expect(
+      within(window).getByLabelText(/^Window closes: Sun, Oct 25, 3:00\sAM PDT$/),
+    ).toBeOnTheScreen();
+  });
+
+  describe('withdraw (CMP-12)', () => {
+    const open = () => ({ 'GET /fixtures/{id}/disputes': { status: 200, body: [dispute()] } });
+
+    it('withdraws an open dispute with a reason and its revision', async () => {
+      let withdrawn = false;
+      const app = renderDispute({
+        'GET /fixtures/{id}/disputes': () =>
+          fakeResponse(200, [
+            withdrawn ? dispute({ status: 'withdrawn', revision: 2 }) : dispute(),
+          ]),
+        'POST /disputes/{id}/withdraw': () => {
+          withdrawn = true;
+          return fakeResponse(200, dispute({ status: 'withdrawn', revision: 2 }));
+        },
+      });
+      const item = await screen.findByTestId(`dispute-${IDS.dispute}`);
+      fireEvent.press(within(item).getByRole('button', { name: 'Withdraw this dispute' }));
+      fireEvent.press(within(item).getByRole('button', { name: 'Withdraw the dispute' }));
+      // A reason is required and nothing is sent without one.
+      expect(
+        within(item).getByLabelText('Reason for withdrawing. Give the reason for withdrawing.'),
+      ).toBeOnTheScreen();
+      expect(app.requestsTo('POST', '/disputes/{id}/withdraw')).toHaveLength(0);
+      fireEvent.changeText(
+        within(item).getByLabelText(/^Reason for withdrawing/),
+        'Settled with the other captain.',
+      );
+      fireEvent.press(within(item).getByRole('button', { name: 'Withdraw the dispute' }));
+      expect(
+        await screen.findByText('You withdrew this dispute. The league no longer reviews it.'),
+      ).toBeOnTheScreen();
+      expect(await screen.findByLabelText('Dispute withdrawn')).toBeOnTheScreen();
+      expect(app.bodiesOf('POST', '/disputes/{id}/withdraw')).toEqual([
+        { reason: 'Settled with the other captain.', expectedRevision: 1 },
+      ]);
+      expect(app.keysOf('POST', '/disputes/{id}/withdraw')[0]).toMatch(/^key-/);
+      await app.settle();
+    });
+
+    it('§4.9: a failed withdrawal is retried under the same idempotency key', async () => {
+      let attempt = 0;
+      const app = renderDispute({
+        ...open(),
+        'POST /disputes/{id}/withdraw': () => {
+          attempt += 1;
+          return attempt === 1
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(200, dispute({ status: 'withdrawn', revision: 2 }));
+        },
+      });
+      fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this dispute' }));
+      fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
+      fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
+      expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+      expect(screen.queryByText(/You withdrew this dispute/)).toBeNull();
+      // The reason is kept for the retry.
+      expect(screen.getByLabelText('Reason for withdrawing').props.value).toBe('Settled.');
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      expect(
+        await screen.findByText('You withdrew this dispute. The league no longer reviews it.'),
+      ).toBeOnTheScreen();
+      const keys = app.keysOf('POST', '/disputes/{id}/withdraw');
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).toBe(keys[0]);
+      expect(app.bodiesOf('POST', '/disputes/{id}/withdraw')).toEqual([
+        { reason: 'Settled.', expectedRevision: 1 },
+        { reason: 'Settled.', expectedRevision: 1 },
+      ]);
+      await app.settle();
+    });
+
+    it('a decided dispute offers no withdrawal', async () => {
+      renderDispute({
+        'GET /fixtures/{id}/disputes': {
+          status: 200,
+          body: [dispute({ status: 'decided', decision: 'upheld' })],
+        },
+      });
+      expect(await screen.findByLabelText('Dispute upheld')).toBeOnTheScreen();
+      expect(screen.queryByRole('button', { name: 'Withdraw this dispute' })).toBeNull();
+    });
+
+    it('a dispute decided meanwhile (INVALID_TRANSITION) reloads the list', async () => {
+      const app = renderDispute({
+        ...open(),
+        'POST /disputes/{id}/withdraw': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('INVALID_TRANSITION', { nextAction: 'reload_current_state' }),
+          ),
+      });
+      fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this dispute' }));
+      fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
+      fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
+      expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
+      expect(screen.getByText(/Error code: INVALID_TRANSITION/)).toBeOnTheScreen();
+      const reads = app.requestsTo('GET', '/fixtures/{id}/disputes').length;
+      fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+      // Wait for the read the reload sends, not only for the button the reset brings back.
+      await waitFor(() =>
+        expect(app.requestsTo('GET', '/fixtures/{id}/disputes').length).toBeGreaterThan(reads),
+      );
+      expect(
+        await screen.findByRole('button', { name: 'Withdraw this dispute' }),
+      ).toBeOnTheScreen();
+      await app.settle();
+    });
+
+    it('a refused withdrawal is "not available"', async () => {
+      renderDispute({
+        ...open(),
+        'POST /disputes/{id}/withdraw': () =>
+          fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' })),
+      });
+      fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this dispute' }));
+      fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
+      fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
+      expect(
+        await screen.findByText('Withdrawing this dispute is not available to you.'),
+      ).toBeOnTheScreen();
+      expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
+    });
+
+    it('offline: withdrawing is disabled', async () => {
+      const app = renderDispute(open());
+      expect(
+        await screen.findByRole('button', { name: 'Withdraw this dispute' }),
+      ).toBeOnTheScreen();
+      act(() => app.sources.setReachable(false));
+      expect(screen.getByRole('button', { name: 'Withdraw this dispute' })).toBeDisabled();
+    });
   });
 });

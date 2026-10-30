@@ -13,6 +13,8 @@ export const teamRoutes = {
   availability: (entryId: string) => `/team/${entryId}/availability` as const,
   /** SCR-C-25, team totals and requests */
   contributions: (entryId: string) => `/team/${entryId}/contributions` as const,
+  /** SCR-C-25, the contributions asked of the signed-in person or the people they pay for */
+  myContributions: () => '/team/contributions' as const,
   /** SCR-C-25, a player's own contribution */
   contribution: (requestId: string) => `/team/contribution/${requestId}` as const,
   /** SCR-C-26 */
@@ -28,6 +30,8 @@ export const teamRoutes = {
   /** SCR-C-29 */
   dispute: (entryId: string, fixtureId: string) =>
     `/team/${entryId}/disputes/${fixtureId}` as const,
+  /** SCR-C-28, a tournament pool's table (CMP-15) */
+  pool: (entryId: string, poolId: string) => `/team/${entryId}/pools/${poolId}` as const,
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

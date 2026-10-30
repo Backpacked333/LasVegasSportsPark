@@ -1,12 +1,17 @@
 /**
  * The fourteen staff navigation areas (SPK-UX-005), in specification order, with the screens of
- * docs/package-a/screen-and-journey-inventory.md section 5 each one will hold. "Visibility depends
- * on permissions": the API does not yet publish which areas or actions a principal may use, so
- * every area is listed and each area's screens render the API's ACCESS_DENIED as "not available"
- * (the client never decides authorization).
+ * docs/package-a/screen-and-journey-inventory.md section 5 each one holds. "Visibility depends on
+ * permissions": the navigation lists the areas `GET /v1/me/permissions` marks visible for this
+ * principal (`AreaNav`, K-05; the area mapping is the API's, Proposed), and every area's screens
+ * still render the API's ACCESS_DENIED as "not available" when opened directly (the client never
+ * decides authorization). The conditional Package G screens (SCR-S-51 to SCR-S-57) sit in the
+ * areas the inventory assigns them, behind their capability switches (DEC-016).
  */
+import type { NavigationAreaId } from '@sportspark/api-client';
+
 export interface StaffArea {
-  id: string;
+  /** The API's navigation area id (`MeNavigationArea.id`). */
+  id: NavigationAreaId;
   title: string;
   path: string;
   screenIds: string;
@@ -132,25 +137,28 @@ export const STAFF_AREAS: readonly StaffArea[] = [
     path: '/admin',
     screenIds: 'SCR-S-46 to SCR-S-49, SCR-S-56',
     purpose:
-      'Accounts and roles, integrations and configuration, migration imports, support cases.',
-    pending: {
-      screenIds: 'SCR-S-56',
-      purpose:
-        'Access hardware is a conditional capability: whether it is used is pending DEC-016 and DEC-072 to DEC-082 (Product owner).',
-    },
+      'Accounts and roles, integrations and configuration, migration imports, support cases, access hardware.',
     links: [
       { path: '/admin/accounts', title: 'Accounts, roles and permissions', screenIds: 'SCR-S-46' },
+      { path: '/admin/audit', title: 'Audit records', screenIds: 'SCR-S-46' },
       {
         path: '/admin/integrations',
         title: 'Integrations and configuration',
         screenIds: 'SCR-S-47',
       },
+      { path: '/admin/capabilities', title: 'Capability switches', screenIds: 'SCR-S-47' },
+      { path: '/admin/provider-events', title: 'Provider events', screenIds: 'SCR-S-47' },
       {
         path: '/admin/migration',
         title: 'Migration imports and reconciliation',
         screenIds: 'SCR-S-48',
       },
       { path: '/admin/cases', title: 'Support cases', screenIds: 'SCR-S-49' },
+      {
+        path: '/admin/access-hardware',
+        title: 'Access hardware (conditional)',
+        screenIds: 'SCR-S-56',
+      },
     ],
   },
 ];

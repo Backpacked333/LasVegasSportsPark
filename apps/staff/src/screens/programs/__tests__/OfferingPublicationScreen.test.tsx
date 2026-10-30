@@ -1,7 +1,8 @@
 /**
  * SCR-S-15 offering publication (SPK-CAT-004, SPK-PAY-002): publication and registration shown
- * as separate states, the server's publication report on VALIDATION_FAILED, pause preserving
- * participation, stale and permission answers, and the DEC-007 pending state.
+ * as separate states, the API's dry run (`GET /offerings/{id}/publication-check`) with its
+ * problems, a turned-off offering kind, the server's publication report on VALIDATION_FAILED,
+ * pause preserving participation, stale and permission answers, and the DEC-007 pending state.
  */
 import type { FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -15,10 +16,33 @@ import {
   ok,
 } from '../../../features/registration-finance/__tests__/fixtures';
 
+const CANCELLATION_MISSING = {
+  code: 'cancellation_policy_missing',
+  field: 'cancellationPolicyVersionId',
+  message: 'An approved cancellation policy version is required.',
+};
+
+function check(
+  overrides: Partial<{
+    publishable: boolean;
+    problems: { code: string; field: string; message: string }[];
+    publicationState: 'draft' | 'published' | 'registration_open';
+  }> = {},
+) {
+  return ok({
+    offeringId: OFFERING_ID,
+    publicationState: 'draft',
+    revision: 4,
+    publishable: false,
+    problems: [CANCELLATION_MISSING],
+    ...overrides,
+  });
+}
+
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     'GET /offerings/{id}': ok(offering()),
-    'GET /offerings/{id}/price-rules': ok([]),
+    'GET /offerings/{id}/publication-check': check(),
     ...extra,
   };
 }
@@ -26,23 +50,84 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
 const PATH = `/programs/offerings/${OFFERING_ID}/publication`;
 
 describe('SCR-S-15 OfferingPublicationScreen', () => {
-  it('shows publication, registration and schedule as separate states, and what is configured', async () => {
+  it('shows publication, registration and schedule as separate states, and the dry-run report', async () => {
     const app = createTestApp({ routes: routes() });
     render(app.at(PATH));
     const states = await screen.findByRole('list', { name: 'Publication and registration state' });
     expect(within(states).getByText('draft')).toBeInTheDocument();
     expect(within(states).getByText('Registration not open')).toBeInTheDocument();
     expect(within(states).getByRole('link', { name: 'Schedule' })).toBeInTheDocument();
-    const checklist = screen.getByRole('list', { name: 'Configuration checklist' });
-    const cancellation = within(checklist)
-      .getByText('Cancellation policy')
-      .closest('li') as HTMLElement;
-    expect(within(cancellation).getByText('Not set')).toBeInTheDocument();
-    const window = within(checklist).getByText('Registration window').closest('li') as HTMLElement;
-    expect(within(window).getByText('Set')).toBeInTheDocument();
+    // SPK-CAT-004: the problems are the API's dry run, never computed here.
+    const problems = await screen.findByRole('list', { name: 'Publication check problems' });
+    expect(
+      within(problems).getByText('An approved cancellation policy version is required.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Not ready to publish')).toBeInTheDocument();
+    expect(screen.getByText(/Checked against revision 4/)).toBeInTheDocument();
     expect(screen.getByText(/depends on DEC-007/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Validate and publish' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open registration' })).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/offerings/{id}/price-rules')).toBe(false);
+  });
+
+  it('SPK-CAT-004: says the offering is ready only when the API reports it publishable', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}/publication-check': check({ publishable: true, problems: [] }),
+      }),
+    });
+    render(app.at(PATH));
+    expect(await screen.findByText('Ready to publish')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Publication check problems' })).toBeNull();
+    expect(screen.getByText(/publishing would succeed if nothing changes first/)).toBeVisible();
+  });
+
+  it('DEC-016: a conditional offering kind whose switch is off reads as turned off', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}': ok(offering({ kind: 'membership' })),
+        'GET /offerings/{id}/publication-check': check({
+          problems: [
+            {
+              code: 'capability_disabled',
+              field: 'kind',
+              message: 'This organization has not enabled memberships (DEC-016, DEC-072).',
+            },
+          ],
+        }),
+      }),
+    });
+    render(app.at(PATH));
+    expect(await screen.findByText('Memberships turned off')).toBeInTheDocument();
+    expect(screen.getByText(/has not enabled memberships/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Publication check problems' })).toBeNull();
+  });
+
+  it('shows the dry run as not available when the API refuses it, and its error code otherwise', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}/publication-check': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+        }),
+      }),
+    });
+    render(app.at(PATH));
+    const panel = (await screen.findByRole('heading', { name: 'Publication check' })).closest(
+      'section',
+    ) as HTMLElement;
+    await waitFor(() => expect(within(panel).getByText('Not available')).toBeInTheDocument());
+    app.fake.set(
+      'GET /offerings/{id}/publication-check',
+      apiError(503, 'SERVICE_UNAVAILABLE', { nextAction: 'retry_later' }),
+    );
+    await act(async () => {
+      await app.queryClient.resetQueries({
+        queryKey: ['api', '/offerings/{id}/publication-check'],
+      });
+    });
+    await waitFor(() =>
+      expect(within(panel).getByText(/Error code: SERVICE_UNAVAILABLE/)).toBeInTheDocument(),
+    );
   });
 
   it('SPK-CAT-004: publishing with missing configuration shows the server report and changes nothing', async () => {
@@ -108,6 +193,12 @@ describe('SCR-S-15 OfferingPublicationScreen', () => {
       expectedRevision: 4,
       reason: 'Coach unavailable',
     });
+    // The dry run is re-read after the change.
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/offerings/{id}/publication-check'),
+      ).toHaveLength(2),
+    );
   });
 
   it('offers Reload after INVALID_TRANSITION and refetches the offering', async () => {

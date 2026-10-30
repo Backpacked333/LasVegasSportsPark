@@ -1,15 +1,16 @@
 /**
- * Dates and times on the competition screens. The competition payloads carry no facility time
- * zone and the API has no facility directory, so instants are shown in the device's time zone with
- * the zone named, never presented as facility-local time (SPK-SCHED-008). Date-only values
- * (season and specification dates) are calendar dates and are shown without any time-zone shift.
+ * Dates and times on the competition screens (SPK-SCHED-008). An instant is shown in the
+ * facility's IANA time zone when the API gives one (a fixture's `venue.timezone`, or the time zone
+ * of the division's facility from `GET /v1/facilities`); otherwise in the device's time zone. The
+ * zone is always named, so a device-zone time is never mistaken for facility-local time. Date-only
+ * values (season and specification dates) are calendar dates and are shown without any shift.
  */
 
-export function formatInstant(iso: string | null | undefined): string {
+export function formatInstant(iso: string | null | undefined, timeZone?: string | null): string {
   if (!iso) return 'Not set';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
+  const options: Intl.DateTimeFormatOptions = {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
@@ -17,7 +18,15 @@ export function formatInstant(iso: string | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
     timeZoneName: 'short',
-  }).format(date);
+  };
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat(undefined, { ...options, timeZone }).format(date);
+    } catch {
+      // An unknown zone name falls back to the device zone, still named.
+    }
+  }
+  return new Intl.DateTimeFormat(undefined, options).format(date);
 }
 
 export function formatDateOnly(value: string | null | undefined): string {

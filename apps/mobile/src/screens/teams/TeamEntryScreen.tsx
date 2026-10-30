@@ -9,8 +9,13 @@
  *
  * Open seasons come from `GET /v1/seasons?status=open` with competition names from
  * `GET /v1/competitions`; divisions (`GET /v1/divisions`) are shown for information only, because
- * the API lets only staff place an entry in a division (reported: customers cannot state a
- * preferred division). Payment, when the league bills the team, is SCR-C-14, not this screen.
+ * the API lets only staff place an entry in a division: a customer's preferred division waits on
+ * DEC-002 and DEC-028 (the API does not take one). Renewal is offered only when the prior entry's
+ * workspace lists `competition.renew_team_entry` for this viewer (CMP-02); when it does not, a
+ * manager of the prior entry is told renewal is not available for this team now (the API gives no
+ * reason, for example an entry not approved yet), anyone else that only its captain renews it. A
+ * created or renewed entry is listed on SCR-C-21 from `GET /v1/me/team-entries`. Payment, when
+ * the league bills the team, is SCR-C-14, not this screen.
  *
  * States: loading; empty (no open season; no prior team to renew); ready; validation failure
  * (team name rules, registration closed: the API's reasons); permission restriction (renewal only
@@ -26,8 +31,15 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateRange, formatInstant } from '../../features/teams/format';
 import { InvitationIssued } from '../../features/teams/InvitationIssued';
-import { useOpenedTeamEntries } from '../../features/teams/opened-teams';
-import { useSignedIn, useWorkspace, type Workspace } from '../../features/teams/queries';
+import {
+  hasManagementView,
+  MY_TEAMS_KEY,
+  notAvailableNow,
+  TEAM_ACTIONS,
+  useSignedIn,
+  useWorkspace,
+  type Workspace,
+} from '../../features/teams/queries';
 import { idParam, teamRoutes } from '../../features/teams/routes';
 import { teamEntryStatus } from '../../features/teams/status';
 import {
@@ -200,11 +212,13 @@ function EntryForm({
 }) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const { remember } = useOpenedTeamEntries();
   const [seasonId, setSeasonId] = useState<string | null>(null);
   const [teamName, setTeamName] = useState('');
   const [attempted, setAttempted] = useState(false);
-  const create = useApiCommand('post', '/team-entries', { invalidate: [['api', '/divisions']] });
+  // The new entry is listed on SCR-C-21 from `GET /v1/me/team-entries` once created.
+  const create = useApiCommand('post', '/team-entries', {
+    invalidate: [['api', '/divisions'], MY_TEAMS_KEY],
+  });
   const choices = seasons.filter((s) => s.id !== prior?.season.id);
   const nameError =
     !prior && attempted && teamName.trim().length === 0 ? 'Enter the team name.' : null;
@@ -219,7 +233,6 @@ function EntryForm({
           ? { seasonId, renewFromEntryId: prior.entry.id }
           : { seasonId, team: { name: teamName.trim() } },
       })
-      .then((created) => remember(created.entry.id))
       .catch(() => undefined);
   };
 
@@ -348,7 +361,21 @@ function RenewContent({ priorEntryId }: { priorEntryId: string }) {
       empty={{ title: 'No prior team', description: 'There is no prior team to renew.' }}
       unavailableOffline={['renewing the team']}
     >
-      {(ws) => <EntryContent prior={ws} />}
+      {(ws) =>
+        // CMP-02: renewal is offered only when the API lists it for this viewer and entry.
+        ws.viewer.availableActions.includes(TEAM_ACTIONS.renew) ? (
+          <EntryContent prior={ws} />
+        ) : hasManagementView(ws) ? (
+          // A manager of an entry the API does not list renewal for now (for example one not
+          // approved yet): the API names no reason, so none is invented here.
+          <StateView variant="unavailable" description={notAvailableNow('Renewing this team')} />
+        ) : (
+          <StateView
+            variant="unavailable"
+            description="Renewing this team is not available to you. Only a captain of the prior entry can renew it."
+          />
+        )
+      }
     </QueryBoundary>
   );
 }

@@ -17,17 +17,16 @@
  * partial completion: not permitted; recovery required: not applicable, a failed booking is
  * retried under the same key.
  */
-import { apiQueryKey, type ApiError, type ApiResponse, type Schema } from '@sportspark/api-client';
-import { useQueries } from '@tanstack/react-query';
+import type { ApiError } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
+import { useEligibleOfferings } from '../../features/money/eligible-offerings';
 import { formatDateRange, formatInstant, hasPassed } from '../../features/money/format';
 import { useNameOf } from '../../features/money/people';
-import { useApiRecords } from '../../features/money/records';
 import { moneyRoutes, param } from '../../features/money/routes';
 import {
   bookingStatus,
@@ -37,7 +36,7 @@ import {
   type SessionBooking,
 } from '../../features/money/status';
 import { Body, ButtonRow, Caption, ChoiceRow, Field, Section } from '../../features/money/ui';
-import { useApi, useConnectivity, useNow } from '../../providers/AppProviders';
+import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -45,9 +44,6 @@ import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-
-type PublicOffering = Schema<'PublicOffering'>;
-type OfferingPage = { items: PublicOffering[]; nextCursor: string | null };
 
 /** Why the API refused a redemption, in the customer's words (SPK-AT-020). */
 export function redemptionRefusal(error: ApiError): string | null {
@@ -60,27 +56,6 @@ export function redemptionRefusal(error: ApiError): string | null {
     return 'Not available: this makeup has expired';
   }
   return null;
-}
-
-/** Offerings of the eligible programs, read with the same keys `useApiQuery` uses. */
-function useProgramOfferings(programIds: readonly string[]) {
-  const api = useApi();
-  return useQueries({
-    queries: programIds.map((programId) => {
-      const query = { programId, limit: 50 };
-      return {
-        queryKey: apiQueryKey('/offerings', { query }),
-        queryFn: ({ signal }: { signal: AbortSignal }) =>
-          (
-            api.request as (
-              method: 'get',
-              path: string,
-              options: object,
-            ) => Promise<ApiResponse<OfferingPage>>
-          )('get', '/offerings', { query, signal }),
-      };
-    }),
-  });
 }
 
 function Booked({ booking }: { booking: SessionBooking }) {
@@ -107,8 +82,10 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
   const nameOf = useNameOf();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const direct = useApiRecords('/offerings/{id}', makeup.eligibleOfferingIds);
-  const fromPrograms = useProgramOfferings(makeup.eligibleProgramIds);
+  const { offerings, loading: loadingChoices } = useEligibleOfferings(
+    makeup.eligibleOfferingIds,
+    makeup.eligibleProgramIds,
+  );
   const [offeringId, setOfferingId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
@@ -129,16 +106,6 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
 
   if (booking) return <Booked booking={booking} />;
 
-  const offerings = new Map<string, PublicOffering>();
-  for (const id of makeup.eligibleOfferingIds) {
-    const record = direct[id]?.data;
-    if (record) offerings.set(record.id, record);
-  }
-  for (const result of fromPrograms) {
-    for (const o of result.data?.data.items ?? []) offerings.set(o.id, o);
-  }
-  const loadingChoices =
-    Object.values(direct).some((r) => r.loading) || fromPrograms.some((r) => r.isPending);
   const upcoming = (sessions.data ?? []).filter(
     (s) => s.status === 'scheduled' && !hasPassed(s.scheduledStart, now),
   );

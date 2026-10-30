@@ -7,9 +7,12 @@
  * reason; a commercial or space pool through its capacity, with a reason; both carry
  * `expectedRevision`, and a capacity below what is committed is refused by the API.
  *
- * Not available yet, and shown as such: assigning an enrolled child to a group (the API has no
- * group membership command) and recording progression recommendations (no API; DEC-055 pending).
- * Children are listed by name only: no date of birth, contact or medical detail (§4.14).
+ * Assigning an enrolled child to a named group is not offered: the data model has no group
+ * membership (§4.4; group places are capacity) and the group requirements are pending DEC-003.
+ * Progression recommendations are drafted, shared and withdrawn behind the organization's
+ * `youth_progression` capability (ENR-14, ProgressionRecommendations.tsx; DEC-055 pending).
+ * Children are listed by name only (`GET /v1/person-names`): no date of birth, contact or
+ * medical detail (§4.14).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -35,12 +38,13 @@ import {
 import { formatDateOnly, shortRef } from '../../features/competition/format';
 import { CAPACITY_CONSTRAINT, humanizeCode } from '../../features/competition/labels';
 import { TeamsNav } from '../../features/competition/nav';
-import { PersonName } from '../../features/competition/names';
+import { PersonName, usePersonNames } from '../../features/competition/names';
 import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { ProgressionRecommendations } from './ProgressionRecommendations';
 
 type Pool = Schema<'CapacityPool'>;
 type OfferingKind = Schema<'OfferingKind'>;
@@ -263,6 +267,8 @@ function OfferingGroups({ offeringId }: { offeringId: string }) {
     },
   });
   const units = offering.data?.staff?.capacityUnits ?? [];
+  const childIds = (enrollments.data?.items ?? []).map((e) => e.participantPersonId);
+  const names = usePersonNames(childIds);
   return (
     <>
       {offering.data ? (
@@ -314,8 +320,8 @@ function OfferingGroups({ offeringId }: { offeringId: string }) {
         <h3 id="children-title">Enrolled children</h3>
         <StateView
           variant="unavailable"
-          title="Assigning a child to a group: not available yet"
-          description="The API records no group membership yet, so children cannot be placed in a group from here."
+          title="Assigning a child to a group: not available"
+          description="Group places are capacity, not a membership record, so children are not placed in a named group from here. Whether they should be is pending DEC-003 (Program manager)."
         />
         <QueryBoundary
           query={enrollments}
@@ -333,7 +339,7 @@ function OfferingGroups({ offeringId }: { offeringId: string }) {
                   <li key={enrollment.id}>
                     <div className="row-text">
                       <span className="row-title">
-                        <PersonName personId={enrollment.participantPersonId} />
+                        <PersonName personId={enrollment.participantPersonId} names={names} />
                       </span>
                       <span className="caption">
                         Enrollment {enrollment.status} · Group: not recorded
@@ -358,9 +364,10 @@ function OfferingGroups({ offeringId }: { offeringId: string }) {
         <PendingNote decision={PENDING.progression} />
         <p className="caption">
           A recommendation explains eligibility and suitability from approved information and never
-          guarantees acceptance, availability or purchase. Recording one is not available yet: the
-          API has no progression record.
+          guarantees acceptance, availability or purchase.
         </p>
+        {/* The capability gate is inside: drafting and sharing are gated, withdrawing never is. */}
+        <ProgressionRecommendations offeringId={offeringId} childIds={childIds} names={names} />
       </section>
     </>
   );

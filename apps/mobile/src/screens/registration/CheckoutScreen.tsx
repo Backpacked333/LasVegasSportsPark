@@ -37,6 +37,12 @@ import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { formatMoney } from '../../features/registration/format';
 import { JoinWaitlistButton } from '../../features/registration/JoinWaitlist';
 import { useParticipantNames } from '../../features/registration/participants';
+import {
+  checkoutOf,
+  MY_BASKETS_KEY,
+  MY_CHECKOUTS_KEY,
+  useMyCheckouts,
+} from '../../features/registration/in-progress';
 import { useRegistrationProgress } from '../../features/registration/progress';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { basketStatus, holdStatus, quoteStatus } from '../../features/registration/status';
@@ -115,12 +121,22 @@ function CheckoutContent({
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const { progress, update } = useRegistrationProgress();
+  const { update } = useRegistrationProgress();
   const names = useParticipantNames(basket.lines.map((l) => l.participantPersonId));
+  const started =
+    quote.status === 'consumed' ||
+    basket.status === 'checking_out' ||
+    basket.status === 'fulfilled';
+  // The checkout already started for this price, as the API names or lists it (SPK-UX-001).
+  const myCheckouts = useMyCheckouts(started && quote.consumedByCheckoutId === null);
+  const existingCheckoutId =
+    quote.consumedByCheckoutId ?? checkoutOf(myCheckouts.data, { quoteId: quote.id })?.id ?? null;
   const hold = useApiCommand('post', '/baskets/{id}/hold', {
-    invalidate: [['api', '/baskets/{id}']],
+    invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
-  const checkout = useApiCommand('post', '/registration-checkouts');
+  const checkout = useApiCommand('post', '/registration-checkouts', {
+    invalidate: [MY_CHECKOUTS_KEY, MY_BASKETS_KEY],
+  });
   const requote = useApiCommand('post', '/registration-quotes');
   const [token, setToken] = useState<string | null>(null);
   const [authorized, setAuthorized] = useState(false);
@@ -132,17 +148,13 @@ function CheckoutContent({
     async (body: CheckoutBody) => {
       setFailure(null);
       // Saved before sending: if the app is closed before the answer arrives, the basket and the
-      // resume card lead back here, and re-posting this quote returns the existing checkout.
-      await update({ quoteId: quote.id, pendingCheckoutQuoteId: quote.id });
+      // "In progress" card lead back here, and re-posting this quote returns the existing
+      // checkout. Once the API answers, its own list holds the checkout.
+      await update({ pendingCheckoutQuoteId: quote.id });
       try {
         const result = await checkout.submit({ body });
         setUnknownOutcome(null);
-        await update({
-          basketId: quote.basketId,
-          quoteId: quote.id,
-          checkoutId: result.id,
-          pendingCheckoutQuoteId: null,
-        });
+        await update({ pendingCheckoutQuoteId: null });
         router.replace(registrationRoutes.outcome(result.id));
       } catch (error) {
         const apiError = error as ApiError;
@@ -150,11 +162,15 @@ function CheckoutContent({
           setUnknownOutcome(body);
         } else {
           setUnknownOutcome(null);
+          // A definite refusal (4xx) created no checkout: nothing is left to look for later.
+          if (apiError.status !== null && apiError.status < 500) {
+            await update({ pendingCheckoutQuoteId: null });
+          }
           setFailure({ error: apiError, retry: () => void pay(body) });
         }
       }
     },
-    [checkout, update, quote.basketId, quote.id, router],
+    [checkout, update, quote.id, router],
   );
   useResumeUnknownOutcome(unknownOutcome, (body) => void pay(body));
 
@@ -176,7 +192,6 @@ function CheckoutContent({
           creditIds: quote.appliedCredits.map((c) => c.creditId),
         },
       });
-      await update({ basketId: quote.basketId, quoteId: next.id });
       router.replace(registrationRoutes.checkout(next.id));
     } catch (error) {
       setFailure({ error: error as ApiError, retry: () => void newPrice() });
@@ -209,20 +224,14 @@ function CheckoutContent({
     (dueNow === 0 || token !== null) &&
     (!installments || authorized);
 
-  if (
-    quote.status === 'consumed' ||
-    basket.status === 'checking_out' ||
-    basket.status === 'fulfilled'
-  ) {
+  if (started) {
     return (
       <Section title="Checkout started">
         <Body>A checkout already exists for this price. It is never charged twice.</Body>
-        {progress.checkoutId && progress.quoteId === quote.id ? (
+        {existingCheckoutId ? (
           <Button
             label="See your payment and registration"
-            onPress={() =>
-              router.replace(registrationRoutes.outcome(progress.checkoutId as string))
-            }
+            onPress={() => router.replace(registrationRoutes.outcome(existingCheckoutId))}
           />
         ) : (
           <Button

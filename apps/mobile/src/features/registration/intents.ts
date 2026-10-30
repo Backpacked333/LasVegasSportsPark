@@ -1,53 +1,52 @@
 /**
  * Registration intents (SPK-REG-001) as the customer sees them on SCR-C-09.
  *
- * Which intents an offering kind accepts is decided by the API (`INTENT_OFFERING_KINDS` in
- * apps/api/src/modules/enrollment/enrollment.policy.ts); the API exposes no "available intents"
- * for an offering, so the same table is mirrored here only to avoid offering choices the API would
- * refuse (reported as an API gap). The API still evaluates every line: an intent that does not fit
- * comes back as an eligibility reason on the line, never as a client decision.
+ * Which intents an offering accepts is the API's answer: `GET /v1/offerings/{id}/registration-options`
+ * `availableIntents` (ENR-05). Nothing here decides that; this file only says how the app carries
+ * an intent the API offers, and which capability switch (DEC-016) a Package G intent sits behind,
+ * so a switch reported off reads "turned off" before anything is sent. The API still checks every
+ * command (CAPABILITY_DISABLED, eligibility on the line, PARTICIPANT_AUTHORITY_REQUIRED).
  */
-import type { OfferingKind, RegistrationIntent } from './format';
-
-export const INTENT_OFFERING_KINDS: Record<RegistrationIntent, readonly OfferingKind[]> = {
-  individual_league: ['season', 'term'],
-  join_team: ['season'],
-  create_team_entry: ['season'],
-  youth: ['term', 'camp', 'session', 'private_coaching', 'season'],
-  trial: ['trial'],
-  makeup: ['makeup', 'session', 'term', 'camp'],
-  pickup: ['pickup'],
-  rental_request: ['rental'],
-  membership: ['membership'],
-  package_purchase: ['package'],
-  party_request: ['party'],
-};
+import type { CapabilityId } from '@sportspark/api-client';
+import type { RegistrationIntent } from './format';
 
 /**
- * How the app can carry an intent today:
+ * How the app can carry an intent:
  * - `basket`: a household basket line (SPK-REG-004), then quote, forms, hold and checkout.
- * - `team_invitation`: joining a known team needs the team entry from an invitation (SCR-C-17).
- * - `session_booking`: trials, makeups and pickup have their own commands
- *   (`/trial-participations`, `/makeup-entitlements/{id}/redeem`, `/session-bookings`), which this
- *   screen group does not build.
+ *   Memberships and session packages are basket lines too (ENR-10, ENR-11, ENR-12).
+ * - `booking`: a rental or party exists only with its reservation (`POST /v1/bookings`,
+ *   SPK-COND-003); the chooser hands over to the Package G booking route.
+ * - `makeup`: a makeup is redeemed from the participant's makeup entitlement (SCR-C-35).
+ * - `team_invitation`: joining a known team needs the team's invitation (SCR-C-17).
+ * - `session`: a trial or a pickup session is one participant in one session, with its own
+ *   command (`POST /v1/trial-participations`, `POST /v1/session-bookings`; `SessionBooking.tsx`).
  */
-export type IntentHandling = 'basket' | 'team_invitation' | 'session_booking';
+export type IntentHandling = 'basket' | 'booking' | 'makeup' | 'team_invitation' | 'session';
 
 export const INTENT_HANDLING: Record<RegistrationIntent, IntentHandling> = {
   individual_league: 'basket',
   youth: 'basket',
   create_team_entry: 'basket',
-  rental_request: 'basket',
-  join_team: 'team_invitation',
-  trial: 'session_booking',
-  makeup: 'session_booking',
-  pickup: 'session_booking',
-  // Package G (behind each organization's capability switch, DEC-016): a membership or package
-  // is bought through a basket line; a party is booked through POST /v1/bookings, which this
-  // screen group does not build.
   membership: 'basket',
   package_purchase: 'basket',
-  party_request: 'session_booking',
+  rental_request: 'booking',
+  party_request: 'booking',
+  makeup: 'makeup',
+  join_team: 'team_invitation',
+  trial: 'session',
+  pickup: 'session',
+};
+
+/**
+ * The capability switch a new commitment of a Package G intent needs (§3.16, DEC-016; DEC-072,
+ * DEC-074, DEC-076, DEC-077, DEC-082). Used only to show "turned off" from `GET /v1/me/permissions`.
+ */
+export const INTENT_CAPABILITY: Partial<Record<RegistrationIntent, CapabilityId>> = {
+  membership: 'memberships',
+  package_purchase: 'session_packages',
+  rental_request: 'rentals',
+  party_request: 'parties',
+  pickup: 'pickup_sessions',
 };
 
 export const INTENT_LABELS: Record<RegistrationIntent, { title: string; description: string }> = {
@@ -76,9 +75,10 @@ export const INTENT_LABELS: Record<RegistrationIntent, { title: string; descript
   party_request: { title: 'Party booking', description: 'Book this party.' },
 };
 
-/** Intents the API accepts for this kind of offering, in the order SPK-REG-001 lists them. */
-export function intentsFor(kind: OfferingKind): RegistrationIntent[] {
-  return (Object.keys(INTENT_OFFERING_KINDS) as RegistrationIntent[]).filter((intent) =>
-    INTENT_OFFERING_KINDS[intent].includes(kind),
-  );
-}
+/** What the chooser says for an intent it does not carry as a basket line. */
+export const HANDLING_NOTE: Record<Exclude<IntentHandling, 'basket'>, string> = {
+  booking: 'Choose a time and what you need on the next screen.',
+  makeup: 'A makeup is booked from the makeup sessions you have (Account, credits and makeups).',
+  team_invitation: 'Joining a team uses the invitation the team sends you (Account, invitations).',
+  session: 'Choose the participant and the session on this screen.',
+};

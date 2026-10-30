@@ -4,9 +4,37 @@
  * kinds and review states use the API's machine names (journeys.md section 3, rule 4).
  */
 import type { Schema } from '@sportspark/api-client';
+import type { StatusTone } from '../../ui/StatusBadge';
 
 export type GrantPermission = Schema<'GrantPermission'>;
 export type RelationshipKind = Schema<'RelationshipKind'>;
+export type GrantStatus = Schema<'GrantStatus'>;
+export type InvitationStatus = Schema<'InvitationView'>['status'];
+
+/** A grant's state at the API's clock (ID-04); the glyph agrees with the text (SPK-UX-009). */
+export const GRANT_STATUS_TONE: Readonly<Record<GrantStatus, StatusTone>> = {
+  effective: 'success',
+  scheduled: 'pending',
+  suspended: 'warning',
+  revoked: 'neutral',
+  ended: 'neutral',
+};
+
+export const INVITATION_STATUS_TONE: Readonly<Record<InvitationStatus, StatusTone>> = {
+  pending: 'pending',
+  accepted: 'success',
+  declined: 'neutral',
+  revoked: 'neutral',
+  expired: 'neutral',
+};
+
+export const INVITATION_STATUSES: readonly InvitationStatus[] = [
+  'pending',
+  'accepted',
+  'declined',
+  'revoked',
+  'expired',
+];
 
 /** Each permission independently (SPK-IAM-003): machine name, then what it allows. */
 export const GRANT_PERMISSIONS: readonly { value: GrantPermission; label: string }[] = [

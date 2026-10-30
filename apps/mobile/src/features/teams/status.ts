@@ -38,9 +38,13 @@ export function teamEntryStatus(
   }
 }
 
-/** Fixture states (journeys.md): a scheduled fixture shows its time; readiness is separate. */
+/**
+ * Fixture states (journeys.md): a scheduled fixture shows its time, in the facility's zone when
+ * the caller has it (`venue.timezone`, SPK-SCHED-008); readiness is separate.
+ */
 export function fixtureStatus(
   fixture: Pick<Fixture, 'status' | 'scheduledStart'>,
+  timeZone?: string | null,
 ): StatusBadgeProps {
   switch (fixture.status) {
     case 'unscheduled':
@@ -48,7 +52,9 @@ export function fixtureStatus(
     case 'scheduled':
       return {
         tone: 'info',
-        label: fixture.scheduledStart ? formatInstant(fixture.scheduledStart) : 'Scheduled',
+        label: fixture.scheduledStart
+          ? formatInstant(fixture.scheduledStart, timeZone)
+          : 'Scheduled',
       };
     case 'postponed':
       return { tone: 'warning', label: 'Postponed' };
@@ -305,12 +311,16 @@ export function contributionStatus(contribution: {
   }
 }
 
-/** PaymentAttempt states (journeys.md): processing and unknown are never "failed" or "paid". */
+/**
+ * PaymentAttempt states (journeys.md): processing and unknown are never "failed" or "paid".
+ * `created` waits like `processing` (the API's PaymentAttemptStatus, FIN-01); only
+ * `action_required` asks the payer to act (SPK-UX-010: the money screens use the same words).
+ */
 export function paymentStatus(status: Schema<'PaymentAttemptStatus'>): StatusBadgeProps {
   switch (status) {
-    case 'created':
     case 'action_required':
       return { tone: 'warning', label: 'Payment needs your action' };
+    case 'created':
     case 'processing':
       return { tone: 'pending', label: 'Payment processing' };
     case 'succeeded':

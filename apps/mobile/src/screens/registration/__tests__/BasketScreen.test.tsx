@@ -15,10 +15,12 @@ import {
   IDS,
   acknowledgment,
   basket,
+  checkout,
   familyRoutes,
   inMinutes,
   line,
   offering,
+  page,
   quote,
   waitlistEntry,
 } from '../../../features/registration/testing/fixtures';
@@ -91,7 +93,6 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(sent?.body).toEqual({ basketId: IDS.basket, discountCodes: [], creditIds: [] });
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/quote/${IDS.quote}`);
-    expect(app.progressStore.snapshot().quoteId).toBe(IDS.quote);
   });
 
   it('SPK-REG-006: held places show the server expiry and an informational countdown; release sends the revision', async () => {
@@ -242,18 +243,34 @@ describe('SCR-C-11 BasketScreen', () => {
       preferences: {},
     });
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/waitlist/${IDS.entry}`);
-    expect(app.progressStore.snapshot().waitlistEntryIds).toEqual([IDS.entry]);
+    // Nothing is kept on the device: GET /me/waitlist-entries lists the entry everywhere.
+    expect(app.progressStore.snapshot()).toEqual({ pendingCheckoutQuoteId: null });
   });
 
   it('a checkout whose answer never arrived (app closed mid-payment) is found again from the basket', async () => {
     renderBasket({
-      progress: { basketId: IDS.basket, quoteId: IDS.quote, pendingCheckoutQuoteId: IDS.quote },
+      progress: { pendingCheckoutQuoteId: IDS.quote },
       routes: routes({
         'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) },
       }),
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Check your payment' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/checkout/${IDS.quote}`);
+  });
+
+  it('SPK-UX-001: after a reinstall, the basket finds its checkout in GET /me/registration-checkouts', async () => {
+    const app = renderBasket({
+      routes: routes({
+        'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) },
+        'GET /me/registration-checkouts': page([
+          checkout({ id: IDS.quote2, basketId: IDS.lineB }),
+          checkout({ status: 'finalizing' }),
+        ]),
+      }),
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'See your payment' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull();
   });
 
   it('§4.10: a basket of another household reads not available', async () => {

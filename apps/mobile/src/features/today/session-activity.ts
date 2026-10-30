@@ -8,7 +8,10 @@
  * - `GET /v1/enrollments/{id}`, its last operation and its placement request, to tell
  *   "Payment processing", "Awaiting placement" and "Confirmed" apart (journeys.md section 3);
  * - the newest schedule notice about the session's scheduling event, for old and new details and
- *   the facility's time zone (SPK-COMMS-005, SPK-SCHED-008).
+ *   the facility's time zone (SPK-COMMS-005, SPK-SCHED-008);
+ * - the facility the calendar item or offering names (`GET /v1/facilities/{id}`, K-04): its name
+ *   for "Where" and its IANA zone, so times are on the facility clock even without a notice
+ *   (the calendar item's own `timezone` comes first).
  *
  * Every read is answered by the API under its own authorization; a read the person may not make
  * simply leaves that part out (the API answers NOT_FOUND and nothing is inferred from it).
@@ -18,9 +21,9 @@ import { useApiQuery } from '../../api/useApiQuery';
 import type { StatusBadgeProps } from '../../ui/StatusBadge';
 import type { ActivityCardModel } from './NextActivityCard';
 import { latestChangeForEvent } from './notices';
-import { useInbox, useSignedIn } from './queries';
+import { useFacility, useInbox, useSignedIn } from './queries';
 import { bookingStatus, calendarItemStatus, checkoutStateOf, enrollmentStatus } from './status';
-import { displayZone } from './time';
+import { zoneOf } from './time';
 
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
 
@@ -37,7 +40,8 @@ export type SessionRef = Pick<
   | 'start'
   | 'end'
   | 'status'
->;
+> &
+  Partial<Pick<FamilyCalendarItem, 'facilityId' | 'timezone'>>;
 
 /** The detail route for a calendar item (opaque ids only, never names, §4.14); null without a session. */
 export function sessionHref(
@@ -113,6 +117,7 @@ export function useSessionActivity(
     request: { path: { id: assignedEntryId ?? '' } },
     enabled: signedIn && !!assignedEntryId,
   });
+  const facility = useFacility(ref ? (ref.facilityId ?? offering.data?.facilityId ?? null) : null);
 
   if (!ref) {
     return {
@@ -127,8 +132,15 @@ export function useSessionActivity(
   const session = sessions.data?.find((s) => s.id === ref.sessionId);
   const latest = latestChangeForEvent(inbox.data?.items ?? [], session?.schedulingEventId);
   const after = latest?.change.after ?? null;
-  const zone = displayZone(after?.timezone ?? latest?.change.before?.timezone ?? null);
+  const zone = zoneOf(
+    after?.timezone,
+    latest?.change.before?.timezone,
+    ref.timezone,
+    facility.data?.timezone,
+    offering.data?.facility?.timezone,
+  );
   const offeringName = offering.data?.name ?? ref.title;
+  const facilityName = facility.data?.name ?? offering.data?.facility?.name ?? null;
 
   let status: StatusBadgeProps;
   if (session?.status === 'canceled') {
@@ -143,6 +155,9 @@ export function useSessionActivity(
         basket.data,
         order.data,
         basket.error !== null || order.error !== null,
+        // A read still to answer is "checking", never "payment outstanding" (SPK-PAY-007).
+        (e.status === 'pending' && !!e.basketId && basket.data === undefined) ||
+          (!!basket.data?.orderRef && order.data === undefined),
       ),
       placement: placement.data ?? null,
       teamName: team.data?.team.name ?? null,
@@ -152,10 +167,12 @@ export function useSessionActivity(
   }
 
   const fieldNames = after?.resources.map((r) => r.name).join(', ');
+  const place = fieldNames || offering.data?.locationLabel || null;
   const model: ActivityCardModel = {
     participant,
     title: offeringName,
-    location: fieldNames || offering.data?.locationLabel || null,
+    // "Main Park, Pitch 2": the facility, then the pitches a notice names or the offering's label.
+    location: [facilityName, place].filter((p): p is string => !!p).join(', ') || null,
     start: session?.scheduledStart ?? (ref.start || null),
     end: session?.scheduledEnd ?? (ref.end || null),
     zone,

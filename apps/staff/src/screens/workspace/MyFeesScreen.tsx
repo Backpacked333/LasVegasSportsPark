@@ -68,8 +68,12 @@ function FeeCard({ item }: { item: WorkspaceAssignment }) {
     <li aria-label={item.activity.title}>
       <span className="row-title">{item.activity.title}</span>
       <span className="caption">
-        {formatRange(item.activity.scheduledStart, item.activity.scheduledEnd)} ·{' '}
-        {humanize(item.assignment.role)}
+        {formatRange(
+          item.activity.scheduledStart,
+          item.activity.scheduledEnd,
+          item.activity.facility?.timezone ?? null,
+        )}{' '}
+        · {humanize(item.assignment.role)}
       </span>
       {fee ? (
         <>

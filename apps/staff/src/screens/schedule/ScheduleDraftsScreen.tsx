@@ -14,6 +14,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
+import { ActionGate } from '../../features/schedule-facilities/permission';
 import {
   FacilityGate,
   type FacilityContext,
@@ -149,7 +150,13 @@ export function ScheduleDraftsScreen() {
       <FacilityGate purpose="work on its schedule drafts">
         {(facility) => (
           <>
-            <NewDraftForm facility={facility} />
+            <ActionGate
+              action="scheduling.manage_drafts"
+              facilityId={facility.id}
+              what="Opening schedule drafts"
+            >
+              <NewDraftForm facility={facility} />
+            </ActionGate>
             <DraftList facility={facility} />
           </>
         )}

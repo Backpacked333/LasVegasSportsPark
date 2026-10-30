@@ -1,13 +1,40 @@
 /**
  * SCR-C-30 Account (SPK-UX-002 "Account: Family, enrollments, payments, credits, forms,
- * preferences, support"), and the navigation into SCR-C-31, SCR-C-36, SCR-C-01 and SCR-C-02.
+ * preferences, support"; recovery required, §4.11), and the navigation into SCR-C-31, SCR-C-36,
+ * SCR-C-17, SCR-C-01 and SCR-C-02.
  */
-import { act, render, screen, within } from '@testing-library/react-native';
+import { act, render, screen, waitFor, within } from '@testing-library/react-native';
 import { fireEvent, renderRouter, screen as routerScreen } from 'expo-router/testing-library';
 import { RootNavigator } from '../../../navigation/RootNavigator';
 import { createTestApp } from '../../../testing/test-app';
 import { AccountScreen } from '../AccountScreen';
-import { apiError, CHILD, me, ok, peopleRoute, person } from './fixtures';
+import { apiError, CHILD, me, namesRoute, ok, page, person } from './fixtures';
+
+const CHECKOUT = '0192f1a0-0000-7000-8000-00000000f501';
+
+function recoveryCheckout() {
+  return {
+    id: CHECKOUT,
+    quoteId: '0192f1a0-0000-7000-8000-00000000f502',
+    orderId: '0192f1a0-0000-7000-8000-00000000f503',
+    basketId: '0192f1a0-0000-7000-8000-00000000f504',
+    payerPersonId: '0192f1a0-0000-7000-8000-00000000a001',
+    status: 'recovery_required',
+    paymentKind: 'provider',
+    payment: null,
+    receipt: null,
+    holdIds: [],
+    enrollmentIds: [],
+    operationId: '0192f1a0-0000-7000-8000-00000000f505',
+    failure: null,
+    recovery: null,
+    nextAction: 'await_reconciliation',
+    revision: 3,
+    createdAt: '2026-10-24T11:00:00.000Z',
+    updatedAt: '2026-10-24T11:30:00.000Z',
+    completedAt: null,
+  };
+}
 
 const SECTION_TITLES = [
   'Family and permissions',
@@ -20,10 +47,12 @@ const SECTION_TITLES = [
 ];
 
 describe('SCR-C-30 AccountScreen', () => {
-  it('SPK-UX-002: lists the hub sections in order; built ones open, the others say "Not available yet"', async () => {
+  it('SPK-UX-002: lists the hub sections in order, and every one opens its screen', async () => {
     const app = createTestApp({
       routes: {
         'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([]),
       },
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
@@ -46,13 +75,129 @@ describe('SCR-C-30 AccountScreen', () => {
     });
     expect(family).toHaveProp('accessibilityHint', 'Opens Family and permissions');
     expect(screen.getByRole('button', { name: 'Preferences' })).toBeOnTheScreen();
-    expect(screen.getByLabelText('Payments and obligations, Not available yet')).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: /^Payments and obligations/ })).toBeNull();
+    for (const title of [
+      'Enrollments and participation',
+      'Payments and obligations',
+      'Credits and makeup sessions',
+      'Forms and acknowledgments',
+      'Support',
+    ]) {
+      expect(screen.getByRole('button', { name: title })).toHaveProp(
+        'accessibilityHint',
+        `Opens ${title}`,
+      );
+    }
+    expect(screen.queryByLabelText(/Not available yet/)).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Invitations, Open invitations you received' }),
+    ).toBeOnTheScreen();
     expect(
       screen.getByText(
         /Account deletion and data requests is not available yet: it depends on DEC-059/,
       ),
     ).toBeOnTheScreen();
+  });
+
+  it('SPK-IAM-005: the Family row counts a person whose every grant is paused, as Family lists them, never "No family members yet"', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([
+          {
+            grantId: 'grant-view-paused',
+            relationshipId: '0192f1a0-0000-7000-8000-00000000d100',
+            relationshipKind: 'guardian',
+            actorPersonId: '0192f1a0-0000-7000-8000-00000000a001',
+            actorDisplayName: 'Alex Morgan',
+            subjectPersonId: CHILD,
+            subjectDisplayName: 'Sam Morgan',
+            permission: 'view',
+            source: 'claim',
+            effectiveFrom: '2026-09-01T10:00:00.000Z',
+            effectiveTo: null,
+            revokedAt: null,
+            status: 'suspended',
+            underReview: true,
+            revision: 2,
+          },
+        ]),
+      },
+    });
+    render(<AccountScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByRole('button', {
+        name: 'Family and permissions, 1 person with permissions under review, paused or starting later',
+      }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('No family members yet')).toBeNull();
+    const read = app.fake.requests.find((r) => r.route === '/me/access-grants');
+    expect(read?.query).toEqual({ direction: 'held', limit: '100' });
+  });
+
+  it('the Family row says "No family members yet" only once the grants read confirms it, and stays neutral when that read fails', async () => {
+    const empty = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([]),
+      },
+    });
+    const first = render(<AccountScreen />, { wrapper: empty.wrapper });
+    expect(
+      await screen.findByRole('button', { name: 'Family and permissions, No family members yet' }),
+    ).toBeOnTheScreen();
+    first.unmount();
+
+    const failing = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': () =>
+          apiError(500, 'INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+      },
+    });
+    render(<AccountScreen />, { wrapper: failing.wrapper });
+    await waitFor(() =>
+      expect(failing.fake.requests.some((r) => r.route === '/me/access-grants')).toBe(true),
+    );
+    expect(
+      await screen.findByRole('button', {
+        name: 'Family and permissions, People you manage and their permissions',
+      }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('No family members yet')).toBeNull();
+  });
+
+  it('recovery required (§4.11): a registration whose payment was received but not completed is pinned first with "Do not pay again"', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([recoveryCheckout()]),
+      },
+    });
+    render(<AccountScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`account-recovery-${CHECKOUT}`);
+    expect(row.props.accessibilityLabel).toMatch(
+      /^Do not pay again, Payment received\. Last update .*, Payment received\. We are completing your registration\.$/,
+    );
+    expect(row).toHaveProp('accessibilityHint', 'Opens the registration outcome');
+    const read = app.fake.requests.find((r) => r.route === '/me/registration-checkouts');
+    expect(read?.query).toEqual({ status: 'recovery_required', limit: '10' });
+  });
+
+  it('a failed recovery read shows its code and "Try again"; the hub stays usable', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': () =>
+          apiError(500, 'INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+      },
+    });
+    render(<AccountScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Preferences' })).toBeOnTheScreen();
   });
 
   it('empty (new account): asks to finish setting up and holds back sections that need a linked record', async () => {
@@ -67,6 +212,9 @@ describe('SCR-C-30 AccountScreen', () => {
     const family = screen.getByTestId('account-section-SCR-C-31');
     expect(within(family).getByText('Available after you finish setting up')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: /^Family and permissions/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Invitations/ })).toBeNull();
+    // Nothing to pin before the account is linked to a person.
+    expect(app.fake.requests.some((r) => r.route === '/me/registration-checkouts')).toBe(false);
   });
 
   it('offline: keeps the cached hub on screen with its age', async () => {
@@ -97,10 +245,17 @@ describe('SCR-C-30 navigation into the account screens', () => {
     const app = createTestApp({
       routes: {
         'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
-        'GET /people/{id}': peopleRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
+        'GET /person-names': namesRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
         'GET /me/communication-preferences': ok({ personId: CHILD, preferences: [] }),
         'GET /me/calendar-feeds': ok({ feeds: [] }),
+        'GET /me/push-devices': ok({ devices: [] }),
         'GET /me/inbox': ok({ items: [], nextCursor: null }),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([]),
+        'GET /me/households': ok({ items: [] }),
+        'GET /me/invitations': page([]),
+        'GET /me/team-invitations': page([]),
+        'GET /acknowledgments': ok([]),
       },
     });
     const TestRootLayout = () => (
@@ -135,9 +290,37 @@ describe('SCR-C-30 navigation into the account screens', () => {
     ).toBeOnTheScreen();
   });
 
+  it('opens Invitations from Account (SCR-C-17)', async () => {
+    const { router } = renderApp();
+    fireEvent.press(
+      await routerScreen.findByRole('button', {
+        name: 'Invitations, Open invitations you received',
+      }),
+    );
+    expect(router.getPathname()).toBe('/invitations');
+    expect(
+      await routerScreen.findByRole('header', { name: 'No open invitations' }),
+    ).toBeOnTheScreen();
+  });
+
+  it('opens Forms and acknowledgments from Account (SCR-C-13 signed forms)', async () => {
+    const { router } = renderApp();
+    fireEvent.press(
+      await routerScreen.findByRole('button', { name: /^Forms and acknowledgments/ }),
+    );
+    expect(router.getPathname()).toBe('/forms');
+    expect((await routerScreen.findAllByRole('header', { name: 'No forms signed' })).length).toBe(
+      2,
+    );
+  });
+
   it.each([
     [/^Account setup/, '/onboarding'],
     [/^Access after recovery/, '/recovery'],
+    [/^Enrollments and participation/, '/enrollments'],
+    [/^Payments and obligations/, '/payments'],
+    [/^Credits and makeup sessions/, '/credits'],
+    [/^Support/, '/support'],
   ])('opens %s from Account (%s)', async (name, path) => {
     const { router } = renderApp();
     fireEvent.press(await routerScreen.findByRole('button', { name }));

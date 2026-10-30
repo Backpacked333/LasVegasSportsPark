@@ -1,8 +1,10 @@
 /**
  * SCR-S-06 Closure impact and resolution: SPK-SCHED-009 (affected games, programs, rentals, staff,
- * customers, financial obligations, messages), SPK-AT-009 (complete impact preview, approved
- * resolution, consistent publication through one draft), SPK-AT-021 (maintenance closures return to
- * service by release), POL-041 and DEC-009 pending, SPK-UX-008 stale (affected set changed).
+ * customers, financial obligations, messages; preview before creating, `GET /v1/closure-impact`),
+ * SPK-AT-009 (complete impact preview, approved resolution, consistent publication through one
+ * draft), SPK-FAC-003 (a pending closure is withdrawn before it applies; a restriction's closure
+ * only with its restriction), SPK-AT-021 (maintenance closures return to service by release),
+ * POL-041 and DEC-009 pending, SPK-UX-008 stale (affected set changed).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -68,6 +70,25 @@ const IMPACT = {
 };
 const PENDING = closure({ id: 'c1', impact: IMPACT, revision: 2 });
 
+const NOTICE_ID = '0192f1a0-0000-7000-8000-00000000a0a1';
+/** The same impact with an obligation and an unsent message (SPK-SCHED-009). */
+const IMPACT_WITH_MONEY = {
+  ...IMPACT,
+  obligations: [{ type: 'enrollment_charge', id: 'ob-1', eventIds: ['e1'] }],
+  messages: [
+    { notificationId: NOTICE_ID, eventId: 'e2', kind: 'schedule_reminder', status: 'queued' },
+  ],
+  summary: { ...IMPACT.summary, obligations: 1, messages: 1 },
+};
+const RILEY = {
+  personId: 'p1',
+  canonicalPersonId: 'p1',
+  givenName: 'Riley',
+  familyName: 'Chen',
+  displayName: 'Riley Chen',
+  kind: 'adult' as const,
+};
+
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     ...oneFacilityRoutes(),
@@ -78,18 +99,37 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
 }
 
 describe('SCR-S-06 ClosureDetailScreen', () => {
-  it('SPK-SCHED-009: lists what is affected, and says which items the API does not list', async () => {
-    const app = createTestApp({ routes: routes() });
+  it('SPK-SCHED-009: lists what is affected, including customers, obligations and unsent messages', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /closures/{id}': { status: 200, body: { ...PENDING, impact: IMPACT_WITH_MONEY } },
+        'GET /person-names': { status: 200, body: { items: [RILEY] } },
+      }),
+    });
     render(app.at('/schedule/closures/c1'));
     const table = await screen.findByRole('table', { name: 'What this closure affects' });
     expect(within(table).getByRole('row', { name: 'Games 2' })).toBeInTheDocument();
     expect(within(table).getByRole('row', { name: 'Teams 4' })).toBeInTheDocument();
     expect(within(table).getByRole('row', { name: /People committed .* 2/ })).toBeInTheDocument();
-    for (const label of ['Customers', 'Financial obligations', 'Messages']) {
-      expect(
-        within(table).getByRole('row', { name: new RegExp(`^${label} Not available here`) }),
-      ).toBeInTheDocument();
-    }
+    expect(within(table).getByRole('row', { name: 'Customers 1' })).toBeInTheDocument();
+    expect(within(table).getByRole('row', { name: 'Financial obligations 1' })).toBeInTheDocument();
+    expect(within(table).getByRole('row', { name: 'Messages not yet sent 1' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Affected financial obligations' })).toHaveTextContent(
+      'enrollment charge',
+    );
+    expect(
+      screen.getByText(/A financial adjustment for these obligations is not available yet/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('list', { name: 'Unsent messages about affected events' }),
+    ).toHaveTextContent('schedule reminderAbout Adult 7v7 final · status queued');
+    // Names are read on request, names only (§4.14).
+    expect(app.fake.requests.some((r) => r.route === '/person-names')).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Show the 1 customer' }));
+    const customers = await screen.findByRole('list', { name: 'Affected customers' });
+    expect(await within(customers).findByText('Riley Chen')).toBeInTheDocument();
+    expect(customers).toHaveTextContent('committed to the event · U12 Red v Blue, Adult 7v7 final');
     const events = screen.getByRole('list', { name: 'Affected events' });
     expect(events).toHaveTextContent('U12 Red v Blue');
     await waitFor(() =>
@@ -331,12 +371,128 @@ describe('SCR-S-06 ClosureDetailScreen', () => {
   });
 });
 
+describe('SCR-S-06 closure withdrawal (SPK-FAC-003)', () => {
+  it('withdraws a pending closure with a reason and the expected revision', async () => {
+    const user = userEvent.setup();
+    const withdrawn = closure({
+      id: 'c1',
+      status: 'withdrawn',
+      revision: 3,
+      impact: IMPACT,
+      withdrawnAt: '2026-10-24T12:05:00.000Z',
+      withdrawalReason: 'Pitch drained in time',
+    });
+    const app = createTestApp({
+      routes: routes({
+        'POST /closures/{id}/withdraw': () => {
+          app.fake.set('GET /closures/{id}', { status: 200, body: withdrawn });
+          return fakeResponse(200, withdrawn);
+        },
+      }),
+    });
+    render(app.at('/schedule/closures/c1'));
+    await user.click(await screen.findByRole('button', { name: 'Withdraw closure' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Enter the reason for withdrawing the closure.',
+    );
+    expect(app.fake.requests.some((r) => r.route === '/closures/{id}/withdraw')).toBe(false);
+    await user.type(screen.getByLabelText('Reason for withdrawing'), 'Pitch drained in time');
+    await user.click(screen.getByRole('button', { name: 'Withdraw closure' }));
+    expect(await screen.findByTestId('closure-withdrawn')).toHaveTextContent(
+      'nothing was closed and nobody was told',
+    );
+    const request = app.fake.requests.find((r) => r.route === '/closures/{id}/withdraw');
+    expect(request?.body).toEqual({ reason: 'Pitch drained in time', expectedRevision: 2 });
+    expect(request?.headers['idempotency-key']).toMatch(/^key-\d{8}$/);
+    expect(screen.getByText('withdrawn')).toBeInTheDocument();
+    expect(screen.getByText(/: Pitch drained in time$/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply closure' })).toBeNull();
+  });
+
+  it('a closure held by a restriction (RESOURCE_CONFLICT OWNED_BY_RESTRICTION) links to that restriction', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /closures/{id}/withdraw': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('RESOURCE_CONFLICT', {
+              details: { code: 'OWNED_BY_RESTRICTION', closureId: 'c1', restrictionId: 'r7' },
+            }),
+          ),
+      }),
+    });
+    render(app.at('/schedule/closures/c1'));
+    await user.type(await screen.findByLabelText('Reason for withdrawing'), 'Not needed');
+    await user.click(screen.getByRole('button', { name: 'Withdraw closure' }));
+    const banner = await screen.findByTestId('owned-by-restriction');
+    expect(banner).toHaveTextContent('withdraw the restriction instead');
+    expect(within(banner).getByRole('link', { name: 'Open the restriction' })).toHaveAttribute(
+      'href',
+      '/facilities/restrictions/r7',
+    );
+  });
+
+  it('a pending maintenance closure offers no withdraw here, only its restriction', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /closures/{id}': {
+          status: 200,
+          body: { ...PENDING, source: 'maintenance' as const },
+        },
+        'GET /maintenance-restrictions': {
+          status: 200,
+          body: [restriction({ id: 'r1', status: 'approved', schedulingClosureId: 'c1' })],
+        },
+      }),
+    });
+    render(app.at('/schedule/closures/c1'));
+    expect(
+      await screen.findByText(/It is withdrawn together with its restriction/),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Open the restriction' })).toHaveAttribute(
+      'href',
+      '/facilities/restrictions/r1',
+    );
+    expect(screen.queryByRole('button', { name: 'Withdraw closure' })).toBeNull();
+  });
+
+  it('withdraw refused for lack of authority names the permission; STALE_REVISION offers Reload', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /closures/{id}/withdraw': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', { details: { action: 'scheduling.manage_closures' } }),
+          ),
+      }),
+    });
+    render(app.at('/schedule/closures/c1'));
+    await user.type(await screen.findByLabelText('Reason for withdrawing'), 'Not needed');
+    await user.click(screen.getByRole('button', { name: 'Withdraw closure' }));
+    expect(
+      await screen.findByText(
+        /Withdrawing the closure is not available to you\. Your role does not include the permission scheduling\.manage_closures/,
+      ),
+    ).toBeInTheDocument();
+    app.fake.set('POST /closures/{id}/withdraw', () =>
+      fakeResponse(409, apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' })),
+    );
+    await user.click(screen.getByRole('button', { name: 'Withdraw closure' }));
+    expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull());
+  });
+});
+
 describe('SCR-S-06 closures list', () => {
-  it('creates a closure from facility-local times as a pending impact preview', async () => {
+  it('previews the impact (GET /v1/closure-impact) before creating, then creates the pending closure', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
         'GET /closures': { status: 200, body: [] },
+        'GET /closure-impact': { status: 200, body: IMPACT },
         'POST /closures': { status: 201, body: PENDING },
       }),
     });
@@ -355,22 +511,127 @@ describe('SCR-S-06 closures list', () => {
       fireEvent.change(within(field).getByLabelText('Time'), { target: { value: time } });
     }
     await user.click(screen.getByRole('button', { name: 'Preview impact' }));
+    const preview = await screen.findByTestId('closure-preview');
+    expect(app.fake.requests.find((r) => r.route === '/closure-impact')?.query).toEqual({
+      facilityId: FACILITY_A,
+      resourceId: PITCH,
+      start: '2026-10-25T00:00:00.000Z',
+      end: '2026-10-25T06:00:00.000Z',
+    });
+    expect(preview).toHaveTextContent('Nothing has been created or closed.');
+    expect(
+      within(preview).getByRole('table', { name: 'What this closure would affect' }),
+    ).toHaveTextContent('Customers1');
+    expect(within(preview).getByRole('list', { name: 'Affected events' })).toHaveTextContent(
+      'U12 Red v Blue',
+    );
+    expect(app.fake.requests.some((r) => r.method === 'POST' && r.route === '/closures')).toBe(
+      false,
+    );
+    await user.click(within(preview).getByRole('button', { name: 'Create pending closure' }));
     expect(screen.getByRole('list', { name: 'Problems to correct' })).toHaveTextContent(
       'Enter the reason for the closure.',
     );
     await user.type(screen.getByLabelText('Reason'), 'Flooded turf');
-    await user.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await user.click(screen.getByRole('button', { name: 'Create pending closure' }));
     expect(
       await screen.findByRole('heading', { name: 'Closure impact and resolution' }),
     ).toBeInTheDocument();
-    expect(
-      app.fake.requests.find((r) => r.method === 'POST' && r.route === '/closures')?.body,
-    ).toEqual({
+    const create = app.fake.requests.find((r) => r.method === 'POST' && r.route === '/closures');
+    expect(create?.body).toEqual({
       facilityId: FACILITY_A,
       resourceId: PITCH,
       interval: { start: '2026-10-25T00:00:00.000Z', end: '2026-10-25T06:00:00.000Z' },
       reason: 'Flooded turf',
       source: 'manual',
     });
+    expect(create?.headers['idempotency-key']).toMatch(/^key-\d{8}$/);
+  });
+
+  it('a change after the preview asks for a new preview before anything is created', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /closures': { status: 200, body: [] },
+        'GET /closure-impact': { status: 200, body: IMPACT },
+      }),
+    });
+    render(app.at('/schedule/closures'));
+    await user.click(await screen.findByLabelText('The whole facility'));
+    for (const [group, time] of [
+      ['From', '17:00'],
+      ['Until', '23:00'],
+    ] as const) {
+      const field = screen.getByRole('group', { name: `${group} (America/Los_Angeles)` });
+      fireEvent.change(within(field).getByLabelText('Date'), { target: { value: '2026-10-24' } });
+      fireEvent.change(within(field).getByLabelText('Time'), { target: { value: time } });
+    }
+    await user.click(screen.getByRole('button', { name: 'Preview impact' }));
+    expect(await screen.findByTestId('closure-preview')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/closure-impact')?.query).not.toHaveProperty(
+      'resourceId',
+    );
+    const until = screen.getByRole('group', { name: 'Until (America/Los_Angeles)' });
+    fireEvent.change(within(until).getByLabelText('Time'), { target: { value: '22:00' } });
+    expect(await screen.findByTestId('preview-outdated')).toHaveTextContent(
+      'Preview the impact again before creating the closure.',
+    );
+    expect(screen.queryByRole('button', { name: 'Create pending closure' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Preview impact' }));
+    expect(await screen.findByTestId('closure-preview')).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/closure-impact').at(-1)?.query.end).toBe(
+      '2026-10-25T05:00:00.000Z',
+    );
+  });
+
+  it('a preview refused for lack of authority names the permission and creates nothing', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /closures': { status: 200, body: [] },
+        'GET /closure-impact': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', { details: { action: 'scheduling.manage_closures' } }),
+          ),
+      }),
+    });
+    render(app.at('/schedule/closures'));
+    await user.click(await screen.findByLabelText('The whole facility'));
+    for (const [group, time] of [
+      ['From', '17:00'],
+      ['Until', '23:00'],
+    ] as const) {
+      const field = screen.getByRole('group', { name: `${group} (America/Los_Angeles)` });
+      fireEvent.change(within(field).getByLabelText('Date'), { target: { value: '2026-10-24' } });
+      fireEvent.change(within(field).getByLabelText('Time'), { target: { value: time } });
+    }
+    await user.click(screen.getByRole('button', { name: 'Preview impact' }));
+    expect(
+      await screen.findByText(/the permission scheduling\.manage_closures/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create pending closure' })).toBeNull();
+  });
+
+  it('lists a withdrawn closure with its reason, by status in text', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /closures': {
+          status: 200,
+          body: [
+            closure({
+              id: 'c2',
+              status: 'withdrawn',
+              withdrawnAt: '2026-10-24T12:05:00.000Z',
+              withdrawalReason: 'Pitch drained in time',
+            }),
+          ],
+        },
+      }),
+    });
+    render(app.at('/schedule/closures'));
+    const list = await screen.findByRole('list', { name: 'Closures' });
+    expect(list).toHaveTextContent('withdrawn: Pitch drained in time');
+    expect(within(list).getByText('withdrawn')).toBeInTheDocument();
   });
 });

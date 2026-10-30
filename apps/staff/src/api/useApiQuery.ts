@@ -22,8 +22,11 @@ export type ApiQueryArgs<P extends GetPath> = {
   enabled?: boolean;
   staleTime?: number;
   refetchInterval?: number | false;
-  /** False for a result the viewer acts on as shown (for example a report about to be stored). */
-  refetchOnWindowFocus?: boolean;
+  /**
+   * False for a result the viewer acts on as shown (for example a report about to be stored);
+   * 'always' to re-read on every return to the window even when the cached result is not stale.
+   */
+  refetchOnWindowFocus?: boolean | 'always';
 } & (undefined extends OptionsArg<P, 'get'>[0]
   ? { request?: Omit<RequestOf<P>, 'signal'> }
   : { request: Omit<RequestOf<P>, 'signal'> });

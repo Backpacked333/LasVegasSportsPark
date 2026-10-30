@@ -28,7 +28,14 @@ import { SelectField, TextAreaField } from '../../features/competition/fields';
 import { formatInstant } from '../../features/competition/format';
 import { PLACEMENT_STATUS, weekdayName } from '../../features/competition/labels';
 import { SeasonLinks, TeamsNav } from '../../features/competition/nav';
-import { EntryName, PersonName, useSeasonEntries } from '../../features/competition/names';
+import {
+  EntryName,
+  PersonName,
+  usePersonNames,
+  useSeasonEntries,
+  type EntryNames,
+  type PersonNames,
+} from '../../features/competition/names';
 import { OperationStatus } from '../../features/competition/OperationStatus';
 import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
@@ -272,9 +279,11 @@ function ReasonedAction({
 function RequestCard({
   request,
   entries,
+  names,
 }: {
   request: PlacementRequest;
-  entries: ReadonlyMap<string, { teamId: string }>;
+  entries: EntryNames;
+  names: PersonNames;
 }) {
   const [showCandidates, setShowCandidates] = useState(false);
   const badge = PLACEMENT_STATUS[request.status];
@@ -282,7 +291,7 @@ function RequestCard({
     <li aria-labelledby={`placement-${request.id}`}>
       <div className="row-text">
         <span className="row-title" id={`placement-${request.id}`}>
-          <PersonName personId={request.participantPersonId} />
+          <PersonName personId={request.participantPersonId} names={names} />
         </span>
         <StatusBadge tone={badge.tone} label={`Placement ${badge.label}`} />
         <span className="caption">Requested {formatInstant(request.createdAt)}</span>
@@ -344,6 +353,7 @@ export function PlacementBoardScreen() {
       },
     },
   });
+  const names = usePersonNames((requests.data?.items ?? []).map((r) => r.participantPersonId));
   return (
     <section aria-labelledby="placement-title">
       <h2 id="placement-title">Placement board</h2>
@@ -375,7 +385,7 @@ export function PlacementBoardScreen() {
           <>
             <ul className="list" aria-label="Placement requests">
               {data.items.map((request) => (
-                <RequestCard key={request.id} request={request} entries={byId} />
+                <RequestCard key={request.id} request={request} entries={byId} names={names} />
               ))}
             </ul>
             <PageButtons

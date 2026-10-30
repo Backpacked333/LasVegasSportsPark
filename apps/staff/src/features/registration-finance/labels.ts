@@ -325,3 +325,52 @@ export const TENDER_KIND: Record<Schema<'CashTenderKind'>, string> = {
   check: 'Check',
   external_terminal: 'External terminal',
 };
+
+/** Order payment state (SPK-PAY-002); `awaiting_payment` never reads as paid. */
+export const ORDER_PAYMENT_STATUS: Labels<Schema<'Order'>['paymentStatus']> = {
+  awaiting_payment: { tone: 'pending', label: 'Payment awaiting_payment' },
+  paid: { tone: 'success', label: 'Payment paid' },
+  canceled: { tone: 'neutral', label: 'Payment canceled' },
+};
+
+/** Order fulfillment state (§4.11): `recovery_required` is money received, fulfillment incomplete. */
+export const ORDER_FULFILLMENT_STATUS: Labels<Schema<'Order'>['fulfillmentStatus']> = {
+  pending: { tone: 'pending', label: 'Fulfillment pending' },
+  fulfilled: { tone: 'success', label: 'Fulfillment fulfilled' },
+  recovery_required: { tone: 'danger', label: 'Fulfillment recovery_required' },
+  compensated: { tone: 'neutral', label: 'Fulfillment compensated' },
+  canceled: { tone: 'neutral', label: 'Fulfillment canceled' },
+};
+
+/** Inbox processing state of a provider event (§4.12); the payload is never shown (§4.14). */
+export const PROVIDER_EVENT_STATUS: Labels<Schema<'ProviderEventStatus'>> = {
+  received: { tone: 'pending', label: 'Event received' },
+  processed: { tone: 'success', label: 'Event processed' },
+  failed: { tone: 'danger', label: 'Event failed' },
+  ignored: { tone: 'neutral', label: 'Event ignored' },
+  dead: { tone: 'danger', label: 'Event dead-lettered' },
+};
+
+/** Session package state (ENR-11, SPK-COND-002). */
+export const PACKAGE_STATUS: Labels<Schema<'PackageEntitlementStatus'>> = {
+  active: { tone: 'success', label: 'Package active' },
+  exhausted: { tone: 'neutral', label: 'Package exhausted' },
+  expired: { tone: 'neutral', label: 'Package expired' },
+  revoked: { tone: 'neutral', label: 'Package revoked' },
+};
+
+/** Membership suspension state (ENR-12, SPK-COND-001). */
+export const SUSPENSION_STATUS: Labels<Schema<'MembershipSuspension'>['status']> = {
+  active: { tone: 'warning', label: 'Suspension active' },
+  ended: { tone: 'neutral', label: 'Suspension ended' },
+};
+
+/** Asynchronous operation state (§4.8, §4.12): only `succeeded` reads as done. */
+export const OPERATION_STATUS: Labels<Schema<'Operation'>['status']> = {
+  pending: { tone: 'pending', label: 'Operation pending' },
+  running: { tone: 'pending', label: 'Operation running' },
+  succeeded: { tone: 'success', label: 'Operation succeeded' },
+  failed: { tone: 'danger', label: 'Operation failed' },
+  recovery_required: { tone: 'danger', label: 'Operation recovery_required' },
+  compensated: { tone: 'neutral', label: 'Operation compensated' },
+};

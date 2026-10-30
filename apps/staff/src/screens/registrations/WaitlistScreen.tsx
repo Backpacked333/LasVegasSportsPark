@@ -4,14 +4,18 @@
  * the capacity pools (capacity, committed, held, available). Staff may remove an entry with a
  * reason (an open offer is declined and its place released by the API).
  *
- * - Offers are issued by the service when a place is released, in priority order, each holding a
- *   defined place until its server-owned expiry; the API has no command to issue one by hand, so
- *   "issue an offer" is shown as not available rather than imitated.
+ * - "Offer the place" (`POST /v1/waitlist-entries/{id}/offer`, ENR-04) asks the API to offer a
+ *   free place to a waiting entry, with a reason and `expectedRevision`; the capacity constraints
+ *   still decide. Only the next entry in the API's priority order can be offered
+ *   (`NOT_NEXT_IN_QUEUE` names who is), and without a free place the answer is
+ *   CAPACITY_UNAVAILABLE ("offer without capacity"). The offer holds its place until the API's
+ *   expiry; the service also offers released places on its own.
  * - Late payments never displace a valid offer: the API keeps the offer's hold (SPK-AT-006).
  * - The priority basis and offer expiry policy are pending DEC-006; only the API's values show.
+ * - Times are in the offering facility's zone (SPK-SCHED-008).
  * - The list is `GET /v1/waitlist-entries?offeringId=`; route parameters are opaque ids only.
  */
-import type { Schema } from '@sportspark/api-client';
+import type { ApiError, Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -33,7 +37,6 @@ import { PENDING } from '../../features/registration-finance/pending';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type Entry = Schema<'WaitlistEntry'>;
@@ -63,10 +66,125 @@ function preferenceText(preferences: Record<string, unknown>): string {
     .join('; ');
 }
 
-function EntryCard({ entry }: { entry: Entry }) {
+/** VALIDATION_FAILED `NOT_NEXT_IN_QUEUE`: the entry the API would offer first, if it says. */
+function notNextOf(error: ApiError | null): { next: string | null } | null {
+  if (!error || error.code !== 'VALIDATION_FAILED') return null;
+  const details = error.details as Record<string, unknown> | null | undefined;
+  if (!details || details['code'] !== 'NOT_NEXT_IN_QUEUE') return null;
+  const next = details['nextWaitlistEntryId'];
+  return { next: typeof next === 'string' ? next : null };
+}
+
+function OfferPlace({
+  entry,
+  entries,
+  zone,
+  onDone,
+}: {
+  entry: Entry;
+  entries: readonly Entry[];
+  zone: string | null;
+  onDone: () => void;
+}) {
   const online = useOnline();
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState<string | null>(null);
+  const offer = useApiCommand('post', '/waitlist-entries/{id}/offer', {
+    invalidate: [WAITLIST_KEY, ['api', '/capacity-pools']],
+  });
+  const reload = () => {
+    offer.reset();
+    void queryClient.invalidateQueries({ queryKey: WAITLIST_KEY });
+    void queryClient.invalidateQueries({ queryKey: ['api', '/capacity-pools'] });
+  };
+  const notNext = notNextOf(offer.error);
+  const nextEntry = notNext?.next ? entries.find((e) => e.id === notNext.next) : undefined;
+  const made = offer.data?.offers.find((o) => o.status === 'offered') ?? null;
+  return (
+    <form
+      noValidate
+      aria-label="Offer the place"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!reason.trim()) {
+          setReasonError('A reason is required and is audited.');
+          return;
+        }
+        setReasonError(null);
+        offer
+          .submit({
+            path: { id: entry.id },
+            body: { reason: reason.trim(), expectedRevision: entry.revision },
+          })
+          .catch(() => undefined);
+      }}
+    >
+      <p className="caption">
+        The API offers a free place to the next waiting entry in priority order and holds it until
+        the offer expires. The expiry comes from the waitlist policy, pending{' '}
+        {PENDING.waitlistOfferExpiry.ids.join(', ')} (owner: {PENDING.waitlistOfferExpiry.owner}).
+      </p>
+      <TextArea
+        label="Reason for offering the place"
+        required
+        value={reason}
+        onChange={setReason}
+        error={reasonError}
+      />
+      <div className="rf-actions">
+        <Button type="submit" busy={offer.isProcessing} disabled={!online || offer.isProcessing}>
+          Offer the place
+        </Button>
+        <Button variant="secondary" onClick={onDone}>
+          Do not offer
+        </Button>
+      </div>
+      <OfflineCaption action="offering a place" />
+      {offer.status === 'success' && offer.data ? (
+        <p role="status">
+          Offered.{' '}
+          {made
+            ? `The place is held until ${formatInstant(made.expiresAt, zone)} (the API's expiry).`
+            : `The entry is now ${WAITLIST_ENTRY_STATUS[offer.data.status].label}.`}
+        </p>
+      ) : null}
+      {notNext ? (
+        <section className="state" aria-live="polite" data-testid="state-validation">
+          <StatusBadge tone="warning" label="Not next in the queue" />
+          <p>
+            Another waiting entry is offered the next place first
+            {nextEntry ? (
+              <>
+                {': '}
+                <PersonName id={nextEntry.participantPersonId} fallback="Participant" />
+                {nextEntry.position !== null ? ` (position ${nextEntry.position})` : ''}
+              </>
+            ) : null}
+            . Nothing was offered.
+          </p>
+          <p className="caption">Error code: {offer.error?.code}</p>
+          <Button onClick={reload}>Reload</Button>
+        </section>
+      ) : (
+        <CommandError error={offer.error} onReload={reload} />
+      )}
+    </form>
+  );
+}
+
+function EntryCard({
+  entry,
+  entries,
+  zone,
+}: {
+  entry: Entry;
+  entries: readonly Entry[];
+  zone: string | null;
+}) {
+  const online = useOnline();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState<'remove' | 'offer' | null>(null);
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
   const remove = useApiCommand('post', '/waitlist-entries/{id}/remove', {
@@ -86,7 +204,7 @@ function EntryCard({ entry }: { entry: Entry }) {
         </span>
         <span className="caption">
           {REGISTRATION_INTENT[entry.intent]} · priority basis {humanize(entry.priorityBasis)} (rank{' '}
-          {entry.priorityRank}) · joined {formatInstant(entry.joinedAt)}
+          {entry.priorityRank}) · joined {formatInstant(entry.joinedAt, zone)}
         </span>
         <span className="caption">Preferences: {preferenceText(entry.preferences)}</span>
         <StatusBadge {...WAITLIST_ENTRY_STATUS[entry.status]} />
@@ -96,10 +214,11 @@ function EntryCard({ entry }: { entry: Entry }) {
               <li key={offer.id}>
                 <StatusBadge {...WAITLIST_OFFER_STATUS[offer.status]} />{' '}
                 <span className="caption">
-                  offered {formatInstant(offer.offeredAt)}, expires {formatInstant(offer.expiresAt)}
-                  {offer.acceptedAt ? `, accepted ${formatInstant(offer.acceptedAt)}` : ''}
-                  {offer.declinedAt ? `, declined ${formatInstant(offer.declinedAt)}` : ''}
-                  {offer.expiredAt ? `, expired ${formatInstant(offer.expiredAt)}` : ''}
+                  offered {formatInstant(offer.offeredAt, zone)}, expires{' '}
+                  {formatInstant(offer.expiresAt, zone)}
+                  {offer.acceptedAt ? `, accepted ${formatInstant(offer.acceptedAt, zone)}` : ''}
+                  {offer.declinedAt ? `, declined ${formatInstant(offer.declinedAt, zone)}` : ''}
+                  {offer.expiredAt ? `, expired ${formatInstant(offer.expiredAt, zone)}` : ''}
                 </span>
               </li>
             ))}
@@ -109,7 +228,7 @@ function EntryCard({ entry }: { entry: Entry }) {
         )}
       </div>
       {live ? (
-        open ? (
+        open === 'remove' ? (
           <form
             noValidate
             aria-label="Remove from the waitlist"
@@ -142,20 +261,33 @@ function EntryCard({ entry }: { entry: Entry }) {
               <Button type="submit" busy={remove.isProcessing} disabled={!online}>
                 Remove from the waitlist
               </Button>
-              <Button variant="secondary" onClick={() => setOpen(false)}>
+              <Button variant="secondary" onClick={() => setOpen(null)}>
                 Keep on the waitlist
               </Button>
             </div>
           </form>
+        ) : open === 'offer' ? (
+          <OfferPlace entry={entry} entries={entries} zone={zone} onDone={() => setOpen(null)} />
         ) : (
-          <Button
-            variant="secondary"
-            disabled={!online}
-            onClick={() => setOpen(true)}
-            aria-describedby={`entry-${entry.id}`}
-          >
-            Remove…
-          </Button>
+          <div className="rf-actions">
+            {entry.status === 'waiting' ? (
+              <Button
+                disabled={!online}
+                onClick={() => setOpen('offer')}
+                aria-describedby={`entry-${entry.id}`}
+              >
+                Offer the place…
+              </Button>
+            ) : null}
+            <Button
+              variant="secondary"
+              disabled={!online}
+              onClick={() => setOpen('remove')}
+              aria-describedby={`entry-${entry.id}`}
+            >
+              Remove…
+            </Button>
+          </div>
         )
       ) : null}
       <CommandError error={remove.error} onReload={reload} />
@@ -165,6 +297,13 @@ function EntryCard({ entry }: { entry: Entry }) {
 
 function OfferingWaitlist({ offeringId }: { offeringId: string }) {
   const [status, setStatus] = useState<EntryStatus | ''>('');
+  // SPK-SCHED-008: the offering names its facility and that facility's zone.
+  const offering = useApiQuery({
+    path: '/offerings/{id}',
+    request: { path: { id: offeringId } },
+    staleTime: 5 * 60_000,
+  });
+  const zone = offering.data?.facility?.timezone ?? null;
   const pools = useApiQuery({ path: '/capacity-pools', request: { query: { offeringId } } });
   const entries = useApiQuery({
     path: '/waitlist-entries',
@@ -209,11 +348,6 @@ function OfferingWaitlist({ offeringId }: { offeringId: string }) {
           )}
         </QueryBoundary>
       </section>
-      <StateView
-        variant="unavailable"
-        title="Issuing an offer by hand is not available"
-        description="The service offers a released place to the next waiting entry in priority order, holding it until the offer expires. The API has no command for staff to issue an offer."
-      />
       <p className="caption">
         Priority basis and offer expiry come from the waitlist policy, pending{' '}
         {PENDING.waitlistPolicy.ids.join(', ')} (owner: {PENDING.waitlistPolicy.owner}). A late
@@ -237,17 +371,17 @@ function OfferingWaitlist({ offeringId }: { offeringId: string }) {
           title: 'No waitlist',
           description: 'Nobody is on the waitlist for this offering.',
         }}
-        unavailableOffline={['removing entries']}
+        unavailableOffline={['offering places', 'removing entries']}
       >
         {(list) => (
           <ul className="list" aria-label="Waitlist entries">
             {orderEntries(list).map((entry) => (
-              <EntryCard key={entry.id} entry={entry} />
+              <EntryCard key={entry.id} entry={entry} entries={list} zone={zone} />
             ))}
           </ul>
         )}
       </QueryBoundary>
-      <OfflineCaption action="removing entries" />
+      <OfflineCaption action="offering places or removing entries" />
     </>
   );
 }

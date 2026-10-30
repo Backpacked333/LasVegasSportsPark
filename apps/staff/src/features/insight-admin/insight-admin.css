@@ -65,6 +65,12 @@
   flex-direction: column;
   gap: var(--space-1);
 }
+.ia-field-group,
+.ia-person-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
 .ia-field label {
   font-weight: 600;
 }

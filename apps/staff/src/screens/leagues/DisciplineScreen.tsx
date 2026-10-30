@@ -5,8 +5,10 @@
  * narratives restricted; SPK-UX-008). Lists show only the safe incident summary: a narrative is
  * opened deliberately on the incident page. Reading needs league management authority; anyone
  * else gets "not available" and nothing implies a record exists. A proposed suspension must state
- * its scope (never assumed to span every program) and completion criteria. The lengths, scopes and
- * appeal procedure are pending DEC-010 and DEC-063, so nothing is preset.
+ * its scope (never assumed to span every program) and completion criteria; its subject is found by
+ * name (person search, ID-02) or entered by reference. Decisions and appeals are listed with their
+ * own actions (DisciplineRecords.tsx, CMP-05). The lengths, scopes and appeal procedure are
+ * pending DEC-010 and DEC-063, so nothing is preset.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -34,12 +36,13 @@ import {
   SUSPENSION_STATUS,
 } from '../../features/competition/labels';
 import { LeaguesNav } from '../../features/competition/nav';
-import { PersonName } from '../../features/competition/names';
+import { PersonName, usePersonNames } from '../../features/competition/names';
+import { PersonSearchField } from '../../features/competition/PersonSearchField';
 import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Appeals, Decisions } from './DisciplineRecords';
 
 type Suspension = Schema<'Suspension'>;
 type IncidentStatus = Schema<'IncidentStatus'>;
@@ -219,7 +222,7 @@ function ProposeSuspensionForm() {
   const submit = () => {
     const next: Record<string, string> = {};
     if (!isRecordReference(subject))
-      next.subject = 'Enter the person reference shown on their record.';
+      next.subject = 'Find the person by name, or enter the reference shown on their record.';
     if (!basis.trim()) next.basis = 'State the basis for the suspension.';
     if (!scope) next.scope = 'Choose the scope: a suspension is never assumed to apply everywhere.';
     if (scope === 'competitions' && competitionIds.length === 0)
@@ -276,12 +279,11 @@ function ProposeSuspensionForm() {
         submit();
       }}
     >
-      <TextField
-        label="Person reference"
+      <PersonSearchField
+        label="Suspended person"
         required
         value={subject}
         onChange={setSubject}
-        hint="The reference on the person's record; names and contacts are never used here."
         error={err('subject', 'subjectPersonId')}
       />
       <TextAreaField
@@ -373,6 +375,7 @@ function Suspensions() {
     path: '/suspensions',
     request: { query: { ...(status ? { status: status as SuspensionStatus } : {}) } },
   });
+  const people = usePersonNames((suspensions.data ?? []).map((s) => s.subjectPersonId));
   return (
     <section className="panel" aria-labelledby="suspensions-title">
       <h3 id="suspensions-title">Suspensions</h3>
@@ -416,7 +419,7 @@ function Suspensions() {
                 <li key={s.id} aria-labelledby={`suspension-${s.id}`}>
                   <div className="row-text">
                     <span className="row-title" id={`suspension-${s.id}`}>
-                      <PersonName personId={s.subjectPersonId} />
+                      <PersonName personId={s.subjectPersonId} names={people} />
                     </span>
                     <StatusBadge tone={badge.tone} label={`Suspension ${badge.label}`} />
                     <dl className="facets">
@@ -477,16 +480,13 @@ export function DisciplineScreen() {
       <LeaguesNav />
       <p className="caption">
         Restricted records: narratives never appear in public results, team views or customer
-        exports. Disputes are reviewed from each fixture.
+        exports. Disputes are reviewed under Disputes or from each fixture.
       </p>
       <PendingNote decision={PENDING.discipline} />
       <Incidents />
       <Suspensions />
-      <StateView
-        variant="unavailable"
-        title="Appeal and decision lists: not available yet"
-        description="The API reads an appeal or a disciplinary decision only by its reference; the appeal status of each dispute and suspension is shown with it."
-      />
+      <Decisions />
+      <Appeals />
     </section>
   );
 }

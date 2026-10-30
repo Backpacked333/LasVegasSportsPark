@@ -2,6 +2,9 @@
  * Shared parts of SCR-S-48 Migration imports and reconciliation (§5.4, §5.5, §5.6, SPK-AT-024,
  * DEC-014, DEC-067; SPK-UX-008): review-queue exceptions with their decision form, and a
  * reconciliation report with its four levels, discrepancies (never netted) and per-area approvals.
+ * Deciding an exception and recording a sign-off are offered only when `GET /v1/me/permissions`
+ * lists migration.decide_exception or migration.approve_reconciliation for the viewer's roles; the
+ * API still decides each one (which queue or area is the viewer's) and its ACCESS_DENIED is shown.
  * Staged payloads are never rendered: a row is shown by entity type, external id, outcome and
  * reasons only, so imported personal and child data is not repeated on screen (§4.14).
  */
@@ -13,6 +16,7 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError, CommandSuccess, PendingNote } from './feedback';
+import { ActionGate } from './permission';
 import { CheckboxGroup, RadioGroup, SelectField, TextField } from './fields';
 import { formatInstant, formatMinor, formatScalar, shortId } from './format';
 import {
@@ -86,8 +90,8 @@ function DecideException({ exception }: { exception: ImportException }) {
       resolution = { permissions: permissions as Schema<'GrantPermission'>[] };
     }
     if (decision === 'accept' && exception.kind === 'ambiguous_balance' && amount.trim()) {
-      // The staged balance's currency is not on the exception (API gap), so the scale is never
-      // inferred from a typed currency: the approved amount is entered in minor units.
+      // The approved amount is entered in minor units of the staged balance's currency (MIG-01
+      // names it on the exception); it is formatted for display only, never converted.
       const minor = /^\d{1,15}$/.test(amount.trim()) ? Number(amount.trim()) : null;
       if (minor === null || minor < 1)
         next.amount =
@@ -150,16 +154,24 @@ function DecideException({ exception }: { exception: ImportException }) {
       {decision === 'accept' && exception.kind === 'ambiguous_balance' ? (
         <>
           <TextField
-            label="Approved amount in minor units of the staged balance's currency"
+            label={`Approved amount in minor units of ${exception.currency ?? "the staged balance's currency"}`}
             inputMode="numeric"
             value={amount}
             onChange={setAmount}
-            hint="For example cents: 2500 for 25.00. Leave empty to accept the staged amount."
+            hint={`For example cents: 2500 for 25.00. Leave empty to accept the staged amount${
+              exception.stagedAmountMinor !== null
+                ? ` (${formatMinor(exception.stagedAmountMinor, exception.currency)})`
+                : ''
+            }.`}
             error={errors.amount}
           />
           {/^\d{1,15}$/.test(amount.trim()) && Number(amount.trim()) > 0 ? (
             <p className="caption" role="status">
-              Records amountMinor {Number(amount.trim())} in the staged balance&apos;s currency.
+              Records amountMinor {Number(amount.trim())}
+              {exception.currency
+                ? `: ${formatMinor(Number(amount.trim()), exception.currency)}`
+                : " in the staged balance's currency (not stated)"}
+              .
             </p>
           ) : null}
         </>
@@ -204,7 +216,17 @@ export function ExceptionCard({ exception }: { exception: ImportException }) {
           Review owner: {roleLabel(exception.reviewOwnerRole)} · {exception.phase} phase · raised{' '}
           {formatInstant(exception.createdAt)} · batch {shortId(exception.batchId)}
         </span>
+        {exception.stagedAmountMinor !== null ? (
+          <span className="caption">
+            Staged amount {formatMinor(exception.stagedAmountMinor, exception.currency)}
+          </span>
+        ) : null}
         <ReasonList reasons={exception.reasons} />
+        {exception.resolution?.amountMinor !== undefined ? (
+          <span className="caption">
+            Approved amount {formatMinor(exception.resolution.amountMinor, exception.currency)}
+          </span>
+        ) : null}
         {exception.decision ? (
           <span className="caption">
             Decision: {exception.decision}
@@ -215,7 +237,7 @@ export function ExceptionCard({ exception }: { exception: ImportException }) {
         ) : null}
       </div>
       {exception.status === 'open' ? (
-        <>
+        <ActionGate actionId="migration.decide_exception" what="Deciding this exception">
           <Button
             variant="secondary"
             aria-expanded={open}
@@ -225,7 +247,7 @@ export function ExceptionCard({ exception }: { exception: ImportException }) {
             {open ? 'Close decision' : 'Decide'}
           </Button>
           {open ? <DecideException exception={exception} /> : null}
-        </>
+        </ActionGate>
       ) : null}
     </li>
   );
@@ -286,50 +308,52 @@ function ApproveArea({ report }: { report: Report }) {
     });
   };
   return (
-    <form className="ia-form" onSubmit={submit} aria-label="Record an area sign-off" noValidate>
-      <h4>Record an area sign-off</h4>
-      <SelectField
-        label="Area"
-        required
-        value={area}
-        onChange={setArea}
-        placeholder="Choose an area"
-        options={open.map((a) => ({ value: a, label: RECONCILIATION_AREA_LABELS[a] }))}
-        error={errors.area}
-      />
-      <RadioGroup
-        legend="Decision"
-        name="area-decision"
-        required
-        value={decision}
-        onChange={setDecision}
-        options={[
-          { value: 'approved', label: 'Approve' },
-          { value: 'rejected', label: 'Reject' },
-        ]}
-        error={errors.decision}
-      />
-      <TextField
-        label="Reason"
-        value={reason}
-        onChange={setReason}
-        hint="Needed to reject, or to approve an area with discrepancies; they stay listed and are never netted."
-      />
-      <div>
-        <Button type="submit" busy={approve.isProcessing} disabled={!online}>
-          Record sign-off
-        </Button>
-      </div>
-      <CommandSuccess message={success} />
-      <CommandError
-        error={approve.error}
-        onRetry={() => {
-          const body = build();
-          if (body) send(body);
-        }}
-        onReload={reload}
-      />
-    </form>
+    <ActionGate actionId="migration.approve_reconciliation" what="Recording an area sign-off">
+      <form className="ia-form" onSubmit={submit} aria-label="Record an area sign-off" noValidate>
+        <h4>Record an area sign-off</h4>
+        <SelectField
+          label="Area"
+          required
+          value={area}
+          onChange={setArea}
+          placeholder="Choose an area"
+          options={open.map((a) => ({ value: a, label: RECONCILIATION_AREA_LABELS[a] }))}
+          error={errors.area}
+        />
+        <RadioGroup
+          legend="Decision"
+          name="area-decision"
+          required
+          value={decision}
+          onChange={setDecision}
+          options={[
+            { value: 'approved', label: 'Approve' },
+            { value: 'rejected', label: 'Reject' },
+          ]}
+          error={errors.decision}
+        />
+        <TextField
+          label="Reason"
+          value={reason}
+          onChange={setReason}
+          hint="Needed to reject, or to approve an area with discrepancies; they stay listed and are never netted."
+        />
+        <div>
+          <Button type="submit" busy={approve.isProcessing} disabled={!online}>
+            Record sign-off
+          </Button>
+        </div>
+        <CommandSuccess message={success} />
+        <CommandError
+          error={approve.error}
+          onRetry={() => {
+            const body = build();
+            if (body) send(body);
+          }}
+          onReload={reload}
+        />
+      </form>
+    </ActionGate>
   );
 }
 

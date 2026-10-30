@@ -4,7 +4,8 @@
  * never charges or notifies; abort needs a reason), partial completion per row with reasons,
  * §5.5 four levels with discrepancies never netted and per-area sign-offs (DEC-067), every command
  * with an idempotency key and the expected revision, staged payloads never shown (§4.14), and a
- * protected batch shown as not available.
+ * protected batch shown as not available. MIG-01: the batch's reconciliation reports listed newest
+ * first with the latest one shown, and staged balances with their currency.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -12,7 +13,9 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import {
   BATCH_1,
+  MIGRATION_OPERATOR_ACTIONS,
   REPORT_1,
+  uuid,
   importBatch,
   importException,
   importRow,
@@ -20,11 +23,12 @@ import {
   page,
   reconciliationReport,
 } from '../../../features/insight-admin/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, mePermissions } from '../../../testing/test-app';
 
 function app(batch: ReturnType<typeof importBatch>, routes: Record<string, FakeHandler> = {}) {
   return createTestApp({
     routes: {
+      'GET /me/permissions': mePermissions({ actions: MIGRATION_OPERATOR_ACTIONS }),
       'GET /import-batches/{id}': ok(batch),
       'GET /import-batches/{id}/rows': page([
         importRow(1),
@@ -138,7 +142,7 @@ describe('SCR-S-48 ImportBatchScreen', () => {
     );
   });
 
-  it('accepts an ambiguous balance with the amount finance approved, in minor units', async () => {
+  it('MIG-01: accepts an ambiguous balance with the amount finance approved, in minor units of its currency', async () => {
     const user = userEvent.setup();
     const test = app(importBatch(BATCH_1, 'validated'), {
       'GET /import-exceptions': page([importException('ambiguous_balance')]),
@@ -147,16 +151,14 @@ describe('SCR-S-48 ImportBatchScreen', () => {
       ),
     });
     render(test.at(at));
-    await user.click(await screen.findByRole('button', { name: 'Decide Ambiguous balance X-3' }));
+    const card = (await screen.findByText('Staged amount -$25.00')).closest('li') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Decide Ambiguous balance X-3' }));
     const form = screen.getByRole('form', { name: /Decide exception/ });
     await user.click(within(form).getByRole('radio', { name: 'Accept' }));
-    // The staged balance's currency is unknown here, so the amount is in minor units, with the
-    // amount to be recorded confirmed before sending.
-    await user.type(
-      within(form).getByLabelText(/^Approved amount in minor units of the staged balance/),
-      '2400',
-    );
-    expect(within(form).getByText(/Records amountMinor 2400/)).toBeInTheDocument();
+    // The staged balance's currency is on the exception: the amount is entered in its minor
+    // units and the amount to be recorded is confirmed, formatted, before sending.
+    await user.type(within(form).getByLabelText(/^Approved amount in minor units of USD/), '2400');
+    expect(within(form).getByText(/Records amountMinor 2400: \$24\.00/)).toBeInTheDocument();
     await user.type(
       within(form).getByLabelText('Reason (required)'),
       'Finance approved the corrected balance',
@@ -292,6 +294,8 @@ describe('SCR-S-48 ImportBatchScreen', () => {
       },
       'GET /import-reconciliation-reports/{id}': () =>
         fakeResponse(200, signed ? signedReport : reconciliationReport()),
+      'GET /import-batches/{id}/reconciliation-reports': () =>
+        fakeResponse(200, { items: [signed ? signedReport : reconciliationReport()] }),
       'POST /import-reconciliation-reports/{id}/approvals': () => {
         signed = true;
         return fakeResponse(200, signedReport);
@@ -404,5 +408,136 @@ describe('SCR-S-48 ImportBatchScreen', () => {
     );
     expect(await screen.findByTestId('state-unavailable')).toHaveTextContent('Not available');
     expect(screen.queryByText(/import batch not found/)).toBeNull();
+  });
+
+  it('MIG-01: lists the batch reconciliation reports newest first and shows the latest', async () => {
+    const OLDER = uuid(602);
+    const test = app(importBatch(BATCH_1, 'applied', { latestReconciliationReportId: REPORT_1 }), {
+      'GET /import-batches/{id}/reconciliation-reports': ok({
+        items: [
+          reconciliationReport(),
+          reconciliationReport({
+            id: OLDER,
+            generatedAt: '2026-10-22T08:00:00.000Z',
+            approvalStatus: 'superseded',
+            supersededByReportId: REPORT_1,
+            status: 'discrepancy',
+            discrepancyCount: 2,
+          }),
+        ],
+      }),
+      'GET /import-reconciliation-reports/{id}': ok(reconciliationReport()),
+    });
+    render(test.at(at));
+    const list = await screen.findByRole('list', { name: 'Reconciliation reports of this batch' });
+    const [latest, older] = within(list).getAllByRole('listitem') as HTMLElement[];
+    expect(within(latest!).getByText('latest')).toBeInTheDocument();
+    expect(within(latest!).getByText('sign-off pending')).toBeInTheDocument();
+    expect(within(older!).getByText('sign-off superseded')).toBeInTheDocument();
+    expect(
+      within(older!).getByText(new RegExp(`superseded by ${REPORT_1.slice(0, 8)}`)),
+    ).toBeInTheDocument();
+    expect(
+      within(older!).getByRole('link', { name: `Reconciliation report ${OLDER.slice(0, 8)}` }),
+    ).toHaveAttribute('href', `/admin/migration/reconciliation/${OLDER}`);
+    // The latest report is shown with its levels and sign-off form without generating a new one.
+    expect(
+      await screen.findByRole('region', { name: 'Reconciliation levels' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('form', { name: 'Record an area sign-off' })).toBeInTheDocument();
+    expect(
+      test.fake.requests.some(
+        (r) => r.method === 'POST' && r.route === '/import-batches/{id}/reconciliation-reports',
+      ),
+    ).toBe(false);
+  });
+
+  it('SPK-UX-005: offers each next step only when GET /v1/me/permissions lists its action', async () => {
+    // A support operator reads batches and decides exceptions, but does not validate, stage or abort.
+    const test = app(importBatch(BATCH_1, 'received'), {
+      'GET /me/permissions': mePermissions({
+        staffRoles: ['support_operator'],
+        actions: [
+          'migration.read_batch',
+          'migration.read_exceptions',
+          'migration.decide_exception',
+        ],
+      }),
+      'GET /import-exceptions': page([importException('ambiguous_relationship')]),
+    });
+    render(test.at(at));
+    expect(
+      await screen.findByText('Validating this batch is not available to you.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Appending a chunk is not available to you.')).toBeInTheDocument();
+    expect(screen.getByText('Aborting this batch is not available to you.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Validate (seal and dry run)' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Append chunk' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Abort the batch' })).toBeNull();
+    const queue = await screen.findByRole('list', { name: 'Review exceptions of this batch' });
+    expect(
+      within(queue).getByRole('button', { name: 'Decide Ambiguous relationship X-3' }),
+    ).toBeInTheDocument();
+    expect(test.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  it('a reviewed batch: apply and abort are offered only to an operator', async () => {
+    render(
+      app(importBatch(BATCH_1, 'reviewed'), {
+        'GET /me/permissions': mePermissions({
+          staffRoles: ['finance_operator'],
+          actions: ['migration.read_batch', 'migration.reconcile'],
+        }),
+      }).at(at),
+    );
+    expect(
+      await screen.findByText('Applying this batch is not available to you.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply the batch' })).toBeNull();
+  });
+
+  it('shows a failed permissions read with its code and Try again, and offers no step', async () => {
+    render(
+      app(importBatch(BATCH_1, 'validated'), {
+        'GET /me/permissions': () =>
+          fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { message: 'Try again later.' })),
+      }).at(at),
+    );
+    expect(
+      (await screen.findAllByText('Error code: INTERNAL_ERROR. Reference: test-correlation-id'))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: 'Try again' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Complete the review' })).toBeNull();
+  });
+
+  it('still shows the API refusal (ACCESS_DENIED) of an offered step with its message', async () => {
+    const user = userEvent.setup();
+    render(
+      app(importBatch(BATCH_1, 'received'), {
+        'POST /import-batches/{id}/validate': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', {
+              message: 'You are not permitted to perform this action.',
+              nextAction: 'contact_support_or_request_access',
+            }),
+          ),
+      }).at(at),
+    );
+    await user.click(await screen.findByRole('button', { name: 'Validate (seal and dry run)' }));
+    expect(await screen.findByText('Not available to you')).toBeInTheDocument();
+    expect(screen.getByText('You are not permitted to perform this action.')).toBeInTheDocument();
+  });
+
+  it('says there is no reconciliation report yet for an applied batch, without a read', async () => {
+    const test = app(importBatch(BATCH_1, 'applied'));
+    render(test.at(at));
+    expect(
+      await screen.findByText('No reconciliation report yet for this batch.'),
+    ).toBeInTheDocument();
+    expect(
+      test.fake.requests.some((r) => r.route === '/import-batches/{id}/reconciliation-reports'),
+    ).toBe(false);
   });
 });

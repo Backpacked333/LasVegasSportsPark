@@ -5,18 +5,25 @@
  * capacity units, price basis with approved taxes and fees, required forms and the cancellation
  * policy, then the entry point to registration (SCR-C-09).
  *
+ * Times are shown in the facility's time zone (`facility.timezone`, SPK-SCHED-008), with the
+ * zone named. Signed in, "Who can take part" shows the read-only eligibility of each person the
+ * account may register, for each intent the offering accepts
+ * (`GET /v1/offerings/{id}/registration-options`, ENR-05, SPK-REG-002): reasons and permitted
+ * alternatives as the API words them, unknown evidence as "not known yet", never a pass. A person
+ * the account may only view is "not available to register", with no further detail (SPK-IAM-003).
+ *
  * States: loading; withdrawn or never published reads "not available" (NOT_FOUND, no hint it
  * exists); ready; stale (re-read on return to the app: a paused or closed window shows as such);
  * offline (cached detail with its age, registration disabled); registration unavailable unless the
- * API reports `registration_open`.
+ * API reports `registration_open`; the eligibility section has its own loading, error and
+ * not-available states.
  *
- * Not shown, because the API does not provide them to customers (reported as API gaps):
- * eligibility per authorized participant before a basket line is added (no preview endpoint), the
- * responsible manager (staff-only), and the facility's time zone (times use the device's zone).
+ * Not shown: the responsible manager, which the API gives to staff only (`staff` is null for
+ * customers; reported).
  */
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import {
   OFFERING_KIND_LABELS,
@@ -25,15 +32,26 @@ import {
   formatInstant,
   formatMoney,
 } from '../../features/registration/format';
+import {
+  eligibilityMessages,
+  eligibilityOf,
+  eligibilityStatus,
+  mayRegister,
+  useRegistrationOptions,
+} from '../../features/registration/options';
+import { useParticipants } from '../../features/registration/participants';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { offeringDates, registrationWindowStatus } from '../../features/registration/status';
+import { INTENT_LABELS } from '../../features/registration/intents';
 import { Body, ButtonRow, Detail, Section, Title } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { spacing } from '../../ui/theme';
 
 type Offering = Schema<'Offering'>;
 type OfferingSession = Schema<'OfferingSession'>;
@@ -78,7 +96,13 @@ function PriceSection({ offering }: { offering: Offering }) {
   );
 }
 
-function SessionsSection({ sessions }: { sessions: OfferingSession[] | undefined }) {
+function SessionsSection({
+  sessions,
+  timeZone,
+}: {
+  sessions: OfferingSession[] | undefined;
+  timeZone: string;
+}) {
   if (!sessions || sessions.length === 0) return null;
   const shown = sessions.slice(0, SESSIONS_SHOWN);
   return (
@@ -90,8 +114,8 @@ function SessionsSection({ sessions }: { sessions: OfferingSession[] | undefined
             label={s.title ?? `Session ${s.sequence}`}
             value={
               s.status === 'canceled'
-                ? `Canceled (was ${formatInstant(s.scheduledStart)})`
-                : formatInstant(s.scheduledStart)
+                ? `Canceled (was ${formatInstant(s.scheduledStart, timeZone)})`
+                : formatInstant(s.scheduledStart, timeZone)
             }
           />
         ))}
@@ -141,6 +165,95 @@ function PoliciesSection({ offering, signedIn }: { offering: Offering; signedIn:
         )}
       </Section>
     </>
+  );
+}
+
+/**
+ * SPK-REG-002: read-only eligibility per participant the account may register. Nothing is held;
+ * the API evaluates again when a line is added.
+ */
+function EligibilitySection({ offering }: { offering: Offering }) {
+  const { participants, me, namesLoading, namesError, retryNames } = useParticipants();
+  const ids = participants.map((p) => p.personId);
+  const options = useRegistrationOptions(
+    offering.id,
+    ids,
+    me.data !== undefined && !namesLoading && namesError === null,
+  );
+  return (
+    <Section title="Who can take part">
+      <Detail label="Age" value={ageBandLabel(offering.ageBand) ?? 'No age limits'} />
+      {me.isPending ||
+      namesLoading ||
+      (options.data === undefined && options.isPending && options.fetchStatus === 'fetching') ? (
+        <StateView variant="loading" label="eligibility for your family" />
+      ) : me.error ? (
+        <QueryErrorView error={me.error} onRetry={() => void me.refetch()} />
+      ) : namesError ? (
+        <QueryErrorView error={namesError} onRetry={() => retryNames?.()} />
+      ) : options.data === undefined && options.error ? (
+        <QueryErrorView
+          error={options.error}
+          onRetry={() => void options.refetch()}
+          unavailable={{
+            title: 'Eligibility not available',
+            description: 'Eligibility is checked for each participant when you register.',
+          }}
+        />
+      ) : participants.length === 0 ? (
+        <Body muted>Add yourself or your family members in Account to see who can take part.</Body>
+      ) : (
+        <View accessibilityRole="list" testID="eligibility-preview">
+          {participants.map((p) => {
+            if (!mayRegister(options.data, p.personId)) {
+              return (
+                <Detail
+                  key={p.personId}
+                  label={p.displayName}
+                  value="Not available to register from your account"
+                  testID={`eligibility-${p.self ? 'self' : p.personId}`}
+                />
+              );
+            }
+            return (
+              <View key={p.personId} testID={`eligibility-${p.self ? 'self' : p.personId}`}>
+                {(options.data?.availableIntents ?? []).map((intent) => {
+                  const result = eligibilityOf(options.data, p.personId, intent);
+                  if (!result) return null;
+                  const status = eligibilityStatus(result);
+                  const { reasons, alternatives } = eligibilityMessages(result);
+                  return (
+                    <View
+                      key={intent}
+                      style={styles.eligibility}
+                      accessible
+                      accessibilityLabel={[
+                        `${p.displayName}, ${INTENT_LABELS[intent].title}: ${status.label}`,
+                        ...reasons,
+                        ...alternatives,
+                      ].join('. ')}
+                    >
+                      <Body>{`${p.displayName}: ${INTENT_LABELS[intent].title}`}</Body>
+                      <StatusBadge {...status} />
+                      {reasons.map((reason) => (
+                        <Body key={reason} muted>{`• ${reason}`}</Body>
+                      ))}
+                      {alternatives.map((alternative) => (
+                        <Body key={alternative} muted>{`→ ${alternative}`}</Body>
+                      ))}
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })}
+        </View>
+      )}
+      <Body muted>
+        Eligibility is checked again when you add someone, against the activity's rules and dates of
+        birth. Nothing is held until checkout.
+      </Body>
+    </Section>
   );
 }
 
@@ -213,23 +326,34 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
             </Section>
             <Section title="About">
               <Detail label="Activity" value={o.activityType} />
+              <Detail label="Facility" value={o.facility.name} />
               {o.format ? <Detail label="Format" value={o.format} /> : null}
               {o.locationLabel ? <Detail label="Location" value={o.locationLabel} /> : null}
               <Detail label="Dates" value={offeringDates(o)} />
               {o.registrationOpensAt ? (
-                <Detail label="Registration opens" value={formatInstant(o.registrationOpensAt)} />
+                <Detail
+                  label="Registration opens"
+                  value={formatInstant(o.registrationOpensAt, o.facility.timezone)}
+                />
               ) : null}
               {o.registrationClosesAt ? (
-                <Detail label="Registration closes" value={formatInstant(o.registrationClosesAt)} />
+                <Detail
+                  label="Registration closes"
+                  value={formatInstant(o.registrationClosesAt, o.facility.timezone)}
+                />
               ) : null}
             </Section>
-            <Section title="Who can take part">
-              <Detail label="Age" value={ageBandLabel(o.ageBand) ?? 'No age limits'} />
-              <Body muted>
-                Eligibility is checked for each participant when you add them, against the
-                activity's rules and dates of birth.
-              </Body>
-            </Section>
+            {signedIn ? (
+              <EligibilitySection offering={o} />
+            ) : (
+              <Section title="Who can take part">
+                <Detail label="Age" value={ageBandLabel(o.ageBand) ?? 'No age limits'} />
+                <Body muted>
+                  Sign in to see whether you or your family members can take part. Eligibility is
+                  checked against the activity's rules and dates of birth.
+                </Body>
+              </Section>
+            )}
             {o.capacity.length > 0 ? (
               <Section title="Places">
                 {o.capacity.map((c) => (
@@ -239,7 +363,7 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
               </Section>
             ) : null}
             <PriceSection offering={o} />
-            <SessionsSection sessions={sessions.data} />
+            <SessionsSection sessions={sessions.data} timeZone={o.facility.timezone} />
             <PoliciesSection offering={o} signedIn={signedIn} />
             <RegistrationAction offering={o} />
           </View>
@@ -248,6 +372,10 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  eligibility: { paddingVertical: spacing.xs, gap: spacing.xs },
+});
 
 /** Route component for app/registration/offering/[offeringId].tsx. */
 export function OfferingDetailRoute() {

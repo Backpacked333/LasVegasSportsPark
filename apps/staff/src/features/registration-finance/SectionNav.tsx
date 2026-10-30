@@ -42,4 +42,9 @@ export const FINANCE_LINKS: readonly SectionLink[] = [
   { to: '/finance/payments', label: 'Payment attempts (SCR-S-36)' },
   { to: '/finance/credits', label: 'Refunds and credits (SCR-S-37)' },
   { to: '/finance/reconciliation', label: 'Reconciliation (SCR-S-38)' },
+  // Conditional Package G screens (src/screens/package-g/), behind their capability switches.
+  { to: '/finance/memberships', label: 'Memberships (SCR-S-53)' },
+  { to: '/finance/session-packages', label: 'Session packages (SCR-S-54)' },
+  { to: '/finance/point-of-sale', label: 'Point of sale (SCR-S-55)' },
+  { to: '/finance/accounting-exports', label: 'Accounting export batches (SCR-S-57)' },
 ];

@@ -10,12 +10,18 @@
  *   kept locally until save"); nothing is presented as saved before the API confirms it.
  * - Concurrent editor: STALE_REVISION keeps the user's edits and offers to load the latest version
  *   or to save these edits on top of it (an explicit choice, never silent).
- * - Base revisions: an event that changed after the draft captured it is flagged on its change
- *   ("rebase required"); because the API re-captures base revisions on every save, autosave pauses
- *   until the user has reviewed the event and chosen to rebase.
+ * - Base revisions: the API keeps the base revision a change captured when it entered the draft, on
+ *   every save (SPK-SCHED-005), so autosave never rebases. An event that changed after the draft
+ *   captured it is flagged on its change ("rebase required"), and publication refuses the draft
+ *   until it is rebased. "Rebase onto the current event" does what the API documents: one save
+ *   without that event's changes, then one with them again, which captures the event's current
+ *   revision. A rebase that captured a revision newer than the one the user reviewed is flagged
+ *   again, so a draft is never rebased past what the user saw.
  * - Validation: `POST /v1/schedule-drafts/{id}/validate` lists conflicts per change (conflict unit
  *   overlap, team or official overlap, rest, closure, operating hours, format).
- * - Read-only when the draft is published, discarded or publishing.
+ * - Read-only when the draft is published, discarded or publishing, or when the viewer's roles do
+ *   not include scheduling.manage_drafts at its facility (`GET /v1/me/permissions`; shown as not
+ *   available, naming the permission). "Review and publish" needs scheduling.publish_schedule.
  */
 import type { ApiError, ApiResponse, Schema } from '@sportspark/api-client';
 import { apiQueryKey } from '@sportspark/api-client';
@@ -35,6 +41,7 @@ import {
   type FacilityContext,
 } from '../../features/schedule-facilities/facility-scope';
 import { resourceNames } from '../../features/schedule-facilities/inventory';
+import { NotAvailableToYou, useActionAllowed } from '../../features/schedule-facilities/permission';
 import { draftBadge } from '../../features/schedule-facilities/labels';
 import { formatInstant, localTimeOf } from '../../features/schedule-facilities/time';
 import { ExistingEventForm, NewEventForm } from './DraftChangeForms';
@@ -68,7 +75,6 @@ type SaveState =
   | { kind: 'saving' }
   | { kind: 'offline' }
   | { kind: 'stale' }
-  | { kind: 'rebase' }
   | { kind: 'failed'; error: ApiError };
 
 interface Snapshot {
@@ -77,7 +83,7 @@ interface Snapshot {
 }
 
 /** Serial autosave with the draft revision; see the screen comment. */
-function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
+function useDraftAutosave(draft: ScheduleDraft) {
   const { online, services } = useApp();
   const queryClient = useQueryClient();
   const save = useApiCommand('patch', '/schedule-drafts/{id}', { invalidate: [DRAFTS_KEY] });
@@ -86,7 +92,8 @@ function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
   const queued = useRef<Snapshot | null>(null);
   const inFlight = useRef(false);
   const onlineRef = useRef(online);
-  const blockedRef = useRef(blocked);
+  // Targets being rebased: the next save leaves their changes out, the one after adds them again.
+  const rebasing = useRef<ReadonlySet<string>>(new Set());
   const [state, setState] = useState<SaveState>({ kind: 'saved' });
   const [pending, setPending] = useState(false);
 
@@ -118,12 +125,14 @@ function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
       setState({ kind: 'offline' });
       return;
     }
-    if (blockedRef.current) {
-      setState({ kind: 'rebase' });
-      return;
-    }
     const snapshot = queued.current;
-    queued.current = null;
+    const dropping = rebasing.current;
+    const without = snapshot.changes.filter(
+      (c) => !c.targetEventId || !dropping.has(c.targetEventId),
+    );
+    // First leg of a rebase: save without the rebased targets; the snapshot stays queued.
+    const firstLeg = dropping.size > 0 && without.length < snapshot.changes.length;
+    queued.current = firstLeg ? snapshot : null;
     inFlight.current = true;
     setState({ kind: 'saving' });
     try {
@@ -132,11 +141,12 @@ function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
         body: {
           expectedRevision: revision.current,
           name: snapshot.name,
-          changes: snapshot.changes,
+          changes: firstLeg ? without : snapshot.changes,
         },
       });
       adopt(saved);
       inFlight.current = false;
+      if (dropping.size > 0 && rebasing.current === dropping) rebasing.current = new Set();
       if (queued.current) {
         void flush();
       } else {
@@ -175,11 +185,6 @@ function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
     return () => clearTimeout(timer);
   }, [state, online, flush]);
 
-  useEffect(() => {
-    blockedRef.current = blocked;
-    if (!blocked && queued.current) void flush();
-  }, [blocked, flush]);
-
   const schedule = useCallback(
     (snapshot: Snapshot) => {
       queued.current = snapshot;
@@ -198,10 +203,23 @@ function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
     [flush],
   );
 
+  /**
+   * Rebase the changes of one target event: save without them, then with them again, so the API
+   * captures the event's current revision (SPK-SCHED-005).
+   */
+  const rebase = useCallback(
+    (targetEventId: string, snapshot: Snapshot) => {
+      rebasing.current = new Set([...rebasing.current, targetEventId]);
+      schedule(snapshot);
+    },
+    [schedule],
+  );
+
   /** After STALE_REVISION: drop unsaved edits. */
   const discardPending = useCallback(
     (latest: ScheduleDraft) => {
       queued.current = null;
+      rebasing.current = new Set();
       setPending(false);
       adopt(latest);
       setState({ kind: 'saved' });
@@ -218,6 +236,7 @@ function useDraftAutosave(draft: ScheduleDraft, blocked: boolean) {
     revision: () => revision.current,
     saveOnLatest,
     discardPending,
+    rebase,
   };
 }
 
@@ -300,16 +319,6 @@ function SaveStatus({
           </span>
         </div>
       );
-    case 'rebase':
-      return (
-        <div role="status" className="banner">
-          <StatusBadge tone="warning" label="Not saved: rebase required" />
-          <span>
-            An event in this draft changed since the draft captured it. Review the flagged change
-            and choose Rebase to keep it on the current version; saving resumes after that.
-          </span>
-        </div>
-      );
     case 'stale':
       return (
         <div role="alert" className="banner" data-testid="draft-stale">
@@ -345,10 +354,15 @@ function DraftEditor({
 }) {
   const { online } = useApp();
   const tz = facility.timezone;
-  const readOnly = READ_ONLY.has(draft.status);
+  // SPK-UX-008 permission restriction: the role view (GET /v1/me/permissions) at the draft's facility.
+  const canEdit = useActionAllowed('scheduling.manage_drafts', draft.facilityId);
+  const canPublish = useActionAllowed('scheduling.publish_schedule', draft.facilityId);
+  const closedDraft = READ_ONLY.has(draft.status);
+  const readOnly = closedDraft || !canEdit;
   const [working, setWorking] = useState<DraftChangeInput[]>(() => draft.changes.map(toInput));
   const [name, setName] = useState(draft.name);
-  const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(new Set());
+  // The revision of each target event the user had in front of them when they pressed Rebase.
+  const [reviewed, setReviewed] = useState<ReadonlyMap<string, number>>(new Map());
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const resources = useApiQuery({
     path: '/resources',
@@ -359,15 +373,17 @@ function DraftEditor({
     [...working, ...draft.changes].flatMap((c) => (c.targetEventId ? [c.targetEventId] : [])),
   );
 
-  // Base revisions no longer current: from the events as loaded and from the last validation.
+  // Base revisions no longer current: from the events as loaded and from the last validation. A
+  // rebase that captured a newer revision than the one the user reviewed needs another review, so a
+  // draft is never rebased past what the user saw (SPK-SCHED-005).
   const staleTargets = new Set<string>();
   for (const c of draft.changes) {
-    const current = c.targetEventId ? targets.get(c.targetEventId)?.event : undefined;
+    if (!c.targetEventId || c.baseEventRevision === null) continue;
+    const current = targets.get(c.targetEventId)?.event;
+    const seen = reviewed.get(c.targetEventId);
     if (
-      c.targetEventId &&
-      current &&
-      c.baseEventRevision !== null &&
-      current.revision !== c.baseEventRevision
+      (current && current.revision !== c.baseEventRevision) ||
+      (seen !== undefined && c.baseEventRevision > seen)
     ) {
       staleTargets.add(c.targetEventId);
     }
@@ -375,15 +391,19 @@ function DraftEditor({
   for (const issue of draft.validationResults?.issues ?? []) {
     if (issue.code === 'stale_revision' && issue.eventId) staleTargets.add(issue.eventId);
   }
-  // A rebase acknowledges the event at the revision shown when Rebase was pressed: if the event
-  // changes again, it needs a new acknowledgment, so a draft is never silently rebased twice
-  // (SPK-SCHED-005).
-  const ackKey = (id: string) => `${id}:${targets.get(id)?.event?.revision ?? 'unknown'}`;
-  // Only changes still in the working copy block saving; removing a stale change unblocks it.
-  const unacknowledged = [...staleTargets].filter(
-    (id) => !acknowledged.has(ackKey(id)) && working.some((c) => c.targetEventId === id),
-  );
-  const autosave = useDraftAutosave(draft, unacknowledged.length > 0);
+  // Publication refuses a stale base; a change removed from the working copy no longer counts.
+  const needsRebase = [...staleTargets].filter((id) => working.some((c) => c.targetEventId === id));
+  const autosave = useDraftAutosave(draft);
+  const queryClient = useQueryClient();
+  const rebase = (targetEventId: string) => {
+    const shown = targets.get(targetEventId)?.event?.revision;
+    if (shown === undefined) return;
+    setReviewed((prev) => new Map(prev).set(targetEventId, shown));
+    autosave.rebase(targetEventId, { name: name.trim() || draft.name, changes: working });
+    void queryClient.invalidateQueries({
+      queryKey: apiQueryKey('/events/{id}', { path: { id: targetEventId } }),
+    });
+  };
 
   const validate = useApiCommand('post', '/schedule-drafts/{id}/validate', {
     invalidate: [DRAFTS_KEY],
@@ -470,12 +490,14 @@ function DraftEditor({
           </dd>
         </dl>
       </div>
-      {readOnly ? (
+      {closedDraft ? (
         <StateView
           variant="unavailable"
           title={`This draft is ${draft.status}`}
           description="It can no longer be edited. Open a new draft for further changes."
         />
+      ) : readOnly ? (
+        <NotAvailableToYou what="Editing schedule drafts" action="scheduling.manage_drafts" />
       ) : (
         <SaveStatus
           state={autosave.state}
@@ -535,19 +557,12 @@ function DraftEditor({
                     {stale && change.targetEventId ? (
                       <span className="banner">
                         <StatusBadge tone="warning" label="Rebase required" />
-                        The event changed since this draft captured it. Check its current details
-                        above.
-                        {!acknowledged.has(ackKey(change.targetEventId)) && editable ? (
+                        The event changed since this draft captured it, so publishing is refused
+                        until the change is rebased. Check its current details above.
+                        {editable && target?.event ? (
                           <Button
                             variant="secondary"
-                            onClick={() => {
-                              const key = ackKey(change.targetEventId as string);
-                              setAcknowledged((prev) => new Set([...prev, key]));
-                              autosave.schedule({
-                                name: name.trim() || draft.name,
-                                changes: working,
-                              });
-                            }}
+                            onClick={() => rebase(change.targetEventId as string)}
                           >
                             Rebase onto the current event
                           </Button>
@@ -621,13 +636,21 @@ function DraftEditor({
 
       {!readOnly ? (
         <>
-          {settled && online ? (
+          {!canPublish ? (
+            <NotAvailableToYou what="Publishing schedules" action="scheduling.publish_schedule" />
+          ) : settled && online && needsRebase.length === 0 ? (
             <Link to={`/schedule/drafts/${draft.id}/publish`} className="button button-primary">
               Review and publish
             </Link>
           ) : (
             <Button disabled>
-              Review and publish ({online ? 'after the draft is saved' : 'needs a connection'})
+              Review and publish (
+              {!online
+                ? 'needs a connection'
+                : needsRebase.length > 0
+                  ? 'after the flagged changes are rebased'
+                  : 'after the draft is saved'}
+              )
             </Button>
           )}
           <section aria-labelledby="draft-add-title">

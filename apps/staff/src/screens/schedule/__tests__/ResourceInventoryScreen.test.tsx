@@ -1,7 +1,8 @@
 /**
  * SCR-S-07 Resource inventory and configurations: SPK-SCHED-001 (facility, spaces, dimensions,
  * formats, buffers, equipment, staffing, hours), SPK-SCHED-002 (whole-space and subdivision
- * relationships, derived conflict units, arrangements), DEC-001 pending, SPK-UX-008 states.
+ * relationships, derived conflict units, arrangements), SPK-SCHED-008 (the facility and its zone
+ * from `GET /v1/facilities`), DEC-001 pending, SPK-UX-008 states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -15,6 +16,8 @@ import {
   UNIT_A,
   UNIT_B,
   UNIT_ROOM,
+  facilityDirectory,
+  facilitySummary,
   oneFacilityRoutes,
 } from '../../../features/schedule-facilities/test-fixtures';
 import { FACILITY_A, createTestApp } from '../../../testing/test-app';
@@ -83,6 +86,40 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
 }
 
 describe('SCR-S-07 ResourceInventoryScreen', () => {
+  it('SPK-SCHED-008: shows the facility as the directory states it: name, IANA zone, status and address', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /facilities': facilityDirectory([
+          facilitySummary({
+            id: FACILITY_A,
+            address: { line1: '100 Park Way', city: 'Las Vegas', region: 'NV' },
+          }),
+        ]),
+      }),
+    });
+    render(app.at('/schedule/resources'));
+    const facts = await screen.findByRole('region', { name: 'Facility' });
+    expect(facts).toHaveTextContent('NameNorth Park 1');
+    expect(facts).toHaveTextContent('Time zoneAmerica/Los_Angeles');
+    expect(within(facts).getByText('Facility status: active')).toBeInTheDocument();
+    expect(facts).toHaveTextContent('Address100 Park Way, Las Vegas, NV');
+  });
+
+  it('an address not configured reads "Not set yet"; a directory error shows its code with a retry', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /facilities': () => fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
+      }),
+    });
+    render(app.at('/schedule/resources'));
+    const facts = await screen.findByRole('region', { name: 'Facility' });
+    expect(await within(facts).findByText(/Error code: INTERNAL_ERROR/)).toBeInTheDocument();
+    app.fake.set('GET /facilities', facilityDirectory());
+    await user.click(within(facts).getByRole('button', { name: 'Try again' }));
+    expect(await within(facts).findByText('Not set yet')).toBeInTheDocument();
+  });
+
   it('shows spaces as a tree with dimensions, formats, buffers and the conflict units the API derives', async () => {
     const app = createTestApp({ routes: routes() });
     render(app.at('/schedule/resources'));

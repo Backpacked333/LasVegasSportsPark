@@ -4,7 +4,7 @@
  * facility fact, price or policy.
  */
 import type { Schema } from '@sportspark/api-client';
-import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
+import { fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
 import { TEST_NOW, TEST_SESSION } from '../../../testing/test-app';
 
 export const IDS = {
@@ -130,37 +130,30 @@ export function me(overrides: Partial<Schema<'Me'>> = {}): Schema<'Me'> {
   };
 }
 
-export function person(id: string, givenName: string, kind: 'adult' | 'child' = 'child') {
+/** One `GET /person-names` item (ID-02): names only, never a date of birth or contact (§4.14). */
+export function personName(personId: string, givenName: string, kind: 'adult' | 'child' = 'child') {
   return {
-    id,
-    kind,
+    personId,
+    canonicalPersonId: personId,
     givenName,
     familyName: 'Example',
-    dateOfBirth: null,
-    status: 'active' as const,
-    mergedIntoPersonId: null,
-    revision: 1,
-    createdAt: T,
-    updatedAt: T,
-    contactPoints: [],
+    displayName: `${givenName} Example`,
+    kind,
   };
 }
+
+/** The family's names as `GET /person-names` gives them (the API omits anyone else). */
+export const FAMILY_NAMES = [
+  personName(IDS.childA, 'Ada'),
+  personName(IDS.childB, 'Ben'),
+  personName(IDS.viewOnlyChild, 'Cy'),
+];
 
 /** Routes every screen needs to name the signed-in parent and two children. */
 export function familyRoutes() {
   return {
     'GET /me': { status: 200, body: me() },
-    'GET /people/{id}': (req: FakeRequest) => {
-      const names: Record<string, string> = {
-        [IDS.childA]: 'Ada',
-        [IDS.childB]: 'Ben',
-        [IDS.viewOnlyChild]: 'Cy',
-      };
-      const name = names[req.params.id ?? ''];
-      return name
-        ? fakeResponse(200, person(req.params.id as string, name))
-        : fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' }));
-    },
+    'GET /person-names': { status: 200, body: { items: FAMILY_NAMES } },
   };
 }
 
@@ -558,6 +551,207 @@ export function waitlistEntry(
     removedAt: null,
     revision: 2,
     createdAt: T,
+    ...overrides,
+  };
+}
+
+/** `GET /offerings/{id}/registration-options` for the youth program (ENR-05). */
+export function registrationOptions(
+  overrides: Partial<Schema<'RegistrationOptions'>> = {},
+): Schema<'RegistrationOptions'> {
+  return {
+    offeringId: IDS.offering,
+    availableIntents: ['youth', 'makeup'],
+    seasonId: null,
+    participants: [IDS.parent, IDS.childA, IDS.childB].map((personId) => ({
+      personId,
+      intents: [
+        { intent: 'youth' as const, eligibility: eligible() },
+        { intent: 'makeup' as const, eligibility: eligible() },
+      ],
+    })),
+    ...overrides,
+  };
+}
+
+/**
+ * Answers registration options for the participants a request names, leaving out anyone the
+ * account may not register (the view-only child), as the API does.
+ */
+export function optionsHandler(base: Partial<Schema<'RegistrationOptions'>> = {}) {
+  return (req: FakeRequest) => {
+    const options = registrationOptions(base);
+    const named = (req.query.participantPersonIds ?? '').split(',').filter(Boolean);
+    return fakeResponse(200, {
+      ...options,
+      participants: options.participants.filter((p) => named.includes(p.personId)),
+    });
+  };
+}
+
+/** A blocking eligibility result with the API's reason and alternative (SPK-REG-002). */
+export function ineligible(message: string): Schema<'EligibilityResult'> {
+  return {
+    ...eligible(),
+    eligible: false,
+    reasons: [
+      {
+        code: 'age_band',
+        severity: 'blocking',
+        message,
+        source: { type: 'policy', id: null },
+        requiredAction: 'choose_other_offering',
+      },
+    ],
+    alternatives: [
+      { kind: 'other_offering', message: 'Choose an activity for this age.', offeringId: null },
+    ],
+  };
+}
+
+/** One of `GET /me/waitlist-entries` (ENR-01): the entry with the offering's name and open offer. */
+export function myWaitlistEntry(
+  overrides: Partial<Schema<'MyWaitlistEntry'>> = {},
+): Schema<'MyWaitlistEntry'> {
+  return {
+    ...waitlistEntry(),
+    offeringName: 'Autumn Youth Program',
+    openOffer: null,
+    ...overrides,
+  };
+}
+
+/** One session of an offering (`GET /offerings/{id}/sessions`). */
+export function offeringSession(
+  overrides: Partial<Schema<'OfferingSession'>> = {},
+): Schema<'OfferingSession'> {
+  return {
+    id: '0192f1a0-0000-7000-8000-0000000000e1',
+    offeringId: IDS.offering,
+    sequence: 1,
+    title: null,
+    scheduledStart: '2026-10-31T17:00:00.000Z',
+    scheduledEnd: '2026-10-31T18:00:00.000Z',
+    schedulingEventId: null,
+    capacityOverride: null,
+    status: 'scheduled',
+    canceledAt: null,
+    cancelReason: null,
+    revision: 1,
+    createdAt: T,
+    ...overrides,
+  };
+}
+
+/** A session booking as the API answers it (SPK-PLACE-004, ENR-11, ENR-12). */
+export function sessionBooking(
+  overrides: Partial<Schema<'SessionBooking'>> = {},
+): Schema<'SessionBooking'> {
+  return {
+    id: '0192f1a0-0000-7000-8000-0000000000e2',
+    offeringId: IDS.offering,
+    sessionId: '0192f1a0-0000-7000-8000-0000000000e1',
+    participantPersonId: IDS.childA,
+    kind: 'pickup',
+    status: 'confirmed',
+    poolId: IDS.pool,
+    holdId: null,
+    makeupEntitlementId: null,
+    entitlementBasis: 'purchase',
+    packageEntitlementId: null,
+    membershipEnrollmentId: null,
+    creditDisposition: null,
+    scheduledStart: '2026-10-31T17:00:00.000Z',
+    scheduledEnd: '2026-10-31T18:00:00.000Z',
+    bookedBy: {
+      kind: 'customer',
+      accountId: TEST_SESSION.accountId,
+      personId: IDS.parent,
+      staffRoles: [],
+      actorLabel: 'customer',
+    },
+    assistedByPersonId: null,
+    payerPersonId: IDS.parent,
+    price: null,
+    policies: {
+      eligibilityPolicyVersionId: null,
+      cancellationPolicyVersionId: null,
+      requiredFormPolicyVersionIds: [],
+      approvalPolicyVersionId: null,
+    },
+    eligibility: null,
+    expiresAt: null,
+    confirmedAt: T,
+    canceledAt: null,
+    cancelReason: null,
+    expiredAt: null,
+    revision: 2,
+    createdAt: T,
+    updatedAt: T,
+    ...overrides,
+  };
+}
+
+/** A trial participation (SPK-YOUTH-003). */
+export function trialParticipation(
+  overrides: Partial<Schema<'TrialParticipation'>> = {},
+): Schema<'TrialParticipation'> {
+  return {
+    id: '0192f1a0-0000-7000-8000-0000000000e3',
+    offeringId: IDS.offering,
+    sessionId: null,
+    sessionBookingId: null,
+    participantPersonId: IDS.childA,
+    applicationId: null,
+    status: 'scheduled',
+    scheduledFor: null,
+    attendedAt: null,
+    noShowAt: null,
+    canceledAt: null,
+    followUpConsent: false,
+    followUp: {},
+    convertedEnrollmentId: null,
+    convertedBasketId: null,
+    convertedAt: null,
+    registeredBy: {
+      kind: 'customer',
+      accountId: TEST_SESSION.accountId,
+      personId: IDS.parent,
+      staffRoles: [],
+      actorLabel: 'customer',
+    },
+    assistedByPersonId: null,
+    revision: 1,
+    createdAt: T,
+    ...overrides,
+  };
+}
+
+/** A session package of a participant (`GET /me/package-entitlements`, ENR-11). */
+export function packageEntitlement(
+  overrides: Partial<Schema<'PackageEntitlement'>> = {},
+): Schema<'PackageEntitlement'> {
+  return {
+    id: '0192f1a0-0000-7000-8000-0000000000e4',
+    participantPersonId: IDS.childA,
+    enrollmentId: IDS.enrollmentA,
+    offeringId: IDS.offering2,
+    offeringName: 'Ten pickup sessions',
+    entitlementDefinitionId: '0192f1a0-0000-7000-8000-0000000000e5',
+    appliesTo: { offeringIds: [IDS.offering], programIds: [] },
+    credits: 10,
+    redeemedCount: 3,
+    remainingCredits: 7,
+    status: 'active',
+    expiresAt: null,
+    issuedAt: T,
+    expiredAt: null,
+    revokedAt: null,
+    revokedReason: null,
+    redemptions: [],
+    revision: 1,
+    createdAt: T,
+    updatedAt: T,
     ...overrides,
   };
 }

@@ -16,8 +16,10 @@
  * - ready: online and fresh, the banner is hidden.
  *
  * Foreground refresh after an interrupted registration or payment is the query layer's
- * (`focusManager` on AppState, AppProviders); a registration found in recovery is pinned on Home
- * (SCR-C-03) and its outcome belongs to the checkout outcome screen (SCR-C-15).
+ * (`focusManager` on AppState, AppProviders); a registration found in recovery on that refresh
+ * (`GET /v1/me/registration-checkouts`, or the enrollment's checkout) is pinned on Home (SCR-C-03)
+ * and opens the checkout outcome screen (SCR-C-15). The stale threshold stays pending (DEC-032,
+ * DEC-033): unset, data age is shown but never called stale.
  */
 import { ApiError, formatAge } from '@sportspark/api-client';
 import { notifyManager, useQueryClient } from '@tanstack/react-query';

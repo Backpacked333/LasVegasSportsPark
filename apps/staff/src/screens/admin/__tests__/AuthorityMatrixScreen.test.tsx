@@ -6,7 +6,13 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { NOW_ISO, ok, page, uuid } from '../../../features/insight-admin/__tests__/fixtures';
+import {
+  NOW_ISO,
+  facilityList,
+  ok,
+  page,
+  uuid,
+} from '../../../features/insight-admin/__tests__/fixtures';
 import { FACILITY_A, createTestApp } from '../../../testing/test-app';
 
 const MATRIX = ok({
@@ -49,7 +55,11 @@ describe('SCR-S-48 AuthorityMatrixScreen', () => {
   it('resolves each record category and shows a conflict as writes refused', async () => {
     const user = userEvent.setup();
     const test = createTestApp({
-      routes: { 'GET /authority-matrix': MATRIX, 'GET /authority-assignments': page([]) },
+      routes: {
+        'GET /authority-matrix': MATRIX,
+        'GET /authority-assignments': page([]),
+        'GET /facilities': facilityList(),
+      },
     });
     render(test.at('/admin/migration/authority'));
     const table = await screen.findByRole('region', { name: 'Authority matrix table' });

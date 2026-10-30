@@ -7,7 +7,13 @@
  */
 import type { Session } from '@sportspark/api-client';
 import { MemorySessionStore } from '@sportspark/api-client';
-import { createFakeFetch, sequentialKeys, type FakeHandler } from '@sportspark/api-client/testing';
+import {
+  createFakeFetch,
+  fakePermissions,
+  sequentialKeys,
+  type FakeHandler,
+  type FakePermissionsOptions,
+} from '@sportspark/api-client/testing';
 import { QueryClient, focusManager, onlineManager } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { AppConfig } from '../config/app-config';
@@ -22,6 +28,18 @@ export const TEST_SESSION: Session = {
   accountId: '0192f1a0-0000-7000-8000-0000000000aa',
 };
 
+/**
+ * `GET /v1/me/permissions` for a customer (K-05, K-12): no staff areas, no outright actions, and
+ * every capability switch off, as the API starts (DEC-016). Override per test, e.g.
+ * `routes: { 'GET /me/permissions': mePermissions({ enabled: ['memberships'] }) }`.
+ */
+export function mePermissions(options: FakePermissionsOptions = {}) {
+  return {
+    status: 200,
+    body: fakePermissions({ principalKind: 'customer', areas: [], ...options }),
+  };
+}
+
 export interface TestAppOptions {
   routes?: Record<string, FakeHandler>;
   /** `null` for a signed-out app. */
@@ -32,7 +50,8 @@ export interface TestAppOptions {
 }
 
 export function createTestApp(options: TestAppOptions = {}) {
-  const fake = createFakeFetch(options.routes ?? {});
+  // A default for the permissions read (only screens that need it read it).
+  const fake = createFakeFetch({ 'GET /me/permissions': mePermissions(), ...options.routes });
   // TanStack's managers are process-wide: start every test from the state it asks for.
   onlineManager.setOnline(options.reachable !== false);
   focusManager.setFocused(undefined);

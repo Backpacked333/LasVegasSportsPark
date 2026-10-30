@@ -7,15 +7,17 @@
  *   in-app essential notice is locked on by the API (`locked`) and shown as "Always on", never as
  *   a switch. Defaults come from the API (`stored: false` reads "Facility default"); which channels
  *   are used at all is DEC-062 (Operator/privacy owner), shown as pending.
- * - Push on this device: no push module or device registration exists yet (DEC-061, DEC-020;
- *   the API has no device endpoint), so it is shown as not available; when the operating system
- *   denies push, the screen explains it and that in-app notices continue.
+ * - Push (PushDevicesSection): the devices registered for push (`GET /v1/me/push-devices`) with
+ *   "Stop push" (revoke); registering this install waits on DEC-061 and DEC-020 (no push module in
+ *   this build, shown as pending); when the operating system denies push, the screen explains it
+ *   and that in-app notices continue.
  * - Private calendar feeds with revocable links (CalendarFeedsSection, SPK-COMMS-008).
  *
  * States: loading; empty: not applicable (the API always returns the full matrix); ready;
  * validation failure: not applicable (a locked notice cannot be switched; the API's
- * VALIDATION_FAILED is shown if it happens); permission restriction (push denied by the operating
- * system: explained, in-app notices kept); stale version: not applicable, refreshed on return;
+ * VALIDATION_FAILED is shown if it happens; a reason is required to stop push to a device);
+ * permission restriction (push denied by the operating system: explained, in-app notices kept);
+ * stale version: refreshed on return; STALE_REVISION on stopping push reloads the device list;
  * offline (changes disabled, nothing queued); processing (Save busy); success ("Preferences
  * saved"); partial completion: not permitted (one PATCH); recovery required: not applicable, a
  * failed save keeps the choices and offers "Try again" under the same key.
@@ -37,7 +39,7 @@ import { spacing } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
 import { Paragraph, SectionHeader, SwitchRow } from '../account/components/forms';
 import { CalendarFeedsSection } from './CalendarFeedsSection';
-import { usePushPermissionStatus } from './push-permission';
+import { PushDevicesSection } from './PushDevicesSection';
 
 type Preferences = Schema<'CommunicationPreferences'>;
 type Preference = Schema<'CommunicationPreference'>;
@@ -85,7 +87,7 @@ function PreferencesContent() {
       >
         {(data) => <PreferencesForm data={data} />}
       </QueryBoundary>
-      <PushOnThisDevice />
+      <PushDevicesSection />
       <CalendarFeedsSection />
     </View>
   );
@@ -197,36 +199,6 @@ function PreferencesForm({ data }: { data: Preferences }) {
         ) : null}
       </View>
       {save.error ? <CommandError error={save.error} onRetry={() => void retry()} /> : null}
-    </View>
-  );
-}
-
-function PushOnThisDevice() {
-  const status = usePushPermissionStatus();
-  return (
-    <View>
-      <SectionHeader title="Push on this device" />
-      {status === null ? (
-        <StateView variant="loading" label="push settings" />
-      ) : status === 'denied' ? (
-        <StateView
-          variant="unavailable"
-          title="Push is turned off for this app"
-          description="Your device settings block notifications from this app. Essential notices still appear in the app's inbox. To get push, allow notifications for this app in your device settings."
-        />
-      ) : status === 'unavailable' ? (
-        <StateView
-          variant="unavailable"
-          title="Push is not set up in this version"
-          description="This version of the app does not register for push notifications. Essential notices always appear in the app's inbox."
-        />
-      ) : (
-        <StateView
-          variant="unavailable"
-          title="This device is not registered for push yet"
-          description="Registering a device for push is not available yet. Essential notices always appear in the app's inbox."
-        />
-      )}
     </View>
   );
 }

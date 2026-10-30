@@ -6,8 +6,15 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { importException, ok, page } from '../../../features/insight-admin/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import {
+  MIGRATION_OPERATOR_ACTIONS,
+  importException,
+  ok,
+  page,
+} from '../../../features/insight-admin/__tests__/fixtures';
+import { createTestApp, mePermissions } from '../../../testing/test-app';
+
+const OPERATOR = mePermissions({ actions: MIGRATION_OPERATOR_ACTIONS });
 
 describe('SCR-S-48 ImportReviewScreen', () => {
   it('lists open exceptions with their review owner and filters by owner', async () => {
@@ -41,6 +48,7 @@ describe('SCR-S-48 ImportReviewScreen', () => {
     const user = userEvent.setup();
     const test = createTestApp({
       routes: {
+        'GET /me/permissions': OPERATOR,
         'GET /import-exceptions': page([importException('ambiguous_relationship')]),
         'POST /import-exceptions/{id}/decide': ok(
           importException('ambiguous_relationship', { status: 'decided', decision: 'accept' }),
@@ -77,5 +85,59 @@ describe('SCR-S-48 ImportReviewScreen', () => {
       ),
     );
     expect(await screen.findByRole('heading', { name: 'Nothing to review' })).toBeInTheDocument();
+  });
+
+  it('MIG-01: shows a staged balance and an approved amount in the currency the row states', async () => {
+    render(
+      createTestApp({
+        routes: {
+          'GET /import-exceptions': page([
+            importException('ambiguous_balance'),
+            importException('ambiguous_balance', {
+              id: 'e3',
+              externalId: 'X-4',
+              status: 'decided',
+              decision: 'accept',
+              resolution: { amountMinor: 2400 },
+              decisionReason: 'Finance approved',
+              stagedAmountMinor: 2500,
+              currency: 'EUR',
+            }),
+            importException('ambiguous_balance', {
+              id: 'e4',
+              externalId: 'X-5',
+              stagedAmountMinor: 1000,
+              currency: null,
+            }),
+          ]),
+        },
+      }).at('/admin/migration/review'),
+    );
+    const list = await screen.findByRole('list', { name: 'Import exceptions' });
+    expect(within(list).getByText('Staged amount -$25.00')).toBeInTheDocument();
+    expect(within(list).getByText('Staged amount €25.00')).toBeInTheDocument();
+    expect(within(list).getByText('Approved amount €24.00')).toBeInTheDocument();
+    expect(
+      within(list).getByText('Staged amount 1,000 (minor units, currency not stated)'),
+    ).toBeInTheDocument();
+  });
+
+  it('SPK-UX-005: offers no decision without migration.decide_exception', async () => {
+    render(
+      createTestApp({
+        routes: {
+          'GET /me/permissions': mePermissions({
+            staffRoles: ['program_manager'],
+            actions: ['migration.read_exceptions'],
+          }),
+          'GET /import-exceptions': page([importException('ambiguous_relationship')]),
+        },
+      }).at('/admin/migration/review'),
+    );
+    const list = await screen.findByRole('list', { name: 'Import exceptions' });
+    expect(
+      await within(list).findByText('Deciding this exception is not available to you.'),
+    ).toBeInTheDocument();
+    expect(within(list).queryByRole('button', { name: /^Decide / })).toBeNull();
   });
 });

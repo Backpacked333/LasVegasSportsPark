@@ -25,7 +25,7 @@ import { CommandError } from '../../features/registration/CommandError';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { formatInstant } from '../../features/registration/format';
 import { useParticipantNames } from '../../features/registration/participants';
-import { useRegistrationProgress } from '../../features/registration/progress';
+import { MY_BASKETS_KEY, MY_WAITLIST_KEY } from '../../features/registration/in-progress';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import {
   openOffer,
@@ -53,7 +53,6 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const { update } = useRegistrationProgress();
   const names = useParticipantNames([entry.participantPersonId]);
   const name = names(entry.participantPersonId);
   const offering = useApiQuery({
@@ -61,9 +60,13 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
     request: { path: { id: entry.offeringId } },
   });
   const offeringName = offering.data?.name ?? 'this activity';
+  /** SPK-SCHED-008: the offer deadline in the facility's zone when the offering is readable. */
+  const timeZone = offering.data?.facility.timezone;
   const [failure, setFailure] = useState<Failure | null>(null);
-  const invalidate = [['api', '/waitlist-entries/{id}']] as const;
-  const accept = useApiCommand('post', '/waitlist-offers/{id}/accept', { invalidate });
+  const invalidate = [['api', '/waitlist-entries/{id}'], MY_WAITLIST_KEY] as const;
+  const accept = useApiCommand('post', '/waitlist-offers/{id}/accept', {
+    invalidate: [...invalidate, MY_BASKETS_KEY],
+  });
   const decline = useApiCommand('post', '/waitlist-offers/{id}/decline', { invalidate });
   const withdraw = useApiCommand('post', '/waitlist-entries/{id}/withdraw', { invalidate });
   const offer = openOffer(entry);
@@ -77,7 +80,6 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
         body: { expectedRevision: offer.revision },
       });
       if (result.basket) {
-        await update({ basketId: result.basket.id, quoteId: null });
         router.push(registrationRoutes.basket(result.basket.id));
       } else {
         refetch();
@@ -109,15 +111,18 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
     <View>
       <Section title={name === 'You' ? 'Your place on the waitlist' : `Waitlist for ${name}`}>
         <Body>{offeringName}</Body>
-        <StatusBadge {...waitlistEntryStatus(entry, offeringName, now)} testID="waitlist-status" />
-        <Detail label="Joined" value={formatInstant(entry.joinedAt)} />
+        <StatusBadge
+          {...waitlistEntryStatus(entry, offeringName, now, timeZone)}
+          testID="waitlist-status"
+        />
+        <Detail label="Joined" value={formatInstant(entry.joinedAt, timeZone)} />
       </Section>
 
       {offer ? (
         <Section title="A place is offered">
           <ExpiryNotice
             expiresAt={offer.expiresAt}
-            status={waitlistOfferStatus(offer, now)}
+            status={waitlistOfferStatus(offer, now, timeZone)}
             explanation="The place is reserved for you until this time; after it, the place is released under the waitlist policy. The countdown is a guide."
             onLapsed={refetch}
             testID="waitlist-offer"
@@ -164,10 +169,10 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
                 key={o.id}
                 style={styles.offer}
                 accessible
-                accessibilityLabel={`Offered ${formatInstant(o.offeredAt)}. ${waitlistOfferStatus(o, now).label}`}
+                accessibilityLabel={`Offered ${formatInstant(o.offeredAt, timeZone)}. ${waitlistOfferStatus(o, now, timeZone).label}`}
               >
-                <Body>{`Offered ${formatInstant(o.offeredAt)}`}</Body>
-                <StatusBadge {...waitlistOfferStatus(o, now)} />
+                <Body>{`Offered ${formatInstant(o.offeredAt, timeZone)}`}</Body>
+                <StatusBadge {...waitlistOfferStatus(o, now, timeZone)} />
               </View>
             ))}
           </View>

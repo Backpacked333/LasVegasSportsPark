@@ -156,4 +156,27 @@ describe('SCR-W-01 WorkspaceScreen', () => {
     render(app.at('/workspace'));
     expect(await screen.findByRole('heading', { name: 'No assignments' })).toBeInTheDocument();
   });
+
+  it('WRK-01 / SPK-SCHED-008: shows each activity in its facility’s zone with the facility name', async () => {
+    const item = assignment('a3', 'accepted', '2026-10-25T10:00:00.000Z', []);
+    const withFacility = {
+      ...item,
+      activity: {
+        ...item.activity,
+        facility: { id: FACILITY_A, name: 'North Park 1', timezone: 'America/New_York' },
+      },
+    };
+    const app = createTestApp({
+      routes: {
+        'GET /me/assignments': {
+          status: 200,
+          body: { evaluatedAt: '2026-10-24T12:00:00.000Z', items: [withFacility] },
+        },
+      },
+    });
+    render(app.at('/workspace'));
+    const list = await screen.findByRole('list', { name: 'Assignments' });
+    // 10:00 UTC is 06:00 in New York (EDT).
+    expect(within(list).getByText(/06:00.*North Park 1/)).toBeInTheDocument();
+  });
 });

@@ -6,16 +6,18 @@
  * refund already reserves the funds; an `unknown` result keeps its reservation until reconciled.
  * Partial refunds are permitted by amount and show what remains refundable.
  *
- * The API publishes no list of a payment's refunds, so earlier refunds are opened by reference.
+ * The payment's detail (FIN-02) states what is still refundable, and its earlier refunds are
+ * listed (`GET /v1/refunds?paymentAttemptId=`, keyset pages) with their state and reservation.
  * Refund eligibility and amounts are pending DEC-009 (owner Finance): staff enter the amount; no
  * policy is computed here.
  */
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError, fieldErrorsOf } from '../../features/registration-finance/CommandError';
 import { Facts, TextArea, TextField } from '../../features/registration-finance/fields';
+import { RefundList } from '../../features/registration-finance/RefundList';
 import { formatMoney, parseMoneyInput } from '../../features/registration-finance/format';
 import { PAYMENT_STATUS } from '../../features/registration-finance/labels';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
@@ -31,8 +33,6 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function RequestRefund({ paymentId, currency }: { paymentId: string; currency: string }) {
   const online = useOnline();
@@ -129,9 +129,6 @@ function RequestRefund({ paymentId, currency }: { paymentId: string; currency: s
 
 export function RefundsScreen() {
   const { paymentId = '' } = useParams();
-  const navigate = useNavigate();
-  const [reference, setReference] = useState('');
-  const [referenceError, setReferenceError] = useState<string | null>(null);
   const payment = useApiQuery({ path: '/payments/{id}', request: { path: { id: paymentId } } });
   return (
     <section aria-labelledby="refunds-title">
@@ -155,6 +152,7 @@ export function RefundsScreen() {
                 label="Payment"
                 items={[
                   ['Amount', formatMoney(data.amountMinor, data.currency)],
+                  ['Still refundable', formatMoney(data.refundableMinor, data.currency)],
                   ['Provider reference', data.providerReference ?? 'None recorded'],
                 ]}
               />
@@ -168,41 +166,20 @@ export function RefundsScreen() {
                   description={`Only a succeeded payment can be refunded; this attempt is ${PAYMENT_STATUS[data.status].label}.`}
                 />
               )}
+              {/* §4.10: listed only for a payment the viewer may read, so an unavailable payment
+                  never shows "no refund", which would imply that it exists. */}
+              <section className="rf-panel" aria-labelledby="earlier-refunds-title">
+                <h3 id="earlier-refunds-title">Earlier refunds</h3>
+                <RefundList
+                  filter={{ paymentAttemptId: data.id }}
+                  label="Earlier refunds of this payment"
+                  emptyDescription="No refund has been requested for this payment."
+                />
+              </section>
             </>
           )
         }
       </QueryBoundary>
-      <section className="rf-panel" aria-labelledby="earlier-refunds-title">
-        <h3 id="earlier-refunds-title">Earlier refunds</h3>
-        <p className="caption">
-          The API publishes no list of a payment&apos;s refunds. Open an earlier refund by its
-          reference.
-        </p>
-        <form
-          noValidate
-          aria-label="Open a refund"
-          className="rf-grid"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!UUID.test(reference.trim())) {
-              setReferenceError('Enter a refund reference.');
-              return;
-            }
-            setReferenceError(null);
-            navigate(`/finance/refunds/${reference.trim()}`);
-          }}
-        >
-          <TextField
-            label="Refund reference"
-            value={reference}
-            onChange={setReference}
-            error={referenceError}
-          />
-          <Button type="submit" variant="secondary">
-            Open the refund
-          </Button>
-        </form>
-      </section>
     </section>
   );
 }

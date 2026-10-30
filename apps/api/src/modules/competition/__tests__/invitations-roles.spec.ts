@@ -251,6 +251,57 @@ describe('team invitations and team roles (CMP-03, CMP-07, CMP-13; SPK-CAP-001, 
     ]);
   });
 
+  it('§4.9: a team invitation decline sent with a stale expectedRevision is refused and changes nothing', async () => {
+    const team = await teamOf('Larks');
+    const player = await adultCustomer(t);
+    const invited = await invite(team, { recipientPersonId: player.personId });
+    const read = await get(`/team-invitations/${invited.id}`, player);
+    expect(read.body.revision).toBe(1);
+
+    const stale = await post(`/team-invitations/${invited.id}/decline`, player, {
+      expectedRevision: 7,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    expect(await invitationRow(invited.id)).toMatchObject({ status: 'pending', revision: 1 });
+    expect(await resolvedEvents(invited.id)).toEqual([]);
+
+    const current = await post(`/team-invitations/${invited.id}/decline`, player, {
+      expectedRevision: read.body.revision,
+    });
+    expect(current.status).toBe(200);
+    expect(current.body).toMatchObject({ status: 'declined', revision: 2 });
+  });
+
+  it('CMP-03: GET /me/team-invitations filters on the effective status, so an unswept expired invitation is not listed as pending', async () => {
+    const team = await teamOf('Terns');
+    const otherTeam = await teamOf('Gulls');
+    const player = await adultCustomer(t);
+    const shortLived = await invite(team, {
+      recipientPersonId: player.personId,
+      expiresInHours: 1,
+    });
+    const lasting = await invite(otherTeam, { recipientPersonId: player.personId });
+    t.clock.advance(2 * 3_600_000);
+    try {
+      // the sweep has not run: the stored status is still pending
+      expect((await invitationRow(shortLived.id)).status).toBe('pending');
+      const pending = await get('/me/team-invitations?status=pending', player);
+      expect(pending.status).toBe(200);
+      expect(pending.body.items.map((i: { id: string }) => i.id)).toEqual([lasting.id]);
+      const expired = await get('/me/team-invitations?status=expired', player);
+      expect(expired.body.items).toEqual([
+        expect.objectContaining({
+          id: shortLived.id,
+          status: 'pending',
+          effectiveStatus: 'expired',
+        }),
+      ]);
+    } finally {
+      t.clock.set(CLOCK_START);
+    }
+  });
+
   // CMP-07 ---------------------------------------------------------------------------------------
   it('SPK-CAP-001: a team invitation past expiry is expired by the sweep once and can no longer be accepted; a replayed run is a no-op', async () => {
     const team = await teamOf('Swifts');

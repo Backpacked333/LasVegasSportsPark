@@ -2,23 +2,25 @@
  * SCR-S-10 Fixtures and match readiness, part 1: the fixtures of a season with their machine
  * state and derived readiness (SPK-READY-001, SPK-READY-002, SPK-READY-004, SPK-STAFF-002,
  * SPK-UX-008). The fixture state (`unscheduled`, `scheduled`, …) and readiness are shown apart: a
- * scheduled fixture may still be blocked. Each row asks `GET /v1/fixtures/{id}/readiness` (the API
- * has no list-level readiness); until it answers, or when it cannot, the row says unknown, never
- * ready. Pages follow the API's cursor (§4.5).
+ * scheduled fixture may still be blocked. Readiness for the page comes from one season summary
+ * read (`GET /v1/seasons/{id}/readiness`, CMP-01), never one read per row; until it answers, or
+ * when it cannot, a row says unknown, never ready. Team names come with each fixture (CMP-01);
+ * start times are in the division facility's time zone when known (SPK-SCHED-008). Pages follow
+ * the API's cursor (§4.5).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiQuery } from '../../api/useApiQuery';
+import { useDivisionZones } from '../../features/competition/facilities';
 import { SelectField } from '../../features/competition/fields';
 import { formatInstant } from '../../features/competition/format';
 import { FIXTURE_STATUS } from '../../features/competition/labels';
 import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
-import { EntryName, useSeasonEntries } from '../../features/competition/names';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { ReadinessBadge } from './Readiness';
+import { SeasonReadinessStatus, SummaryReadinessBadge, useSeasonReadiness } from './Readiness';
 
 type FixtureStatus = Schema<'FixtureStatus'>;
 
@@ -35,7 +37,7 @@ export function FixturesScreen() {
   const [cursors, setCursors] = useState<string[]>([]);
   const cursor = cursors[cursors.length - 1];
   const divisions = useApiQuery({ path: '/divisions', request: { query: { seasonId } } });
-  const { byId } = useSeasonEntries(seasonId);
+  const zoneOf = useDivisionZones(divisions.data);
   const fixtures = useApiQuery({
     path: '/seasons/{id}/fixtures',
     request: {
@@ -48,6 +50,8 @@ export function FixturesScreen() {
       },
     },
   });
+  const matches = fixtures.data?.items.filter((f) => f.awayEntryId !== null);
+  const readiness = useSeasonReadiness(seasonId, matches);
   const divisionName = new Map((divisions.data ?? []).map((d) => [d.id, d.name]));
 
   return (
@@ -90,6 +94,7 @@ export function FixturesScreen() {
       >
         {(data) => (
           <>
+            <SeasonReadinessStatus readiness={readiness} />
             <div className="table-scroll">
               <table className="data-table">
                 <caption>Fixtures</caption>
@@ -110,12 +115,7 @@ export function FixturesScreen() {
                         <td>{fixture.round ?? 'None'}</td>
                         <td>
                           <Link to={`/leagues/fixtures/${fixture.id}`}>
-                            <EntryName entryId={fixture.homeEntryId} teamIdOf={byId} /> v{' '}
-                            {fixture.awayEntryId ? (
-                              <EntryName entryId={fixture.awayEntryId} teamIdOf={byId} />
-                            ) : (
-                              'bye'
-                            )}
+                            {fixture.homeTeamName} v {fixture.awayTeamName ?? 'bye'}
                           </Link>
                           {fixture.divisionId ? (
                             <span className="caption">
@@ -126,7 +126,7 @@ export function FixturesScreen() {
                         </td>
                         <td>
                           {fixture.scheduledStart
-                            ? formatInstant(fixture.scheduledStart)
+                            ? formatInstant(fixture.scheduledStart, zoneOf(fixture.divisionId))
                             : 'No time yet'}
                         </td>
                         <td>
@@ -134,7 +134,11 @@ export function FixturesScreen() {
                         </td>
                         <td>
                           {fixture.awayEntryId ? (
-                            <ReadinessBadge fixtureId={fixture.id} />
+                            <SummaryReadinessBadge
+                              fixtureId={fixture.id}
+                              scheduled={fixture.scheduledStart !== null}
+                              readiness={readiness}
+                            />
                           ) : (
                             <span className="caption">Bye: no match to prepare</span>
                           )}

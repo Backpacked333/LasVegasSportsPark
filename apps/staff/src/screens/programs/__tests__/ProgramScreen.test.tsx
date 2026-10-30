@@ -1,8 +1,8 @@
 /**
  * SCR-S-14 one program and "new draft offering" (SPK-CAT-001, SPK-CAT-002, SPK-YOUTH-002,
- * SPK-SCHED-008, §4.9): offerings in every publication state, an offering created with every
- * SPK-CAT-001 field and facility-local registration times, edits with the expected revision, and
- * a protected NOT_FOUND shown as not available.
+ * SPK-SCHED-008, §4.9, §4.5): offerings in every publication state in keyset pages with "Load
+ * more", an offering created with every SPK-CAT-001 field and facility-local registration times,
+ * edits with the expected revision, and a protected NOT_FOUND shown as not available.
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -73,6 +73,60 @@ describe('SCR-S-14 ProgramScreen', () => {
     expect(within(items[0]!).getByText('draft')).toBeInTheDocument();
     expect(within(items[1]!).getByText('registration_open')).toBeInTheDocument();
     expect(within(items[0]!).getByText(/North Park 1/)).toBeInTheDocument();
+  });
+
+  it('§4.5: pages the offerings with the API cursor, keeps them when Load more fails, and narrows by state', async () => {
+    const user = userEvent.setup();
+    let fail = true;
+    const app = createTestApp({
+      routes: routes({
+        'GET /programs/{id}/offerings': (request) => {
+          if (request.query.cursor !== 'f2') {
+            return fakeResponse(200, { items: [offering()], nextCursor: 'f2' });
+          }
+          if (fail) {
+            fail = false;
+            return fakeResponse(503, {
+              code: 'SERVICE_UNAVAILABLE',
+              message: 'Try later',
+              correlationId: 'c',
+              nextAction: 'retry_later',
+            });
+          }
+          return fakeResponse(200, {
+            items: [
+              offering({
+                id: `${OFFERING_ID.slice(0, -1)}9`,
+                name: 'Spring academy U12',
+                publicationState: 'registration_open',
+              }),
+            ],
+            nextCursor: null,
+          });
+        },
+      }),
+    });
+    render(app.at(`/programs/${PROGRAM_ID}`));
+    const list = await screen.findByRole('list', { name: 'Offerings' });
+    const rows = () => within(list).getAllByRole('listitem');
+    expect(rows()).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Load more offerings' }));
+    expect(await screen.findByText(/Error code: SERVICE_UNAVAILABLE/)).toBeInTheDocument();
+    expect(rows()).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Load more offerings' }));
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(within(list).getByRole('link', { name: 'Spring academy U12' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more offerings' })).toBeNull();
+    const calls = app.fake.requests.filter((r) => r.route === '/programs/{id}/offerings');
+    expect(calls.map((r) => r.query.cursor ?? null)).toEqual([null, 'f2', 'f2']);
+    expect(calls[0]?.query).toMatchObject({ limit: '50' });
+    // A state filter starts again from the first page of that state.
+    await user.selectOptions(screen.getByLabelText('Publication state'), 'registration_open');
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/programs/{id}/offerings').at(-1)?.query,
+      ).toEqual({ limit: '50', publicationState: 'registration_open' }),
+    );
   });
 
   it('SPK-CAT-001: creates a draft offering with every required field and facility-local registration times', async () => {

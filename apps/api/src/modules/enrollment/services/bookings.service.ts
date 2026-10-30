@@ -852,6 +852,26 @@ export class BookingsService implements BookingQueryPort {
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       const status = BookingMachine.next(row.status, 'cancel');
+      if (row.status === 'held' && row.basket_id) {
+        // §4.11, SPK-PAY-007: a held booking ends as a hold only while its basket is still held.
+        // While finance's checkout runs, money may be moving and finance owns the basket (as for
+        // an enrollment cancel, EnrollmentsService.cancel); once the basket is fulfilled the
+        // payment is taken and the enrollment confirmation moves the booking on, after which it
+        // is cancelled with its previewed consequence. Refused before anything is written.
+        const basket = await this.baskets.load(trx, organizationId, row.basket_id, true);
+        if (basket?.status === 'checking_out') {
+          throw errors.resourceConflict(
+            'A checkout is in progress for this booking; cancel the checkout instead.',
+            { code: 'CHECKOUT_IN_PROGRESS', orderRef: basket.order_ref },
+          );
+        }
+        if (basket?.status === 'fulfilled') {
+          throw errors.resourceConflict(
+            'This booking is paid and being confirmed; cancel it once it is confirmed, with its consequence.',
+            { code: 'BOOKING_CONFIRMATION_PENDING', orderRef: basket.order_ref },
+          );
+        }
+      }
       const now = this.clock.now();
       // The booking's own state first, so the enrollment follow-up below finds it settled.
       await trx

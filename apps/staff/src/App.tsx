@@ -1,6 +1,8 @@
 /**
- * Staff dashboard routes (SPK-UX-005): Today is the operating home, the fourteen areas, the coach
- * and referee workspace (SPK-UX-007), sign-in, and a not-available page for unknown paths.
+ * Staff dashboard routes (SPK-UX-005): Today is the operating home, the fourteen areas, the
+ * conditional Package G screens in their areas (SCR-S-51 to SCR-S-57, behind their capability
+ * switches), the coach and referee workspace (SPK-UX-007), sign-in, and a not-available page for
+ * unknown paths.
  */
 import { Navigate, Route, Routes } from 'react-router';
 import { competitionRoutes } from './features/competition/routes';
@@ -9,12 +11,15 @@ import { operationsRoutes } from './features/operations/routes';
 import { registrationFinanceRoutes } from './features/registration-finance/routes';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS } from './navigation/areas';
+import { packageGRoutes } from './screens/package-g/routes';
 import { AreaScreen } from './screens/area/AreaScreen';
 import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
 import { NotFoundScreen } from './screens/not-found/NotFoundScreen';
 import { AccessReviewScreen } from './screens/people/AccessReviewScreen';
 import { AccessReviewsScreen } from './screens/people/AccessReviewsScreen';
+import { DuplicateCandidateScreen } from './screens/people/DuplicateCandidateScreen';
 import { DuplicateReviewScreen } from './screens/people/DuplicateReviewScreen';
+import { InvitationsScreen } from './screens/people/InvitationsScreen';
 import { OpenAccessReviewScreen } from './screens/people/OpenAccessReviewScreen';
 import { PeopleScreen } from './screens/people/PeopleScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
@@ -46,6 +51,7 @@ export function AppRoutes() {
         {competitionRoutes()}
         {operationsRoutes()}
         {insightAdminRoutes()}
+        {packageGRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />
@@ -53,6 +59,8 @@ export function AppRoutes() {
         <Route path="/people/access-reviews/new" element={<OpenAccessReviewScreen />} />
         <Route path="/people/access-reviews/:reviewId" element={<AccessReviewScreen />} />
         <Route path="/people/duplicates" element={<DuplicateReviewScreen />} />
+        <Route path="/people/duplicates/:candidateId" element={<DuplicateCandidateScreen />} />
+        <Route path="/people/invitations" element={<InvitationsScreen />} />
         <Route path="/people/:personId" element={<PersonRecordScreen />} />
         <Route path="/people/:personId/relationships" element={<RelationshipsScreen />} />
         <Route path="/admin/cases" element={<SupportCasesScreen />} />

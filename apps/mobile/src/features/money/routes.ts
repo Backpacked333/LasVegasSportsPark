@@ -13,6 +13,10 @@ export const moneyRoutes = {
   transfer: (enrollmentId: string) => `/enrollments/${enrollmentId}/transfer` as const,
   payments: () => '/payments' as const,
   obligation: (obligationId: string) => `/payments/${obligationId}` as const,
+  /** SCR-C-34: one payment attempt with its refunds (`GET /v1/payments/{id}`). */
+  payment: (paymentId: string) => `/payments/attempt/${paymentId}` as const,
+  /** SCR-C-34: one order with its balances and installments (`GET /v1/orders/{id}`). */
+  order: (orderId: string) => `/payments/order/${orderId}` as const,
   credits: () => '/credits' as const,
   makeup: (makeupId: string) => `/credits/makeup/${makeupId}` as const,
   youthFeedback: () => '/youth-feedback' as const,

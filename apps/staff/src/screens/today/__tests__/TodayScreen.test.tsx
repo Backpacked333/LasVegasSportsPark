@@ -3,10 +3,12 @@
  * record, owner, age, deadline, next permitted actions and resolution history; recovery-required
  * financial issues pinned first; "Acknowledge" only where the API lists it, with the expected
  * revision and an idempotency key; only current and upcoming activities in facility-local time;
- * field status; sources and facilities the viewer may not read shown as not available.
+ * field status; expected arrivals from the reporting module (counts only, facility-local
+ * times, unavailable values with their reason); sources and facilities the viewer may not read
+ * shown as not available.
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import {
@@ -14,9 +16,17 @@ import {
   FACILITY_B,
   TEST_NOW,
   createTestApp,
+  mePermissions,
   todayFeed,
 } from '../../../testing/test-app';
-import { EXCEPTION_ID, PAYMENT_ID, exceptionItem, scheduledEvent } from './fixtures';
+import {
+  EXCEPTION_ID,
+  PAYMENT_ID,
+  exceptionItem,
+  expectedArrivalsReport,
+  lifecycleActions,
+  scheduledEvent,
+} from './fixtures';
 
 /** A Today feed whose single facility day runs from 07:00 to 23:00 UTC on the test date. */
 function feedWithDay(items: unknown[] = [], visible = true) {
@@ -94,10 +104,12 @@ describe('SCR-S-01 TodayScreen issues', () => {
         ),
       ),
     ).toBeInTheDocument();
-    // The lifecycle verbs are offered as buttons, the domain action as the next step.
+    // The lifecycle verbs are offered as buttons, the domain action as the next step, linked to
+    // the owning module's staff screen.
     expect(
-      within(row).getByText('Next: Reconcile the payment with the provider'),
-    ).toBeInTheDocument();
+      within(row).getByRole('link', { name: 'Reconcile the payment with the provider' }),
+    ).toHaveAttribute('href', `/finance/payments/${PAYMENT_ID}`);
+    expect(within(row).queryByRole('link', { name: 'Acknowledge' })).toBeNull();
     expect(within(row).getByText('Resolution history (1)')).toBeInTheDocument();
     expect(within(row).getByRole('link', { name: /Open exception/ })).toHaveAttribute(
       'href',
@@ -174,6 +186,59 @@ describe('SCR-S-01 TodayScreen issues', () => {
     await waitFor(() =>
       expect(app.fake.requests.filter((r) => r.route === '/today').length).toBeGreaterThan(1),
     );
+  });
+
+  it('K-10, SUP-01: a queue owner gets Acknowledge from exceptions.manage_own_queue, by verb, with the item revision', async () => {
+    const user = userEvent.setup();
+    const ownQueue = exceptionItem({
+      ownerQueue: 'front_desk',
+      revision: 7,
+      details: { exceptionId: EXCEPTION_ID },
+      nextActions: [
+        {
+          action: 'communications.read_notification',
+          verb: 'view',
+          label: 'Review the delivery attempts',
+          method: 'GET',
+          href: '/v1/notifications/0192f1a0-0000-7000-8000-0000000000d1/deliveries',
+        },
+        {
+          action: 'reporting.something_unmapped',
+          verb: 'view',
+          label: 'Read the owning record',
+          method: 'GET',
+          href: '/v1/unmapped/0192f1a0-0000-7000-8000-0000000000d2',
+        },
+        ...lifecycleActions('exceptions.manage_own_queue', ['acknowledge', 'resolve', 'close']),
+      ],
+    });
+    const app = createTestApp({
+      routes: {
+        'GET /today': todayFeed([ownQueue]),
+        'POST /exceptions/{id}/acknowledge': { status: 200, body: { status: 'acknowledged' } },
+      },
+    });
+    render(app.at('/today'));
+    const row = await screen.findByTestId(`today-item-exception:${EXCEPTION_ID}`);
+    expect(within(row).getByRole('link', { name: 'Review the delivery attempts' })).toHaveAttribute(
+      'href',
+      '/communications/notifications/0192f1a0-0000-7000-8000-0000000000d1',
+    );
+    // A step no staff screen serves is named, not linked.
+    expect(within(row).getByText('Read the owning record')).toBeInTheDocument();
+    expect(within(row).queryByRole('link', { name: 'Read the owning record' })).toBeNull();
+    // Lifecycle steps are never listed as plain "Next" text.
+    expect(within(row).queryByText(/Mark resolved/)).toBeNull();
+    await user.click(
+      within(row).getByRole('button', {
+        name: 'Acknowledge: Payment outcome unknown for checkout',
+      }),
+    );
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/exceptions/{id}/acknowledge')).toBe(true),
+    );
+    const ack = app.fake.requests.find((r) => r.route === '/exceptions/{id}/acknowledge');
+    expect(ack?.body).toEqual({ expectedRevision: 7 });
   });
 
   it('reports STALE_REVISION on acknowledge with "Reload", which re-reads Today', async () => {
@@ -319,8 +384,11 @@ describe('SCR-S-01 TodayScreen activities and field status', () => {
     expect(screen.getByText('Activity counts are not available to you.')).toBeInTheDocument();
     // Field status denied: not available, never an error with the code.
     await waitFor(() => expect(screen.getAllByText('Not available').length).toBeGreaterThan(0));
-    // Expected arrivals have no API read yet.
-    expect(screen.getByText(/The API does not publish expected arrivals yet/)).toBeInTheDocument();
+    // Expected arrivals: the viewer's role does not read operations reports, so none is asked for.
+    expect(
+      screen.getByText('Expected arrivals at this facility are not available to your role.'),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/reports/expected-arrivals')).toBe(false);
   });
 
   it('labels every control (SPK-UX-009)', async () => {
@@ -329,5 +397,110 @@ describe('SCR-S-01 TodayScreen activities and field status', () => {
     await screen.findByRole('list', { name: 'Open issues' });
     for (const button of screen.getAllByRole('button')) expect(button).toHaveAccessibleName();
     for (const link of screen.getAllByRole('link')) expect(link).toHaveAccessibleName();
+  });
+});
+
+describe('SCR-S-01 TodayScreen expected arrivals', () => {
+  const REPORTS = mePermissions({ actions: ['reporting.view_operations_reports'] });
+
+  it('SPK-REPORT-002: shows expected arrivals per activity for the facility day, counts only, in start order', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': REPORTS,
+        'GET /today': feedWithDay(),
+        'GET /events': { status: 200, body: { items: [], nextCursor: null } },
+        'GET /facilities/{id}/operating-status': OPERATING_STATUS,
+        'GET /reports/expected-arrivals': { status: 200, body: expectedArrivalsReport() },
+      },
+    });
+    render(app.at('/today'));
+    const list = await screen.findByRole('list', {
+      name: 'Expected arrivals by activity, North Park 1',
+    });
+    const request = app.fake.requests.find((r) => r.route === '/reports/expected-arrivals');
+    // The facility-local date of the Today feed, never a device date.
+    expect(request?.query).toEqual({ facilityId: FACILITY_A, date: '2026-10-24' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(within(rows[0] as HTMLElement).getByText('Rovers v United')).toBeInTheDocument();
+    expect(within(rows[0] as HTMLElement).getByText('Started')).toBeInTheDocument();
+    const session = rows[1] as HTMLElement;
+    expect(within(session).getByText('U8 skills session')).toBeInTheDocument();
+    expect(within(session).getByText('11:00 · session')).toBeInTheDocument();
+    expect(
+      within(session).getByText(
+        /Expected 9: 1 adults, 8 children .* supervised releases expected 8/,
+      ),
+    ).toBeInTheDocument();
+    expect(within(session).getByText('Upcoming')).toBeInTheDocument();
+    const totals = screen.getByRole('list', { name: 'Expected arrivals totals, North Park 1' });
+    expect(within(totals).getByText('Expected arrivals: 14')).toBeInTheDocument();
+    // A value the API cannot compute shows its reason, never zero (rule G13).
+    expect(
+      within(totals).getByText('Supervised releases expected: not available (pending DEC-075)'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Counted as of/)).toBeInTheDocument();
+    // No participant is named anywhere in the request.
+    expect(JSON.stringify(request?.query)).not.toMatch(/name/i);
+  });
+
+  it('says when no arrivals are expected today', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': REPORTS,
+        'GET /today': feedWithDay(),
+        'GET /events': { status: 200, body: { items: [], nextCursor: null } },
+        'GET /reports/expected-arrivals': {
+          status: 200,
+          body: expectedArrivalsReport({ rows: [], values: [] }),
+        },
+      },
+    });
+    render(app.at('/today'));
+    expect(
+      await screen.findByText('No expected arrivals are listed for today at this facility.'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a report failure with its code and a retry, and ACCESS_DENIED as not available', async () => {
+    const user = userEvent.setup();
+    let denied = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': REPORTS,
+        'GET /today': feedWithDay(),
+        'GET /events': { status: 200, body: { items: [], nextCursor: null } },
+        'GET /reports/expected-arrivals': () =>
+          denied
+            ? fakeResponse(403, apiErrorBody('ACCESS_DENIED'))
+            : fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_later' })),
+      },
+    });
+    render(app.at('/today'));
+    const section = await screen.findByRole('region', { name: 'Expected arrivals' });
+    expect(await within(section).findByText(/Error code: INTERNAL_ERROR/)).toBeInTheDocument();
+    denied = true;
+    await user.click(within(section).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(within(section).getByText('Not available')).toBeInTheDocument());
+    expect(within(section).queryByText(/Error code/)).toBeNull();
+  });
+
+  it('offline, the loaded arrivals stay with their age', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': REPORTS,
+        'GET /today': feedWithDay(),
+        'GET /events': { status: 200, body: { items: [], nextCursor: null } },
+        'GET /reports/expected-arrivals': { status: 200, body: expectedArrivalsReport() },
+      },
+    });
+    render(app.at('/today'));
+    const section = await screen.findByRole('region', { name: 'Expected arrivals' });
+    await within(section).findByRole('list', {
+      name: 'Expected arrivals by activity, North Park 1',
+    });
+    act(() => app.connectivity.set(false));
+    expect(await within(section).findByText('You are offline')).toBeInTheDocument();
+    expect(within(section).getByText(/Showing information from/)).toBeInTheDocument();
+    expect(within(section).getByText('Rovers v United')).toBeInTheDocument();
   });
 });

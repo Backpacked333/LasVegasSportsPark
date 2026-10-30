@@ -2,9 +2,12 @@
  * SCR-S-35 obligations and orders (SPK-PAY-002, SPK-PAY-004, SPK-PAY-005, SPK-PAY-006,
  * SPK-REG-003): the four figures shown consistently with any excess, per customer and per team,
  * the order with its price basis, installment plans with failed installments as a financial state,
- * a recovery-required order with its owner, and permission and not-found answers.
+ * a recovery-required order with its owner, and permission and not-found answers; keyset paging,
+ * the live payment attempt (FIN-01), the order list and order page with their payment attempts
+ * (FIN-02, SPK-PAY-011); an order the viewer may not read never shows its attempts (§4.10); the
+ * customer and payer found by name (ID-03).
  */
-import type { FakeHandler } from '@sportspark/api-client/testing';
+import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -12,12 +15,17 @@ import { createTestApp } from '../../../testing/test-app';
 import {
   ADULT_ID,
   OBLIGATION_ID,
+  ORDER_ID,
+  PAYMENT_ID,
   apiError,
   installmentPlan,
   nameRoutes,
   obligation,
   ok,
   order,
+  paymentAttempt,
+  peopleSearch,
+  personMatch,
 } from '../../../features/registration-finance/__tests__/fixtures';
 
 const TEAM_ENTRY_ID = '0192f1a0-0000-7000-8000-000000001010';
@@ -156,5 +164,207 @@ describe('SCR-S-35 ObligationsScreen', () => {
     render(app.at(`/finance/obligations/${OBLIGATION_ID}`));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
     expect(screen.queryByRole('table', { name: 'Order lines' })).toBeNull();
+  });
+
+  it('§4.5: pages obligations with the API cursor', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /obligations': (request) =>
+          fakeResponse(
+            200,
+            request.query.cursor === 'o2'
+              ? { items: [TEAM], nextCursor: null }
+              : { items: [obligation()], nextCursor: 'o2' },
+          ),
+      }),
+    });
+    render(app.at('/finance/obligations'));
+    const list = await screen.findByRole('list', { name: 'Obligations' });
+    expect(within(list).queryByText('Autumn league team fee')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Load more obligations' }));
+    expect(await within(list).findByText('Autumn league team fee')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more obligations' })).toBeNull();
+  });
+
+  it('FIN-01: a payment still on its way with an unknown outcome is never shown as paid', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /obligations': ok({
+          items: [
+            obligation({
+              liveAttempt: {
+                id: PAYMENT_ID,
+                status: 'unknown',
+                amountMinor: 7500,
+                currency: 'USD',
+                unknownSince: '2026-10-24T10:00:00.000Z',
+                createdAt: '2026-10-24T09:59:00.000Z',
+              },
+            }),
+          ],
+          nextCursor: null,
+        }),
+      }),
+    });
+    render(app.at('/finance/obligations'));
+    const live = await screen.findByRole('group', { name: 'Payment on its way' });
+    expect(
+      within(live).getByText('Attempt unknown: reconcile before any retry'),
+    ).toBeInTheDocument();
+    expect(within(live).getByText(/2 hours ago\): do not take payment again/)).toBeInTheDocument();
+    // Money records carry no facility: the time is UTC, named.
+    expect(
+      within(live).getByText(/Outcome unknown since Sat, Oct 24, 2026, 10:00 AM UTC/),
+    ).toBeInTheDocument();
+    expect(within(live).getByRole('link', { name: 'Open the payment attempt' })).toHaveAttribute(
+      'href',
+      `/finance/payments/${PAYMENT_ID}`,
+    );
+  });
+
+  it('SPK-PAY-011: lists orders by payment and fulfillment state and opens one', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /orders': ok({
+          items: [order({ fulfillmentStatus: 'recovery_required', installmentPlanId: null })],
+          nextCursor: null,
+        }),
+      }),
+    });
+    render(app.at('/finance/obligations'));
+    await user.click(await screen.findByRole('button', { name: 'Orders' }));
+    expect(screen.getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-pressed', 'true');
+    const list = await screen.findByRole('list', { name: 'Orders' });
+    expect(within(list).getByText('Fulfillment recovery_required')).toBeInTheDocument();
+    expect(within(list).getByText('Payment paid')).toBeInTheDocument();
+    expect(within(list).getByText(/Owner: finance operator\s+queue/)).toBeInTheDocument();
+    expect(within(list).getByRole('link', { name: /^Order 0192f1a0: \$125\.00/ })).toHaveAttribute(
+      'href',
+      `/finance/orders/${ORDER_ID}`,
+    );
+    await user.selectOptions(screen.getByLabelText('Fulfillment state'), 'recovery_required');
+    await user.type(screen.getByLabelText('Created from (UTC day)'), '2026-10-01');
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/orders').at(-1)?.query).toMatchObject({
+        fulfillmentStatus: 'recovery_required',
+        from: '2026-10-01T00:00:00.000Z',
+      }),
+    );
+  });
+
+  it('an order list the viewer may not read is not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /orders': apiError(403, 'ACCESS_DENIED', {
+          details: { action: 'finance.read_order' },
+        }),
+      }),
+    });
+    render(app.at('/finance/obligations'));
+    await user.click(await screen.findByRole('button', { name: 'Orders' }));
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+
+  it('an order page shows its lines, obligations and payment attempts', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /payments': ok({
+          items: [paymentAttempt({ status: 'unknown', unknownSince: '2026-10-24T11:00:00.000Z' })],
+          nextCursor: null,
+        }),
+      }),
+    });
+    render(app.at(`/finance/orders/${ORDER_ID}`));
+    expect(await screen.findByRole('table', { name: 'Order lines' })).toBeInTheDocument();
+    const obligations = await screen.findByRole('list', { name: 'Obligations of the order' });
+    expect(within(obligations).getByRole('link', { name: 'Obligation 0192f1a0' })).toHaveAttribute(
+      'href',
+      `/finance/obligations/${OBLIGATION_ID}`,
+    );
+    const attempts = await screen.findByRole('list', { name: 'Payment attempts of the order' });
+    expect(within(attempts).getByText('Attempt unknown: reconcile before any retry')).toBeVisible();
+    expect(screen.getByTestId('state-recovery')).toHaveTextContent('Do not take payment again');
+    expect(app.fake.requests.find((r) => r.route === '/payments')?.query).toMatchObject({
+      orderId: ORDER_ID,
+    });
+  });
+
+  it('an obligation lists its payment attempts; a viewer without the finance read sees them as not available', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /payments': apiError(403, 'ACCESS_DENIED', {
+          details: { action: 'finance.read_payment' },
+        }),
+      }),
+    });
+    render(app.at(`/finance/obligations/${OBLIGATION_ID}`));
+    const panel = (await screen.findByRole('heading', { name: 'Payment attempts' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(await within(panel).findByText('Not available')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/payments')?.query).toMatchObject({
+      obligationId: OBLIGATION_ID,
+    });
+  });
+
+  it('§4.10: an order the viewer may not read shows only "not available", never its payment attempts', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /orders/{id}': apiError(404, 'NOT_FOUND', { nextAction: 'verify_reference' }),
+        'GET /payments': ok({ items: [], nextCursor: null }),
+      }),
+    });
+    render(app.at(`/finance/orders/${ORDER_ID}`));
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Payment attempts' })).toBeNull();
+    expect(screen.queryByText(/No payment attempt/)).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/payments')).toBe(false);
+  });
+
+  it('ID-03: finds the customer and the order payer by name; the search may be not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': (request) =>
+          request.query.query === 'Lee'
+            ? fakeResponse(403, {
+                code: 'ACCESS_DENIED',
+                message: 'Not permitted.',
+                correlationId: 'c',
+                nextAction: 'contact_support_or_request_access',
+              })
+            : peopleSearch([personMatch(ADULT_ID, 'Sam', 'Rivera')])(request),
+        'GET /orders': ok({ items: [order()], nextCursor: null }),
+      }),
+    });
+    render(app.at('/finance/obligations'));
+    const finder = await screen.findByRole('group', { name: 'Find the customer' });
+    await user.type(within(finder).getByLabelText(/^Find the customer/), 'Rivera{Enter}');
+    await user.click(
+      await within(finder).findByRole('button', { name: 'Use Sam Rivera as the customer' }),
+    );
+    expect(screen.getByLabelText('Customer reference')).toHaveValue(ADULT_ID);
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/obligations').at(-1)?.query,
+      ).toMatchObject({ debtorPersonId: ADULT_ID }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Orders' }));
+    const payer = await screen.findByRole('group', { name: 'Find the payer' });
+    await user.type(within(payer).getByLabelText(/^Find the payer/), 'Lee{Enter}');
+    expect(await within(payer).findByText(/Person search is not available to you/)).toBeVisible();
+    await user.clear(within(payer).getByLabelText(/^Find the payer/));
+    await user.type(within(payer).getByLabelText(/^Find the payer/), 'Rivera{Enter}');
+    await user.click(
+      await within(payer).findByRole('button', { name: 'Use Sam Rivera as the payer' }),
+    );
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/orders').at(-1)?.query).toMatchObject({
+        payerPersonId: ADULT_ID,
+      }),
+    );
   });
 });

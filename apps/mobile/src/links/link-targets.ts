@@ -32,6 +32,8 @@ export type LinkTarget =
   | { to: 'invitation'; id: string; token: string }
   /** SCR-C-17: a team invitation (SPK-CAP-001). */
   | { to: 'team-invitation'; id: string; token: string }
+  /** SCR-C-17: the open invitations of the signed-in person (no token, nothing is answered). */
+  | { to: 'invitations' }
   /** SCR-C-01: a claim of a participant record entered at the desk (SPK-IAM-002). */
   | { to: 'claim'; token: string }
   /** An asynchronous outcome, shown in its current state (`GET /v1/operations/{id}`). */
@@ -78,6 +80,7 @@ export function resolveLinkParams(params: Params): LinkResolution {
       return isUuid(id)
         ? { kind: 'target', target: { to, id: id.toLowerCase() } }
         : { kind: 'malformed' };
+    case 'invitations':
     case 'inbox':
     case 'account':
     case 'family':

@@ -14,7 +14,8 @@
  * pickup claim and the pending state is shown; when decided "not used", pickup is not offered.
  * The link carries opaque ids
  * and the token only, no names (§4.14). The sender can withdraw the invitation
- * (`POST /v1/invitations/{id}/revoke`, with a reason and the expected revision).
+ * (`POST /v1/invitations/{id}/revoke`, with a reason and the expected revision) here or later
+ * from "Invitations you sent" (SentInvitationsSection), which lists it with its state.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -34,7 +35,7 @@ import {
 } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
 import { CheckboxRow, ChoiceGroup, Paragraph, TextField } from '../account/components/forms';
-import { invitationStateLabel } from '../invitations/InvitationScreen';
+import { INVITATION_KEYS, invitationStateLabel } from '../invitations/InvitationScreen';
 import { contactFormatError } from '../onboarding/ContactPointStep';
 
 type RelationshipKind = 'guardian' | 'delegate';
@@ -69,7 +70,9 @@ export function InviteAdultForm({
   const [contactValue, setContactValue] = useState('');
   const [selected, setSelected] = useState<readonly GrantPermission[]>([]);
   const [attempted, setAttempted] = useState(false);
-  const invite = useApiCommand('post', '/invitations');
+  const invite = useApiCommand('post', '/invitations', {
+    invalidate: [INVITATION_KEYS.familyList],
+  });
 
   const contactError = contactFormatError(contactKind, contactValue);
   const permissionsError =
@@ -241,11 +244,13 @@ function IssuedInvitation({
   const offline = reachable === false;
   const [reason, setReason] = useState('');
   const [attempted, setAttempted] = useState(false);
-  const revoke = useApiCommand('post', '/invitations/{id}/revoke');
+  const revoke = useApiCommand('post', '/invitations/{id}/revoke', {
+    invalidate: [INVITATION_KEYS.familyList],
+  });
   const link = buildAppLink({ to: 'invitation', id: invitation.id, token: invitation.token });
   // STALE_REVISION or INVALID_TRANSITION on withdrawing: the invitation changed since it was
-  // created (most likely accepted, or withdrawn on another device). No read of an invitation exists,
-  // so the screen says it is no longer open instead of offering a Reload that cannot help.
+  // created (most likely accepted, or withdrawn on another device). The screen says it is no
+  // longer open; its current state is listed under "Invitations you sent".
   const closed = revoke.error?.isStale
     ? revoke.error.code === 'INVALID_TRANSITION'
       ? invitationStateLabel((revoke.error.details as { from?: unknown } | undefined)?.from)

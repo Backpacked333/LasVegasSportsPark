@@ -4,20 +4,27 @@
  * underneath, and per space the events booked on it over a facility-local day or week:
  * scheduled time, occupied time with setup and cleanup buffers, what blocks it through shared space
  * (a whole-pitch booking blocks its halves and the other way round), and closures or maintenance
- * restrictions. Reads `GET /v1/resources`, `GET /v1/events`, `GET /v1/closures`.
+ * restrictions. Reads `GET /v1/resources`, `GET /v1/events` (cursor pages, "Load more events"),
+ * `GET /v1/closures`, and the program sessions at the facility in the same window
+ * (`GET /v1/sessions`, cursor pages, with the facility zone the API states).
  *
  * States: loading; empty (no events in range; no resources: first setup); permission restriction
  * (facility scope) as not available; stale version (a refresh brought a changed published
  * revision: banner, the shown data stays until the user asks for the latest); offline (cached,
- * read-only, with its age); errors with code and retry. The bars are a visual aid only and hidden
- * from assistive technology; each space's list carries the same information as text.
+ * read-only, with its age); errors with code and retry. While more events exist than are shown,
+ * no space reads as free: whether more exist is kept with the events shown, so a held-back refresh
+ * never makes the shown list look complete, and "Load more events" during a held-back change
+ * shows the latest first, then continues it. The bars are a visual aid only and hidden from
+ * assistive technology; each space's list carries the same information as text.
  */
-import type { Schema } from '@sportspark/api-client';
+import { idOf, mergePages, pagesReceivedAt, type Schema } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -44,17 +51,36 @@ import {
   overlaps,
 } from '../../features/schedule-facilities/time';
 import { usePinnedData } from '../../features/schedule-facilities/usePinnedData';
+import { FacilitySessions } from './FacilitySessions';
 
 type Resource = Schema<'Resource'>;
 type Event = Schema<'Event'>;
 type Closure = Schema<'Closure'>;
 
-const EVENT_LIMIT = 200;
+/** Events per page (`GET /v1/events` takes at most 200). */
+const EVENT_PAGE = 200;
 
-function eventSignature(page: { items: Event[] }): string {
-  return page.items
+/**
+ * The events shown and whether more exist after them in the range. `more` is kept with the events
+ * it belongs to: while a changed refresh is held back, the shown events (and not the latest read)
+ * decide whether a space may read as free.
+ */
+interface ShownEvents {
+  items: Event[];
+  more: boolean;
+}
+
+function eventSignature(shown: ShownEvents): string {
+  return shown.items
     .map((e) => `${e.id}:${e.revision}:${e.status}:${e.publishedRevision ?? ''}`)
     .join('|');
+}
+
+/** What `refetch` of the paged event read resolves with (TanStack infinite query result). */
+interface EventPagesRefetch {
+  data?: {
+    pages: { data: { items: Event[]; nextCursor: string | null }; receivedAt: Date }[];
+  };
 }
 
 /** Whether a closure covers a resource: the whole facility, the resource, or shared space. */
@@ -322,23 +348,47 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
     path: '/resources',
     request: { query: { facilityId: facility.id } },
   });
-  const eventsQuery = useApiQuery({
+  const eventPages = useApiPages({
     path: '/events',
     request: {
-      query: { facilityId: facility.id, start: range.start, end: range.end, limit: EVENT_LIMIT },
+      query: { facilityId: facility.id, start: range.start, end: range.end, limit: EVENT_PAGE },
     },
   });
   const closures = useApiQuery({
     path: '/closures',
     request: { query: { facilityId: facility.id } },
   });
+  const latest = useMemo<ShownEvents | undefined>(
+    () => (eventPages.data ? { items: eventPages.data, more: eventPages.hasNextPage } : undefined),
+    [eventPages.data, eventPages.hasNextPage],
+  );
   const pinned = usePinnedData(
-    eventsQuery.data,
-    eventsQuery.updatedAt,
+    latest,
+    eventPages.updatedAt,
     `${facility.id}|${range.start}|${range.end}`,
     eventSignature,
   );
-  const events = { ...eventsQuery, data: pinned.data, updatedAt: pinned.updatedAt };
+  const events = { ...eventPages, data: pinned.data?.items, updatedAt: pinned.updatedAt };
+  // From the events shown: a held-back refresh never makes the shown list look complete.
+  const truncated = pinned.data?.more ?? false;
+  const refresh = () => {
+    // Pin what this refresh returned (the closure's own data would be the old pages).
+    void Promise.resolve(eventPages.refetch()).then((result) => {
+      const pages = (result as EventPagesRefetch).data?.pages;
+      if (pages)
+        pinned.pin(
+          {
+            items: mergePages(
+              pages.map((p) => p.data),
+              idOf,
+            ),
+            more: (pages.at(-1)?.data.nextCursor ?? null) !== null,
+          },
+          pagesReceivedAt(pages),
+        );
+    });
+    void closures.refetch();
+  };
 
   const rangeLabel =
     span === 1
@@ -394,17 +444,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
           />{' '}
           Show canceled events
         </label>
-        <Button
-          variant="secondary"
-          disabled={!online}
-          onClick={() => {
-            // Pin what this refresh returned (the closure's own data would be the old page).
-            void eventsQuery.refetch().then((result) => {
-              if (result.data) pinned.pin(result.data.data, result.data.receivedAt);
-            });
-            void closures.refetch();
-          }}
-        >
+        <Button variant="secondary" disabled={!online} onClick={refresh}>
           Refresh
         </Button>
       </div>
@@ -438,8 +478,8 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
             empty={{ title: '', description: '' }}
             unavailableOffline={['refreshing the schedule']}
           >
-            {(page) => {
-              const visible = page.items.filter((e) => showCanceled || e.status !== 'canceled');
+            {(items) => {
+              const visible = items.filter((e) => showCanceled || e.status !== 'canceled');
               const activeClosures = (closures.data ?? []).filter(
                 (c) =>
                   (c.status === 'active' || c.status === 'pending') && overlaps(c.interval, range),
@@ -453,7 +493,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
               const unplaced = visible.filter((e) => !e.resourceIds.some((id) => known.has(id)));
               return (
                 <>
-                  {visible.length === 0 ? (
+                  {visible.length === 0 && !truncated ? (
                     <StateView
                       variant="empty"
                       title="No events in this range"
@@ -462,11 +502,13 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                       onAction={() => void navigate('/schedule/drafts')}
                     />
                   ) : null}
-                  {page.nextCursor ? (
-                    <p className="caption" role="status">
-                      Showing the first {EVENT_LIMIT} events in this range; more exist and are not
-                      shown, so a space may look free when it is not.
-                      {span === 7 ? ' Switch to the day view to see the rest.' : ''}
+                  {truncated ? (
+                    <p className="caption" role="status" data-testid="events-truncated">
+                      Showing the {items.length} events loaded so far; more exist in this range and
+                      are not shown yet, so a space may look free when it is not.{' '}
+                      {pinned.changed && !eventPages.hasNextPage
+                        ? 'Show the latest schedule above to see them.'
+                        : 'Load more events below.'}
                     </p>
                   ) : null}
                   {span === 1 ? <TrackLegend /> : null}
@@ -487,9 +529,22 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                       range={range}
                       timezone={tz}
                       showTrack={span === 1}
-                      truncated={page.nextCursor !== null}
+                      truncated={truncated}
                     />
                   ))}
+                  <LoadMore
+                    pages={{
+                      ...eventPages,
+                      loadMore: () => {
+                        // The next page continues the latest read, so a held-back change is
+                        // shown first: held and new pages are never mixed.
+                        if (pinned.changed) pinned.showLatest();
+                        pinned.extend();
+                        eventPages.loadMore();
+                      },
+                    }}
+                    label="events"
+                  />
                   {unplaced.length > 0 && !focus ? (
                     <section aria-labelledby="unplaced-events">
                       <h4 id="unplaced-events">Events on spaces not in this inventory</h4>
@@ -506,6 +561,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
           </QueryBoundary>
         )}
       </QueryBoundary>
+      <FacilitySessions facility={facility} range={range} showCanceled={showCanceled} />
     </div>
   );
 }

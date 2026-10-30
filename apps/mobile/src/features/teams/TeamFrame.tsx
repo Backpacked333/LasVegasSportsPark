@@ -5,13 +5,11 @@
  * A malformed route id or a team the person may not see is "not available" (§4.10).
  */
 import type { ReactNode } from 'react';
-import { useEffect } from 'react';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { useOpenedTeamEntries } from './opened-teams';
 import { useViewerPerson, useWorkspace, viewerOf, type Viewer, type Workspace } from './queries';
 
 export function TeamFrame({
@@ -30,11 +28,6 @@ export function TeamFrame({
   const workspace = useWorkspace(entryId);
   const person = useViewerPerson();
   const now = useNow();
-  const { remember } = useOpenedTeamEntries();
-  const loaded = workspace.data !== undefined;
-  useEffect(() => {
-    if (loaded && entryId) remember(entryId);
-  }, [loaded, entryId, remember]);
   return (
     <Screen>
       <RequireSession what={what}>

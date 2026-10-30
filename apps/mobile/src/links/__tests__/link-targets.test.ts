@@ -32,7 +32,7 @@ describe('resolveLinkParams (§4.13 closed list of destinations)', () => {
       kind: 'target',
       target: { to: 'operation', id: ID },
     });
-    for (const to of ['inbox', 'account', 'family', 'preferences'] as const) {
+    for (const to of ['invitations', 'inbox', 'account', 'family', 'preferences'] as const) {
       expect(resolveLinkParams({ to })).toEqual({ kind: 'target', target: { to } });
     }
   });

@@ -8,7 +8,7 @@ import { page } from '../../../features/insight-admin/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 
 describe('Administration and Reports areas', () => {
-  it('links SCR-S-46, SCR-S-47 and SCR-S-48 from the Administration page', async () => {
+  it('links SCR-S-46 (with audit records), SCR-S-47 (with capability switches and provider events), SCR-S-48 and the conditional SCR-S-56', async () => {
     render(createTestApp().at('/admin'));
     const nav = await screen.findByRole('navigation', { name: 'Administration screens' });
     expect(
@@ -20,6 +20,21 @@ describe('Administration and Reports areas', () => {
     expect(
       within(nav).getByRole('link', { name: 'Migration imports and reconciliation' }),
     ).toHaveAttribute('href', '/admin/migration');
+    expect(
+      within(nav).getByRole('link', { name: 'Access hardware (conditional)' }),
+    ).toHaveAttribute('href', '/admin/access-hardware');
+    expect(within(nav).getByRole('link', { name: 'Audit records' })).toHaveAttribute(
+      'href',
+      '/admin/audit',
+    );
+    expect(within(nav).getByRole('link', { name: 'Capability switches' })).toHaveAttribute(
+      'href',
+      '/admin/capabilities',
+    );
+    expect(within(nav).getByRole('link', { name: 'Provider events' })).toHaveAttribute(
+      'href',
+      '/admin/provider-events',
+    );
   });
 
   it('opens the Reports area on the operating reports, not a placeholder', async () => {
@@ -29,7 +44,8 @@ describe('Administration and Reports areas', () => {
     expect(await screen.findByRole('heading', { name: 'Operating reports' })).toBeInTheDocument();
     expect(screen.queryByText(/Not built yet/)).toBeNull();
     const main = screen.getByRole('navigation', { name: 'Main' });
-    expect(within(main).getByRole('link', { name: 'Reports' })).toHaveAttribute(
+    // The areas come from GET /v1/me/permissions: wait for the link before checking it.
+    expect(await within(main).findByRole('link', { name: 'Reports' })).toHaveAttribute(
       'aria-current',
       'page',
     );

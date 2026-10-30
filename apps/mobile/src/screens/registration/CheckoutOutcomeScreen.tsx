@@ -28,7 +28,8 @@ import { CommandError } from '../../features/registration/CommandError';
 import { DevPaymentMethodPicker } from '../../features/registration/dev';
 import { formatInstant, formatMoney } from '../../features/registration/format';
 import { useParticipantNames } from '../../features/registration/participants';
-import { useRegistrationProgress, type ProgressPatch } from '../../features/registration/progress';
+import { MY_BASKETS_KEY, MY_CHECKOUTS_KEY } from '../../features/registration/in-progress';
+import { useRegistrationProgress } from '../../features/registration/progress';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import {
@@ -177,18 +178,20 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
   const placements = useApiRecords('/placement-requests/{id}', placementIds, completed);
   const terminal = TERMINAL.includes(checkout.status);
 
-  // A finished checkout is no longer "in progress" on this device (the record stays in the API).
-  // Only what this checkout owns is forgotten: an older outcome never erases a newer basket or a
-  // checkout whose payment is still unknown.
+  // The API has this checkout, so its list finds it from now on: the device no longer needs to
+  // remember the request for its quote. Only this checkout's quote is forgotten, never another
+  // checkout whose answer is still missing.
   useEffect(() => {
-    if (!terminal) return;
-    const patch: ProgressPatch = {};
-    if (progress.checkoutId === checkout.id) patch.checkoutId = null;
-    if (progress.basketId === checkout.basketId) patch.basketId = null;
-    if (progress.quoteId === checkout.quoteId) patch.quoteId = null;
-    if (progress.pendingCheckoutQuoteId === checkout.quoteId) patch.pendingCheckoutQuoteId = null;
-    if (Object.keys(patch).length > 0) void update(patch);
-  }, [terminal, update, progress, checkout.id, checkout.basketId, checkout.quoteId]);
+    if (progress.pendingCheckoutQuoteId === checkout.quoteId) {
+      void update({ pendingCheckoutQuoteId: null });
+    }
+  }, [update, progress.pendingCheckoutQuoteId, checkout.quoteId]);
+  // A finished checkout leaves "In progress" (SPK-UX-001): the lists are read again.
+  useEffect(() => {
+    if (!terminal && checkout.status !== 'recovery_required') return;
+    void queryClient.invalidateQueries({ queryKey: MY_CHECKOUTS_KEY });
+    void queryClient.invalidateQueries({ queryKey: MY_BASKETS_KEY });
+  }, [terminal, checkout.status, queryClient]);
 
   const status = checkoutStatus(checkout);
   const payment = checkout.payment;

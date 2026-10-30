@@ -1,8 +1,8 @@
 /**
  * "Join the waitlist" for one basket line (SPK-REG-008; SPK-AT-005 the customer who loses the
  * final place gets the permitted alternative, CAPACITY_UNAVAILABLE `join_waitlist_or_choose_alternative`).
- * Sends `POST /v1/waitlist-entries` for the line's participant, offering and intent, remembers the
- * entry on this device (the API has no customer list of waitlist entries) and opens SCR-C-16.
+ * Sends `POST /v1/waitlist-entries` for the line's participant, offering and intent and opens
+ * SCR-C-16; the entry is then listed by `GET /v1/me/waitlist-entries` on every device.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
@@ -11,7 +11,7 @@ import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { Button } from '../../ui/Button';
 import { CommandError } from './CommandError';
-import { useRegistrationProgress } from './progress';
+import { MY_WAITLIST_KEY } from './in-progress';
 import { registrationRoutes } from './routes';
 
 type BasketLine = Schema<'BasketLine'>;
@@ -26,8 +26,7 @@ export function JoinWaitlistButton({
   disabled?: boolean;
 }) {
   const router = useRouter();
-  const { update } = useRegistrationProgress();
-  const join = useApiCommand('post', '/waitlist-entries');
+  const join = useApiCommand('post', '/waitlist-entries', { invalidate: [MY_WAITLIST_KEY] });
   const [failure, setFailure] = useState<ApiError | null>(null);
   const submit = async () => {
     setFailure(null);
@@ -40,7 +39,6 @@ export function JoinWaitlistButton({
           preferences: {},
         },
       });
-      await update({ addWaitlistEntryId: entry.id });
       router.push(registrationRoutes.waitlist(entry.id));
     } catch (error) {
       setFailure(error as ApiError);

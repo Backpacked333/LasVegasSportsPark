@@ -6,6 +6,7 @@
  */
 import {
   ApiError,
+  PERMISSIONS_QUERY_PREFIX,
   createApiClient,
   type ApiClient,
   type Session,
@@ -124,6 +125,11 @@ export function AppProviders({
             client.clear();
             setSession({ status: 'signed_out', session: null, expired: true });
           });
+        },
+        // A command refused because its capability is turned off (K-12): re-read the switches so
+        // every CapabilityGate and the navigation show them as they are now (DEC-016).
+        onCapabilityDisabled: () => {
+          void client.invalidateQueries({ queryKey: PERMISSIONS_QUERY_PREFIX });
         },
       }),
     [services, client],

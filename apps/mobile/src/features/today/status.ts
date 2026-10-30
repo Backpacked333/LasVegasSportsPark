@@ -35,21 +35,45 @@ export function needsRecovery(operation: Operation | null | undefined): boolean 
  * Where a pending registration's checkout stands, from the records the API links to it: the
  * enrollment's basket (`checking_out` while the payment runs) and the basket's order
  * (`fulfillmentStatus`). The enrollment's `lastOperationId` stays null while a checkout runs, so it
- * cannot tell (reported API gap). `unknown` means the basket or order could not be read.
+ * cannot tell (reported API gap). `checking` means the basket or order read has not answered yet;
+ * `unknown` means it could not be read. `null` means both were read (or there are none) and no
+ * checkout is running: only then is a payment called outstanding (§4.11, SPK-PAY-007).
  */
-export type CheckoutState = 'recovery_required' | 'compensated' | 'processing' | 'unknown' | null;
+export type CheckoutState =
+  'recovery_required' | 'compensated' | 'processing' | 'checking' | 'unknown' | null;
 
 export function checkoutStateOf(
   basket: { status: string; orderRef: string | null } | null | undefined,
   order: { fulfillmentStatus: string } | null | undefined,
   readFailed: boolean,
+  readPending = false,
 ): CheckoutState {
   if (order?.fulfillmentStatus === 'recovery_required') return 'recovery_required';
   if (order?.fulfillmentStatus === 'compensated') return 'compensated';
   if (basket?.status === 'checking_out') return 'processing';
   if (readFailed) return 'unknown';
+  if (readPending) return 'checking';
   return null;
 }
+
+type PendingReason = NonNullable<Enrollment['pendingReason']>;
+
+/**
+ * What a pending registration still waits for, in journeys §3 words ("Registration pending:
+ * <reason>", approval, payment or form outstanding, named), from the API's `pendingReason` (ENR-02).
+ */
+export const PENDING_REASON_PHRASES: Readonly<Record<PendingReason, string>> = {
+  approval: 'Registration pending: awaiting approval',
+  payment: 'Registration pending: payment outstanding',
+  forms: 'Registration pending: a form to complete',
+  placement: 'Registration pending: awaiting placement',
+};
+
+/** `pendingReason: payment` while the basket or order read has not answered (never "outstanding"). */
+export const PAYMENT_CHECKING_PHRASE = 'Registration pending: checking payment status';
+/** `pendingReason: payment` when the basket or order could not be read (never "outstanding"). */
+export const PAYMENT_NOT_CHECKED_PHRASE =
+  'Registration pending: payment status could not be checked';
 
 /**
  * Enrollment state as the customer sees it (journeys §3). The operation is the enrollment's
@@ -57,7 +81,7 @@ export function checkoutStateOf(
  * be read; `teamName` is the assigned team when known.
  */
 export function enrollmentStatus(
-  enrollment: Pick<Enrollment, 'status'>,
+  enrollment: Pick<Enrollment, 'status'> & { pendingReason?: Enrollment['pendingReason'] },
   options: {
     offeringName?: string | null;
     operation?: Operation | null;
@@ -83,7 +107,21 @@ export function enrollmentStatus(
       ) {
         return { tone: 'pending', label: 'Payment processing' };
       }
-      // The API does not say which requirement is outstanding (approval, payment or a form).
+      // ENR-02: the API names what is outstanding; without a reason the phrase stays general.
+      const reason = enrollment.pendingReason ?? null;
+      if (reason === 'payment') {
+        // The API's `payment` covers a held basket and one already checking out (a payment
+        // running). "Payment outstanding" is said only once the basket and order were read and no
+        // checkout runs (`checkout: null`); while they are being read, could not be read, or this
+        // caller did not read them, the phrase never invites a second payment (§4.11, SPK-PAY-007).
+        if (checkout === null) return { tone: 'warning', label: PENDING_REASON_PHRASES.payment };
+        if (checkout === 'checking') return { tone: 'pending', label: PAYMENT_CHECKING_PHRASE };
+        if (checkout === 'unknown') return { tone: 'pending', label: PAYMENT_NOT_CHECKED_PHRASE };
+        return { tone: 'warning', label: 'Registration pending' };
+      }
+      if (reason && reason in PENDING_REASON_PHRASES) {
+        return { tone: 'warning', label: PENDING_REASON_PHRASES[reason] };
+      }
       return { tone: 'warning', label: 'Registration pending' };
     }
     case 'confirmed': {

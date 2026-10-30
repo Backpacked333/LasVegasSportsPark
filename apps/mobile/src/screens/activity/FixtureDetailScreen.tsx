@@ -3,31 +3,47 @@
  * SPK-READY-002, SPK-RESULT-001, SPK-RESULT-005, SPK-COMMS-005, SPK-SCHED-008, SPK-UX-008,
  * SPK-UX-009).
  *
- * - `GET /v1/fixtures/{id}`: teams, state, time, availability counts and the person's own RSVP.
+ * - `GET /v1/fixtures/{id}`: teams, state, time, availability counts, the venue (facility, pitches
+ *   and IANA zone, CMP-04), the viewer's roster status and the answers they may see (`responses`).
  *   NOT_FOUND (the person is on neither roster and holds no view grant) is "not available", with
  *   no hint that the fixture exists (§4.10).
- * - The next-activity card (SCR-C-04) with RSVP (`POST /v1/fixtures/{id}/availability`).
+ * - The next-activity card (SCR-C-04) with RSVP (`POST /v1/fixtures/{id}/availability`, with the
+ *   answer's revision as `expectedRevision`); answers of children the API lists are shown, not
+ *   offered (DEC-090).
  * - Material changes: the newest schedule notice about the fixture's scheduling event gives old
- *   and new details, the field names and the facility's time zone.
+ *   and new details; times are on the venue's facility clock (SPK-SCHED-008).
  * - Match readiness as the customer may see it: `GET /v1/fixtures/{id}/readiness` answers with
  *   what this person may read (restricted record ids already removed by the API, SPK-CAP-002);
  *   the screen shows the assessment, each issue's responsible role and required action, and
  *   counts only, never other players' details.
  * - Result: the current official revision, else the submitted one as "Provisional"
  *   (`GET /v1/fixtures/{id}/results`, SPK-RESULT-001); a corrected result says so.
- * - Rule set summary from the team entry the person may read (`GET /v1/team-entries/{id}`).
- * - Arrival guidance is POL-046 (Operations, pending); dispute submission is SCR-C-29, not in
- *   this app yet.
+ * - Rule set summary from the team entry the person may read (`GET /v1/team-entries/{id}`);
+ *   its `viewer.actingAsCaptain` (the API's answer, rule set included) decides the captain view.
+ * - A captain acting for a side opens dispute submission (SCR-C-29) from an official result; the
+ *   dispute screen and the API decide the rest (window, eligibility).
+ * - Arrival guidance is POL-046 (Operations, pending).
  */
 import { apiQueryKey, presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
+import { teamRoutes } from '../../features/teams/routes';
+import {
+  awayOf,
+  fixtureRequiredAction,
+  fixtureTitle,
+  otherResponses,
+  ownResponse,
+  venueLocation,
+  venueOf,
+  viewerOnRoster,
+} from '../../features/today/fixture-model';
 import { NextActivityCard, type ActivityCardModel } from '../../features/today/NextActivityCard';
-import { latestChangeForEvent } from '../../features/today/notices';
-import { useInbox, useMe, useSignedIn } from '../../features/today/queries';
+import { latestChangeForEvent, openAvailabilityRequest } from '../../features/today/notices';
+import { nameOf, useInbox, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { RsvpControl } from '../../features/today/RsvpControl';
 import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
 import {
@@ -36,12 +52,14 @@ import {
   readinessStatus,
   resultStatus,
   roleLabel,
+  rsvpStatus,
   severityStatus,
   type RsvpState,
 } from '../../features/today/status';
-import { displayZone, formatDay, formatWhen, zoneNotice } from '../../features/today/time';
+import { formatDay, formatWhen, zoneNotice, zoneOf } from '../../features/today/time';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { Button } from '../../ui/Button';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
@@ -52,15 +70,7 @@ type FixtureDetail = Schema<'FixtureDetail'>;
 type FixtureSide = Schema<'FixtureSide'>;
 type ResultRevision = Schema<'ResultRevision'>;
 
-/** The generated type of `away` is distorted by its nullable `allOf`; this is its real shape. */
-function awayOf(fixture: FixtureDetail): FixtureSide | null {
-  return (fixture.away as FixtureSide | null) ?? null;
-}
-
-export function fixtureTitle(fixture: FixtureDetail): string {
-  const away = awayOf(fixture);
-  return away ? `${fixture.home.teamName} vs ${away.teamName}` : `${fixture.home.teamName} (bye)`;
-}
+export { fixtureTitle };
 
 function availabilityLine(side: FixtureSide): string {
   const a = side.availability;
@@ -123,6 +133,7 @@ export function visibleReadiness(
 }
 
 function FixtureContent({ fixtureId }: { fixtureId: string }) {
+  const router = useRouter();
   const now = useNow();
   const signedIn = useSignedIn();
   const fixture = useApiQuery({
@@ -154,6 +165,15 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
   });
   const inbox = useInbox();
   const me = useMe();
+  const viewerId = me.data?.principal.personId ?? me.data?.person?.id ?? null;
+  // Whose answer is whose is known only once `GET /v1/me` answers: until then no answer is
+  // labelled as a family member's, and the viewer's own revision is not guessed (CMP-04).
+  const viewerKnown = me.data !== undefined;
+  const othersAnswers = fixture.data && viewerKnown ? otherResponses(fixture.data, viewerId) : [];
+  const names = usePersonNames(
+    othersAnswers.map((r) => r.personId),
+    me.data,
+  );
   const queryClient = useQueryClient();
   // §4.10, §4.14: once the API stops serving this fixture to the person (removed from the roster,
   // guardian grant revoked), the cached copy is no longer shown and leaves the cache.
@@ -195,31 +215,46 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
     mine === 'home' ? (away?.teamName ?? null) : mine === 'away' ? detail.home.teamName : null;
   const latest = latestChangeForEvent(inbox.data?.items ?? [], detail.schedulingEventId);
   const after = latest?.change.after ?? null;
-  const zone = displayZone(after?.timezone ?? latest?.change.before?.timezone ?? null);
+  const venue = venueOf(detail);
+  // SPK-SCHED-008: the newest notice's zone, else the venue's facility zone (CMP-04).
+  const zone = zoneOf(after?.timezone, latest?.change.before?.timezone, venue?.timezone);
   const model: ActivityCardModel = {
     participant: workspace ? workspace.team.name : 'Your team',
     title: fixtureTitle(detail),
     opponent,
-    location: after?.resources.map((r) => r.name).join(', ') || null,
+    location: venueLocation(
+      venue,
+      after?.resources.map((r) => r.name),
+    ),
     start: detail.scheduledStart,
     end: detail.scheduledEnd,
     zone,
     status: fixtureStatus(detail.status),
     change: latest?.change ?? null,
-    requiredAction: null,
+    // COM-06: an open availability request the viewer has not answered.
+    requiredAction: viewerKnown
+      ? fixtureRequiredAction(
+          detail,
+          viewerId,
+          openAvailabilityRequest(inbox.data?.items ?? [], detail.id),
+        )
+      : null,
   };
   const notice = zoneNotice(zone, detail.scheduledStart ?? now);
   const result = results.data ? currentResult(results.data) : null;
   const myEntryId = mine === 'home' ? homeEntryId : mine === 'away' ? awayEntryId : null;
-  const viewerId = me.data?.principal.personId ?? me.data?.person?.id ?? null;
+  // CMP-02: the API says whether the viewer acts as captain (the rule set decides co-captains);
+  // an older workspace answer without `viewer` falls back to the effective role records.
   const isCaptain =
-    viewerId !== null &&
-    (workspace?.roles ?? []).some(
-      (r) =>
-        r.personId === viewerId &&
-        (r.role === 'captain' || r.role === 'co_captain') &&
-        r.effectiveTo === null,
-    );
+    workspace?.viewer?.actingAsCaptain ??
+    (viewerId !== null &&
+      (workspace?.roles ?? []).some(
+        (r) =>
+          r.personId === viewerId &&
+          (r.role === 'captain' || r.role === 'co_captain') &&
+          r.effectiveTo === null,
+      ));
+  const own = ownResponse(detail, viewerId);
   const ownSide = mine === 'home' ? detail.home : mine === 'away' ? away : null;
   const shownReadiness = readiness.data
     ? visibleReadiness(readiness.data, myEntryId, isCaptain)
@@ -237,15 +272,52 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
           testID="fixture-card"
           rsvp={
             <RsvpControl
+              key={detail.id}
               fixtureId={detail.id}
               fixtureStatus={detail.status}
-              myResponse={(detail.myResponse as RsvpState | null) ?? null}
+              myResponse={(own?.state ?? detail.myResponse ?? null) as RsvpState | null}
+              responseRevision={own?.revision ?? null}
+              onRoster={viewerOnRoster(detail)}
               onReload={() => void fixture.refetch()}
             />
           }
         />
         {notice ? <Caption>{notice}</Caption> : null}
       </Section>
+
+      {!viewerKnown && (detail.responses ?? []).length > 0 ? (
+        <Section title="Family answers" testID="fixture-family-answers">
+          <SectionQueryState
+            read={me}
+            label="the family answers"
+            unavailable={{ description: 'The family answers are not available to you.' }}
+          />
+        </Section>
+      ) : null}
+      {othersAnswers.length > 0 ? (
+        <Section title="Family answers" testID="fixture-family-answers">
+          <View accessibilityRole="list" style={styles.pad}>
+            {othersAnswers.map((r) => {
+              const status = rsvpStatus(r.state as RsvpState);
+              return (
+                <View
+                  key={r.personId}
+                  accessible
+                  accessibilityLabel={`${nameOf(names, r.personId)}: ${status.label}`}
+                  style={styles.answer}
+                >
+                  <Text style={styles.body}>{nameOf(names, r.personId)}</Text>
+                  <StatusBadge {...status} />
+                </View>
+              );
+            })}
+          </View>
+          <Caption>
+            Answering for a child in the app is still being decided (DEC-090); these are the answers
+            recorded so far.
+          </Caption>
+        </Section>
+      ) : null}
 
       {ownSide ? (
         // Only the viewer's own side: the opponent's answers are not theirs to see.
@@ -320,7 +392,17 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
             ) : null}
           </View>
         ) : null}
-        {result ? <Caption>Disputing a result is not available in the app yet.</Caption> : null}
+        {result && result.status === 'official' && isCaptain && myEntryId ? (
+          <View style={styles.pad}>
+            <Button
+              label="Dispute this result"
+              variant="secondary"
+              accessibilityHint="Opens the dispute form for your team; the dispute window applies"
+              onPress={() => router.push(teamRoutes.dispute(myEntryId, detail.id) as Href)}
+              testID="fixture-dispute"
+            />
+          </View>
+        ) : null}
       </Section>
 
       <Section title="Rules" testID="fixture-rules">
@@ -367,6 +449,7 @@ export function FixtureDetailRoute() {
 const styles = StyleSheet.create({
   pad: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   issues: { gap: spacing.sm },
+  answer: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   issue: {
     gap: spacing.xs,
     padding: spacing.md,

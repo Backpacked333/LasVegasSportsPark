@@ -132,9 +132,26 @@ export class ApiError extends Error {
     return this.code === 'NOT_FOUND';
   }
 
-  /** The principal may not perform the action: render as "not available", never retry. */
+  /**
+   * The principal may not perform the action: render as "not available", never retry. A command
+   * refused because the organization turned its capability off is not a restriction of the
+   * principal (`isCapabilityDisabled`) and is shown as "turned off" instead.
+   */
   get isPermissionRestriction(): boolean {
+    if (this.isCapabilityDisabled) return false;
     return this.code === 'ACCESS_DENIED' || this.code === 'PARTICIPANT_AUTHORITY_REQUIRED';
+  }
+  /**
+   * ACCESS_DENIED with `details.code: 'CAPABILITY_DISABLED'`: a gated command of a capability the
+   * organization has turned off (K-12, DEC-016). Never retryable; the turned-off state names the
+   * decision that may turn it on.
+   */
+  get isCapabilityDisabled(): boolean {
+    if (this.code !== 'ACCESS_DENIED') return false;
+    const details = this.details as { code?: unknown } | null | undefined;
+    return (
+      typeof details === 'object' && details !== null && details.code === 'CAPABILITY_DISABLED'
+    );
   }
 
   /**

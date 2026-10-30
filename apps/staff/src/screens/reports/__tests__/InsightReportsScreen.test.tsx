@@ -10,6 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import {
   NOW_ISO,
+  facilityList,
   metricDefinition,
   ok,
   reportResponse,
@@ -48,12 +49,13 @@ function app(routes: Record<string, FakeHandler> = {}) {
         items: [metricDefinition('MET-064', 'Reserved hours')],
       }),
       'GET /reports/cost-inputs': ok({ items: [COST_INPUT] }),
+      'GET /facilities': facilityList(),
       ...routes,
     },
   });
 }
 
-/** Waits until the facility scope from `GET /me` and the Today feed has loaded into the form. */
+/** Waits until the facility scope from `GET /me` and `GET /facilities` has loaded into the form. */
 async function ready(facilityReport = true) {
   if (facilityReport) {
     await within(await screen.findByLabelText('Facility (required)')).findByRole('option', {
@@ -333,5 +335,67 @@ describe('SCR-S-44 InsightReportsScreen', () => {
       comparisonFrom: '2026-09-01',
       comparisonTo: '2026-12-31',
     });
+  });
+
+  it('REP-02, SPK-REPORT-005: rental customers send their periods only; not offered is pending DEC-076/DEC-077', async () => {
+    const user = userEvent.setup();
+    const base = reportResponse('retention');
+    const test = app({
+      'GET /reports/retention': ok({
+        ...base,
+        report: { ...base.report, key: 'retention', title: 'Retention' },
+        settings: [
+          {
+            setting: 'REPORTING_OPERATING_DAY_START',
+            configured: false,
+            value: null,
+            pendingDecision: 'DEC-001',
+            effect:
+              'Not configured: a reported day is the facility-local calendar day, from local midnight to midnight.',
+          },
+        ],
+        disclosures: [
+          'Not offered is not computed for rental customers (DEC-076, DEC-077 pending).',
+        ],
+      }),
+    });
+    render(test.at('/reports/insight?report=retention'));
+    await ready(false);
+    await user.selectOptions(screen.getByLabelText('Cohort (required)'), 'rental_customers');
+    expect(screen.queryByLabelText('Program id')).toBeNull();
+    expect(screen.queryByLabelText(/Leave out members who could not return/)).toBeNull();
+    const note = screen
+      .getAllByTestId('pending-note')
+      .find((n) => n.textContent?.includes('DEC-076')) as HTMLElement;
+    expect(note).toHaveTextContent('counted whether or not rentals and parties are turned on');
+    expect(note).toHaveTextContent('DEC-077');
+    await user.type(screen.getByLabelText('Anchor period first date (required)'), '2025-09-01');
+    await user.type(screen.getByLabelText('Anchor period last date (required)'), '2025-12-31');
+    await user.type(screen.getByLabelText('Comparison period first date (required)'), '2026-09-01');
+    await user.type(screen.getByLabelText('Comparison period last date (required)'), '2026-12-31');
+    await user.click(screen.getByRole('button', { name: 'Show report' }));
+    const report = await screen.findByRole('article', { name: 'Retention' });
+    expect(test.fake.requests.find((r) => r.route === '/reports/retention')?.query).toEqual({
+      cohort: 'rental_customers',
+      anchorFrom: '2025-09-01',
+      anchorTo: '2025-12-31',
+      comparisonFrom: '2026-09-01',
+      comparisonTo: '2026-12-31',
+    });
+    const settings = within(report).getByRole('region', { name: 'Settings this report used' });
+    expect(within(settings).getByText('not configured')).toBeInTheDocument();
+    expect(within(settings).getByText(/REPORTING_OPERATING_DAY_START/)).toBeInTheDocument();
+    expect(within(settings).getByText('Pending DEC-001.')).toBeInTheDocument();
+  });
+
+  it('SPK-REPORT-005: a program narrows youth participants only', async () => {
+    const user = userEvent.setup();
+    render(app().at('/reports/insight?report=retention'));
+    await ready(false);
+    await user.selectOptions(screen.getByLabelText('Cohort (required)'), 'youth_participants');
+    expect(screen.getByLabelText('Program id')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Leave out members who could not return/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Cohort (required)'), 'households');
+    expect(screen.queryByLabelText('Program id')).toBeNull();
   });
 });

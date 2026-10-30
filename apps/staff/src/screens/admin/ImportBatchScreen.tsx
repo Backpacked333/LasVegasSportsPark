@@ -5,12 +5,19 @@
  * errors and review decisions (`GET /v1/import-batches/{id}`, `/rows`, `/v1/import-exceptions`).
  *
  * The next step follows the batch state machine (received → validated → reviewed → applied, or
- * aborted before any apply); the API authorizes each command and its ACCESS_DENIED is shown:
+ * aborted before any apply). Each step is offered only when `GET /v1/me/permissions` lists its
+ * action for the viewer's roles (migration.validate_batch, stage_batch, review_batch, apply_batch,
+ * abort_batch, reconcile, decide_exception, approve_reconciliation; batches carry no
+ * `availableActions`), shown as "not available to you" otherwise; the API still authorizes each
+ * command and its ACCESS_DENIED is shown:
  * validate (seal and dry-run; a checksum or row-count mismatch is a validation failure), append a
  * chunk while received, complete the review (expected revision; refused while exceptions are open),
  * apply (processing "Importing"; repeatable: matched records create nothing, charge nothing and
  * send nothing), abort (reason and expected revision), and reconcile an applied batch at the four
- * §5.5 levels. Partial completion is expected per row: every row's outcome and reasons are listed.
+ * §5.5 levels. The batch's reconciliation reports are listed newest first
+ * (`GET /v1/import-batches/{id}/reconciliation-reports`, MIG-01) and its latest report
+ * (`latestReconciliationReportId`) is shown with its sign-offs; superseded reports stay as evidence.
+ * Partial completion is expected per row: every row's outcome and reasons are listed.
  * Staged payloads are never shown (personal and child data, §4.14).
  */
 import type { Schema } from '@sportspark/api-client';
@@ -33,10 +40,12 @@ import {
   shortId,
 } from '../../features/insight-admin/format';
 import {
+  APPROVAL_BADGES,
   BATCH_BADGES,
   ENTITY_TYPE_LABELS,
   EXCEPTION_STATUS_BADGES,
   ENTITY_TYPES,
+  RECONCILIATION_BADGES,
   ROW_OUTCOME_BADGES,
   type RowOutcome,
 } from '../../features/insight-admin/labels';
@@ -48,6 +57,7 @@ import {
   ReconciliationReportView,
 } from '../../features/insight-admin/migration';
 import { MigrationNav } from '../../features/insight-admin/nav';
+import { ActionGate } from '../../features/insight-admin/permission';
 import { ExceptionsPage } from './ImportReviewScreen';
 import { parseStagingDocument, readFileText } from '../../features/insight-admin/staging';
 import { useApp } from '../../providers/AppProviders';
@@ -235,9 +245,7 @@ function ApplyAction({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) 
       .then((next) => {
         const c = next.outcomeCounts;
         onDone(
-          c
-            ? `Batch ${next.status}: ${c.created} created, ${c.matched} matched, ${c.updated} updated, ${c.skipped} skipped, ${c.exception} exceptions`
-            : `Batch ${next.status}`,
+          `Batch ${next.status}: ${c.created} created, ${c.matched} matched, ${c.updated} updated, ${c.skipped} skipped, ${c.exception} exceptions`,
         );
         return refresh();
       })
@@ -313,11 +321,24 @@ function AbortAction({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) 
   );
 }
 
-function ReconcileAction({ batch }: { batch: ImportBatch }) {
+const REPORTS_KEY = ['api', '/import-batches/{id}/reconciliation-reports'] as const;
+
+function ReconcileAction({
+  batch,
+  onGenerated,
+}: {
+  batch: ImportBatch;
+  onGenerated: (reportId: string) => void;
+}) {
   const { online } = useApp();
-  const generate = useApiCommand('post', '/import-batches/{id}/reconciliation-reports');
+  const generate = useApiCommand('post', '/import-batches/{id}/reconciliation-reports', {
+    invalidate: [REPORTS_KEY, BATCH_KEY],
+  });
   const send = () =>
-    void generate.submit({ path: { id: batch.id }, body: {} }).catch(() => undefined);
+    void generate
+      .submit({ path: { id: batch.id }, body: {} })
+      .then((report) => onGenerated(report.id))
+      .catch(() => undefined);
   return (
     <div className="ia-action">
       <Button busy={generate.isProcessing} disabled={!online} onClick={send}>
@@ -328,13 +349,12 @@ function ReconcileAction({ batch }: { batch: ImportBatch }) {
         again supersedes a pending report; earlier reports stay as evidence.
       </p>
       <CommandError error={generate.error} onRetry={send} />
-      {generate.data ? <GeneratedReport reportId={generate.data.id} /> : null}
     </div>
   );
 }
 
 /**
- * The generated report read through its own query, so a sign-off refetches it and the next
+ * One reconciliation report read through its own query, so a sign-off refetches it and the next
  * sign-off carries the current revision (the mutation result would stay as generated).
  */
 function GeneratedReport({ reportId }: { reportId: string }) {
@@ -360,30 +380,124 @@ function GeneratedReport({ reportId }: { reportId: string }) {
   );
 }
 
+function ReportList({ batch, latestId }: { batch: ImportBatch; latestId: string }) {
+  const reports = useApiQuery({
+    path: '/import-batches/{id}/reconciliation-reports',
+    request: { path: { id: batch.id } },
+  });
+  return (
+    <InsightQueryBoundary
+      query={reports}
+      label="the reconciliation reports of this batch"
+      isEmpty={(data) => data.items.length === 0}
+      empty={{
+        title: 'No reconciliation report yet',
+        description: 'Reconcile the applied batch to produce one.',
+      }}
+    >
+      {(data) => (
+        <ul className="list" aria-label="Reconciliation reports of this batch">
+          {data.items.map((report) => {
+            const status = RECONCILIATION_BADGES[report.status];
+            const approval = APPROVAL_BADGES[report.approvalStatus];
+            return (
+              <li key={report.id}>
+                <div className="row-text">
+                  <Link to={`/admin/migration/reconciliation/${report.id}`}>
+                    Reconciliation report {shortId(report.id)}
+                  </Link>
+                  <span>
+                    <StatusBadge tone={status.tone} label={status.label} />{' '}
+                    <StatusBadge tone={approval.tone} label={`sign-off ${approval.label}`} />
+                    {report.id === latestId ? (
+                      <>
+                        {' '}
+                        <StatusBadge tone="info" label="latest" />
+                      </>
+                    ) : null}
+                  </span>
+                  <span className="caption">
+                    Generated {formatInstant(report.generatedAt)} by {report.generatedBy.actorLabel}{' '}
+                    · {report.discrepancyCount} discrepanc
+                    {report.discrepancyCount === 1 ? 'y' : 'ies'}
+                    {report.supersededByReportId
+                      ? ` · superseded by ${shortId(report.supersededByReportId)}`
+                      : ''}
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </InsightQueryBoundary>
+  );
+}
+
+function Reconciliation({ batch }: { batch: ImportBatch }) {
+  const [generatedId, setGeneratedId] = useState<string | null>(null);
+  const latestId = generatedId ?? batch.latestReconciliationReportId;
+  return (
+    <>
+      <ActionGate actionId="migration.reconcile" what="Reconciling this batch">
+        <ReconcileAction batch={batch} onGenerated={setGeneratedId} />
+      </ActionGate>
+      <section className="ia-section" aria-labelledby="reconciliation-reports-title">
+        <h4 id="reconciliation-reports-title">Reconciliation reports</h4>
+        {latestId ? (
+          <>
+            <ReportList batch={batch} latestId={latestId} />
+            <h4>Latest report</h4>
+            <GeneratedReport key={latestId} reportId={latestId} />
+          </>
+        ) : (
+          <p className="caption">No reconciliation report yet for this batch.</p>
+        )}
+      </section>
+    </>
+  );
+}
+
+function GatedAbort({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) {
+  return (
+    <ActionGate actionId="migration.abort_batch" what="Aborting this batch">
+      <AbortAction batch={batch} onDone={onDone} />
+    </ActionGate>
+  );
+}
+
 function NextSteps({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) {
   return (
     <section className="ia-section" aria-labelledby="next-steps-title">
       <h3 id="next-steps-title">Next step</h3>
       {batch.status === 'received' ? (
         <>
-          <ValidateAction batch={batch} onDone={onDone} />
-          <AppendChunk batch={batch} />
-          <AbortAction batch={batch} onDone={onDone} />
+          <ActionGate actionId="migration.validate_batch" what="Validating this batch">
+            <ValidateAction batch={batch} onDone={onDone} />
+          </ActionGate>
+          <ActionGate actionId="migration.stage_batch" what="Appending a chunk">
+            <AppendChunk batch={batch} />
+          </ActionGate>
+          <GatedAbort batch={batch} onDone={onDone} />
         </>
       ) : null}
       {batch.status === 'validated' ? (
         <>
-          <ReviewAction batch={batch} onDone={onDone} />
-          <AbortAction batch={batch} onDone={onDone} />
+          <ActionGate actionId="migration.review_batch" what="Completing the review">
+            <ReviewAction batch={batch} onDone={onDone} />
+          </ActionGate>
+          <GatedAbort batch={batch} onDone={onDone} />
         </>
       ) : null}
       {batch.status === 'reviewed' ? (
         <>
-          <ApplyAction batch={batch} onDone={onDone} />
-          {batch.applyStartedAt ? null : <AbortAction batch={batch} onDone={onDone} />}
+          <ActionGate actionId="migration.apply_batch" what="Applying this batch">
+            <ApplyAction batch={batch} onDone={onDone} />
+          </ActionGate>
+          {batch.applyStartedAt ? null : <GatedAbort batch={batch} onDone={onDone} />}
         </>
       ) : null}
-      {batch.status === 'applied' ? <ReconcileAction batch={batch} /> : null}
+      {batch.status === 'applied' ? <Reconciliation batch={batch} /> : null}
       {batch.status === 'aborted' ? (
         <p>
           Aborted {formatInstant(batch.abortedAt)}
@@ -399,6 +513,7 @@ function CountsLine({
   counts,
 }: {
   label: string;
+  /** Planned counts are null until the batch is validated; final counts are always present. */
   counts: Schema<'ImportOutcomeCounts'> | null;
 }) {
   if (!counts) return null;

@@ -8,6 +8,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import type { StatusBadgeProps } from '../../ui/StatusBadge';
+import { pendingLabel } from '../registration/status';
 import { formatDay, formatMoney, hasPassed } from './format';
 
 /*
@@ -78,9 +79,10 @@ export interface EnrollmentContext {
 export function enrollmentStatus(enrollment: Enrollment, context: EnrollmentContext = {}): Status {
   switch (enrollment.status) {
     case 'pending':
+      // journeys.md: "Registration pending: <reason>", named from the API's `pendingReason`.
       return context.recoveryRequired
         ? { tone: 'warning', label: 'Payment received. We are completing your registration.' }
-        : { tone: 'pending', label: 'Registration pending' };
+        : { tone: 'pending', label: pendingLabel(enrollment.pendingReason) };
     case 'confirmed': {
       if (context.placementUnknown) {
         return { tone: 'info', label: 'Confirmed. Placement status not available yet.' };
@@ -94,7 +96,11 @@ export function enrollmentStatus(enrollment: Enrollment, context: EnrollmentCont
             : 'Confirmed. Awaiting placement.',
         };
       }
-      if (placement === 'assigned') return { tone: 'success', label: 'Confirmed: team assigned' };
+      if (placement === 'assigned') {
+        // journeys.md: "Confirmed: <team or group>", with the team the API names (ENR-02).
+        const team = context.placement?.assignedTeamName;
+        return { tone: 'success', label: team ? `Confirmed: ${team}` : 'Confirmed: team assigned' };
+      }
       if (context.nextInstallmentDueAt) {
         return {
           tone: 'success',
@@ -184,12 +190,17 @@ export function obligationStatus(obligation: Obligation, now: Date): Status {
   }
 }
 
-/** journeys.md: PaymentAttempt states. `unknown` is never shown as failure (SPK-PAY-007). */
+/**
+ * journeys.md: PaymentAttempt states. `unknown` is never shown as failure (SPK-PAY-007). The API's
+ * PaymentAttemptStatus (FIN-01) is authoritative: `created` is on its way like `processing` (the
+ * payer waits, `await_payment_confirmation`); only `action_required` asks the payer to act. The
+ * same words are used by `liveAttemptStatus` and the registration screens (SPK-UX-010).
+ */
 export function paymentStatus(status: PaymentAttempt['status']): Status {
   switch (status) {
-    case 'created':
     case 'action_required':
       return { tone: 'warning', label: 'Payment needs your action' };
+    case 'created':
     case 'processing':
       return { tone: 'pending', label: 'Payment processing' };
     case 'succeeded':

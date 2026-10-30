@@ -8,8 +8,10 @@
  *     'POST /assignments/{id}/accept': (req) => fakeResponse(409, apiErrorBody('STALE_REVISION')),
  *   });
  */
+import { CAPABILITY_IDS, type CapabilityId } from './capabilities';
 import type { FetchLike } from './client';
 import type { ErrorCode } from './errors';
+import { NAVIGATION_AREAS, type MePermissions, type NavigationAreaId } from './permissions';
 
 export interface FakeRequest {
   method: string;
@@ -142,4 +144,77 @@ export function createFakeFetch(
 export function sequentialKeys(prefix = 'key'): () => string {
   let n = 0;
   return () => `${prefix}-${String(++n).padStart(8, '0')}`;
+}
+
+/** Capabilities the API answers with commands enforcement; the rest are recorded only (K-12). */
+const RECORDED_ONLY: ReadonlySet<CapabilityId> = new Set([
+  'installments',
+  'supervised_pickup',
+  'advanced_fairness',
+  'retention_tools',
+]);
+
+export interface FakePermissionsOptions {
+  principalKind?: MePermissions['principalKind'];
+  staffRoles?: MePermissions['staffRoles'];
+  /** Action ids allowed outright (every facility), or `{ id, facilityIds }` for a scoped one. */
+  actions?: readonly (string | { id: string; facilityIds: string[] | null })[];
+  conditionalActions?: readonly {
+    id: string;
+    self?: boolean;
+    subjectPermission?: string | null;
+    teamRole?: string | null;
+  }[];
+  /** Visible navigation areas; default every area (a general manager). */
+  areas?: readonly NavigationAreaId[];
+  /** Switches that are on; every other one is off, as the API starts (DEC-016). */
+  enabled?: readonly CapabilityId[];
+  evaluatedAt?: string;
+}
+
+/**
+ * A `GET /v1/me/permissions` body (MePermissions). Defaults: a staff principal, every navigation
+ * area visible, no actions, and every capability switch off (the API's starting state).
+ *
+ *   'GET /me/permissions': { status: 200, body: fakePermissions({ enabled: ['rentals'] }) }
+ */
+export function fakePermissions(options: FakePermissionsOptions = {}): MePermissions {
+  const visible = new Set<NavigationAreaId>(options.areas ?? NAVIGATION_AREAS);
+  const enabled = new Set<CapabilityId>(options.enabled ?? []);
+  return {
+    evaluatedAt: options.evaluatedAt ?? '2026-10-24T12:00:00.000Z',
+    principalKind: options.principalKind ?? 'staff',
+    staffRoles:
+      options.staffRoles ?? (options.principalKind === 'customer' ? [] : ['general_manager']),
+    actions: (options.actions ?? []).map((a) =>
+      typeof a === 'string'
+        ? { id: a, facilityIds: null }
+        : { id: a.id, facilityIds: a.facilityIds },
+    ),
+    conditionalActions: (options.conditionalActions ?? []).map((a) => ({
+      id: a.id,
+      self: a.self ?? false,
+      subjectPermission: a.subjectPermission ?? null,
+      teamRole: a.teamRole ?? null,
+    })),
+    areas: NAVIGATION_AREAS.map((id) => ({ id, visible: visible.has(id), actionIds: [] })),
+    capabilities: CAPABILITY_IDS.map((id) => ({
+      id,
+      enabled: enabled.has(id),
+      enforcement: RECORDED_ONLY.has(id) ? 'recorded_only' : 'commands',
+    })),
+  } as MePermissions;
+}
+
+/** The ACCESS_DENIED body a gated command answers while its capability is turned off (K-12). */
+export function capabilityDisabledBody(capability: CapabilityId, decisions?: readonly string[]) {
+  return apiErrorBody('ACCESS_DENIED', {
+    message: `This organization has not enabled ${capability.replaceAll('_', ' ')}.`,
+    nextAction: 'contact_support_or_request_access',
+    details: {
+      code: 'CAPABILITY_DISABLED',
+      capability,
+      applicabilityReferences: [...(decisions ?? ['DEC-016'])],
+    },
+  });
 }

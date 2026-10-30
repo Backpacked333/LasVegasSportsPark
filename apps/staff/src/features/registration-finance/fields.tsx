@@ -72,11 +72,17 @@ export function TextField({
   onChange,
   type = 'text',
   inputMode,
+  onEnter,
 }: BaseProps & {
   value: string;
   onChange: (value: string) => void;
   type?: 'text' | 'date' | 'datetime-local' | 'number';
   inputMode?: 'numeric' | 'decimal' | 'text';
+  /**
+   * Enter runs this instead of submitting an enclosing form (for a search field inside a command
+   * form: Enter searches, it never sends the command).
+   */
+  onEnter?: () => void;
 }) {
   const ids = useFieldIds(hint, error);
   return (
@@ -91,6 +97,15 @@ export function TextField({
         aria-invalid={error ? true : undefined}
         aria-describedby={ids.describedBy}
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={
+          onEnter
+            ? (event) => {
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+                onEnter();
+              }
+            : undefined
+        }
       />
     </Frame>
   );

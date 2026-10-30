@@ -8,12 +8,13 @@
  *   (pending): a submitted report is provisional.
  * - Incident narratives are restricted information: they are sent to the API and not repeated
  *   on this screen after submission.
- * - Cards need the players' record ids, and the workspace has no field-limited player list, so
- *   cards are not available here.
+ * - Cards are recorded against players of the field-limited match sheet
+ *   (`GET /v1/fixtures/{id}/match-sheet`, CMP-06: names and numbers, the person id only in the
+ *   official's full view); when the sheet is not available to the viewer, cards are not offered.
  * - Offline, the report stays on screen as entered; submitting needs a connection (a queued
  *   submission is DEC-032, pending).
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -29,7 +30,9 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { useMatchSheet, type MatchSheet } from './MatchSheet';
 import { MyAssignmentPage, type WorkspaceAssignment } from './MyAssignment';
+import { activityZone } from './WorkspaceScreen';
 
 type Classification = Schema<'ResultClassification'>;
 type IncidentInput = Schema<'ResultIncidentInput'>;
@@ -43,6 +46,17 @@ const CLASSIFICATIONS: readonly Classification[] = [
   'disputed',
 ];
 const INCIDENT_KINDS = ['misconduct', 'complaint', 'operational', 'injury'] as const;
+const CARD_KINDS = ['yellow', 'second_yellow', 'red'] as const;
+type CardInput = Schema<'ResultCard'>;
+
+interface CardDraft {
+  teamEntryId: string;
+  personId: string;
+  kind: (typeof CARD_KINDS)[number] | '';
+  minute: string;
+}
+
+const EMPTY_CARD: CardDraft = { teamEntryId: '', personId: '', kind: '', minute: '' };
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 
 export function MatchReportScreen() {
@@ -104,6 +118,8 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
   const [abandonReason, setAbandonReason] = useState('');
   const [notes, setNotes] = useState('');
   const [incidents, setIncidents] = useState<IncidentDraft[]>([]);
+  const [cards, setCards] = useState<CardDraft[]>([]);
+  const sheet = useMatchSheet(fixtureId);
   const [problems, setProblems] = useState<Record<string, string>>({});
   const apiErrors = fieldErrorsOf(submit.error);
   // SubmitResultBody (SPK-RESULT-002): scores are required for a completed or forfeited match and
@@ -145,8 +161,20 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
       else if (i.minute.trim() && minuteOf(i.minute) === null)
         next[`incident${n}`] = `An incident minute is a whole number from 0 to ${MAX_MINUTE}.`;
     });
+    cards.forEach((c, n) => {
+      if (!c.teamEntryId || !c.personId || !c.kind)
+        next[`card${n}`] = 'Each card needs a team, a player and a kind.';
+      else if (c.minute.trim() && minuteOf(c.minute) === null)
+        next[`card${n}`] = `A card minute is a whole number from 0 to ${MAX_MINUTE}.`;
+    });
     setProblems(next);
     if (Object.keys(next).length > 0 || !classification) return;
+    const cardInputs: CardInput[] = cards.map((c) => ({
+      teamEntryId: c.teamEntryId,
+      personId: c.personId,
+      kind: c.kind as CardInput['kind'],
+      minute: minuteOf(c.minute),
+    }));
     const incidentInputs: IncidentInput[] = incidents.map((i) => ({
       kind: i.kind as IncidentInput['kind'],
       severity: i.severity as IncidentInput['severity'],
@@ -172,7 +200,7 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
                 },
               }
             : {}),
-          cards: [],
+          cards: cardInputs,
           incidents: incidentInputs,
           ...(notes.trim() ? { notes: notes.trim() } : {}),
         },
@@ -212,7 +240,7 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
                 <span className="caption">
                   {' '}
                   by {r.submittedBy.actorLabel}
-                  {r.submittedAt ? `, ${formatInstant(r.submittedAt)}` : ''}
+                  {r.submittedAt ? `, ${formatInstant(r.submittedAt, activityZone(item))}` : ''}
                 </span>
               </li>
             ))}
@@ -335,10 +363,13 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
             Add an incident
           </Button>
         </fieldset>
-        <StateView
-          variant="unavailable"
-          title="Cards are not available here yet"
-          description="Recording a card needs the player's record, and the workspace cannot read the player list yet. Report cards to the league manager."
+        <CardsEditor
+          sheet={sheet.data}
+          sheetError={sheet.error}
+          onRetrySheet={() => void sheet.refetch()}
+          cards={cards}
+          problems={problems}
+          onChange={setCards}
         />
         <TextAreaField label="Notes (optional)" value={notes} onChange={setNotes} rows={3} />
         <StateView
@@ -454,5 +485,120 @@ function IncidentEditor({
         Remove
       </Button>
     </div>
+  );
+}
+
+/**
+ * Cards against players of the match sheet (SPK-DISC-001, SPK-STAFF-005). SPK-UX-008: while the
+ * sheet loads, a loading state; a refusal (NOT_FOUND, ACCESS_DENIED) or a sheet without the
+ * official's full view, "not available"; any other failure (5xx, timeout, offline), the error
+ * with its code and "Try again", never presented as a permission restriction.
+ */
+function CardsEditor({
+  sheet,
+  sheetError,
+  onRetrySheet,
+  cards,
+  problems,
+  onChange,
+}: {
+  sheet: MatchSheet | undefined;
+  sheetError: ApiError | null;
+  onRetrySheet: () => void;
+  cards: CardDraft[];
+  problems: Record<string, string>;
+  onChange: (cards: CardDraft[]) => void;
+}) {
+  const sides = (sheet?.sides ?? []).filter((side) => side.players.some((p) => p.personId));
+  const refused = sheetError !== null && presentationForError(sheetError) === 'unavailable';
+  const notAvailable = (
+    <StateView
+      variant="unavailable"
+      title="Cards are not available"
+      description="Recording a card needs the match sheet, which is not available to you for this fixture. Report cards to the league manager."
+    />
+  );
+  if (refused) return notAvailable;
+  if (sheet === undefined) {
+    return sheetError ? (
+      <div role="group" aria-label="Cards">
+        <p className="caption">Recording a card needs the player list, which could not load.</p>
+        <StateView variant="error" error={sheetError} onRetry={onRetrySheet} />
+      </div>
+    ) : (
+      <StateView variant="loading" label="the player list" />
+    );
+  }
+  if (sheet.view !== 'full' || sides.length === 0) return notAvailable;
+  const update = (n: number, next: CardDraft) =>
+    onChange(cards.map((c, i) => (i === n ? next : c)));
+  return (
+    <fieldset className="ops-fieldset">
+      <legend>Cards</legend>
+      {cards.map((card, n) => {
+        const label = `Card ${n + 1}`;
+        const errorId = `card-${n}-error`;
+        const side = sides.find((s) => s.entryId === card.teamEntryId);
+        return (
+          <div
+            key={n}
+            className="ops-section"
+            role="group"
+            aria-label={label}
+            aria-invalid={problems[`card${n}`] ? true : undefined}
+            aria-describedby={problems[`card${n}`] ? errorId : undefined}
+          >
+            <SelectField
+              label={`${label} team`}
+              value={card.teamEntryId}
+              onChange={(v) => update(n, { ...card, teamEntryId: v, personId: '' })}
+              placeholder="Choose a team"
+              options={sides.map((s) => ({ value: s.entryId, label: s.teamName }))}
+            />
+            <SelectField
+              label={`${label} player`}
+              value={card.personId}
+              onChange={(v) => update(n, { ...card, personId: v })}
+              placeholder={side ? 'Choose a player' : 'Choose the team first'}
+              disabled={!side}
+              options={(side?.players ?? [])
+                .filter((p) => p.personId)
+                .map((p) => ({
+                  value: p.personId as string,
+                  label: `${p.jerseyNumber !== null ? `#${p.jerseyNumber} ` : ''}${p.displayName}`,
+                }))}
+            />
+            <SelectField
+              label={`${label} kind`}
+              value={card.kind}
+              onChange={(v) => update(n, { ...card, kind: v as CardDraft['kind'] })}
+              placeholder="Choose"
+              options={CARD_KINDS.map((k) => ({ value: k, label: humanize(k) }))}
+            />
+            <TextField
+              label={`${label} minute (optional)`}
+              value={card.minute}
+              onChange={(v) => update(n, { ...card, minute: v })}
+              inputMode="numeric"
+            />
+            {problems[`card${n}`] ? (
+              <span className="error-text" id={errorId} role="alert">
+                {problems[`card${n}`]}
+              </span>
+            ) : null}
+            <Button
+              variant="secondary"
+              aria-label={`Remove card ${n + 1}`}
+              onClick={() => onChange(cards.filter((_, i) => i !== n))}
+            >
+              Remove
+            </Button>
+          </div>
+        );
+      })}
+      <Button variant="secondary" onClick={() => onChange([...cards, EMPTY_CARD])}>
+        Add a card
+      </Button>
+    </fieldset>
   );
 }

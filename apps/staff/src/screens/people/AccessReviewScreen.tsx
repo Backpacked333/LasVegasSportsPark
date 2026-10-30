@@ -3,78 +3,79 @@
  * `GET /v1/access-reviews/{id}`: subject, reason, parties, evidence references, owner, effective
  * dates, escalation and the full decision history. Decisions (restrict, lift, escalate, decide,
  * close, note, reassign) are recorded with `POST /v1/access-reviews/{id}/decisions`, the review's
- * expected revision and an idempotency key; the API decides which decision is allowed now and
- * answers INVALID_TRANSITION or STALE_REVISION, which offer "Reload" and keep the typed input.
+ * expected revision and an idempotency key. Only the decisions the API lists in the review's
+ * `allowedDecisions` are offered (empty for a reader who may not decide, or a closed review); the
+ * API still answers INVALID_TRANSITION or STALE_REVISION, which offer "Reload" and keep the typed
+ * input. People are named from `GET /v1/person-names` (a person the viewer may not view reads "not
+ * available"). Decisions the system recorded (the end of a restriction window) say so. The
+ * review's audit history is offered to roles that may read the audit log.
  *
  * Temporary restrictions state their end explicitly ("until lifted" or a date): a restriction is
- * never given an end the reviewer did not choose. Nothing is inferred from household membership.
+ * never given an end the reviewer did not choose. A restriction names one person's permissions
+ * over the subject or chosen ones; a lift ends all of this review's restrictions, those on one
+ * person's permissions, or chosen ones. Permissions are chosen from the subject's authority
+ * (`GET /v1/people/{id}/authority`) where the viewer may read it, each with its holder and state;
+ * otherwise by reference. Nothing is inferred from household membership.
  * The workflow is restricted: a review the viewer may not see is shown as not available, and
  * offline the review is read-only.
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { PeopleNav } from '../../features/people/PeopleNav';
 import { PersonReferenceField, referenceError } from '../../features/people/PersonReferenceField';
+import {
+  PersonName,
+  personNameText,
+  usePeopleNames,
+  type PeopleNames,
+} from '../../features/people/names';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError, CommandSuccess, fieldErrorsOf } from '../../ui/CommandFeedback';
-import { Facts, RadioGroup, SelectField, TextAreaField, TextField } from '../../ui/FormFields';
+import {
+  CheckboxGroup,
+  Facts,
+  RadioGroup,
+  SelectField,
+  TextAreaField,
+  TextField,
+} from '../../ui/FormFields';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
+import { StatusBadge } from '../../ui/StatusBadge';
 import { formatDateTime, localInputToIso } from '../../ui/time';
+import { AuditHistory } from '../today/AuditHistory';
 import { REVIEW_OWNER_ROLES, type ReviewOwnerRole } from './OpenAccessReviewScreen';
+import { DECISION_KINDS, REVIEW_STATUS_TONE, type DecisionKind } from './review-vocabulary';
 
 type AccessReview = Schema<'AccessReview'>;
-type DecisionKind = Schema<'AccessReviewDecision'>['kind'];
 
 const REVIEW_KEY = ['api', '/access-reviews/{id}'] as const;
 
-const STATUS_TONE: Record<AccessReview['status'], StatusTone> = {
-  open: 'warning',
-  escalated: 'danger',
-  decided: 'info',
-  closed: 'neutral',
-};
+export { DECISION_KINDS };
 
-export const DECISION_KINDS: readonly { value: DecisionKind; label: string }[] = [
-  { value: 'restrict', label: 'restrict: suspend permissions while the review runs' },
-  { value: 'lift', label: 'lift: end a restriction' },
-  { value: 'escalate', label: 'escalate: hand to the escalation owner' },
-  { value: 'decide', label: 'decide: record the outcome' },
-  { value: 'close', label: 'close: end the review' },
-  { value: 'note', label: 'note: add to the history only' },
-  { value: 'reassign', label: 'reassign: change the review owner' },
-];
-
-function ReviewFacts({ review }: { review: AccessReview }) {
+function ReviewFacts({ review, names }: { review: AccessReview; names: PeopleNames }) {
   return (
     <>
       <span className="actions-row">
-        <StatusBadge tone={STATUS_TONE[review.status]} label={`Status: ${review.status}`} />
+        <StatusBadge tone={REVIEW_STATUS_TONE[review.status]} label={`Status: ${review.status}`} />
       </span>
       <Facts
         label="Review"
         items={[
-          [
-            'Subject',
-            <Link key="s" to={`/people/${review.subjectPersonId}`}>
-              {review.subjectPersonId}
-            </Link>,
-          ],
+          ['Subject', <PersonName key="s" id={review.subjectPersonId} names={names} />],
           ['Reason', review.reason],
           ['Owner role', review.ownerRole],
           [
             'Owner person',
             review.ownerPersonId ? (
-              <Link key="o" to={`/people/${review.ownerPersonId}`}>
-                {review.ownerPersonId}
-              </Link>
+              <PersonName key="o" id={review.ownerPersonId} names={names} />
             ) : (
               'Not assigned'
             ),
@@ -107,7 +108,7 @@ function ReviewFacts({ review }: { review: AccessReview }) {
             {review.parties.map((p, i) => (
               <li key={i}>
                 <span>{p.description}</span>
-                {p.personId ? <Link to={`/people/${p.personId}`}>{p.personId}</Link> : null}
+                {p.personId ? <PersonName id={p.personId} names={names} /> : null}
               </li>
             ))}
           </ul>
@@ -149,6 +150,7 @@ function ReviewFacts({ review }: { review: AccessReview }) {
                     {d.affectedGrantIds.length > 0
                       ? ` · ${d.affectedGrantIds.length} permission(s) affected`
                       : ''}
+                    {d.bySystem ? ' · recorded by the system' : ''}
                   </span>
                   {d.note ? <span>{d.note}</span> : null}
                 </div>
@@ -168,14 +170,94 @@ function parseGrantIds(text: string): string[] {
     .filter(Boolean);
 }
 
+type GrantView = Schema<'GrantView'>;
+
+/**
+ * The permissions held over the review's subject, from the subject's authority
+ * (`GET /v1/people/{id}/authority`, `identity.read_authority`), read only while the reviewer is
+ * choosing permissions. `grants` is null while the checkbox list is not shown (no read, still
+ * loading, failed or nothing held): references are typed instead.
+ */
+function useSubjectGrants(subjectPersonId: string, wanted: boolean): GrantView[] | null {
+  const permissions = usePermissions();
+  const permitted = permissions.isPermitted('identity.read_authority');
+  const authority = useApiQuery({
+    path: '/people/{id}/authority',
+    request: { path: { id: subjectPersonId } },
+    enabled: wanted && permitted === true,
+  });
+  if (!authority.data) return null;
+  const grants = authority.data.grants.filter(
+    (g) => g.subjectPersonId === subjectPersonId && g.status !== 'revoked' && g.status !== 'ended',
+  );
+  return grants.length > 0 ? grants : null;
+}
+
+/**
+ * The permissions chosen one by one, each with its holder (named through
+ * `GET /v1/person-names`, a child by given name only, never the grant's composed display name)
+ * and state. Where the subject's authority is not readable, permission references are entered.
+ */
+function GrantChoice({
+  grants,
+  selected,
+  onSelected,
+  text,
+  onText,
+  error,
+}: {
+  grants: readonly GrantView[] | null;
+  selected: readonly string[];
+  onSelected: (ids: string[]) => void;
+  text: string;
+  onText: (value: string) => void;
+  error: string | undefined;
+}) {
+  const names = usePeopleNames((grants ?? []).map((g) => g.actorPersonId));
+  if (grants) {
+    const holder = (id: string) =>
+      personNameText(names, id) ??
+      (names.get(id) === undefined && !names.failed
+        ? 'a person (loading the name)'
+        : names.failed && names.error && presentationForError(names.error) !== 'unavailable'
+          ? `a person (name could not be loaded: ${names.error.code})`
+          : 'a person not available to you');
+    return (
+      <CheckboxGroup
+        legend="Permissions"
+        hint="Choose each permission; the others are not affected."
+        options={grants.map((g) => ({
+          value: g.grantId,
+          label: `${g.permission} held by ${holder(g.actorPersonId)} · state ${g.status}${g.underReview ? ' · under review' : ''}`,
+        }))}
+        value={selected}
+        onChange={onSelected}
+        error={error}
+      />
+    );
+  }
+  return (
+    <TextAreaField
+      label="Permission references"
+      required
+      hint="Separated by spaces, as shown on the person's household, relationships and grants."
+      value={text}
+      onChange={onText}
+      error={error}
+    />
+  );
+}
+
 function DecisionForm({ review }: { review: AccessReview }) {
   const { online } = useApp();
   const queryClient = useQueryClient();
   const [kind, setKind] = useState('');
   const [note, setNote] = useState('');
-  const [target, setTarget] = useState<'actor' | 'grants' | 'all'>('actor');
+  const [restrictTarget, setRestrictTarget] = useState<'actor' | 'grants'>('actor');
+  const [liftTarget, setLiftTarget] = useState<'all' | 'actor' | 'grants'>('all');
   const [actor, setActor] = useState('');
   const [grantIds, setGrantIds] = useState('');
+  const [chosenGrants, setChosenGrants] = useState<string[]>([]);
   const [ends, setEnds] = useState('');
   const [until, setUntil] = useState('');
   const [outcome, setOutcome] = useState('');
@@ -188,11 +270,19 @@ function DecisionForm({ review }: { review: AccessReview }) {
   });
   const apiErrors = fieldErrorsOf(decide.error);
   const targeting = kind === 'restrict' || kind === 'lift';
-  // The API lifts by review and optional permission references only, never by person: a lift
-  // offers "everything this review restricted" or specific references (SPK-IAM-005).
-  const liftTarget: 'all' | 'grants' = target === 'grants' ? 'grants' : 'all';
-  const restrictTarget: 'actor' | 'grants' = target === 'grants' ? 'grants' : 'actor';
+  // A lift ends only this review's restrictions: all of them, those on one person's permissions
+  // over the subject (ID-08: naming a person never lifts another person's), or named permissions
+  // (SPK-IAM-005). A restriction names one person's permissions or specific ones.
   const effectiveTarget = kind === 'lift' ? liftTarget : restrictTarget;
+  const grants = useSubjectGrants(
+    review.subjectPersonId,
+    targeting && effectiveTarget === 'grants',
+  );
+  // Only the control on screen is sent: the ticked permissions while the list is shown, the typed
+  // references otherwise (text typed before the list appeared is never sent hidden).
+  const grantIdList = grants
+    ? chosenGrants.filter((id) => grants.some((g) => g.grantId === id))
+    : parseGrantIds(grantIds);
 
   const reload = () => {
     decide.reset();
@@ -210,11 +300,8 @@ function DecisionForm({ review }: { review: AccessReview }) {
       } else if (effectiveTarget === 'actor') {
         const a = referenceError(actor, true);
         if (a) problems['actor'] = a;
-      } else {
-        const ids = parseGrantIds(grantIds);
-        if (ids.length === 0 || ids.some((id) => !isUuid(id))) {
-          problems['grantIds'] = 'Enter one or more permission references, separated by spaces.';
-        }
+      } else if (grantIdList.length === 0 || grantIdList.some((id) => !isUuid(id))) {
+        problems['grantIds'] = 'Choose or enter one or more permissions.';
       }
     }
     let effectiveTo: string | null = null;
@@ -245,9 +332,7 @@ function DecisionForm({ review }: { review: AccessReview }) {
           ...(targeting && effectiveTarget === 'actor'
             ? { actorPersonId: actor.trim().toLowerCase() }
             : {}),
-          ...(targeting && effectiveTarget === 'grants'
-            ? { grantIds: parseGrantIds(grantIds) }
-            : {}),
+          ...(targeting && effectiveTarget === 'grants' ? { grantIds: grantIdList } : {}),
           ...(effectiveTo ? { effectiveTo } : {}),
           ...(kind === 'decide' ? { outcome: { summary: outcome.trim() } } : {}),
           ...(kind === 'reassign' && ownerRole ? { ownerRole: ownerRole as ReviewOwnerRole } : {}),
@@ -273,6 +358,22 @@ function DecisionForm({ review }: { review: AccessReview }) {
     );
   }
 
+  // Only what the API lists for this review now (SPK-IAM-005); never more.
+  const allowed = DECISION_KINDS.filter((k) => review.allowedDecisions.includes(k.value));
+  if (allowed.length === 0) {
+    return (
+      <section className="panel" aria-labelledby="decision-title">
+        <h3 id="decision-title">Record a decision</h3>
+        <CommandSuccess message={success} />
+        <p>
+          {review.status === 'closed'
+            ? 'This review is closed; it takes no further decisions.'
+            : 'No decision on this review is available to you now.'}
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="panel" aria-labelledby="decision-title">
       <h3 id="decision-title">Record a decision</h3>
@@ -289,7 +390,7 @@ function DecisionForm({ review }: { review: AccessReview }) {
           label="Decision"
           required
           placeholder="Choose a decision"
-          options={DECISION_KINDS}
+          options={allowed}
           value={kind}
           onChange={setKind}
           error={errors['kind'] ?? apiErrors['kind']}
@@ -301,15 +402,23 @@ function DecisionForm({ review }: { review: AccessReview }) {
               name="target"
               required
               value={effectiveTarget}
-              onChange={(v) => setTarget(v as 'actor' | 'grants' | 'all')}
+              onChange={(v) =>
+                kind === 'lift'
+                  ? setLiftTarget(v as 'all' | 'actor' | 'grants')
+                  : setRestrictTarget(v as 'actor' | 'grants')
+              }
               options={
                 kind === 'lift'
                   ? [
                       { value: 'all', label: 'All restrictions placed by this review' },
                       {
-                        value: 'grants',
+                        value: 'actor',
                         label:
-                          'Only the permissions with these references (others stay restricted)',
+                          'Only the restrictions on one person’s permissions over the subject (others stay restricted)',
+                      },
+                      {
+                        value: 'grants',
+                        label: 'Only the permissions chosen (others stay restricted)',
                       },
                     ]
                   : [
@@ -330,11 +439,12 @@ function DecisionForm({ review }: { review: AccessReview }) {
                 error={errors['actor'] ?? apiErrors['actorPersonId']}
               />
             ) : (
-              <TextAreaField
-                label="Permission references"
-                required
-                value={grantIds}
-                onChange={setGrantIds}
+              <GrantChoice
+                grants={grants}
+                selected={chosenGrants}
+                onSelected={setChosenGrants}
+                text={grantIds}
+                onText={setGrantIds}
                 error={errors['grantIds'] ?? apiErrors['grantIds']}
               />
             )}
@@ -413,6 +523,21 @@ function DecisionForm({ review }: { review: AccessReview }) {
   );
 }
 
+function ReviewView({ review }: { review: AccessReview }) {
+  const names = usePeopleNames([
+    review.subjectPersonId,
+    review.ownerPersonId,
+    ...review.parties.map((p) => p.personId),
+  ]);
+  return (
+    <>
+      <ReviewFacts review={review} names={names} />
+      <DecisionForm review={review} />
+      <AuditHistory targetType="access_review" targetId={review.id} />
+    </>
+  );
+}
+
 function ReviewQuery({ id }: { id: string }) {
   const review = useApiQuery({ path: '/access-reviews/{id}', request: { path: { id } } });
   return (
@@ -422,12 +547,7 @@ function ReviewQuery({ id }: { id: string }) {
       empty={{ title: '', description: '' }}
       unavailableOffline={['recording decisions']}
     >
-      {(data) => (
-        <>
-          <ReviewFacts review={data} />
-          <DecisionForm review={data} />
-        </>
-      )}
+      {(data) => <ReviewView review={data} />}
     </QueryBoundary>
   );
 }

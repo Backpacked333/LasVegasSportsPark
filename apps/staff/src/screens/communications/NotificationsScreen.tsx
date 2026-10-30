@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, COMMUNICATIONS_TABS } from '../../features/operations/AreaTabs';
-import { useOperatingFacility } from '../../features/operations/context';
+import { useFacilityZone, useOperatingFacility } from '../../features/operations/context';
 import { SelectField } from '../../features/operations/fields';
 import { formatInstant, humanize } from '../../features/operations/format';
 import { NOTIFICATION_STATUS } from '../../features/operations/labels';
@@ -67,24 +67,9 @@ export function NotificationsScreen() {
         {(data) => (
           <>
             <ul className="list" aria-label="Messages">
-              {data.items.map((n) => {
-                const badge = NOTIFICATION_STATUS[n.status];
-                return (
-                  <li key={n.id}>
-                    <div className="row-text">
-                      <Link className="row-title" to={`/communications/notifications/${n.id}`}>
-                        {n.title}
-                      </Link>
-                      <span className="caption">
-                        {humanize(n.kind)} ·{' '}
-                        {n.category === 'operational' ? 'Essential' : 'Promotional'} · created{' '}
-                        {formatInstant(n.createdAt)}
-                      </span>
-                      <StatusBadge tone={badge.tone} label={badge.label} />
-                    </div>
-                  </li>
-                );
-              })}
+              {data.items.map((n) => (
+                <NotificationRow key={n.id} notification={n} />
+              ))}
             </ul>
             {data.nextCursor ? (
               <Button variant="secondary" onClick={() => setCursor(data.nextCursor ?? undefined)}>
@@ -95,5 +80,25 @@ export function NotificationsScreen() {
         )}
       </QueryBoundary>
     </section>
+  );
+}
+
+/** One message; its time in the notice's facility zone when it names one (SPK-SCHED-008). */
+function NotificationRow({ notification: n }: { notification: Schema<'Notification'> }) {
+  const zone = useFacilityZone(n.facilityId);
+  const badge = NOTIFICATION_STATUS[n.status];
+  return (
+    <li>
+      <div className="row-text">
+        <Link className="row-title" to={`/communications/notifications/${n.id}`}>
+          {n.title}
+        </Link>
+        <span className="caption">
+          {humanize(n.kind)} · {n.category === 'operational' ? 'Essential' : 'Promotional'} ·
+          created {formatInstant(n.createdAt, zone)}
+        </span>
+        <StatusBadge tone={badge.tone} label={badge.label} />
+      </div>
+    </li>
   );
 }

@@ -24,12 +24,14 @@ export function exceptionItem(overrides: Record<string, unknown> = {}) {
     nextActions: [
       {
         action: 'finance.reconcile_payment',
+        verb: 'open',
         label: 'Reconcile the payment with the provider',
         method: 'POST',
         href: `/v1/payments/${PAYMENT_ID}/reconcile`,
       },
       {
         action: 'exceptions.manage',
+        verb: 'acknowledge',
         label: 'Acknowledge',
         method: 'POST',
         href: `/v1/exceptions/${EXCEPTION_ID}/acknowledge`,
@@ -46,6 +48,25 @@ export function exceptionItem(overrides: Record<string, unknown> = {}) {
     details: { exceptionId: EXCEPTION_ID, revision: 4 },
     ...overrides,
   };
+}
+
+/**
+ * The exception lifecycle steps as the API lists them (SUP-01 `verb`). `action` is the kernel's
+ * `exceptions.manage`, or `exceptions.manage_own_queue` for a viewer who holds the role the queue
+ * is named after (K-10); the client must offer the step either way.
+ */
+export function lifecycleActions(
+  action: 'exceptions.manage' | 'exceptions.manage_own_queue' = 'exceptions.manage',
+  verbs: readonly ('acknowledge' | 'resolve' | 'close')[] = ['acknowledge', 'resolve', 'close'],
+) {
+  const labels = { acknowledge: 'Acknowledge', resolve: 'Mark resolved', close: 'Close' };
+  return verbs.map((verb) => ({
+    action,
+    verb,
+    label: labels[verb],
+    method: 'POST',
+    href: `/v1/exceptions/${EXCEPTION_ID}/${verb}`,
+  }));
 }
 
 export function operationalException(overrides: Record<string, unknown> = {}) {
@@ -77,12 +98,7 @@ export function operationalException(overrides: Record<string, unknown> = {}) {
         reason: null,
       },
     ],
-    nextActions: ['acknowledge', 'resolve', 'close'].map((verb) => ({
-      action: 'exceptions.manage',
-      label: verb,
-      method: 'POST',
-      href: `/v1/exceptions/${EXCEPTION_ID}/${verb}`,
-    })),
+    nextActions: lifecycleActions(),
     underlyingRecordUnchanged: true,
     ...overrides,
   };
@@ -202,6 +218,7 @@ export function recommendation(overrides: Record<string, unknown> = {}) {
       commandOperationId: null,
       record: null,
       lastError: null,
+      settlements: [],
     },
     expiredAt: null,
     revision: 2,
@@ -243,5 +260,115 @@ export function assistantRequest(overrides: Record<string, unknown> = {}) {
     completedAt: TEST_NOW.toISOString(),
     revision: 1,
     ...overrides,
+  };
+}
+
+/** `GET /v1/reports/expected-arrivals` (REP-01): counts only, never names. */
+export function expectedArrivalsReport(overrides: Record<string, unknown> = {}) {
+  return {
+    report: {
+      key: 'expected_arrivals',
+      title: 'Expected arrivals',
+      requirementIds: ['SPK-REPORT-002'],
+      accessAction: 'reporting.view_operations_reports',
+      exportAction: 'reporting.export_operational',
+    },
+    runId: null,
+    asOf: TEST_NOW.toISOString(),
+    producedAt: TEST_NOW.toISOString(),
+    scope: { facilityId: FACILITY_A, timezone: 'America/Los_Angeles', from: null, to: null },
+    parameters: {},
+    freshness: { class: 'F1', pointInTime: 'partial', note: '' },
+    settings: [],
+    metrics: [],
+    disclosures: [
+      'Counts only: no participant is named (child data minimization, §4.14, rule G9).',
+    ],
+    values: [
+      {
+        metric: 'MET-004',
+        label: 'Expected arrivals',
+        value: 14,
+        unit: 'count',
+        currency: null,
+        dimensions: {},
+        unavailableReason: null,
+      },
+      {
+        metric: 'MET-006',
+        label: 'Supervised releases expected',
+        value: null,
+        unit: 'count',
+        currency: null,
+        dimensions: {},
+        unavailableReason: 'pending DEC-075',
+      },
+    ],
+    columns: [],
+    rows: [
+      {
+        activityType: 'session',
+        activityId: 'act-2',
+        offeringId: null,
+        sessionId: 's-2',
+        title: 'U8 skills session',
+        start: '2026-10-24T18:00:00.000Z',
+        localStart: '11:00',
+        expected: 9,
+        adults: 1,
+        children: 8,
+        byEnrollment: 9,
+        byBooking: 0,
+        byRoster: 0,
+        supervisedReleasesExpected: 8,
+      },
+      {
+        activityType: 'fixture',
+        activityId: 'act-1',
+        offeringId: null,
+        sessionId: null,
+        title: 'Rovers v United',
+        start: '2026-10-24T11:00:00.000Z',
+        localStart: '04:00',
+        expected: 5,
+        adults: 5,
+        children: 0,
+        byEnrollment: 0,
+        byBooking: 0,
+        byRoster: 5,
+        supervisedReleasesExpected: 0,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+/** One page of `GET /v1/audit-records` (K-08). */
+export function auditPage(targetType: string, targetId: string, nextCursor: string | null = null) {
+  return {
+    items: [
+      {
+        id: '0192f1a0-0000-7000-8000-00000000ad01',
+        occurredAt: TEST_NOW.toISOString(),
+        actor: {
+          kind: 'staff',
+          accountId: null,
+          personId: null,
+          staffRoles: ['general_manager'],
+          sessionId: null,
+          actorLabel: 'Staff GM',
+        },
+        action: 'exceptions.manage',
+        targetType,
+        targetId,
+        beforeRevision: 3,
+        afterRevision: 4,
+        reason: 'Called the provider',
+        correlationId: null,
+        operationId: null,
+        details: { masked: 'a***@example.test' },
+      },
+    ],
+    nextCursor,
   };
 }

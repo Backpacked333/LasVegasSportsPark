@@ -1,14 +1,16 @@
 /**
  * "Finance" area home (SPK-UX-005): SCR-S-35 to SCR-S-38 built here. The conditional finance
  * screens (SCR-S-53 memberships, SCR-S-54 session packages, SCR-S-55 point of sale, SCR-S-57
- * accounting export) belong to other screen groups and stay marked as not built; accounting export
- * also waits on DEC-022.
+ * accounting export) are linked to their own pages (src/screens/package-g/), each behind its
+ * capability switch (DEC-016); accounting export also waits on DEC-022.
  */
 import { Link } from 'react-router';
 import { PENDING } from '../../features/registration-finance/pending';
 import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
-import { Placeholder } from '../../ui/Placeholder';
 import { StateView } from '../../ui/StateView';
+import { PACKAGE_G_LIST } from '../package-g/registry';
+
+const CONDITIONAL = PACKAGE_G_LIST.filter((screen) => screen.area === 'finance');
 
 const SCREENS = [
   {
@@ -16,21 +18,21 @@ const SCREENS = [
     title: 'Obligations and orders',
     id: 'SCR-S-35',
     purpose:
-      'Obligations per customer and team with total, received, allocated and remaining; orders, lines and installment plans.',
+      'Obligations per customer and team with total, received, allocated and remaining; orders by payment and fulfillment state, lines and installment plans.',
   },
   {
     to: '/finance/payments',
     title: 'Payment attempts and unknown outcomes',
     id: 'SCR-S-36',
     purpose:
-      'Unknown and conflicting payment and refund outcomes to reconcile from provider evidence before any retry; checkouts needing recovery.',
+      'Payment attempts by state, unknown and conflicting outcomes to reconcile from provider evidence before any retry, provider events, and checkouts needing recovery.',
   },
   {
     to: '/finance/credits',
     title: 'Refunds and credits',
     id: 'SCR-S-37',
     purpose:
-      'Refunds reserve the refundable amount before execution; credits with owner, currency, uses, expiry, balance and history.',
+      'Refunds by payment and state, each reserving the refundable amount before execution; credits with owner, currency, uses, expiry, balance and history.',
   },
   {
     to: '/finance/reconciliation',
@@ -59,11 +61,20 @@ export function FinanceScreen() {
           </li>
         ))}
       </ul>
-      <Placeholder
-        screenIds="SCR-S-53 to SCR-S-55, SCR-S-57"
-        title="Memberships, session packages, point of sale, accounting export"
-        purpose="Conditional finance capabilities, built by their own screen groups."
-      />
+      <h3 id="finance-conditional">Conditional capabilities</h3>
+      <ul className="list" aria-labelledby="finance-conditional">
+        {CONDITIONAL.map((screen) => (
+          <li key={screen.id}>
+            <div className="row-text">
+              <Link className="row-title" to={screen.path}>
+                {screen.title}
+              </Link>
+              <span>{screen.purpose}</span>
+              <span className="caption">{screen.id}, used only when turned on (DEC-016)</span>
+            </div>
+          </li>
+        ))}
+      </ul>
       <StateView
         variant="pending-decision"
         subject={PENDING.accounting.subject}

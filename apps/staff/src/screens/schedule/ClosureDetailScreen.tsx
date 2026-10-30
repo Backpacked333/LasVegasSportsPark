@@ -1,22 +1,25 @@
 /**
  * SCR-S-06 Closure impact and resolution (SPK-SCHED-009, SPK-FAC-003, SPK-AT-009, SPK-AT-021;
  * POL-041 and DEC-009 pending). Reads `GET /v1/closures/{id}`: the impact lists the affected games,
- * programs, rentals and other events, the teams, people and equipment committed to them, and the
- * owning records. The API does not return the affected customers, financial obligations or messages
- * (finance and communications resolve those from the owning records), so those rows say so instead
- * of showing a number.
+ * programs, rentals and other events, the teams, people and equipment committed to them, the owning
+ * records, and the customers, financial obligations and unsent messages they involve
+ * (`ClosureImpactView.tsx`).
  *
  * - Apply (`POST /v1/closures/{id}/apply`, `expectedRevision`): the user chooses to cancel the
  *   affected published events (each sends a schedule notice) or to leave them for resolution; no
  *   choice is preselected. The API recomputes the impact when applying; if the affected set
  *   changed since the preview, the screen says what changed ("stale version: affected set changed").
+ * - Withdraw a pending closure before it applies (`POST /v1/closures/{id}/withdraw`, reason and
+ *   `expectedRevision`, SPK-FAC-003): nothing was closed and nobody is told. A closure held by a
+ *   maintenance restriction is withdrawn with its restriction on SCR-S-42; the API answers
+ *   RESOURCE_CONFLICT `OWNED_BY_RESTRICTION` and the screen links to that restriction.
  * - Resolve: per affected event, relocate, reschedule or cancel; the choices become one schedule
  *   draft (`POST /v1/schedule-drafts`) that publishes through the normal publication command, so the
  *   resolution is validated and published together or not at all.
  * - Lift (`POST /v1/closures/{id}/lift`) for closures not created by maintenance; a maintenance
  *   restriction returns to service by an authorized release on SCR-S-42 (SPK-FAC-004).
  */
-import type { Schema } from '@sportspark/api-client';
+import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -33,12 +36,9 @@ import {
   ZoneCaption,
   type FacilityContext,
 } from '../../features/schedule-facilities/facility-scope';
-import { namesOf, resourceNames } from '../../features/schedule-facilities/inventory';
-import {
-  CLOSURE_BADGE,
-  EVENT_KIND_LABEL,
-  eventBadge,
-} from '../../features/schedule-facilities/labels';
+import { resourceNames } from '../../features/schedule-facilities/inventory';
+import { ActionGate } from '../../features/schedule-facilities/permission';
+import { CLOSURE_BADGE } from '../../features/schedule-facilities/labels';
 import {
   LocalDateTimeField,
   localFromInstant,
@@ -47,13 +47,17 @@ import {
 } from '../../features/schedule-facilities/LocalDateTimeField';
 import { ResourceChecklist } from '../../features/schedule-facilities/ResourceChecklist';
 import { formatInstant, formatRange } from '../../features/schedule-facilities/time';
+import {
+  AffectedEventList,
+  ImpactParties,
+  ImpactSummary,
+  type AffectedEvent,
+} from './ClosureImpactView';
 import { CLOSURES_KEY } from './ClosuresScreen';
 import type { DraftChangeInput } from './draft-changes';
 import { DRAFTS_KEY } from './ScheduleDraftsScreen';
 
 type Closure = Schema<'Closure'>;
-// The OpenAPI component is declared nullable (it is reused as a nullable field), hence NonNullable.
-type AffectedEvent = NonNullable<Schema<'ClosureImpact'>>['affectedEvents'][number];
 type Mode = NonNullable<Closure['resolution']>['mode'];
 
 interface ResolutionChoice {
@@ -61,54 +65,6 @@ interface ResolutionChoice {
   resourceIds: string[];
   start: LocalDateTime;
   end: LocalDateTime;
-}
-
-function ImpactSummary({ closure }: { closure: Closure }) {
-  const impact = closure.impact;
-  if (!impact) return <p>No impact preview was recorded for this closure.</p>;
-  const s = impact.summary;
-  const rows: [string, string][] = [
-    ['Games', String(s.games)],
-    ['Programs', String(s.programs)],
-    ['Rentals', String(s.rentals)],
-    ['Other events', String(s.other)],
-    ['Teams', String(s.teams)],
-    ['People committed (staff, officials, coaches, participants)', String(s.people)],
-    ['Equipment', String(s.equipment)],
-    ['Owning records (fixtures, sessions, rentals)', String(impact.sourceRecords.length)],
-  ];
-  return (
-    <table className="facts-table">
-      <caption>What this closure affects</caption>
-      <tbody>
-        {rows.map(([label, value]) => (
-          <tr key={label}>
-            <th scope="row">{label}</th>
-            <td>{value}</td>
-          </tr>
-        ))}
-        {['Customers', 'Financial obligations', 'Messages'].map((label) => (
-          <tr key={label}>
-            <th scope="row">{label}</th>
-            <td>
-              Not available here: resolved by the owning records, not listed by the scheduling
-              service
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function commitmentSummary(e: AffectedEvent): string {
-  const count = (t: string) => e.commitments.filter((c) => c.partyType === t).length;
-  const parts = [
-    count('team') ? `${count('team')} team${count('team') === 1 ? '' : 's'}` : null,
-    count('person') ? `${count('person')} ${count('person') === 1 ? 'person' : 'people'}` : null,
-    count('equipment') ? `${count('equipment')} equipment` : null,
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join(', ') : 'no commitments';
 }
 
 function ResolutionBuilder({
@@ -365,6 +321,110 @@ function ApplyPanel({ closure, onApplied }: { closure: Closure; onApplied: (c: C
   );
 }
 
+/** The restriction that holds a maintenance closure, from the facility's restrictions. */
+function useOwningRestriction(closure: Closure, enabled: boolean) {
+  const restrictions = useApiQuery({
+    path: '/maintenance-restrictions',
+    request: { query: { facilityId: closure.facilityId } },
+    enabled,
+  });
+  return restrictions.data?.find((r) => r.schedulingClosureId === closure.id);
+}
+
+/** RESOURCE_CONFLICT `OWNED_BY_RESTRICTION` from the withdraw route (FAC-01). */
+function owningRestrictionId(error: ApiError | null): string | null {
+  if (!error || error.code !== 'RESOURCE_CONFLICT') return null;
+  const details = error.details as { code?: unknown; restrictionId?: unknown } | null;
+  if (!details || details.code !== 'OWNED_BY_RESTRICTION') return null;
+  return typeof details.restrictionId === 'string' ? details.restrictionId : '';
+}
+
+function RestrictionLink({ id }: { id: string | null | undefined }) {
+  return id ? (
+    <Link to={`/facilities/restrictions/${id}`}>Open the restriction</Link>
+  ) : (
+    <Link to="/facilities/restrictions">Operating restrictions</Link>
+  );
+}
+
+/** SPK-FAC-003: withdraw a pending closure before it applies; a reason is required. */
+function WithdrawPanel({ closure }: { closure: Closure }) {
+  const { online } = useApp();
+  const maintenance = closure.source === 'maintenance';
+  const owner = useOwningRestriction(closure, maintenance);
+  const [reason, setReason] = useState('');
+  const [attempted, setAttempted] = useState(false);
+  const withdraw = useApiCommand('post', '/closures/{id}/withdraw', {
+    invalidate: [CLOSURES_KEY, ['api', '/closures/{id}'], ['api', '/events']],
+  });
+  const reload = useCommandReload(withdraw.reset, [CLOSURES_KEY, ['api', '/closures/{id}']]);
+  if (maintenance) {
+    return (
+      <section aria-labelledby="withdraw-title">
+        <h4 id="withdraw-title">Withdraw</h4>
+        <p>
+          This closure belongs to a maintenance restriction. It is withdrawn together with its
+          restriction, from Facilities and maintenance.
+        </p>
+        <RestrictionLink id={owner?.id} />
+      </section>
+    );
+  }
+  const submit = () => {
+    setAttempted(true);
+    if (!reason.trim()) return;
+    void withdraw
+      .submit({
+        path: { id: closure.id },
+        body: { reason: reason.trim(), expectedRevision: closure.revision },
+      })
+      .catch(() => undefined);
+  };
+  const owned = owningRestrictionId(withdraw.error);
+  return (
+    <section aria-labelledby="withdraw-title">
+      <h4 id="withdraw-title">Withdraw the closure</h4>
+      <p>
+        Withdrawing ends this planned closure before it applies. Nothing was closed, so nobody is
+        told, and the closure is kept for history.
+      </p>
+      <label htmlFor="withdraw-reason">Reason for withdrawing</label>
+      <input
+        id="withdraw-reason"
+        value={reason}
+        maxLength={2000}
+        aria-invalid={attempted && !reason.trim() ? true : undefined}
+        onChange={(e) => setReason(e.target.value)}
+      />
+      {attempted && !reason.trim() ? (
+        <span className="error-text" role="alert">
+          Enter the reason for withdrawing the closure.
+        </span>
+      ) : null}
+      <Button variant="secondary" busy={withdraw.isProcessing} disabled={!online} onClick={submit}>
+        Withdraw closure
+      </Button>
+      {!online ? <p className="caption">Withdrawing a closure needs a connection.</p> : null}
+      {owned !== null ? (
+        <div role="alert" className="banner" data-testid="owned-by-restriction">
+          <StatusBadge tone="warning" label="Withdraw it with its restriction" />
+          <span>
+            This closure belongs to a maintenance restriction; withdraw the restriction instead.
+          </span>
+          <RestrictionLink id={owned} />
+        </div>
+      ) : withdraw.error ? (
+        <CommandError
+          error={withdraw.error}
+          onRetry={submit}
+          onReload={reload}
+          action="Withdrawing the closure"
+        />
+      ) : null}
+    </section>
+  );
+}
+
 function LiftPanel({ closure }: { closure: Closure }) {
   const { online } = useApp();
   const [confirm, setConfirm] = useState(false);
@@ -372,13 +432,8 @@ function LiftPanel({ closure }: { closure: Closure }) {
     invalidate: [CLOSURES_KEY, ['api', '/closures/{id}']],
   });
   const reloadLift = useCommandReload(lift.reset, [CLOSURES_KEY, ['api', '/closures/{id}']]);
-  const restrictions = useApiQuery({
-    path: '/maintenance-restrictions',
-    request: { query: { facilityId: closure.facilityId } },
-    enabled: closure.source === 'maintenance',
-  });
+  const restriction = useOwningRestriction(closure, closure.source === 'maintenance');
   if (closure.source === 'maintenance') {
-    const restriction = restrictions.data?.find((r) => r.schedulingClosureId === closure.id);
     return (
       <section aria-labelledby="lift-title">
         <h4 id="lift-title">Return to service</h4>
@@ -386,11 +441,7 @@ function LiftPanel({ closure }: { closure: Closure }) {
           This closure comes from a maintenance restriction. The area returns to service by an
           authorized release, which also checks any required inspection.
         </p>
-        {restriction ? (
-          <Link to={`/facilities/restrictions/${restriction.id}`}>Open the restriction</Link>
-        ) : (
-          <Link to="/facilities/restrictions">Operating restrictions</Link>
-        )}
+        <RestrictionLink id={restriction?.id} />
       </section>
     );
   }
@@ -483,7 +534,21 @@ function ClosureDetail({ closure, facility }: { closure: Closure; facility: Faci
             <dd>{formatInstant(shown.liftedAt, tz)}</dd>
           </>
         ) : null}
+        {shown.withdrawnAt ? (
+          <>
+            <dt>Withdrawn</dt>
+            <dd>
+              {formatInstant(shown.withdrawnAt, tz)}
+              {shown.withdrawalReason ? `: ${shown.withdrawalReason}` : ''}
+            </dd>
+          </>
+        ) : null}
       </dl>
+      {shown.status === 'withdrawn' ? (
+        <p role="status" data-testid="closure-withdrawn">
+          This closure was withdrawn before it applied: nothing was closed and nobody was told.
+        </p>
+      ) : null}
 
       {applied ? (
         <div role="status" className="banner" data-testid="closure-applied">
@@ -507,55 +572,63 @@ function ClosureDetail({ closure, facility }: { closure: Closure; facility: Faci
           Impact{' '}
           {shown.status === 'pending'
             ? `as previewed ${formatInstant(shown.updatedAt, tz)}`
-            : 'when applied'}
+            : shown.status === 'withdrawn'
+              ? 'as previewed before it was withdrawn'
+              : 'when applied'}
         </h4>
-        <ImpactSummary closure={shown} />
-        {affected.length === 0 ? (
-          <StateView
-            variant="empty"
-            title="Nothing is affected"
-            description="No booked event overlaps this closure."
-          />
+        {impact ? (
+          <>
+            <ImpactSummary impact={impact} caption="What this closure affects" />
+            <AffectedEventList
+              impact={impact}
+              names={names}
+              timeZone={tz}
+              canceled={canceled}
+              unresolved={unresolved}
+            />
+            <ImpactParties impact={impact} />
+          </>
         ) : (
-          <ul className="list" aria-label="Affected events">
-            {affected.map((e) => {
-              const eb = eventBadge(e.status);
-              return (
-                <li key={e.eventId}>
-                  <div className="row-text">
-                    <span className="row-title">{e.title}</span>
-                    <span className="caption">
-                      {EVENT_KIND_LABEL[e.kind]} ·{' '}
-                      {formatRange(e.scheduledStart, e.scheduledEnd, tz)} on{' '}
-                      {namesOf(e.resourceIds, names)} · {commitmentSummary(e)}
-                      {e.sourceType ? ` · from a ${e.sourceType.replace(/_/g, ' ')}` : ''}
-                    </span>
-                  </div>
-                  <StatusBadge tone={eb.tone} label={eb.label} />
-                  {canceled.has(e.eventId) ? (
-                    <StatusBadge tone="neutral" label="Canceled by this closure" />
-                  ) : null}
-                  {unresolved.has(e.eventId) ? (
-                    <StatusBadge tone="warning" label="Awaiting resolution" />
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+          <p>No impact preview was recorded for this closure.</p>
         )}
       </section>
 
-      {shown.status === 'pending' ? <ApplyPanel closure={shown} onApplied={setApplied} /> : null}
-      {toResolve.length > 0 ? (
-        <ResolutionBuilder
-          key={toResolve.map((e) => e.eventId).join()}
-          closure={shown}
-          facility={facility}
-          events={toResolve}
-          resources={resources.data ?? []}
-        />
+      {shown.status === 'pending' ? (
+        <ActionGate
+          action="scheduling.manage_closures"
+          facilityId={shown.facilityId}
+          what="Applying or withdrawing this closure"
+        >
+          <ApplyPanel closure={shown} onApplied={setApplied} />
+          <WithdrawPanel closure={shown} />
+        </ActionGate>
       ) : null}
-      {shown.status === 'active' ? <LiftPanel closure={shown} /> : null}
+      {toResolve.length > 0 ? (
+        <ActionGate
+          action="scheduling.manage_drafts"
+          facilityId={shown.facilityId}
+          what="Building a resolution draft"
+        >
+          <ResolutionBuilder
+            key={toResolve.map((e) => e.eventId).join()}
+            closure={shown}
+            facility={facility}
+            events={toResolve}
+            resources={resources.data ?? []}
+          />
+        </ActionGate>
+      ) : null}
+      {shown.status === 'active' && shown.source === 'maintenance' ? (
+        <LiftPanel closure={shown} />
+      ) : shown.status === 'active' ? (
+        <ActionGate
+          action="scheduling.manage_closures"
+          facilityId={shown.facilityId}
+          what="Lifting this closure"
+        >
+          <LiftPanel closure={shown} />
+        </ActionGate>
+      ) : null}
     </div>
   );
 }

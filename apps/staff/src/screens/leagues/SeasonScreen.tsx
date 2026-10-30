@@ -21,7 +21,8 @@ import {
   useRefetch,
 } from '../../features/competition/feedback';
 import { NumberField, TextField, parseWholeNumber } from '../../features/competition/fields';
-import { formatDateOnly, formatInstant, shortRef } from '../../features/competition/format';
+import { useFacilityDirectory } from '../../features/competition/facilities';
+import { formatDateOnly, formatInstant } from '../../features/competition/format';
 import {
   IRREVERSIBLE_MOVES,
   SEASON_STATUS,
@@ -232,6 +233,7 @@ function Divisions({ season }: { season: Season }) {
     request: { query: { seasonId: season.id } },
   });
   const [creating, setCreating] = useState(false);
+  const facilities = useFacilityDirectory();
   return (
     <section className="panel" aria-labelledby="divisions-title">
       <h3 id="divisions-title">Divisions</h3>
@@ -266,12 +268,17 @@ function Divisions({ season }: { season: Season }) {
                     {division.capacityTeamEntries !== null
                       ? ` of ${division.capacityTeamEntries}`
                       : ' (no division limit)'}
-                    {division.facilityId ? ` · Facility ${shortRef(division.facilityId)}` : ''}
+                    {division.facilityId ? ` · ${facilities.name(division.facilityId)}` : ''}
                   </span>
                 </div>
-                <Link to={`/leagues/divisions/${division.id}/fixture-generation`}>
-                  Generate fixtures for {division.name}
-                </Link>
+                <div className="actions">
+                  <Link to={`/leagues/divisions/${division.id}/fixture-generation`}>
+                    Generate fixtures for {division.name}
+                  </Link>
+                  <Link to={`/leagues/divisions/${division.id}/pools`}>
+                    Tournament pools of {division.name}
+                  </Link>
+                </div>
               </li>
             ))}
           </ul>

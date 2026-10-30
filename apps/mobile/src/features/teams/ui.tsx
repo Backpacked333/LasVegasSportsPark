@@ -45,6 +45,15 @@ export function Title({ children }: { children: string }) {
   );
 }
 
+/** A heading inside a section (announced as a header, one level below the section's). */
+export function Subheading({ children }: { children: string }) {
+  return (
+    <Text style={styles.subheading} accessibilityRole="header">
+      {children}
+    </Text>
+  );
+}
+
 export function Body({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
   return <Text style={muted ? styles.caption : styles.body}>{children}</Text>;
 }
@@ -242,7 +251,19 @@ export function fieldIssuesOf(error: ApiError): string[] {
 }
 
 /**
- * A failed command (SPK-UX-008): the API's code, safe message and reference, its recovery action,
+ * The rule code of a refusal whose `details` is an object with a `code` (for example the handover
+ * rules ROLE_NOT_HELD or CAPTAIN_MUST_BE_ADULT under VALIDATION_FAILED, CMP-13), or null.
+ */
+export function detailCodeOf(error: ApiError): string | null {
+  const details = error.details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+  const code = (details as { code?: unknown }).code;
+  return typeof code === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(code) ? code : null;
+}
+
+/**
+ * A failed command (SPK-UX-008): the API's code (with the rule code in `details.code` when there is
+ * one), safe message and reference, its recovery action,
  * and the user's input kept by the caller. "Try again" repeats the same intent under the same
  * idempotency key; "Reload" fetches the current record after STALE_REVISION or
  * INVALID_TRANSITION. A refusal (ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED, protected
@@ -270,10 +291,19 @@ export function CommandFailure({
       </View>
     );
   }
+  if (presentation === 'turned_off') {
+    // ACCESS_DENIED CAPABILITY_DISABLED (K-12): StateView shows it as turned off (DEC-016).
+    return (
+      <View testID={testID}>
+        <StateView variant="error" error={error} />
+      </View>
+    );
+  }
   const recovery = recoveryActionFor(error);
   const reasons = error.code === 'ELIGIBILITY_FAILED' ? eligibilityReasonsOf(error) : [];
   const issues = error.code === 'VALIDATION_FAILED' ? fieldIssuesOf(error) : [];
   const stale = error.isStale;
+  const rule = detailCodeOf(error);
   return (
     <View style={styles.failure} testID={testID} accessibilityLiveRegion="polite">
       <StatusBadge
@@ -292,7 +322,7 @@ export function CommandFailure({
       ))}
       {reasons.length > 0 ? <ReasonList reasons={reasons} /> : null}
       <Text style={styles.caption} selectable>
-        {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
+        {`Error code: ${error.code}${rule ? ` (${rule})` : ''}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
       </Text>
       {stale && onReload ? (
         <Button label="Reload" onPress={onReload} variant="secondary" />
@@ -337,6 +367,7 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
   },
   body: { ...type.body, color: colors.text },
+  subheading: { ...type.body, color: colors.text, fontWeight: '700' },
   caption: { ...type.caption, color: colors.textMuted },
   detail: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   detailLabel: { ...type.body, color: colors.textMuted, minWidth: 120 },

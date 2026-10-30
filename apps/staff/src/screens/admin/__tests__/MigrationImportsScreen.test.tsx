@@ -10,15 +10,17 @@ import { describe, expect, it } from 'vitest';
 import {
   BATCH_1,
   BATCH_2,
+  MIGRATION_OPERATOR_ACTIONS,
   importBatch,
   ok,
   page,
 } from '../../../features/insight-admin/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, mePermissions } from '../../../testing/test-app';
 
 function app(routes: Record<string, FakeHandler> = {}) {
   return createTestApp({
     routes: {
+      'GET /me/permissions': mePermissions({ actions: MIGRATION_OPERATOR_ACTIONS }),
       'GET /import-batches': page([
         importBatch(BATCH_1, 'applied'),
         importBatch(BATCH_2, 'received', { sameChecksumBatchIds: [BATCH_1] }),
@@ -184,5 +186,21 @@ describe('SCR-S-48 MigrationImportsScreen', () => {
       }).at('/admin/migration'),
     );
     await waitFor(() => expect(screen.getByText('Not available to you')).toBeInTheDocument());
+  });
+
+  it('SPK-UX-005: offers staging only when GET /v1/me/permissions lists migration.stage_batch', async () => {
+    render(
+      app({
+        'GET /me/permissions': mePermissions({
+          staffRoles: ['finance_operator'],
+          actions: ['migration.read_batch'],
+        }),
+      }).at('/admin/migration'),
+    );
+    expect(
+      await screen.findByText('Staging a snapshot is not available to you.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: 'Stage a snapshot' })).toBeNull();
+    expect(await screen.findByRole('list', { name: 'Import batches' })).toBeInTheDocument();
   });
 });

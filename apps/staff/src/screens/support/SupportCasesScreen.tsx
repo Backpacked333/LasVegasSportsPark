@@ -1,9 +1,11 @@
 /**
  * SCR-S-49 Support cases, the queue (SPK-SUPPORT-001, SPK-SUPPORT-002, SPK-SUPPORT-003). Lists
- * `GET /v1/cases` for the selected facility, filtered by status, category and "assigned to me",
- * page by page. Each case shows owner, category, priority, status (machine names, never colour
- * alone), due time and overdue. Cases outside the viewer's scope are never listed by the API;
- * ACCESS_DENIED is shown as not available.
+ * `GET /v1/cases` for the selected facility, filtered by status, category, origin (the customer's
+ * own requests from `POST /v1/me/support-requests`, staff-opened cases, escalated access reviews,
+ * operational exceptions; filtered by the API) and "assigned to me", page by page. Each case shows
+ * owner, category, priority, status (machine names, never colour alone), "Customer request" when
+ * the customer opened it, due time in the facility's zone and overdue. Cases outside the viewer's
+ * scope are never listed by the API; ACCESS_DENIED is shown as not available.
  */
 import { useState } from 'react';
 import { Link } from 'react-router';
@@ -17,10 +19,12 @@ import { formatDateTime } from '../../ui/time';
 import { useFacilityDirectory } from '../today/useFacilityDirectory';
 import {
   CASE_CATEGORIES,
+  CASE_ORIGINS,
   CASE_PRIORITY_TONE,
   CASE_STATUSES,
   CASE_STATUS_TONE,
   type CaseCategory,
+  type CaseOrigin,
   type CaseStatus,
 } from './support';
 
@@ -29,6 +33,7 @@ export const CASES_PAGE_SIZE = 25;
 interface Filters {
   status: string;
   category: string;
+  origin: string;
   mine: boolean;
 }
 
@@ -55,6 +60,7 @@ function CasesPage({
         ...(cursor ? { cursor } : {}),
         ...(filters.status ? { status: filters.status as CaseStatus } : {}),
         ...(filters.category ? { category: filters.category as CaseCategory } : {}),
+        ...(filters.origin ? { origin: filters.origin as CaseOrigin } : {}),
         ...(facilityId ? { facilityId } : {}),
         ...(filters.mine && myPersonId ? { ownerPersonId: myPersonId } : {}),
       },
@@ -95,6 +101,9 @@ function CasesPage({
                       tone={CASE_PRIORITY_TONE[c.priority]}
                       label={`Priority: ${c.priority}`}
                     />
+                    {c.openedVia === 'customer' ? (
+                      <StatusBadge tone="info" label="Customer request" />
+                    ) : null}
                     {c.overdue ? <StatusBadge tone="danger" label="Overdue" /> : null}
                   </span>
                 </li>
@@ -113,7 +122,12 @@ function CasesPage({
 }
 
 export function SupportCasesScreen() {
-  const [filters, setFilters] = useState<Filters>({ status: '', category: '', mine: false });
+  const [filters, setFilters] = useState<Filters>({
+    status: '',
+    category: '',
+    origin: '',
+    mine: false,
+  });
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const update = (patch: Partial<Filters>) => {
     setFilters((f) => ({ ...f, ...patch }));
@@ -144,6 +158,13 @@ export function SupportCasesScreen() {
           value={filters.category}
           onChange={(category) => update({ category })}
         />
+        <SelectField
+          label="Origin"
+          placeholder="Any origin"
+          options={CASE_ORIGINS}
+          value={filters.origin}
+          onChange={(origin) => update({ origin })}
+        />
         <CheckboxGroup
           legend="Owner"
           options={[{ value: 'mine', label: 'Assigned to me' }]}
@@ -153,7 +174,7 @@ export function SupportCasesScreen() {
       </div>
       {cursors.map((cursor, i) => (
         <CasesPage
-          key={`${cursor ?? 'first'}-${filters.status}-${filters.category}-${filters.mine}`}
+          key={`${cursor ?? 'first'}-${filters.status}-${filters.category}-${filters.origin}-${filters.mine}`}
           filters={filters}
           cursor={cursor}
           isLast={i === cursors.length - 1}

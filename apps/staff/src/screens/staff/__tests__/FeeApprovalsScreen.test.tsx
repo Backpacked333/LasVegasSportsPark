@@ -10,8 +10,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   assignmentRecord,
   feeSubmission,
+  OFFICIAL,
+  nameEntry,
   oneFacilityMe,
-  person,
+  personNames,
 } from '../../../features/operations/testing';
 import { createTestApp } from '../../../testing/test-app';
 
@@ -20,8 +22,7 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
     'GET /me': oneFacilityMe(),
     'GET /fee-submissions': { status: 200, body: { items: [feeSubmission()], nextCursor: null } },
     'GET /assignments/{id}': { status: 200, body: assignmentRecord({ status: 'completed' }) },
-    'GET /people/{id}': (req) =>
-      fakeResponse(200, person(req.params.id ?? '', 'Jordan', 'Lee', 'adult').body),
+    'GET /person-names': personNames([nameEntry(OFFICIAL, 'Jordan', 'Lee', 'adult')]),
     ...extra,
   };
 }

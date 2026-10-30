@@ -7,16 +7,19 @@
  * Which fields are approved is pending DEC-051 (with DEC-031; Product and operations;
  * Operator/privacy owner): the list comes from configuration (`placementFields`), and while it is
  * unset the screen shows the pending state instead of inventing a field list. Requested teammates
- * would need other people's identities, which the app never exposes (SPK-PLACE-005), and the
- * preferred competition needs a list the customer cannot read: both read as not available.
+ * would need other people's identities, which the app never exposes (SPK-PLACE-005): they read as
+ * not available. A configured preferred competition is chosen from the organization's active
+ * competitions (`GET /v1/competitions?status=active`, which a customer may read) and sent as
+ * `preferredCompetitionId`; "No preference" sends nothing.
  *
- * The API needs the competition season of the placement, and a public offering does not name its
- * season (reported as an API gap): without a `seasonId` in the link the form reads "not
- * available".
+ * The competition season the placement request names comes from the API:
+ * `GET /v1/offerings/{id}/registration-options` `seasonId` (ENR-05, SPK-PLACE-001). An offering
+ * the API links to no season reads "not available" (nothing is sent).
  *
- * States: loading; empty (nothing approved to collect: pending); ready; validation failure (field
- * messages, input kept); permission restriction (no register permission for this participant);
- * offline (input kept on screen, saving disabled); processing (saving); success (saved).
+ * States: loading (basket, then the season); empty (nothing approved to collect: pending); ready;
+ * validation failure (field messages, input kept); permission restriction (no register permission
+ * for this participant); offline (input kept on screen, saving disabled); processing (saving);
+ * success (saved); the season read's error with its code and "Try again".
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -26,13 +29,14 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
 import { fieldMessages } from '../../features/registration/format';
+import { useRegistrationOptions } from '../../features/registration/options';
 import { useParticipantNames } from '../../features/registration/participants';
 import { param, registrationRoutes } from '../../features/registration/routes';
-import { Body, ButtonRow, Section, TextField } from '../../features/registration/ui';
+import { Body, ButtonRow, ChoiceRow, Section, TextField } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -44,15 +48,76 @@ type AvailabilityWindow = Schema<'AvailabilityWindow'>;
 /** Fields this screen can collect, by their configuration name. */
 export const COLLECTABLE_FIELDS = [
   'availability',
+  'preferredCompetition',
   'declaredLevel',
   'positionPreferences',
   'notes',
 ] as const;
 export type CollectableField = (typeof COLLECTABLE_FIELDS)[number];
 const NOT_IN_APP: Record<string, string> = {
-  preferredCompetition: 'Preferred competition',
   requestedTeammates: 'Requested teammates',
 };
+
+/**
+ * SPK-PLACE-001 preferred competition: one of the organization's active competitions, or no
+ * preference. The list is the API's; staff weigh the preference when placing (SPK-PLACE-002).
+ */
+function CompetitionChoice({
+  value,
+  onChange,
+  error,
+}: {
+  value: string | null;
+  onChange: (competitionId: string | null) => void;
+  error?: string;
+}) {
+  const competitions = useApiQuery({
+    path: '/competitions',
+    request: { query: { status: 'active' } },
+  });
+  return (
+    <View style={styles.editor} testID="preferred-competition">
+      <Text style={styles.label}>Preferred competition</Text>
+      {competitions.data === undefined ? (
+        competitions.error ? (
+          <QueryErrorView
+            error={competitions.error}
+            onRetry={() => void competitions.refetch()}
+            unavailable={{
+              title: 'Competitions not available',
+              description: 'You can still save the other answers; staff place players.',
+            }}
+          />
+        ) : (
+          <StateView variant="loading" label="the competitions" />
+        )
+      ) : (
+        <View accessibilityRole="radiogroup" accessibilityLabel="Preferred competition">
+          <ChoiceRow
+            mode="radio"
+            label="No preference"
+            checked={value === null}
+            onToggle={() => onChange(null)}
+          />
+          {competitions.data.map((c) => (
+            <ChoiceRow
+              key={c.id}
+              mode="radio"
+              label={c.name}
+              detail={c.description ?? undefined}
+              checked={value === c.id}
+              onToggle={() => onChange(c.id)}
+            />
+          ))}
+          {competitions.data.length === 0 ? (
+            <Body muted>No competition is open to choose from right now.</Body>
+          ) : null}
+        </View>
+      )}
+      {error ? <Text style={styles.error}>{`✕ ${error}`}</Text> : null}
+    </View>
+  );
+}
 
 export const WEEKDAYS = [
   'Sunday',
@@ -145,23 +210,24 @@ function AvailabilityEditor({
 function PlacementForm({
   basket,
   lineId,
-  seasonId,
   fields,
 }: {
   basket: Basket;
   lineId: string;
-  seasonId: string | undefined;
   fields: readonly string[];
 }) {
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const line = basket.lines.find((l) => l.id === lineId);
+  const options = useRegistrationOptions(line?.offeringId ?? '', [], line !== undefined);
+  const seasonId = options.data?.seasonId ?? null;
   const names = useParticipantNames(line ? [line.participantPersonId] : []);
   const [availability, setAvailability] = useState<AvailabilityWindow[]>([]);
   const [declaredLevel, setDeclaredLevel] = useState('');
   const [positions, setPositions] = useState('');
   const [notes, setNotes] = useState('');
+  const [preferredCompetitionId, setPreferredCompetitionId] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const save = useApiCommand('post', '/placement-requests');
 
@@ -178,12 +244,19 @@ function PlacementForm({
       />
     );
   }
+  if (options.data === undefined) {
+    return options.error ? (
+      <QueryErrorView error={options.error} onRetry={() => void options.refetch()} />
+    ) : (
+      <StateView variant="loading" label="the season of this activity" />
+    );
+  }
   if (!seasonId) {
     return (
       <StateView
         variant="unavailable"
-        title="Not available in the app yet"
-        description="The season of this activity is not available to the app, so placement information cannot be sent from here. Staff place individual players."
+        title="Not available for this activity"
+        description="This activity is not linked to a league season, so placement information cannot be sent from here. Staff place individual players."
       />
     );
   }
@@ -216,6 +289,9 @@ function PlacementForm({
           offeringId: line.offeringId,
           ...(line.applicationId ? { applicationId: line.applicationId } : {}),
           availability: collect.includes('availability') ? availability : [],
+          ...(collect.includes('preferredCompetition') && preferredCompetitionId
+            ? { preferredCompetitionId }
+            : {}),
           ...(collect.includes('declaredLevel') && declaredLevel.trim()
             ? { declaredLevel: declaredLevel.trim() }
             : {}),
@@ -242,6 +318,13 @@ function PlacementForm({
             windows={availability}
             onChange={setAvailability}
             error={errorFor('availability')}
+          />
+        ) : null}
+        {collect.includes('preferredCompetition') ? (
+          <CompetitionChoice
+            value={preferredCompetitionId}
+            onChange={setPreferredCompetitionId}
+            error={errorFor('preferredCompetitionId')}
           />
         ) : null}
         {collect.includes('declaredLevel') ? (
@@ -295,11 +378,9 @@ function PlacementForm({
 export function PlacementInformationScreen({
   basketId,
   lineId,
-  seasonId,
 }: {
   basketId: string;
   lineId: string;
-  seasonId?: string;
 }) {
   const { session, services } = useApp();
   const fields = services.config.placementFields ?? null;
@@ -325,9 +406,7 @@ export function PlacementInformationScreen({
             empty={{ title: 'Not available', description: '' }}
             unavailableOffline={['Saving placement information']}
           >
-            {(b) => (
-              <PlacementForm basket={b} lineId={lineId} seasonId={seasonId} fields={fields} />
-            )}
+            {(b) => <PlacementForm basket={b} lineId={lineId} fields={fields} />}
           </QueryBoundary>
         )}
       </RequireSession>
@@ -335,16 +414,15 @@ export function PlacementInformationScreen({
   );
 }
 
-/** Route component for app/registration/placement/[lineId].tsx (`?basketId=&seasonId=`). */
+/** Route component for app/registration/placement/[lineId].tsx (`?basketId=`). */
 export function PlacementInformationRoute() {
-  const params = useLocalSearchParams<{ lineId: string; basketId?: string; seasonId?: string }>();
+  const params = useLocalSearchParams<{ lineId: string; basketId?: string }>();
   return (
     <>
       <Stack.Screen options={{ title: 'Placement information' }} />
       <PlacementInformationScreen
         lineId={param(params.lineId) ?? ''}
         basketId={param(params.basketId) ?? ''}
-        seasonId={param(params.seasonId)}
       />
     </>
   );
@@ -368,4 +446,5 @@ const styles = StyleSheet.create({
   dayText: { ...type.caption, color: colors.primary, fontWeight: '600' },
   dayTextOn: { color: colors.primaryText },
   window: { gap: spacing.xs },
+  error: { ...type.caption, color: colors.danger },
 });

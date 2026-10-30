@@ -39,6 +39,14 @@ export const ID = {
   enrollment: '0192f1a0-0000-7000-8000-00000000d601',
   resource: '0192f1a0-0000-7000-8000-00000000d701',
   member: '0192f1a0-0000-7000-8000-00000000d801',
+  pool: '0192f1a0-0000-7000-8000-00000000d901',
+  decision: '0192f1a0-0000-7000-8000-00000000da01',
+  appeal: '0192f1a0-0000-7000-8000-00000000db01',
+  recommendation: '0192f1a0-0000-7000-8000-00000000dc01',
+  offering2: '0192f1a0-0000-7000-8000-00000000d302',
+  offering3: '0192f1a0-0000-7000-8000-00000000d303',
+  program: '0192f1a0-0000-7000-8000-00000000dd01',
+  facility: '0192f1a0-0000-7000-8000-00000000fa01',
 } as const;
 
 const T = '2026-10-20T12:00:00.000Z';
@@ -217,6 +225,8 @@ export function teamEntry(overrides: Record<string, unknown> = {}) {
     seasonId: ID.season,
     divisionId: null,
     teamId: ID.teamRed,
+    // CMP-01: an entry carries its team's name.
+    teamName: overrides.teamId === ID.teamBlue ? 'Blue' : 'Red',
     status: 'applied',
     appliedByPersonId: null,
     appliedAt: T,
@@ -249,6 +259,9 @@ export function fixture(overrides: Record<string, unknown> = {}) {
     round: 1,
     homeEntryId: ID.entryRed,
     awayEntryId: ID.entryBlue,
+    // CMP-01: a season fixture row carries both team names (null away for a bye).
+    homeTeamName: 'Red',
+    awayTeamName: overrides.awayEntryId === null ? null : 'Blue',
     schedulingEventId: null,
     scheduledStart: '2026-11-07T18:00:00.000Z',
     scheduledEnd: '2026-11-07T19:00:00.000Z',
@@ -263,14 +276,247 @@ export function fixture(overrides: Record<string, unknown> = {}) {
 
 const availability = { available: 6, unavailable: 1, tentative: 2, noResponse: 3 };
 
-export function fixtureDetail(overrides: Record<string, unknown> = {}) {
+export function venue(overrides: Record<string, unknown> = {}) {
   return {
-    ...fixture(),
+    facilityId: ID.facility,
+    facilityName: 'North Park',
+    timezone: 'America/Los_Angeles',
+    resources: [{ id: ID.resource, name: 'Pitch 1' }],
+    ...overrides,
+  };
+}
+
+export function fixtureDetail(overrides: Record<string, unknown> = {}) {
+  const { homeTeamName: _home, awayTeamName: _away, ...base } = fixture();
+  void _home;
+  void _away;
+  return {
+    ...base,
     home: { entryId: ID.entryRed, teamId: ID.teamRed, teamName: 'Red', availability },
     away: { entryId: ID.entryBlue, teamId: ID.teamBlue, teamName: 'Blue', availability },
     myResponse: null,
+    venue: null,
+    rosterStatus: null,
+    responses: [],
     ...overrides,
   };
+}
+
+/** `GET /v1/facilities` (K-04) with the facility used by the competition fixtures. */
+export function facilities() {
+  return {
+    items: [
+      {
+        id: ID.facility,
+        slug: 'north-park',
+        name: 'North Park',
+        timezone: 'America/Los_Angeles',
+        status: 'active',
+        address: null,
+        inStaffScope: true,
+      },
+    ],
+  };
+}
+
+/**
+ * `GET /v1/person-names` answering with the people it knows; anyone else is omitted, as the API
+ * omits a person the viewer may not view (ID-02). The client repeats `ids` once per person and the
+ * fake fetch keeps only one value, so every known person is answered; rows map names by id.
+ */
+export function personNames(known: Record<string, [string, string, ('adult' | 'child')?]>) {
+  return () => {
+    const items = Object.entries(known).map(([id, [givenName, familyName, kind]]) => ({
+      personId: id,
+      canonicalPersonId: id,
+      givenName,
+      familyName,
+      displayName: `${givenName} ${familyName}`,
+      kind: kind ?? 'child',
+    }));
+    return fakeResponse(200, { items });
+  };
+}
+
+export function seasonReadiness(
+  items: { fixtureId: string; status: string; blockingCount?: number; unknownCount?: number }[],
+  evaluatedAt = '2026-10-24T11:58:00.000Z',
+) {
+  return {
+    seasonId: ID.season,
+    evaluatedAt,
+    items: items.map((i) => ({ blockingCount: 0, unknownCount: 0, ...i })),
+  };
+}
+
+export function matchSheet(overrides: Record<string, unknown> = {}) {
+  return {
+    fixtureId: ID.fixture,
+    scheduledStart: '2026-11-07T18:00:00.000Z',
+    status: 'scheduled',
+    venue: venue(),
+    view: 'full',
+    sides: [
+      {
+        entryId: ID.entryRed,
+        teamName: 'Red',
+        players: [
+          {
+            personId: ID.person,
+            displayName: 'Sam Player',
+            jerseyNumber: 7,
+            playingStatus: 'active',
+            roles: ['captain'],
+          },
+        ],
+      },
+      {
+        entryId: ID.entryBlue,
+        teamName: 'Blue',
+        players: [
+          {
+            personId: ID.child,
+            displayName: 'Alex Keeper',
+            jerseyNumber: 1,
+            playingStatus: 'guest',
+            roles: [],
+          },
+        ],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export function dispute(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ID.dispute,
+    fixtureId: ID.fixture,
+    resultRevisionId: ID.result1,
+    submittingTeamEntryId: ID.entryBlue,
+    submittingRole: 'captain',
+    submittedBy: actor('Captain Blue'),
+    submittedAt: '2026-11-07T20:00:00.000Z',
+    submissionDeadlineAt: '2026-11-09T19:00:00.000Z',
+    reason: 'The second goal was offside.',
+    evidence: [{ kind: 'video', reference: 'clip-12', description: 'Minute 30' }],
+    status: 'submitted',
+    reviewer: null,
+    decision: null,
+    decidedAt: null,
+    decisionReason: null,
+    publicationConsequence: null,
+    appealStatus: 'none',
+    revision: 1,
+    createdAt: T,
+    updatedAt: T,
+    ...overrides,
+  };
+}
+
+export function decision(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ID.decision,
+    incidentId: ID.incident,
+    subjectPersonId: ID.person,
+    ruleSetId: ID.ruleSet,
+    basis: 'Red card for serious foul play.',
+    decision: 'suspension',
+    details: {},
+    decidedBy: actor('League Manager'),
+    decidedAt: '2026-11-08T10:00:00.000Z',
+    status: 'issued',
+    overturnedAt: null,
+    overturnReason: null,
+    suspensionId: ID.suspension,
+    revision: 1,
+    createdAt: T,
+    updatedAt: T,
+    ...overrides,
+  };
+}
+
+export function appeal(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ID.appeal,
+    subjectPersonId: ID.person,
+    decisionId: ID.decision,
+    suspensionId: null,
+    disputeId: null,
+    grounds: 'The foul was accidental.',
+    evidence: [],
+    submittedBy: actor('Guardian'),
+    submittedAt: '2026-11-08T12:00:00.000Z',
+    status: 'submitted',
+    reviewer: null,
+    decidedAt: null,
+    decisionReason: null,
+    revision: 1,
+    createdAt: T,
+    updatedAt: T,
+    ...overrides,
+  };
+}
+
+export function pool(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ID.pool,
+    seasonId: ID.season,
+    divisionId: ID.division,
+    name: 'Pool A',
+    entries: [{ teamEntryId: ID.entryRed, teamName: 'Red', seed: 1 }],
+    revision: 2,
+    createdAt: T,
+    updatedAt: T,
+    ...overrides,
+  };
+}
+
+export function poolStandings(overrides: Record<string, unknown> = {}) {
+  const table = standings();
+  return {
+    poolId: ID.pool,
+    seasonId: ID.season,
+    divisionId: ID.division,
+    ruleSetId: table.ruleSetId,
+    ruleSetVersion: table.ruleSetVersion,
+    computedAt: table.computedAt,
+    sourceResultIds: table.sourceResultIds,
+    pendingFixtureIds: [],
+    rows: table.rows,
+    tiebreakExplanations: [],
+    ...overrides,
+  };
+}
+
+export function recommendation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ID.recommendation,
+    participantPersonId: ID.child,
+    fromOfferingId: ID.offering,
+    recommendedOfferingId: ID.offering2,
+    recommendedProgramId: null,
+    eligibility: {
+      eligible: true,
+      policyVersionId: null,
+      referenceDate: '2027-01-01',
+      evaluatedAt: '2026-10-24T12:00:00.000Z',
+      reasons: [],
+      alternatives: [],
+      overridden: false,
+    },
+    suitability: 'Ready for the next level.',
+    status: 'draft',
+    sharedAt: null,
+    revision: 1,
+    createdAt: T,
+    updatedAt: T,
+    ...overrides,
+  };
+}
+
+export function personSearchResult(id: string, givenName: string, familyName: string) {
+  return { id, givenName, familyName, kind: 'adult', status: 'active', matchedOn: 'name' };
 }
 
 export function readiness(overrides: Record<string, unknown> = {}) {
@@ -324,6 +570,7 @@ export function resultRevision(overrides: Record<string, unknown> = {}) {
     homeScore: 3,
     awayScore: 1,
     forfeitingEntryId: null,
+    shootoutWinnerEntryId: null,
     details: { cards: [], abandonment: null, incidentIds: [], notes: null, disputeId: null },
     submittedBy: actor('Referee R. One'),
     submittedAt: '2026-11-07T19:10:00.000Z',
@@ -403,6 +650,9 @@ export function bracketNode(overrides: Record<string, unknown> = {}) {
     sourceRule: { home: { kind: 'seed', seed: 1 }, away: { kind: 'seed', seed: 2 } },
     homeEntryId: ID.entryRed,
     awayEntryId: ID.entryBlue,
+    // CMP-01: the slot holders' team names.
+    homeTeamName: 'Red',
+    awayTeamName: 'Blue',
     fixtureId: ID.fixture,
     winnerEntryId: null,
     published: true,
@@ -529,6 +779,8 @@ export function specification(overrides: Record<string, unknown> = {}) {
       { kind: 'no_consecutive_games', hard: true, weight: 1 },
       { kind: 'home_away_balance', hard: false, weight: 2 },
     ],
+    maxGamesPerTeamPerDay: null,
+    officialsPerGame: null,
     revision: 1,
     createdAt: T,
     updatedAt: T,

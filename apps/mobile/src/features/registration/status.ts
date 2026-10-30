@@ -26,9 +26,14 @@ type WaitlistEntry = Schema<'WaitlistEntry'>;
 type WaitlistOffer = Schema<'WaitlistOffer'>;
 type Operation = Schema<'Operation'>;
 
-/** Registration window (SPK-CAT-004): paused is never shown as closed. */
+/**
+ * Registration window (SPK-CAT-004): paused is never shown as closed. The opening time is shown
+ * in the offering's facility time zone when the API gives it (SPK-SCHED-008).
+ */
 export function registrationWindowStatus(
-  offering: Pick<PublicOffering, 'publicationState' | 'registrationOpensAt'>,
+  offering: Pick<PublicOffering, 'publicationState' | 'registrationOpensAt'> & {
+    facility?: { timezone: string } | null;
+  },
 ): StatusBadgeProps {
   switch (offering.publicationState) {
     case 'registration_open':
@@ -39,7 +44,10 @@ export function registrationWindowStatus(
       return offering.registrationOpensAt
         ? {
             tone: 'info',
-            label: `Registration opens ${formatInstant(offering.registrationOpensAt)}`,
+            label: `Registration opens ${formatInstant(
+              offering.registrationOpensAt,
+              offering.facility?.timezone,
+            )}`,
           }
         : { tone: 'info', label: 'Registration not open yet' };
     default:
@@ -175,21 +183,40 @@ export function checkoutInFlight(checkout: Checkout): boolean {
   return false;
 }
 
+/**
+ * journeys.md section 3: "Registration pending: <reason>", the outstanding requirement named
+ * from the API's `pendingReason` (ENR-02, SPK-UX-004); without one, plain "Registration pending".
+ */
+export const PENDING_REASON_LABELS: Record<Schema<'EnrollmentPendingReason'>, string> = {
+  approval: 'Registration pending: awaiting approval',
+  payment: 'Registration pending: payment not finished',
+  forms: 'Registration pending: a required form is not signed',
+  placement: 'Registration pending: awaiting placement',
+};
+
+export function pendingLabel(reason: Schema<'EnrollmentPendingReason'> | null | undefined): string {
+  return reason ? PENDING_REASON_LABELS[reason] : 'Registration pending';
+}
+
 /** Enrollment per line (SPK-REG-003, SPK-PLACE-002); placement is its own record. */
 export function enrollmentStatus(
-  enrollment: Pick<Enrollment, 'status'>,
+  enrollment: Pick<Enrollment, 'status'> & Partial<Pick<Enrollment, 'pendingReason'>>,
   offeringName: string,
-  placement: Pick<PlacementRequest, 'status'> | null,
+  placement:
+    (Pick<PlacementRequest, 'status'> & Partial<Pick<PlacementRequest, 'assignedTeamName'>>) | null,
 ): StatusBadgeProps {
   switch (enrollment.status) {
     case 'pending':
-      return { tone: 'pending', label: 'Registration pending' };
+      return { tone: 'pending', label: pendingLabel(enrollment.pendingReason) };
     case 'confirmed':
       if (placement && (placement.status === 'unassigned' || placement.status === 'proposed')) {
         return { tone: 'info', label: `Confirmed in ${offeringName}. Awaiting placement.` };
       }
       if (placement?.status === 'assigned') {
-        return { tone: 'success', label: `Confirmed in ${offeringName}. Placed on a team.` };
+        // journeys.md: "Confirmed: <team or group>", with the team the API names (ENR-02).
+        return placement.assignedTeamName
+          ? { tone: 'success', label: `Confirmed: ${placement.assignedTeamName}` }
+          : { tone: 'success', label: `Confirmed in ${offeringName}. Placed on a team.` };
       }
       return { tone: 'success', label: `Confirmed in ${offeringName}` };
     case 'canceled':
@@ -221,14 +248,29 @@ export function openOffer(entry: WaitlistEntry): WaitlistOffer | null {
   return entry.offers.find((o) => o.status === 'offered') ?? null;
 }
 
+/**
+ * "Place offered. Accept by <server time>." in the facility time zone when known
+ * (SPK-SCHED-008); once the device clock passes it, the record is read again, never decided here.
+ */
+export function offerDeadlineStatus(
+  expiresAt: string,
+  now: Date,
+  timeZone?: string,
+): StatusBadgeProps {
+  return hasPassed(expiresAt, now)
+    ? { tone: 'neutral', label: 'Offer time is up. Checking the offer.' }
+    : { tone: 'warning', label: `Place offered. Accept by ${formatInstant(expiresAt, timeZone)}.` };
+}
+
 /** SPK-REG-008: "Waitlisted for <offering>", "Place offered. Accept by <server time>." */
 export function waitlistEntryStatus(
   entry: WaitlistEntry,
   offeringName: string,
   now: Date,
+  timeZone?: string,
 ): StatusBadgeProps {
   const offer = openOffer(entry);
-  if (offer) return waitlistOfferStatus(offer, now);
+  if (offer) return waitlistOfferStatus(offer, now, timeZone);
   switch (entry.status) {
     case 'waiting':
       return {
@@ -251,15 +293,14 @@ export function waitlistEntryStatus(
   }
 }
 
-export function waitlistOfferStatus(offer: WaitlistOffer, now: Date): StatusBadgeProps {
+export function waitlistOfferStatus(
+  offer: WaitlistOffer,
+  now: Date,
+  timeZone?: string,
+): StatusBadgeProps {
   switch (offer.status) {
     case 'offered':
-      return hasPassed(offer.expiresAt, now)
-        ? { tone: 'neutral', label: 'Offer time is up. Checking the offer.' }
-        : {
-            tone: 'warning',
-            label: `Place offered. Accept by ${formatInstant(offer.expiresAt)}.`,
-          };
+      return offerDeadlineStatus(offer.expiresAt, now, timeZone);
     case 'accepted':
       return { tone: 'success', label: 'Offer accepted' };
     case 'expired':

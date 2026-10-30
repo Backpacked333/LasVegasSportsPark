@@ -1,7 +1,8 @@
 /**
- * SCR-S-26 waitlist management (SPK-REG-008, SPK-AT-006, DEC-006): entries with priority basis,
- * preferences, status and offer history beside capacity, removal with a reason, no hand-issued
- * offers, and the permission restriction.
+ * SCR-S-26 waitlist management (SPK-REG-008, SPK-AT-006, DEC-006, ENR-04): entries with priority
+ * basis, preferences, status and offer history beside capacity, removal with a reason, the staff
+ * offer command (reason, expected revision, the API's expiry in facility time, NOT_NEXT_IN_QUEUE
+ * and CAPACITY_UNAVAILABLE), and the permission restriction.
  */
 import type { FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -81,7 +82,9 @@ describe('SCR-S-26 WaitlistScreen', () => {
     expect(within(second!).getByText(/priority basis joined at \(rank 0\)/)).toBeInTheDocument();
     expect(within(second!).getByText('Preferences: group: morning')).toBeInTheDocument();
     expect(within(second!).getByText('waiting')).toBeInTheDocument();
-    expect(screen.getByText('Issuing an offer by hand is not available')).toBeInTheDocument();
+    // Only a waiting entry can be offered the place; the offered one cannot be offered again.
+    expect(within(second!).getByRole('button', { name: 'Offer the place…' })).toBeInTheDocument();
+    expect(within(first!).queryByRole('button', { name: 'Offer the place…' })).toBeNull();
     expect(screen.getByText(/pending DEC-006/)).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/waitlist-entries')?.query).toEqual({
       offeringId: OFFERING_ID,
@@ -141,5 +144,118 @@ describe('SCR-S-26 WaitlistScreen', () => {
     render(app.at(`/registrations/waitlists/${OFFERING_ID}`));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
     expect(screen.queryByText(PERSON_ID)).toBeNull();
+  });
+
+  it('ENR-04: offers the place with a reason and the expected revision, and shows the API expiry in facility time', async () => {
+    const user = userEvent.setup();
+    const offered = {
+      ...OFFERED.offers[0]!,
+      waitlistEntryId: ENTRY_ID,
+      expiresAt: '2026-10-27T01:00:00.000Z',
+    };
+    const app = createTestApp({
+      routes: routes({
+        'GET /waitlist-entries': ok([waitlistEntry()]),
+        'POST /waitlist-entries/{id}/offer': ok(
+          waitlistEntry({ status: 'offered', position: null, offerCount: 1, offers: [offered] }),
+        ),
+      }),
+    });
+    render(app.at(`/registrations/waitlists/${OFFERING_ID}`));
+    await user.click(await screen.findByRole('button', { name: 'Offer the place…' }));
+    const form = screen.getByRole('form', { name: 'Offer the place' });
+    expect(within(form).getByText(/pending DEC-006/)).toBeInTheDocument();
+    await user.click(within(form).getByRole('button', { name: 'Offer the place' }));
+    expect(within(form).getByText(/A reason is required/)).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/waitlist-entries/{id}/offer')).toBe(false);
+    await user.type(within(form).getByLabelText(/^Reason for offering the place/), 'Seat freed');
+    await user.click(within(form).getByRole('button', { name: 'Offer the place' }));
+    // SPK-SCHED-008: 01:00 UTC on 27 October is 18:00 PDT on 26 October.
+    expect(
+      await within(form).findByText(/held until Mon, Oct 26, 2026, 06:00 PM PDT/),
+    ).toBeInTheDocument();
+    const sent = app.fake.requests.find((r) => r.route === '/waitlist-entries/{id}/offer');
+    expect(sent?.params).toEqual({ id: ENTRY_ID });
+    expect(sent?.body).toEqual({ reason: 'Seat freed', expectedRevision: 1 });
+    expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
+  });
+
+  it('NOT_NEXT_IN_QUEUE names the entry the API would offer first and offers nothing', async () => {
+    const user = userEvent.setup();
+    const later = waitlistEntry({
+      id: `${ENTRY_ID.slice(0, -1)}9`,
+      participantPersonId: ADULT_ID,
+      position: 2,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /waitlist-entries': ok([waitlistEntry(), later]),
+        'POST /waitlist-entries/{id}/offer': apiError(400, 'VALIDATION_FAILED', {
+          message: 'Another waiting entry is offered the next place first.',
+          nextAction: 'correct_input',
+          details: {
+            code: 'NOT_NEXT_IN_QUEUE',
+            waitlistEntryId: later.id,
+            nextWaitlistEntryId: ENTRY_ID,
+          },
+        }),
+      }),
+    });
+    render(app.at(`/registrations/waitlists/${OFFERING_ID}`));
+    const entries = await screen.findByRole('list', { name: 'Waitlist entries' });
+    const rows = within(entries)
+      .getAllByRole('listitem')
+      .filter((li) => li.parentElement === entries);
+    await user.click(within(rows[1]!).getByRole('button', { name: 'Offer the place…' }));
+    await user.type(within(rows[1]!).getByLabelText(/^Reason for offering/), 'Asked by family');
+    await user.click(within(rows[1]!).getByRole('button', { name: 'Offer the place' }));
+    const state = await within(rows[1]!).findByTestId('state-validation');
+    expect(within(state).getByText('Not next in the queue')).toBeInTheDocument();
+    expect(await within(state).findByText('Alex Rivera')).toBeInTheDocument();
+    expect(within(state).getByText(/Error code: VALIDATION_FAILED/)).toBeInTheDocument();
+  });
+
+  it('an offer without a free place answers CAPACITY_UNAVAILABLE and offers Reload', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /waitlist-entries': ok([waitlistEntry()]),
+        'POST /waitlist-entries/{id}/offer': apiError(409, 'CAPACITY_UNAVAILABLE', {
+          message: 'No place is free to offer.',
+          nextAction: 'reload_current_state',
+        }),
+      }),
+    });
+    render(app.at(`/registrations/waitlists/${OFFERING_ID}`));
+    await user.click(await screen.findByRole('button', { name: 'Offer the place…' }));
+    await user.type(screen.getByLabelText(/^Reason for offering/), 'Seat freed');
+    await user.click(screen.getByRole('button', { name: 'Offer the place' }));
+    expect(await screen.findByText('Capacity changed or is not available')).toBeInTheDocument();
+    const reads = app.fake.requests.filter((r) => r.route === '/capacity-pools').length;
+    await user.click(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/capacity-pools').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+  });
+
+  it('a missing offer permission reads as not available to you', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /waitlist-entries': ok([waitlistEntry()]),
+        'POST /waitlist-entries/{id}/offer': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+          details: { action: 'enrollment.manage_waitlist' },
+        }),
+      }),
+    });
+    render(app.at(`/registrations/waitlists/${OFFERING_ID}`));
+    await user.click(await screen.findByRole('button', { name: 'Offer the place…' }));
+    await user.type(screen.getByLabelText(/^Reason for offering/), 'Seat freed');
+    await user.click(screen.getByRole('button', { name: 'Offer the place' }));
+    expect(await screen.findByText('Not available to you')).toBeInTheDocument();
+    expect(screen.getByText(/enrollment\.manage_waitlist/)).toBeInTheDocument();
   });
 });

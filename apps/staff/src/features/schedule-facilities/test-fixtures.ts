@@ -4,7 +4,14 @@
  * Los Angeles; 2026-10-24 local is the test day (TEST_NOW is 05:00 local).
  */
 import type { Schema } from '@sportspark/api-client';
-import { FACILITY_A, TEST_NOW, staffMe, todayFeed } from '../../testing/test-app';
+import {
+  FACILITY_A,
+  FACILITY_B,
+  TEST_NOW,
+  mePermissions,
+  staffMe,
+  todayFeed,
+} from '../../testing/test-app';
 
 export const PITCH = '0192f1a0-0000-7000-8000-0000000000a1';
 export const HALF_A = '0192f1a0-0000-7000-8000-0000000000a2';
@@ -17,9 +24,74 @@ export const ME_PERSON = '0192f1a0-0000-7000-8000-0000000000dd';
 
 const T = TEST_NOW.toISOString();
 
-/** `GET /me` and `GET /today` for a viewer scoped to facility A only. */
+/** A facility directory entry (`GET /v1/facilities`, K-04): Los Angeles, in the viewer's scope. */
+export function facilitySummary(
+  over: Partial<Schema<'FacilitySummary'>> & { id: string },
+): Schema<'FacilitySummary'> {
+  return {
+    slug: 'north-park',
+    name: 'North Park 1',
+    timezone: 'America/Los_Angeles',
+    status: 'active',
+    address: null,
+    inStaffScope: true,
+    ...over,
+  };
+}
+
+/** `GET /v1/facilities`: A (North Park 1) in scope and B (North Park 2) outside it, by default. */
+export function facilityDirectory(items?: Schema<'FacilitySummary'>[]) {
+  return {
+    status: 200,
+    body: {
+      items: items ?? [
+        facilitySummary({ id: FACILITY_A }),
+        facilitySummary({
+          id: FACILITY_B,
+          slug: 'north-park-2',
+          name: 'North Park 2',
+          inStaffScope: false,
+        }),
+      ],
+    },
+  };
+}
+
+/** Every schedule and facilities command these screens offer (scheduling and facilities actions). */
+export const SCHEDULE_FACILITY_ACTIONS = [
+  'scheduling.read_inventory',
+  'scheduling.manage_inventory',
+  'scheduling.manage_closures',
+  'scheduling.read_schedule',
+  'scheduling.manage_events',
+  'scheduling.manage_drafts',
+  'scheduling.publish_schedule',
+  'facilities.manage_asset',
+  'facilities.report_issue',
+  'facilities.manage_maintenance_task',
+  'facilities.apply_restriction',
+  'facilities.record_inspection',
+  'facilities.release_to_service',
+  'facilities.schedule_preventive_maintenance',
+  'facilities.view_maintenance',
+] as const;
+
+/** `GET /me/permissions` allowing the listed actions at facility A (default: all of them). */
+export function scopedPermissions(actions: readonly string[] = SCHEDULE_FACILITY_ACTIONS) {
+  return mePermissions({ actions: actions.map((id) => ({ id, facilityIds: [FACILITY_A] })) });
+}
+
+/**
+ * `GET /me`, `GET /me/permissions` (every schedule and facilities action at A), `GET /facilities`
+ * and `GET /today` for a viewer scoped to facility A only.
+ */
 export function oneFacilityRoutes() {
-  return { 'GET /me': staffMe([FACILITY_A]), 'GET /today': todayFeed([], [FACILITY_A]) };
+  return {
+    'GET /me': staffMe([FACILITY_A]),
+    'GET /me/permissions': scopedPermissions(),
+    'GET /facilities': facilityDirectory(),
+    'GET /today': todayFeed([], [FACILITY_A]),
+  };
 }
 
 export function resource(
@@ -182,14 +254,6 @@ export function task(
   };
 }
 
-/**
- * Nullable `$ref` fields are published as `allOf: [$ref, {type: [object, null]}]`, which the
- * generated client types as `T & (Record<string, never> | null)`; real values need a cast.
- */
-function nullableRef<T>(value: unknown): T {
-  return value as T;
-}
-
 export function restriction(
   over: Partial<Schema<'Restriction'>> & { id: string },
 ): Schema<'Restriction'> {
@@ -205,18 +269,18 @@ export function restriction(
     reason: 'Turf repair',
     affectedConflictUnitIds: [UNIT_A],
     status: 'active',
-    approvedBy: nullableRef<Schema<'Restriction'>['approvedBy']>({
+    approvedBy: {
       kind: 'staff',
       accountId: null,
       personId: null,
       actorLabel: 'Facilities lead',
-    }),
+    },
     approvedAt: T,
     schedulingClosureId: null,
-    releasedBy: nullableRef<Schema<'Restriction'>['releasedBy']>(null),
+    releasedBy: null,
     releasedAt: null,
     releaseReason: null,
-    withdrawnBy: nullableRef<Schema<'Restriction'>['withdrawnBy']>(null),
+    withdrawnBy: null,
     withdrawnAt: null,
     withdrawalReason: null,
     operationId: null,

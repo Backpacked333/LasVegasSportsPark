@@ -2,7 +2,7 @@
  * SCR-C-20 activity detail for a program session or a booked session (SPK-UX-004, SPK-COMMS-005,
  * SPK-SCHED-008, SPK-UX-008, SPK-UX-009, §4.10, §4.14).
  */
-import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, within } from '@testing-library/react-native';
 import {
   BOOKING,
@@ -16,7 +16,9 @@ import {
   OFFERING_TWO,
   offering,
   ok,
-  person,
+  names,
+  facility,
+  DENVER,
   scheduleChange,
   SELF,
   SESSION,
@@ -58,10 +60,8 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
     'GET /me/inbox': inboxPage([]),
     'GET /enrollments/{id}': ok(enrollment()),
     'GET /session-bookings/{id}': ok(booking),
-    'GET /people/{id}': (req) =>
-      req.params.id === CHILD
-        ? fakeResponse(200, person(CHILD, 'Sam'))
-        : fakeResponse(404, apiErrorBody('NOT_FOUND')),
+    'GET /person-names': names({ [CHILD]: 'Sam' }),
+    'GET /facilities/{id}': ok(facility()),
     'GET /offerings/{id}': (req) =>
       fakeResponse(
         200,
@@ -112,7 +112,7 @@ describe('SCR-C-20 SessionDetailScreen', () => {
     const card = await screen.findByTestId('session-card');
     expect(
       await within(card).findByLabelText(
-        'For: Sam. When: Sat, Oct 24, 10:00 AM to 11:00 AM PDT. Where: North field',
+        'For: Sam. When: Sat, Oct 24, 10:00 AM to 11:00 AM PDT. Where: Main Park, North field',
       ),
     ).toBeOnTheScreen();
     expect(within(card).getByRole('header', { name: 'Junior Skills' })).toBeOnTheScreen();
@@ -144,7 +144,7 @@ describe('SCR-C-20 SessionDetailScreen', () => {
     expect(await within(card).findByLabelText('Booking pending')).toBeOnTheScreen();
     expect(
       within(card).getByLabelText(
-        'For: You. When: Sat, Oct 24, 6:00 PM to 7:30 PM PDT. Where: Place not shown yet',
+        'For: You. When: Sat, Oct 24, 6:00 PM to 7:30 PM PDT. Where: Main Park',
       ),
     ).toBeOnTheScreen();
     expect(app.fake.requests.some((r) => r.route === '/enrollments/{id}')).toBe(false);
@@ -209,5 +209,45 @@ describe('SCR-C-20 SessionDetailScreen', () => {
     expect(await screen.findByText('Registrations are unavailable.')).toBeOnTheScreen();
     expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+  });
+
+  it('SPK-SCHED-008: times are on the facility clock the enrollment names, without a schedule notice', async () => {
+    renderSession(
+      { sessionId: SESSION, enrollmentId: ENROLLMENT },
+      {
+        'GET /enrollments/{id}': ok(
+          enrollment({
+            offering: { ...enrollment().offering, timezone: DENVER },
+          }),
+        ),
+      },
+    );
+    const card = await screen.findByTestId('session-card');
+    expect(
+      await within(card).findByLabelText(
+        'For: Sam. When: Sat, Oct 24, 11:00 AM to 12:00 PM MDT. Where: Main Park, North field',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/device's time zone/)).toBeNull();
+  });
+
+  it('SPK-SCHED-008: a booked session takes its zone and place from GET /v1/facilities/{id}', async () => {
+    const app = renderSession(
+      { sessionId: SESSION_TWO, bookingId: BOOKING },
+      {
+        'GET /offerings/{id}': ok({
+          ...offering(OFFERING_TWO, 'Adult Pickup Night', null),
+          facility: undefined,
+        }),
+        'GET /facilities/{id}': ok(facility({ name: 'North Complex', timezone: DENVER })),
+      },
+    );
+    const card = await screen.findByTestId('session-card');
+    expect(
+      await within(card).findByLabelText(
+        'For: You. When: Sat, Oct 24, 7:00 PM to 8:30 PM MDT. Where: North Complex',
+      ),
+    ).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.route === '/facilities/{id}')).toBe(true);
   });
 });

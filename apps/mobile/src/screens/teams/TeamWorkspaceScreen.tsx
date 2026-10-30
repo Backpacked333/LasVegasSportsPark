@@ -8,23 +8,33 @@
  * (SPK-COMP-004).
  *
  * Roster players get the reduced view: no captain sections, teammates' names and playing status
- * without eligibility indicators. Which view is shown follows the API's role records (see
- * features/teams/queries.ts); the API authorizes every command behind the captain tools.
+ * without eligibility indicators. Which view is shown follows the workspace's `viewer` (CMP-02,
+ * see features/teams/queries.ts), and each captain tool is offered only when its action is in
+ * `viewer.availableActions`; the API still authorizes every command behind them.
  *
- * Not available from the API (reported): contacting the operating team (`POST /v1/cases` is staff
- * only), a forms-outstanding indicator, and a player's list of their own contribution requests.
- * What captains may see beyond the API's indicators is DEC-012 (pending).
+ * The captain contacts the operating team about the team with `POST /v1/me/support-requests`
+ * (features/teams/ContactOperations.tsx, SPK-SUPPORT-002). The API allows that to the captain only
+ * (team role `captain`, which a co-captain holds only when the rule set lets co-captains act as
+ * captain), so the form follows `viewer.actingAsCaptain`; everyone else, a co-captain who may not
+ * act as captain included, is pointed to Support. A forms-outstanding indicator is not built:
+ * stage 3 left it pending DEC-002 and DEC-028. What captains may see beyond the API's indicators
+ * is DEC-012 (pending). A player's own contribution requests are listed by SCR-C-25
+ * (`/team/contributions`, `GET /v1/me/contribution-requests`).
+ *
+ * Upcoming game times are in the facility's time zone (SPK-SCHED-008): each game's
+ * `GET /v1/fixtures/{id}` (the read SCR-C-24 makes for the same games, so it is shared) gives
+ * `venue.timezone`; while it loads or if it fails the device's zone is used, always named.
  *
  * States: loading; empty (no fixtures yet); ready; permission restriction (captain-only sections
  * hidden for players; NOT_FOUND is "not available"); stale (refetch on focus, "Updated <time>");
- * offline (cached with age); processing and success: not applicable here (commands live on the
- * linked screens).
+ * offline (cached with age, sending a request disabled); processing and success: the request to
+ * the operating team (other commands live on the linked screens).
  */
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateRange, ordinal, plural } from '../../features/teams/format';
-import type { Viewer, Workspace } from '../../features/teams/queries';
+import { TEAM_ACTIONS, type Viewer, type Workspace } from '../../features/teams/queries';
 import { idParam, teamRoutes } from '../../features/teams/routes';
 import {
   availabilitySummaryText,
@@ -34,12 +44,12 @@ import {
   rsvpStatus,
   teamEntryStatus,
 } from '../../features/teams/status';
+import { ContactOperations, ContactThroughSupport } from '../../features/teams/ContactOperations';
 import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, ButtonRow, Detail, ReasonList, Section, Title } from '../../features/teams/ui';
 import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
-import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type Upcoming = Workspace['upcomingFixtures'][number];
@@ -57,6 +67,35 @@ function upcomingDetail(game: Upcoming, viewer: Viewer): string {
       ? `. Your answer: ${rsvpStatus(game.myResponse).label}`
       : '';
   return `${where}${round}${answers}`;
+}
+
+/**
+ * One upcoming game. The status names the start in the venue's zone from `GET /v1/fixtures/{id}`
+ * (SPK-SCHED-008); a game without a venue yet, or whose read failed, uses the device's zone, named.
+ */
+function UpcomingGameRow({
+  game,
+  viewer,
+  onPress,
+}: {
+  game: Upcoming;
+  viewer: Viewer;
+  onPress: () => void;
+}) {
+  const detail = useApiQuery({
+    path: '/fixtures/{id}',
+    request: { path: { id: game.fixture.id } },
+  });
+  return (
+    <ListRow
+      title={upcomingTitle(game)}
+      detail={upcomingDetail(game, viewer)}
+      status={fixtureStatus(game.fixture, detail.data?.venue?.timezone)}
+      onPress={onPress}
+      accessibilityHint="Opens availability for this team's games"
+      testID={`upcoming-${game.fixture.id}`}
+    />
+  );
 }
 
 function StandingSummary({ workspace }: { workspace: Workspace }) {
@@ -101,7 +140,10 @@ function CaptainReadiness({ workspace }: { workspace: Workspace }) {
           r.financialStatusRef ? 'Recorded: see Team contributions' : 'No obligation recorded yet'
         }
       />
-      <Detail label="Forms outstanding" value="Not shown: not available from the service yet" />
+      <Detail
+        label="Forms outstanding"
+        value="Not shown: waiting on a decision (DEC-002, DEC-028)"
+      />
       {r.issues.length > 0 ? (
         <ReasonList reasons={r.issues} testID="readiness-issues" />
       ) : (
@@ -162,14 +204,11 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
         ) : (
           <View accessibilityRole="list">
             {games.map((game) => (
-              <ListRow
+              <UpcomingGameRow
                 key={game.fixture.id}
-                title={upcomingTitle(game)}
-                detail={upcomingDetail(game, viewer)}
-                status={fixtureStatus(game.fixture)}
+                game={game}
+                viewer={viewer}
                 onPress={() => router.push(teamRoutes.availability(entryId))}
-                accessibilityHint="Opens availability for this team's games"
-                testID={`upcoming-${game.fixture.id}`}
               />
             ))}
           </View>
@@ -194,6 +233,7 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
               label="Roster and invitations"
               onPress={() => router.push(teamRoutes.roster(entryId))}
               variant="secondary"
+              accessibilityHint="Invitations, join requests, the roster and the captain role"
             />
             <Button
               label="Availability"
@@ -205,17 +245,21 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
               onPress={() => router.push(teamRoutes.contributions(entryId))}
               variant="secondary"
             />
-            <Button
-              label="Roster change or substitute"
-              onPress={() => router.push(teamRoutes.rosterChange(entryId))}
-              variant="secondary"
-            />
-            <Button
-              label="Renew for a new season"
-              onPress={() => router.push(teamRoutes.renewEntry(entryId))}
-              variant="secondary"
-              accessibilityHint="Starts a new season entry; this season's records stay as they are"
-            />
+            {viewer.can(TEAM_ACTIONS.manageRoster) ? (
+              <Button
+                label="Roster change or substitute"
+                onPress={() => router.push(teamRoutes.rosterChange(entryId))}
+                variant="secondary"
+              />
+            ) : null}
+            {viewer.can(TEAM_ACTIONS.renew) ? (
+              <Button
+                label="Renew for a new season"
+                onPress={() => router.push(teamRoutes.renewEntry(entryId))}
+                variant="secondary"
+                accessibilityHint="Starts a new season entry; this season's records stay as they are"
+              />
+            ) : null}
           </ButtonRow>
         </Section>
       ) : (
@@ -227,23 +271,26 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
                 onPress={() => router.push(teamRoutes.availability(entryId))}
                 variant="secondary"
               />
+              {/* SCR-C-25: the player's own contribution requests (GET /v1/me/contribution-requests). */}
+              <Button
+                label="Your contributions"
+                onPress={() => router.push(teamRoutes.myContributions())}
+                variant="secondary"
+                accessibilityHint="Lists the team contributions asked of you, with your own payments only"
+              />
             </ButtonRow>
-            <StateView
-              variant="unavailable"
-              title="Your contributions"
-              description="The app cannot list the contributions requested from you yet. Ask your captain or the front desk."
-            />
           </Section>
           <ReducedRoster workspace={workspace} now={now} />
         </>
       )}
 
       <Section title="Contact the operating team">
-        <StateView
-          variant="unavailable"
-          title="Not available in the app yet"
-          description="Opening a support request from the app is not available yet. Contact the front desk."
-        />
+        {/* SUP-01: the API allows a team request to the captain only (see the header). */}
+        {viewer.actingAsCaptain ? (
+          <ContactOperations workspace={workspace} />
+        ) : (
+          <ContactThroughSupport />
+        )}
       </Section>
     </View>
   );

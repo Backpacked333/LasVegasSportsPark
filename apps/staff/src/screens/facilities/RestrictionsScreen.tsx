@@ -4,8 +4,8 @@
  *
  * - Operating status now (`GET /v1/facilities/{id}/operating-status`): each space in service or
  *   restricted, with why and until when.
- * - Restrictions (`GET /v1/maintenance-restrictions`) with status proposed, approved, active or
- *   released.
+ * - Restrictions (`GET /v1/maintenance-restrictions`) with status proposed, approved, active,
+ *   released or withdrawn (a proposed or approved one is withdrawn on its detail screen, FAC-01).
  * - Apply a restriction: the affected area is chosen from the inventory (a whole pitch blocks every
  *   subdivision; a subdivision blocks only itself, and a whole-pitch booking), optionally for a
  *   maintenance task; kind, interval and reason; what happens to events already booked is chosen
@@ -31,6 +31,7 @@ import {
   type FacilityContext,
 } from '../../features/schedule-facilities/facility-scope';
 import { orderedInventory } from '../../features/schedule-facilities/inventory';
+import { ActionGate } from '../../features/schedule-facilities/permission';
 import { RESTRICTION_BADGE } from '../../features/schedule-facilities/labels';
 import {
   LocalDateTimeField,
@@ -354,6 +355,9 @@ function RestrictionList({ facility }: { facility: FacilityContext }) {
                     <span className="caption">
                       {r.kind} · {formatRange(r.interval.start, r.interval.end, facility.timezone)}
                       {r.taskId ? ' · linked to a maintenance task' : ''}
+                      {r.status === 'withdrawn' && r.withdrawalReason
+                        ? ` · withdrawn: ${r.withdrawalReason}`
+                        : ''}
                     </span>
                   </div>
                   <StatusBadge
@@ -379,7 +383,13 @@ export function RestrictionsScreen() {
             <ZoneCaption facility={facility} />
             <OperatingStatusNow facility={facility} />
             <RestrictionList facility={facility} />
-            <ApplyRestrictionForm facility={facility} />
+            <ActionGate
+              action="facilities.apply_restriction"
+              facilityId={facility.id}
+              what="Applying operating restrictions"
+            >
+              <ApplyRestrictionForm facility={facility} />
+            </ActionGate>
           </>
         )}
       </FacilityGate>

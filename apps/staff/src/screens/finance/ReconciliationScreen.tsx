@@ -10,7 +10,9 @@
  * operator queue, unrelated discrepancies are never netted), and record a cash or external tender
  * against an obligation with evidence (`POST /v1/cash-tenders`; it bypasses no registration or
  * capacity check). The cash procedure is pending DEC-009, accounting export DEC-022. Period dates
- * are UTC calendar days, and the form says so.
+ * are UTC calendar days, and the form says so. Unknown payment and refund outcomes open their
+ * lists (`GET /v1/payments?status=unknown`, `GET /v1/refunds?status=unknown`, FIN-02); export
+ * batches are SCR-S-57, used only when the `accounting` switch is on (DEC-016, DEC-081).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -148,6 +150,9 @@ function ReportView({ report }: { report: Report }) {
               ['Unknown outcomes', String(report.refunds.unknownCount)],
             ]}
           />
+          {report.refunds.unknownCount > 0 ? (
+            <Link to="/finance/credits">Open the refunds with an unknown result</Link>
+          ) : null}
         </section>
         <section className="rf-panel" aria-label="Credits">
           <h3>Credits</h3>
@@ -198,7 +203,9 @@ function ReportView({ report }: { report: Report }) {
           <p>
             {report.exceptions.unknownPayments} unknown payment outcome(s) and{' '}
             {report.exceptions.recoveryRequiredCheckouts} checkout(s) needing recovery. Owner:
-            finance operator queue. <Link to="/finance/payments">Open them</Link>.
+            finance operator queue.{' '}
+            <Link to="/finance/payments?view=attempts">Open the payment attempts</Link> or{' '}
+            <Link to="/finance/payments">the finance exceptions</Link>.
           </p>
         </section>
       ) : null}
@@ -668,6 +675,10 @@ export function ReconciliationScreen() {
         decisions={PENDING.accounting.ids}
         owner={PENDING.accounting.owner}
       />
+      <p className="caption">
+        Export batches to an accounting system are a conditional screen (SCR-S-57, in the Finance
+        navigation), used only when the organization turns that capability on (DEC-016, DEC-081).
+      </p>
     </section>
   );
 }

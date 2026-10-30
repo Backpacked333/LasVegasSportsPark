@@ -8,20 +8,32 @@
  * (`POST /v1/notifications/{id}/send` with the expected revision) resolves recipients again; any
  * excluded at that recheck are reported by count, not by contact. STALE_REVISION re-previews.
  *
- * Delivery (`GET /v1/notifications/{id}/deliveries`): per recipient and channel the exact states
- * queued, provider accepted, delivered where confirmed, failed, unknown, read, acknowledged
- * (SPK-COMMS-004), with counts per state. A push is never shown as guaranteed delivery. Retrying a
- * failed delivery is not offered by the API; failed urgent notices reach the Today workspace.
+ * Delivery (`GET /v1/notifications/{id}/deliveries`): per recipient (by the name the API gives,
+ * SPK-UX-006) and channel the exact states queued, provider accepted, delivered where confirmed,
+ * failed, unknown, read, acknowledged (SPK-COMMS-004), with counts per state. A push is never
+ * shown as guaranteed delivery. Failed urgent notices reach the Today workspace.
+ *
+ * Retry (`POST /v1/delivery-attempts/{id}/retry`, COM-02): one failed push, email or SMS delivery
+ * is retried as a new queued attempt, with a reason, the attempt's expected revision and one
+ * idempotency key per intent. It is offered only on a failed external attempt not already
+ * retried, for a recipient still authorised, and only when `GET /v1/me/permissions` lists the
+ * retry action at the notice's facility; the API re-checks the recipient's authority and refuses
+ * an unknown outcome (it may have reached the person), a superseded notice, a revoked recipient
+ * or a second retry, shown with its code.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { usePermissions } from '../../api/permissions';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, COMMUNICATIONS_TABS } from '../../features/operations/AreaTabs';
+import { useFacilityZone } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
+import { TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
 import { formatInstant, humanize } from '../../features/operations/format';
+import { useKeyedCommands } from '../../features/operations/commands';
 import {
   CHANNEL_LABEL,
   DELIVERY_STATES,
@@ -38,6 +50,10 @@ import { StatusBadge } from '../../ui/StatusBadge';
 
 type Notification = Schema<'Notification'>;
 type Deliveries = Schema<'NotificationDeliveries'>;
+type Attempt = Schema<'DeliveryAttempt'>;
+
+const RETRY_ACTION = 'communications.retry_delivery';
+const DELIVERIES_KEY = ['api', '/notifications/{id}/deliveries'] as const;
 
 export function NotificationScreen() {
   const { notificationId = '' } = useParams();
@@ -88,6 +104,8 @@ export function NotificationView({
 }
 
 function NotificationSummary({ notification: n }: { notification: Notification }) {
+  // SPK-SCHED-008: "deliver no earlier than" was entered in the facility's zone; shown in it too.
+  const zone = useFacilityZone(n.facilityId);
   const badge = NOTIFICATION_STATUS[n.status];
   return (
     <div className="ops-section">
@@ -109,9 +127,11 @@ function NotificationSummary({ notification: n }: { notification: Notification }
       </div>
       <p className="caption">
         {humanize(n.kind)}
-        {n.scheduledFor ? ` · Delivered no earlier than ${formatInstant(n.scheduledFor)}` : ''}
-        {n.queuedAt ? ` · Queued ${formatInstant(n.queuedAt)}` : ''}
-        {n.dispatchedAt ? ` · Dispatched ${formatInstant(n.dispatchedAt)}` : ''}
+        {n.scheduledFor
+          ? ` · Delivered no earlier than ${formatInstant(n.scheduledFor, zone)}`
+          : ''}
+        {n.queuedAt ? ` · Queued ${formatInstant(n.queuedAt, zone)}` : ''}
+        {n.dispatchedAt ? ` · Dispatched ${formatInstant(n.dispatchedAt, zone)}` : ''}
       </p>
       <p>{n.body}</p>
       {n.detailsBefore || n.detailsAfter ? (
@@ -151,6 +171,7 @@ function summaryOf(details: Notification['detailsBefore']): string {
 }
 
 function PreviewAndSend({ notification: n }: { notification: Notification }) {
+  const zone = useFacilityZone(n.facilityId);
   const queryClient = useQueryClient();
   const preview = useApiQuery({
     path: '/notifications/{id}/recipients',
@@ -190,7 +211,7 @@ function PreviewAndSend({ notification: n }: { notification: Notification }) {
           <>
             <p data-testid="recipient-count">
               {data.count} recipient{data.count === 1 ? '' : 's'}, resolved from current permissions
-              at {formatInstant(data.resolvedAt)}. Contact details are never shown.
+              at {formatInstant(data.resolvedAt, zone)}. Contact details are never shown.
             </p>
             <ul className="list" aria-label="Recipients">
               {data.recipients.map((r) => (
@@ -251,7 +272,7 @@ function DeliveryStatus({ notification: n }: { notification: Notification }) {
             'No recipient was resolved for this message, so nothing was queued for delivery.',
         }}
       >
-        {(data) => <DeliveryDetail data={data} />}
+        {(data) => <DeliveryDetail data={data} notification={n} />}
       </QueryBoundary>
       <div className="ops-actions">
         <Button variant="secondary" onClick={() => void deliveries.refetch()}>
@@ -263,18 +284,36 @@ function DeliveryStatus({ notification: n }: { notification: Notification }) {
 }
 
 /**
- * SPK-COMMS-006 "names and a count, never a shared contact list": recipients are identified by
- * their position and basis, without reading each person's record (the person read carries contact
- * points). A recipient display name needs the API to add it to NotificationRecipient (README gap).
+ * SPK-COMMS-006 "names and a count, never a shared contact list": a recipient is named by the
+ * display name the API gives (never a contact detail), with the basis; one without a name in the
+ * directory keeps their position.
  */
 function recipientLabel(r: Deliveries['recipients'][number], index: number): string {
   const subjects = r.subjectPersonIds.length;
-  return `Recipient ${index + 1} (${RECIPIENT_BASIS[r.basis]}${r.basisDetail ? `: ${r.basisDetail}` : ''}${
+  const who = r.displayName ?? `Recipient ${index + 1}`;
+  return `${who} (${RECIPIENT_BASIS[r.basis]}${r.basisDetail ? `: ${r.basisDetail}` : ''}${
     subjects > 0 ? `, for ${subjects} ${subjects === 1 ? 'person' : 'people'}` : ''
   })`;
 }
 
-function DeliveryDetail({ data }: { data: Deliveries }) {
+/** Whether to offer a retry of this attempt (the API still decides). */
+function retryable(a: Attempt, data: Deliveries, recipientAuthorized: boolean): boolean {
+  return (
+    a.status === 'failed' &&
+    a.channel !== 'in_app' &&
+    recipientAuthorized &&
+    a.failureCode !== 'RECIPIENT_REVOKED' &&
+    a.failureCode !== 'SUPERSEDED' &&
+    data.notification.supersededByNotificationId === null &&
+    !data.attempts.some((other) => other.retryOfAttemptId === a.id)
+  );
+}
+
+function DeliveryDetail({ data, notification }: { data: Deliveries; notification: Notification }) {
+  const zone = useFacilityZone(notification.facilityId);
+  const permissions = usePermissions();
+  const mayRetry = permissions.isPermitted(RETRY_ACTION, notification.facilityId);
+  const commands = useKeyedCommands({ invalidate: [DELIVERIES_KEY] });
   const counts = useMemo(() => {
     const c = new Map<string, number>();
     for (const a of data.attempts) c.set(a.status, (c.get(a.status) ?? 0) + 1);
@@ -309,11 +348,11 @@ function DeliveryDetail({ data }: { data: Deliveries }) {
           owner="Technical lead/operator"
         />
       ) : null}
-      {failed > 0 ? (
+      {failed > 0 && mayRetry === false ? (
         <StateView
           variant="unavailable"
-          title="Retrying a failed delivery is not available yet"
-          description="The service does not offer a retry for a single delivery. Failed essential notices are raised in the Today workspace."
+          title="Retrying a failed delivery is not available to you"
+          description="Ask a general manager or support operator to retry it. Failed essential notices are raised in the Today workspace."
         />
       ) : null}
       <p className="caption">
@@ -336,22 +375,31 @@ function DeliveryDetail({ data }: { data: Deliveries }) {
                   <ul className="ops-history" aria-label={`Deliveries to ${name}`}>
                     {attempts.map((a) => (
                       <li key={a.id}>
+                        {a.retryOfAttemptId ? 'Retry, ' : ''}
                         {CHANNEL_LABEL[a.channel]}:{' '}
                         <StatusBadge
                           tone={DELIVERY_STATUS[a.status].tone}
                           label={DELIVERY_STATUS[a.status].label}
                         />{' '}
                         <span className="caption">
-                          queued {formatInstant(a.queuedAt)}
-                          {a.acceptedAt ? `, accepted ${formatInstant(a.acceptedAt)}` : ''}
-                          {a.deliveredAt ? `, delivered ${formatInstant(a.deliveredAt)}` : ''}
-                          {a.readAt ? `, read ${formatInstant(a.readAt)}` : ''}
+                          queued {formatInstant(a.queuedAt, zone)}
+                          {a.acceptedAt ? `, accepted ${formatInstant(a.acceptedAt, zone)}` : ''}
+                          {a.deliveredAt ? `, delivered ${formatInstant(a.deliveredAt, zone)}` : ''}
+                          {a.readAt ? `, read ${formatInstant(a.readAt, zone)}` : ''}
                           {a.acknowledgedAt
-                            ? `, acknowledged ${formatInstant(a.acknowledgedAt)}`
+                            ? `, acknowledged ${formatInstant(a.acknowledgedAt, zone)}`
                             : ''}
-                          {a.failedAt ? `, failed ${formatInstant(a.failedAt)}` : ''}
+                          {a.failedAt ? `, failed ${formatInstant(a.failedAt, zone)}` : ''}
                           {a.failureCode ? ` (${humanize(a.failureCode.toLowerCase())})` : ''}
                         </span>
+                        {mayRetry && retryable(a, data, r.status === 'authorized') ? (
+                          <RetryDelivery
+                            attempt={a}
+                            label={`${CHANNEL_LABEL[a.channel]} to ${name}`}
+                            commands={commands}
+                          />
+                        ) : null}
+                        <RetryOutcome attemptId={a.id} commands={commands} timezone={zone} />
                       </li>
                     ))}
                   </ul>
@@ -362,5 +410,106 @@ function DeliveryDetail({ data }: { data: Deliveries }) {
         })}
       </ul>
     </>
+  );
+}
+
+/** One failed delivery retried as a new attempt (COM-02, SPK-COMMS-004), with a reason. */
+function RetryDelivery({
+  attempt,
+  label,
+  commands,
+}: {
+  attempt: Attempt;
+  label: string;
+  commands: ReturnType<typeof useKeyedCommands>;
+}) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [missing, setMissing] = useState(false);
+  const key = `retry|${attempt.id}`;
+  const outcome = commands.outcome(key);
+  if (outcome.status === 'success') return null;
+  const submit = () => {
+    if (!reason.trim()) {
+      setMissing(true);
+      return;
+    }
+    setMissing(false);
+    void commands.run(key, 'post', '/delivery-attempts/{id}/retry', {
+      path: { id: attempt.id },
+      body: { reason: reason.trim(), expectedRevision: attempt.revision },
+    });
+  };
+  const reload = () => {
+    commands.reset(key);
+    void queryClient.invalidateQueries({ queryKey: DELIVERIES_KEY });
+  };
+  return (
+    <div>
+      <Button
+        variant="secondary"
+        aria-expanded={open}
+        aria-label={`Retry the failed delivery: ${label}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Retry this delivery
+      </Button>
+      {open ? (
+        <form
+          className="ops-form"
+          aria-label={`Retry the failed delivery: ${label}`}
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <TextAreaField
+            label="Reason for retrying"
+            value={reason}
+            onChange={setReason}
+            required
+            hint="For example: the address was corrected. The recipient's authority is checked again."
+            error={missing ? 'A reason is required.' : fieldErrorsOf(outcome.error).reason}
+          />
+          <Button type="submit" busy={outcome.status === 'pending'}>
+            Confirm retry
+          </Button>
+        </form>
+      ) : null}
+      {outcome.status === 'error' && outcome.error ? (
+        <CommandError
+          error={outcome.error}
+          onRetry={submit}
+          onReload={reload}
+          subject="This delivery"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function RetryOutcome({
+  attemptId,
+  commands,
+  timezone,
+}: {
+  attemptId: string;
+  commands: ReturnType<typeof useKeyedCommands>;
+  timezone: string | null;
+}) {
+  const outcome = commands.outcome(`retry|${attemptId}`);
+  const retried = outcome.status === 'success' ? (outcome.data as Attempt) : null;
+  if (!retried) return null;
+  return (
+    <CommandSuccess
+      tone="pending"
+      label={`Retry ${DELIVERY_STATUS[retried.status].label.toLowerCase()}`}
+    >
+      <span className="caption">
+        A new attempt was queued {formatInstant(retried.queuedAt, timezone)}; the failed one stays
+        as recorded.
+      </span>
+    </CommandSuccess>
   );
 }

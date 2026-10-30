@@ -14,7 +14,7 @@ import {
   ok,
   operation,
   page,
-  person,
+  personNames,
   teamEntry,
 } from '../../../features/competition/__tests__/fixtures';
 
@@ -74,7 +74,7 @@ const routes = {
   ...TEAM_ROUTES,
   'GET /team-entries': ok([teamEntry({ status: 'approved' })]),
   'GET /placement-requests': ok(page([request()])),
-  'GET /people/{id}': ok(person(ID.person, 'Riley', 'Free')),
+  'GET /person-names': personNames({ [ID.person]: ['Riley', 'Free'] }),
   'GET /placement-requests/{id}/candidates': ok([candidate]),
 };
 
@@ -97,6 +97,9 @@ describe('SCR-S-18 PlacementBoardScreen (SPK-PLACE-001 to SPK-PLACE-003)', () =>
     );
     expect(cached).not.toContain('2016-05-04');
     expect(cached).not.toContain('guardian@example.test');
+    // One name read for the page (GET /v1/person-names, ID-02), never the whole person record.
+    expect(app.fake.requests.filter((r) => r.route === '/person-names')).toHaveLength(1);
+    expect(app.fake.requests.some((r) => r.route === '/people/{id}')).toBe(false);
     expect(app.fake.requests.find((r) => r.route === '/placement-requests')?.query).toMatchObject({
       seasonId: ID.season,
       status: 'unassigned',
@@ -255,5 +258,28 @@ describe('SCR-S-18 PlacementBoardScreen (SPK-PLACE-001 to SPK-PLACE-003)', () =>
     });
     render(denied.at(`/teams/seasons/${ID.season}/placement`));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+});
+
+describe('SCR-S-18 names in one read (ID-02, §4.14)', () => {
+  it('names every entrant on the page with one GET /person-names; an omitted person reads not available', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /placement-requests': ok(
+          page([
+            request(),
+            request({ id: '0192f1a0-0000-7000-8000-00000000d002', participantPersonId: ID.child }),
+          ]),
+        ),
+        // The API omits a person the viewer may not view.
+        'GET /person-names': personNames({ [ID.person]: ['Riley', 'Free'] }),
+      },
+    });
+    render(app.at(`/teams/seasons/${ID.season}/placement`));
+    const list = await screen.findByRole('list', { name: 'Placement requests' });
+    expect(await within(list).findByText('Riley Free')).toBeInTheDocument();
+    expect(within(list).getByText('Person not available to you')).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/person-names')).toHaveLength(1);
   });
 });

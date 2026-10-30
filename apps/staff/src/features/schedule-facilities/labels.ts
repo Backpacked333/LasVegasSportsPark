@@ -22,6 +22,7 @@ type AssetStatus = Schema<'Asset'>['status'];
 type ResourceStatus = Schema<'Resource'>['status'];
 type OperationStatus = Schema<'Operation'>['status'];
 type PreventiveStatus = Schema<'PreventiveSchedule'>['status'];
+type SessionStatus = Schema<'FacilitySession'>['status'];
 
 /** "Draft (autosaved <time>)", "Validation failed", "Published" (journeys.md section 3). */
 export function draftBadge(status: DraftStatus, savedAt?: string): Badge {
@@ -63,6 +64,13 @@ export const CLOSURE_BADGE: Record<ClosureStatus, Badge> = {
   active: { tone: 'danger', label: 'active: space closed' },
   lifted: { tone: 'neutral', label: 'lifted' },
   withdrawn: { tone: 'neutral', label: 'withdrawn' },
+};
+
+/** Program session states (catalog `OfferingSessionStatus`), machine names verbatim. */
+export const SESSION_BADGE: Record<SessionStatus, Badge> = {
+  scheduled: { tone: 'info', label: 'scheduled' },
+  canceled: { tone: 'neutral', label: 'canceled' },
+  completed: { tone: 'success', label: 'completed' },
 };
 
 export const RESTRICTION_BADGE: Record<RestrictionStatus, Badge> = {

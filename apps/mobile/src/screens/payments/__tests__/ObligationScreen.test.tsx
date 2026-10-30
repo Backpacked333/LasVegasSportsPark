@@ -5,10 +5,11 @@
  * never shown as success or failure, and never paid twice.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   accountRoutes,
+  createRouterMock,
   installment,
   installmentPlan,
   obligation,
@@ -18,10 +19,22 @@ import {
 } from '../../../features/money/testing/fixtures';
 import { formatInstant } from '../../../features/money/format';
 import {
+  LIST_IDS,
+  liveAttempt,
+  pageOf,
+  unknownPayment,
+} from '../../../features/money/testing/list-fixtures';
+import {
   createMoneyTestApp as createTestApp,
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { ObligationScreen } from '../ObligationScreen';
+
+const mockRouter = createRouterMock();
+jest.mock('expo-router', () => ({
+  ...jest.requireActual('expo-router'),
+  useRouter: () => mockRouter,
+}));
 
 const SETTLED = obligation({
   status: 'settled',
@@ -352,5 +365,90 @@ describe('SCR-C-34 ObligationScreen', () => {
       'accessibilityLabel',
       'Payment received. We are completing your registration.',
     );
+  });
+  it('SPK-PAY-007, FIN-01: a payment on its way from elsewhere blocks paying until the API no longer reports it', async () => {
+    let live: ReturnType<typeof liveAttempt> | null = liveAttempt();
+    const app = renderObligation({
+      'GET /obligations/{id}': () => fakeResponse(200, obligation({ liveAttempt: live })),
+      // The attempt is the account's own, so it can be opened.
+      'GET /me/payments': pageOf([unknownPayment()]),
+    });
+    const section = await screen.findByTestId('live-attempt');
+    expect(screen.getByTestId('live-attempt-status')).toHaveProp(
+      'accessibilityLabel',
+      'Payment outcome being confirmed. Do not pay again.',
+    );
+    expect(section).toBeOnTheScreen();
+    fireEvent.press(await screen.findByRole('radio', { name: 'Succeeds at once' }));
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    fireEvent.press(await screen.findByRole('button', { name: 'Open the payment' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/payments/attempt/${LIST_IDS.attemptUnknown}`);
+    await waitFor(() => expect(app.queryClient.isFetching()).toBe(0));
+    // The facility reconciled it: the balance no longer reports a live payment.
+    live = null;
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    await waitFor(() => expect(screen.queryByTestId('live-attempt')).toBeNull());
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeEnabled();
+    expect(payments(app)).toHaveLength(0);
+  });
+
+  it('FIN-01: a payment someone else in the household started blocks paying but is not offered to open', async () => {
+    const app = renderObligation({
+      'GET /obligations/{id}': { status: 200, body: obligation({ liveAttempt: liveAttempt() }) },
+      // The account's own payments do not include it: a co-guardian paid (GET /payments/{id}
+      // would answer NOT_FOUND to this account).
+      'GET /me/payments': pageOf([]),
+    });
+    const section = await screen.findByTestId('live-attempt');
+    expect(
+      await within(section).findByText(
+        /may have been started by someone else who pays for this balance/,
+      ),
+    ).toBeOnTheScreen();
+    expect(within(section).queryByRole('button', { name: 'Open the payment' })).toBeNull();
+    expect(screen.getByTestId('live-attempt-status')).toHaveProp(
+      'accessibilityLabel',
+      'Payment outcome being confirmed. Do not pay again.',
+    );
+    fireEvent.press(await screen.findByRole('radio', { name: 'Succeeds at once' }));
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    expect(app.fake.requests.find((r) => r.route === '/me/payments')?.query).toEqual({
+      status: 'unknown',
+      limit: '50',
+    });
+    expect(app.fake.requests.filter((r) => r.route === '/payments/{id}')).toHaveLength(0);
+  });
+
+  it('SPK-UX-010: a live attempt in "created" reads "Payment processing", the same as on its payment detail', async () => {
+    renderObligation({
+      'GET /obligations/{id}': {
+        status: 200,
+        body: obligation({ liveAttempt: liveAttempt({ status: 'created', unknownSince: null }) }),
+      },
+      'GET /me/payments': pageOf([]),
+    });
+    expect(await screen.findByTestId('live-attempt-status')).toHaveProp(
+      'accessibilityLabel',
+      'Payment processing',
+    );
+    expect(screen.queryByText(/depends on DEC-019/)).toBeNull();
+  });
+
+  it('SPK-UX-004: a live payment still processing reads "Payment processing", not received', async () => {
+    renderObligation({
+      'GET /obligations/{id}': {
+        status: 200,
+        body: obligation({
+          liveAttempt: liveAttempt({ status: 'processing', unknownSince: null }),
+        }),
+      },
+    });
+    expect(await screen.findByTestId('live-attempt-status')).toHaveProp(
+      'accessibilityLabel',
+      'Payment processing',
+    );
+    expect(screen.queryByLabelText('Payment received')).toBeNull();
   });
 });

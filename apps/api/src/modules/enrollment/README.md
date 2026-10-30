@@ -378,7 +378,9 @@ mirrored by a database transition guard.
   `enrollment.booking_awaiting_staff` (owner `scheduler`); `workforce.assignment_changed`
   re-evaluates both ways. Hold expiry expires an unpaid booking and cancels its events; cancel
   releases what the state holds (a paid booking through the enrollment cancellation with the
-  accepted consequence). Job `enrollment.booking_lifecycle` (failure owner `scheduler`):
+  accepted consequence); a held booking whose basket is in checkout answers 409
+  `CHECKOUT_IN_PROGRESS`, and one whose basket is already paid but not yet confirmed 409
+  `BOOKING_CONFIRMATION_PENDING`, before anything is written (§4.11). Job `enrollment.booking_lifecycle` (failure owner `scheduler`):
   undecided requests expire at their start, an unstaffed booking that starts raises the critical
   `enrollment.booking_started_unstaffed`, ended bookings complete. Reads:
   `GET /v1/offerings/{id}/booking-availability`, `/v1/me/bookings`, `/v1/bookings/{id}` (booker or
