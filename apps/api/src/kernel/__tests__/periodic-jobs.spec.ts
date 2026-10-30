@@ -1,5 +1,5 @@
 import { seedOrganization } from '@sportspark/db';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../../testing/test-app';
 import type { AppConfig } from '../config';
 import { UnitOfWork } from '../database/unit-of-work';
@@ -8,7 +8,9 @@ import {
   PERIODIC_JOB_FAILING_CATEGORY,
   PeriodicJobRegistry,
   PeriodicJobRunner,
+  renewJobLease,
   type PeriodicJob,
+  type PeriodicJobContext,
 } from '../jobs/periodic-jobs';
 import { BackgroundWorkers } from '../workers/background-workers';
 import { APP_CONFIG, CLOCK, DATABASE } from '../tokens';
@@ -29,6 +31,10 @@ describe('periodic jobs (K-06, §4.12)', () => {
   let started: { promise: Promise<void>; resolve: () => void } | null = null;
   let failing = true;
   let remaining = 0;
+  /** kerneltest.per_row: the rows "sent to a provider" and a hook run after each one. */
+  let sent: number[] = [];
+  let afterRow: ((row: number) => Promise<void>) | null = null;
+  let perRowContext: PeriodicJobContext | null = null;
 
   const job = (name: string, run: PeriodicJob['run'], intervalSeconds = 60): PeriodicJob => ({
     name,
@@ -77,6 +83,21 @@ describe('periodic jobs (K-06, §4.12)', () => {
         return { processed: done, remaining };
       }),
     );
+    // A job that calls a provider once per row (as entry.deliver_device_commands does): it renews
+    // its lease before each call and stops once another runner holds the job.
+    registry.register(
+      job('kerneltest.per_row', async (context) => {
+        perRowContext ??= context;
+        let processed = 0;
+        for (let row = 0; row < 4; row += 1) {
+          if (!(await renewJobLease(context))) break;
+          sent.push(row);
+          processed += 1;
+          if (afterRow) await afterRow(row);
+        }
+        return { processed, remaining: 0 };
+      }),
+    );
     registry.register(
       job('kerneltest.after_failure', async () => {
         count('kerneltest.after_failure');
@@ -90,7 +111,17 @@ describe('periodic jobs (K-06, §4.12)', () => {
   beforeEach(() => {
     gate = null;
     started = null;
+    sent = [];
+    afterRow = null;
+    perRowContext = null;
   });
+
+  const leaseOf = (name: string) =>
+    t.db
+      .selectFrom('periodic_job_leases')
+      .selectAll()
+      .where('job_name', '=', name)
+      .executeTakeFirstOrThrow();
 
   it('runs in the worker process only: registered as the background worker kernel.periodic_jobs', () => {
     const workers = t.app.get(BackgroundWorkers);
@@ -159,6 +190,114 @@ describe('periodic jobs (K-06, §4.12)', () => {
       .executeTakeFirstOrThrow();
     expect(lease.locked_by).toBeNull();
     expect(lease.consecutive_failures).toBe(0);
+  });
+
+  it('SPK-AT-023, ASYNC-06: a pass that outlives PERIODIC_JOBS_LEASE_SECONDS keeps its lease on a timer, so no other worker takes the job over mid-pass (PGlite and TEST_DATABASE_URL)', async () => {
+    const config = t.app.get<AppConfig>(APP_CONFIG);
+    const leaseMs = config.PERIODIC_JOBS_LEASE_SECONDS * 1000;
+    counts.set('kerneltest.gated', 0);
+    gate = deferred();
+    started = deferred();
+    // Only the runner's keep-alive interval is faked; database I/O keeps its real timers.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const first = otherRunner('worker-slow').runOnce(['kerneltest.gated'], {
+        ignoreInterval: true,
+      });
+      await started.promise;
+      const claimedAt = t.clock.now().getTime();
+      // The pass is still running (one slow provider call after another) at 5/6 of the lease.
+      t.clock.advance((leaseMs * 5) / 6);
+      await vi.advanceTimersByTimeAsync(leaseMs / 3);
+      await vi.waitFor(
+        async () => {
+          const lease = await leaseOf('kerneltest.gated');
+          expect(new Date(lease.locked_until!).getTime()).toBeGreaterThan(claimedAt + leaseMs);
+        },
+        { timeout: 5000 },
+      );
+      // Past the lease the run first took, inside the renewed one: another worker stays out.
+      t.clock.advance(leaseMs / 3);
+      expect(t.clock.now().getTime()).toBeGreaterThan(claimedAt + leaseMs);
+      const second = await otherRunner('worker-eager').runOnce(['kerneltest.gated'], {
+        ignoreInterval: true,
+      });
+      expect(second[0]).toMatchObject({ ran: false });
+      gate.resolve();
+      const [summary] = await first;
+      expect(summary).toMatchObject({ ran: true, failed: false, leaseLost: false, processed: 1 });
+      expect(counts.get('kerneltest.gated')).toBe(1);
+      const released = await leaseOf('kerneltest.gated');
+      expect(released.locked_by).toBeNull();
+      expect(released.locked_until).toBeNull();
+    } finally {
+      gate?.resolve();
+      vi.useRealTimers();
+    }
+  });
+
+  it('SPK-AT-023, ASYNC-06: a job that renews its lease before each provider call keeps the job while its rows outlive the lease', async () => {
+    const config = t.app.get<AppConfig>(APP_CONFIG);
+    const leaseMs = config.PERIODIC_JOBS_LEASE_SECONDS * 1000;
+    const intruders: boolean[] = [];
+    let intruding = false;
+    afterRow = async () => {
+      if (intruding) return;
+      // Each provider call takes two thirds of the lease; another worker tries after each one.
+      t.clock.advance((leaseMs * 2) / 3);
+      intruding = true;
+      try {
+        const [attempt] = await otherRunner('worker-intruder').runOnce(['kerneltest.per_row'], {
+          ignoreInterval: true,
+        });
+        intruders.push(attempt!.ran);
+      } finally {
+        intruding = false;
+      }
+    };
+    const [summary] = await otherRunner('worker-rows').runOnce(['kerneltest.per_row'], {
+      ignoreInterval: true,
+    });
+    expect(sent).toEqual([0, 1, 2, 3]);
+    expect(intruders).toEqual([false, false, false, false]);
+    expect(summary).toMatchObject({ ran: true, failed: false, leaseLost: false, processed: 4 });
+    expect(perRowContext?.lease?.signal.aborted).toBe(false);
+    expect((await leaseOf('kerneltest.per_row')).locked_by).toBeNull();
+  });
+
+  it('SPK-AT-023, ASYNC-06: once another worker holds the job, the lease renewal says so, the signal aborts, no further provider call is made and the run records nothing', async () => {
+    afterRow = async (row) => {
+      if (row !== 1) return;
+      // This run's lease lapsed (the process was paused) and another worker claimed the job.
+      const now = t.clock.now();
+      await t.db
+        .updateTable('periodic_job_leases')
+        .set({ locked_by: 'worker-other:lease', locked_until: new Date(now.getTime() + 300_000) })
+        .where('job_name', '=', 'kerneltest.per_row')
+        .execute();
+    };
+    const before = await leaseOf('kerneltest.per_row');
+    const [summary] = await otherRunner('worker-paused').runOnce(['kerneltest.per_row'], {
+      ignoreInterval: true,
+    });
+    expect(sent).toEqual([0, 1]);
+    expect(summary).toMatchObject({ ran: true, failed: false, leaseLost: true, processed: 2 });
+    expect(perRowContext?.lease?.signal.aborted).toBe(true);
+    expect(await renewJobLease(perRowContext!)).toBe(false);
+    // The other worker's hold and the job's bookkeeping are left as they were.
+    const after = await leaseOf('kerneltest.per_row');
+    expect(after.locked_by).toBe('worker-other:lease');
+    expect(after.last_finished_at).toEqual(before.last_finished_at);
+    expect(after.consecutive_failures).toBe(before.consecutive_failures);
+    await t.db
+      .updateTable('periodic_job_leases')
+      .set({ locked_by: null, locked_until: null })
+      .where('job_name', '=', 'kerneltest.per_row')
+      .execute();
+  });
+
+  it('renewJobLease is true for a job called without a runner (no lease to keep)', async () => {
+    expect(await renewJobLease({ now: t.clock.now(), batchSize: 50 })).toBe(true);
   });
 
   it('§4.12: a job failing three times raises one kernel.periodic_job_failing exception per active organization owned by its failure owner, resolved by the next success', async () => {

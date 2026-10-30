@@ -12,7 +12,8 @@ import type { BackgroundWorker } from '../workers/background-workers';
 /**
  * Periodic jobs (K-06, IF-24; §4.12 durable, interruption-tolerant background work with a failure
  * owner). Every time-based sweep (expiry, window ends, reminders, outage detection) is a periodic
- * job; provider-facing pollers stay `BackgroundWorker`s.
+ * job; continuous provider-facing pollers (message delivery, the payment provider worker) stay
+ * `BackgroundWorker`s.
  *
  * Job contract (overview.md, Proposed): a job is idempotent; it selects due rows with
  * `FOR UPDATE SKIP LOCKED` and changes each in one small transaction under
@@ -22,10 +23,42 @@ import type { BackgroundWorker } from '../workers/background-workers';
  * is a failing job, and after PERIODIC_JOBS_FAILURE_THRESHOLD consecutive failures its failure
  * owner gets one `kernel.periodic_job_failing` exception per active organization, resolved by the
  * next success.
+ *
+ * Lease (SPK-AT-023, ASYNC-06): a run holds the job's lease for PERIODIC_JOBS_LEASE_SECONDS. While
+ * a pass runs, the runner renews it every third of that time, so a long pass (one slow provider
+ * call per row) is never taken over by another worker while this one is alive. A job that calls a
+ * provider per row also calls `renewJobLease(context)` before each call, outside any transaction,
+ * and stops when it returns false: another worker took the job over after this run's lease lapsed
+ * (the process was paused or lost the database), and `context.lease.signal` is aborted. The lease
+ * keeps two live runners from working one job; it does not fence a row whose runner was paused
+ * past its lease, so the contract (Proposed) also asks a provider-calling job to claim each row it
+ * sends with its own in-flight marker, checked when the outcome is recorded.
  */
+export interface PeriodicJobLease {
+  /** Aborted once this run no longer holds the job's lease. */
+  readonly signal: AbortSignal;
+  /** Renews the lease now; false (and `signal` aborted) when another runner holds the job. */
+  renew(): Promise<boolean>;
+}
+
 export interface PeriodicJobContext {
   now: Date;
   batchSize: number;
+  /**
+   * The run's lease on the job. The runner always passes it; a test that calls a job's `run`
+   * directly may leave it out (there is no lease to keep then).
+   */
+  lease?: PeriodicJobLease;
+}
+
+/**
+ * Renews the run's lease before a provider call and says whether the run may go on (always true
+ * when the job was called without a runner). Call it outside any transaction.
+ */
+export async function renewJobLease(context: PeriodicJobContext): Promise<boolean> {
+  if (!context.lease) return true;
+  if (context.lease.signal.aborted) return false;
+  return context.lease.renew();
 }
 
 export interface PeriodicJobResult {
@@ -83,6 +116,8 @@ export interface PeriodicJobRunSummary {
   remaining: number;
   failed: boolean;
   error: string | null;
+  /** True when another runner took the job over during this run (it then records nothing). */
+  leaseLost: boolean;
 }
 
 export interface RunOnceOptions {
@@ -94,7 +129,8 @@ export interface RunOnceOptions {
  * Runs the registered periodic jobs (the background worker `kernel.periodic_jobs`). `worker.ts`
  * starts it through `BackgroundWorkers.startAll()`; the API process and tests never do (tests call
  * `runOnce` after advancing the FixedClock). Each job is claimed with one statement, so two
- * runners racing one job run it once, and an expired lease is taken over (SPK-AT-023).
+ * runners racing one job run it once; a running pass keeps renewing its lease, and only an expired
+ * lease (its runner stopped or stalled) is taken over (SPK-AT-023, ASYNC-06).
  */
 @Injectable()
 export class PeriodicJobRunner implements BackgroundWorker {
@@ -163,6 +199,7 @@ export class PeriodicJobRunner implements BackgroundWorker {
           remaining: 0,
           failed: true,
           error: String(error),
+          leaseLost: false,
         });
       }
     }
@@ -180,28 +217,84 @@ export class PeriodicJobRunner implements BackgroundWorker {
       remaining: 0,
       failed: false,
       error: null,
+      leaseLost: false,
     };
     if (!claimed) return summary;
     summary.ran = true;
+    const lease = this.keepLease(job, token);
     try {
       for (;;) {
         const result = await job.run({
           now: this.clock.now(),
           batchSize: job.batchSize ?? DEFAULT_BATCH_SIZE,
+          lease: lease.lease,
         });
         summary.passes += 1;
         summary.processed += result.processed;
         summary.remaining = result.remaining;
         if (result.remaining <= 0 || summary.passes >= this.config.PERIODIC_JOBS_MAX_PASSES) break;
-        if (!(await this.renew(job, token))) break;
+        if (!(await lease.lease.renew())) break;
       }
     } catch (error) {
       summary.failed = true;
       summary.error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       this.logger.warn(`periodic job ${job.name} failed: ${summary.error}`);
+    } finally {
+      await lease.stop();
+    }
+    summary.leaseLost = lease.lease.signal.aborted;
+    if (summary.leaseLost) {
+      this.logger.warn(
+        `periodic job ${job.name}: another runner took the job over during this run`,
+      );
     }
     await this.release(job, token, claimed.consecutiveFailures, summary);
     return summary;
+  }
+
+  /**
+   * Keeps this run's lease while it works (SPK-AT-023, ASYNC-06): renewed on a timer every third
+   * of PERIODIC_JOBS_LEASE_SECONDS and on demand (`lease.renew()`, before each pass and before a
+   * job's provider call), one renewal at a time. A renewal that finds another holder aborts
+   * `lease.signal`; a renewal that fails (the database is unavailable) is retried on the next tick
+   * and lets the lease lapse rather than claiming a hold it cannot prove.
+   */
+  private keepLease(
+    job: PeriodicJob,
+    token: string,
+  ): { lease: PeriodicJobLease; stop(): Promise<void> } {
+    const held = new AbortController();
+    let inFlight: Promise<boolean> | null = null;
+    const renew = (): Promise<boolean> => {
+      if (held.signal.aborted) return Promise.resolve(false);
+      inFlight ??= this.renew(job, token)
+        .then((still) => {
+          if (!still) held.abort();
+          return still;
+        })
+        .finally(() => {
+          inFlight = null;
+        });
+      return inFlight;
+    };
+    const everyMs = Math.max(
+      1000,
+      Math.floor((this.config.PERIODIC_JOBS_LEASE_SECONDS * 1000) / 3),
+    );
+    const timer = setInterval(() => {
+      renew().catch((error: unknown) => {
+        this.logger.warn(`periodic job ${job.name}: lease renewal failed: ${String(error)}`);
+      });
+    }, everyMs);
+    timer.unref();
+    return {
+      lease: { signal: held.signal, renew },
+      stop: async () => {
+        clearInterval(timer);
+        // A renewal still in flight lands before the lease is released.
+        await inFlight?.catch(() => false);
+      },
+    };
   }
 
   /** One statement: the lease is free or expired and the interval has elapsed (or no row yet). */
@@ -230,7 +323,7 @@ export class PeriodicJobRunner implements BackgroundWorker {
     return row ? { consecutiveFailures: Number(row.consecutive_failures) } : null;
   }
 
-  /** Extends this run's lease before another pass; false when another runner took the job over. */
+  /** Extends this run's lease; false when another runner took the job over. */
   private async renew(job: PeriodicJob, token: string): Promise<boolean> {
     const until = new Date(
       this.clock.now().getTime() + this.config.PERIODIC_JOBS_LEASE_SECONDS * 1000,

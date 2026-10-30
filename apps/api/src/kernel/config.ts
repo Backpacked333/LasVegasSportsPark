@@ -56,7 +56,11 @@ export const ConfigSchema = z
     LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
     /** How often the worker looks for due periodic jobs (K-06, §4.12; technical value). */
     PERIODIC_JOBS_TICK_MS: z.coerce.number().int().min(100).default(5000),
-    /** How long a claimed periodic job stays reserved for its runner (SPK-AT-023 takeover after). */
+    /**
+     * How long a claimed periodic job stays reserved for its runner without a renewal; the runner
+     * renews it every third of this while a pass runs, so only a stopped or stalled runner's job is
+     * taken over (SPK-AT-023, ASYNC-06).
+     */
     PERIODIC_JOBS_LEASE_SECONDS: z.coerce.number().int().min(5).default(300),
     /** How many passes one run makes while a job reports remaining work. */
     PERIODIC_JOBS_MAX_PASSES: z.coerce.number().int().min(1).max(1000).default(10),
