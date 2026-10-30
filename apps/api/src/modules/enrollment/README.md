@@ -396,8 +396,11 @@ mirrored by a database transition guard.
   immutable (a correction is a new row). `GET /v1/me/youth-feedback` shows only published family
   feedback and shared recommendations, never staff or review notes; one `youth_feedback` notice per
   published assessment or shared recommendation carries no staff content.
-  `GET /v1/participants/{personId}/assessments` is the staff view. A recommendation stores the
-  read-only eligibility of the recommended offering and never holds capacity.
+  `GET /v1/participants/{personId}/assessments` is the staff view: a program manager sees the
+  offerings in their facility scope and gets an empty page when nothing is visible, whatever exists
+  at other facilities; a coach sees offerings they are accepted on, and NOT_FOUND otherwise (§4.10).
+  A recommendation stores the read-only eligibility of the recommended offering and never holds
+  capacity.
 
 ### Test doubles (`__tests__/stage3-doubles.ts`)
 

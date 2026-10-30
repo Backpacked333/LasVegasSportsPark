@@ -3,6 +3,7 @@ import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createOfferingSessionFixture, createProgramFixture } from '../../catalog';
+import { authHeaderForPerson, createStaffMemberFixture } from '../../identity';
 import { createAssignmentFixture } from '../../workforce';
 import { createEnrollmentFixture } from '../testing/enrollment-fixtures';
 import {
@@ -217,6 +218,48 @@ describe('youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006)', () => {
     expect(
       (await t.http.get(`/v1/participants/${kid}/assessments`).set(guardian.header)).status,
     ).toBe(404);
+  });
+
+  it('§4.10: a program manager at another facility gets the same empty page whether or not the child has assessments elsewhere', async () => {
+    await draft(coach, 'staff_only');
+    const facilityB = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: facilityB,
+        organization_id: t.organizationId,
+        slug: `annex-${facilityB.slice(0, 8)}`,
+        name: 'Annex',
+        timezone: 'America/Los_Angeles',
+      })
+      .execute();
+    const member = await createStaffMemberFixture(t, {
+      roles: ['program_manager'],
+      facilityIds: [facilityB],
+    });
+    const managerAtB = { header: await authHeaderForPerson(t, member.personId) };
+    const neverAssessed = await child(t, [guardian]);
+    // The child assessed only at the main facility, and a child never assessed, read the same.
+    const assessedElsewhere = await t.http
+      .get(`/v1/participants/${kid}/assessments`)
+      .set(managerAtB.header);
+    const never = await t.http
+      .get(`/v1/participants/${neverAssessed}/assessments`)
+      .set(managerAtB.header);
+    expect(assessedElsewhere.status).toBe(200);
+    expect(never.status).toBe(200);
+    expect(assessedElsewhere.body).toEqual({ items: [], nextCursor: null });
+    expect(never.body).toEqual(assessedElsewhere.body);
+    // The same with an offering filter naming the other facility's offering.
+    const filtered = await t.http
+      .get(`/v1/participants/${kid}/assessments?offeringId=${setup.offeringId}`)
+      .set(managerAtB.header);
+    expect(filtered.status).toBe(200);
+    expect(filtered.body).toEqual({ items: [], nextCursor: null });
+    // A program manager of the main facility still sees them.
+    const inScope = await t.http.get(`/v1/participants/${kid}/assessments`).set(reviewer.header);
+    expect(inScope.status).toBe(200);
+    expect(inScope.body.items.length).toBeGreaterThan(0);
   });
 
   it('the database rejects an assessment on an unapproved template, a reviewer equal to the author and a published staff_only assessment', async () => {

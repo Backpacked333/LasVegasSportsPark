@@ -1031,7 +1031,10 @@ export class YouthProgressionService {
       }
     }
     if (managed.length === 0 && coached.length === 0) {
-      if (candidates.length === 0 && principal.staffRoles.includes('program_manager')) {
+      // §4.10: the answer never depends on rows outside the caller's scope. A program manager
+      // gets an empty page whether the person has no assessments at all or only at another
+      // facility's offerings; a coach with nothing visible gets NOT_FOUND in both cases.
+      if (principal.staffRoles.includes('program_manager')) {
         return { items: [], nextCursor: null };
       }
       throw errors.protectedNotFound('participant');
