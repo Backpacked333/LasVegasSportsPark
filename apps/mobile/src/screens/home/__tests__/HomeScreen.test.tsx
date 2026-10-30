@@ -177,8 +177,13 @@ describe('SCR-C-03 Home', () => {
       }),
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
-    const section = await screen.findByTestId('home-in-progress');
-    expect(within(section).getAllByLabelText(/Payment processing/).length).toBeGreaterThan(0);
+    // The status depends on the basket read as well as the enrollment list: wait for it.
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('home-in-progress')).getAllByLabelText(/Payment processing/)
+          .length,
+      ).toBeGreaterThan(0),
+    );
     expect(screen.queryByTestId('home-actions')).toBeNull();
     expect(screen.queryByTestId('home-recovery')).toBeNull();
   });
@@ -366,8 +371,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
       }),
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
-    const card = await screen.findByTestId('next-activity-card');
-    expect(within(card).getByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
+    // The fixture reads may land after the session card first renders: wait for the fixture.
+    expect(await screen.findByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
+    const card = screen.getByTestId('next-activity-card');
     expect(
       await within(card).findByLabelText(
         'For: Sam (Lions). Against: Tigers. When: Sat, Oct 24, 9:00 AM to 10:30 AM MDT. Where: North Complex, Field 1',
@@ -816,7 +822,7 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     ).toBeOnTheScreen();
     const card = await screen.findByTestId('next-activity-card');
     expect(
-      within(card).getByLabelText(
+      await within(card).findByLabelText(
         'Action needed: Answer the availability request for this fixture.',
       ),
     ).toBeOnTheScreen();
