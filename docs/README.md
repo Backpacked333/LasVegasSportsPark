@@ -67,7 +67,7 @@ These documents are maintained alongside the §6.7 artifacts but are not themsel
 
 **Verified** by inspection on 2026-10-30:
 
-- `packages/db/migrations/` holds 105 migrations, `0001_core_schema.sql` to `1480_automation_org_scoped_kernel_fks.sql`, in every module's number range (core 0001 to 0011, identity 0100s through automation 1400s).
+- `packages/db/migrations/` holds 120 migrations, `0001_core_schema.sql` to `1480_automation_org_scoped_kernel_fks.sql`, in every module's number range (core 0001 to 0011, identity 0100s through automation 1400s).
 - All fourteen module READMEs under `apps/api/src/modules/` describe their module as implemented: thirteen read "Status: implemented" and the migration README labels its statements verified by its tests. No README says "Status: scaffold". The customer app (`apps/mobile/README.md`) and the staff dashboard (`apps/staff/README.md`) carry per-screen coverage tables.
 - Every file under `docs/` is listed in sections 1 to 3 of this index: `spec/master-specification.md`; `architecture/overview.md`, `architecture/domain-model.md`, `architecture/api-and-events.md`; `api/openapi.json`; the sixteen files under `package-a/` (`acceptance-fixtures.md`, `authority-matrix.md`, `competitive-proof-plan.md`, `decision-register.md`, `facility-inventory.md`, `integration-register.md`, `journeys.md`, `metric-dictionary.md`, `native-acceptance-matrix.md`, `permission-matrix.md`, `permission-matrix.generated.md` (generated from the action registry), `policy-register.md`, `release-evidence-ledger.md`, `requirement-cross-reference.md`, `role-matrix.md`, `screen-and-journey-inventory.md`); the three files under `runbooks/` (`cutover.md`, `outage-and-offline.md`, `recovery.md`).
 

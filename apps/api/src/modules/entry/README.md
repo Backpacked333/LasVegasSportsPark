@@ -36,7 +36,7 @@ below are **verified** unless marked **proposed**, **pending** (an operator deci
 The stage-3 work (ENT-01 to ENT-05) calls identity's ID-01 and ID-09 members. On a branch without
 the identity stage-3 work those members answer their declared `declaredNotImplemented` error, so
 18 entry tests (names, merge expansion, verified releases, collector checks) need the identity work
-merged; with it, the whole entry suite (17 files, 122 tests) passes on PGlite and on PostgreSQL.
+merged; with it, the whole entry suite (17 files, 124 tests) passes on PGlite and on PostgreSQL.
 
 ## Requirements
 
