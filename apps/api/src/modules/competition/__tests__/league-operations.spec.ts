@@ -326,6 +326,43 @@ describe('league operations (CMP-05, CMP-12; SPK-RESULT-001..005, SPK-DISC-001..
     expect((await get('/disputes?cursor=not-a-cursor', leagueManager)).status).toBe(400);
   });
 
+  it("SPK-RESULT-005 / §4.9: league administration withdrawing a captain's dispute through the review command names its reason", async () => {
+    const before = await get(`/disputes/${openDisputeId}`, leagueManager);
+    expect(before.body.status).toBe('submitted');
+    const reasonless = await post(`/disputes/${openDisputeId}/decide`, leagueManager, {
+      action: 'withdraw',
+      expectedRevision: before.body.revision,
+    });
+    expect(reasonless.status).toBe(400);
+    expect(reasonless.body.code).toBe('VALIDATION_FAILED');
+    const blank = await post(`/disputes/${openDisputeId}/decide`, leagueManager, {
+      action: 'withdraw',
+      expectedRevision: before.body.revision,
+      reason: '   ',
+    });
+    expect(blank.status).toBe(400);
+    // nothing changed: the dispute is still open at the same revision
+    expect((await get(`/disputes/${openDisputeId}`, leagueManager)).body).toMatchObject({
+      status: 'submitted',
+      revision: before.body.revision,
+    });
+    const withdrawn = await post(`/disputes/${openDisputeId}/decide`, leagueManager, {
+      action: 'withdraw',
+      expectedRevision: before.body.revision,
+      reason: 'The captain withdrew the protest by phone.',
+    });
+    expect(withdrawn.status).toBe(200);
+    expect(withdrawn.body).toMatchObject({ status: 'withdrawn', decision: null });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'reason', 'details'])
+      .where('target_id', '=', openDisputeId)
+      .where('action', '=', 'competition.review_dispute')
+      .executeTakeFirstOrThrow();
+    expect(audit.reason).toBe('The captain withdrew the protest by phone.');
+    expect(audit.details).toMatchObject({ operation: 'withdraw', status: 'withdrawn' });
+  });
+
   it('SPK-DISC-005: appeals list by status; decisions list by person, competition and status (CMP-05)', async () => {
     const decision = await post('/disciplinary-decisions', leagueManager, {
       subjectPersonId: c.player.personId,
