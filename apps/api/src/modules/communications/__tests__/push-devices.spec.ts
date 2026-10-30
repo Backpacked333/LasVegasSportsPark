@@ -360,6 +360,67 @@ describe('push devices (COM-01: SPK-UX-001, SPK-COMMS-003/004, SPK-AT-025)', () 
     ).toBe('active');
   });
 
+  it('SPK-AT-025, §4.12: a late relink follow-up revokes only the devices of the old sign-in, as of the relink', async () => {
+    const me = await customer();
+    // two devices registered under the old sign-in
+    const oldToken = `old-sign-in-${newId()}`;
+    const sharedToken = `kept-phone-${newId()}`;
+    const oldDevice = await register(me.header, { platform: 'android', token: oldToken });
+    const keptDevice = await register(me.header, { platform: 'ios', token: sharedToken });
+    expect([oldDevice.status, keptDevice.status]).toEqual([201, 201]);
+    t.clock.advance(60_000);
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const relinked = await t.http
+      .post(`/v1/accounts/${me.accountId}/relink`)
+      .set(await authHeaderForPerson(t, support.personId))
+      .set('Idempotency-Key', key())
+      .send({
+        issuer: t.config.AUTH_ISSUER,
+        subject: `late-follow-up-${newId()}`,
+        reason: 'hijacked account',
+        expectedRevision: 1,
+      });
+    expect(relinked.status, JSON.stringify(relinked.body)).toBe(200);
+    // The follow-up has not run yet (backlog, retry): the recovered sign-in registers a new phone
+    // and re-registers the one it kept (same token, same account: a refresh of the old row).
+    t.clock.advance(20_000);
+    const recovered = await authHeaderForAccount(t, me.accountId);
+    const newToken = `new-sign-in-${newId()}`;
+    const newDevice = await register(recovered, { platform: 'ios', token: newToken });
+    expect(newDevice.status, JSON.stringify(newDevice.body)).toBe(201);
+    const refreshed = await register(recovered, { platform: 'ios', token: sharedToken });
+    expect(refreshed.body.id).toBe(keptDevice.body.id);
+    t.clock.advance(40_000);
+    await dispatchOutbox(t.app);
+    const statusOf = async (id: string) =>
+      t.db
+        .selectFrom('push_devices')
+        .select(['status', 'revoked_reason'])
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+    expect(await statusOf(oldDevice.body.id)).toEqual({
+      status: 'revoked',
+      revoked_reason: 'account_relinked',
+    });
+    expect(await statusOf(newDevice.body.id)).toEqual({ status: 'active', revoked_reason: null });
+    expect(await statusOf(keptDevice.body.id)).toEqual({ status: 'active', revoked_reason: null });
+    // the audit names the instant the revocation was judged against
+    const revokedAudit = await t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('action', '=', 'communications.revoke_push_device')
+      .where('target_id', '=', oldDevice.body.id)
+      .executeTakeFirstOrThrow();
+    expect(revokedAudit.details).toMatchObject({ revokedReason: 'account_relinked' });
+    expect(typeof (revokedAudit.details as { relinkedAt?: unknown }).relinkedAt).toBe('string');
+    // the recovered owner's phones receive pushes, the old sign-in's device does not
+    await pushNotice(me.personId, 'After a late follow-up');
+    await deliverQueued(t.app);
+    const addresses = fakes.push.deviceSends.map((d) => d.address);
+    expect(addresses).toEqual(expect.arrayContaining([newToken, sharedToken]));
+    expect(addresses).not.toContain(oldToken);
+  });
+
   it('§5.1, §5.2 (DEC-020): the push, email and SMS fakes are in the integration register under the messaging gate', async () => {
     const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
     const res = await t.http

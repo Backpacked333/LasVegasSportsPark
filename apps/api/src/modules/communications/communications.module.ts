@@ -262,7 +262,11 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
       },
       { failureOwner: 'front_desk' },
     );
-    // SPK-AT-025, SPK-IAM-006 (COM-01): a recovered account's devices receive nothing more.
+    // SPK-AT-025, SPK-IAM-006 (COM-01): a recovered account's devices receive nothing more. §4.12:
+    // only the devices of the old sign-in, as of the relink instant (the event's occurredAt), not
+    // one the recovered sign-in registered before this follow-up ran. This relies on identity
+    // stamping occurredAt in the relink transaction and on synchronized API clocks
+    // (PushDevicesService.revokeForAccount, README COM-01).
     this.registry.on<EventPayload<typeof IdentityEvents.accountRelinked>>(
       IdentityEvents.accountRelinked.type,
       'communications.revoke_push_on_relink',
@@ -271,6 +275,7 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
           ctx.trx,
           event.organizationId,
           event.payload.accountId,
+          new Date(event.occurredAt),
           event.correlationId,
         );
       },

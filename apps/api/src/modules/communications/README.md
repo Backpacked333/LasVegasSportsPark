@@ -300,10 +300,24 @@ channel approval and the essential/promotional split (DEC-012, DEC-062), the rem
   leave one active row on PGlite and PostgreSQL), list and revoke; the token is never returned,
   logged, audited or put in an event (`tokenHint`); push fans out to every active device and never
   to a revoked one; no device → `NO_ADDRESS` without a front-desk exception, the in-app notice is
-  delivered; `identity.account_relinked` revokes the account's devices (`account_relinked`,
-  SPK-AT-025, replay-safe); the database refuses two active registrations of one token and
-  inconsistent token/status/revocation columns; push, email and SMS fakes are in the integration
-  register (DEC-020).
+  delivered; `identity.account_relinked` revokes the account's devices last registered or
+  refreshed at or before the relink instant, the event's `occurredAt` (`account_relinked`,
+  SPK-AT-025, §4.12, replay-safe; the audit records the instant). A device the recovered sign-in
+  registers or refreshes before a late follow-up runs stays active. The handler depends on
+  identity enqueuing the event in the relink transaction, so that `occurredAt` is the relink
+  instant (`accounts.service.ts`; the late-follow-up test fails if it were stamped at dispatch).
+  Not covered, and an operating assumption: the comparison orders two wall-clock stamps from
+  different processes (`occurredAt` from the process that ran the relink, `last_seen_at` from the
+  one that handled the registration or refresh), so all API processes must share a synchronized
+  clock. A registration or refresh by the old sign-in whose stamp falls after the relink instant
+  stays active: one made up to the clock offset between those processes before the relink (an
+  instance whose clock runs ahead, a backward clock step), or one authenticated before the relink
+  committed and stamped after it. The window is the clock offset plus the relink's commit
+  latency plus the request latency. The handler runs once, so such a device keeps receiving
+  pushes until the owner revokes it or another account registers its token (Known gaps). The
+  database refuses two active registrations of one token and inconsistent
+  token/status/revocation columns; push, email and SMS fakes are in the integration register
+  (DEC-020).
 - **COM-02 retry, names, inbox revision — verified** (`__tests__/delivery-retry.spec.ts`): a failed
   external attempt is retried as a new queued attempt (the failed row untouched, audited with the
   reason, delivered by the next worker pass); front desk is refused; a second retry, an `unknown`, a
@@ -387,6 +401,15 @@ module's route classification counts once MIG-00 lands.
   assignment offer, renewal, approved youth feedback) are composed by their owning modules through
   `NotificationsService.composeAndQueueIn` (IF-22); invitations addressed only to a contact detail
   are not messaged by the platform (DEC-012).
+- Push, account recovery (SPK-AT-025, COM-01): the relink revocation orders the event's
+  `occurredAt` against `last_seen_at`, two wall-clock stamps from different processes, so it holds
+  only while the API processes' clocks agree. That is an operating assumption no deployment
+  document records yet (hosting is DEC-021, **Pending decision**). A clock-free comparison needs
+  the sign-in generation on both sides: identity putting the relinked account revision in the
+  `identity.account_relinked` payload, the kernel principal carrying the account revision it was
+  resolved at, and a new 10xx migration storing that revision on each device row at registration
+  and refresh, so the follow-up revokes rows of an older generation. That is an identity and
+  kernel change (**Proposed**), not made here.
 - Push: a provider's "token no longer valid" answer does not revoke the device yet (the fake has no
   such outcome); a merged person's devices keep addressing the merged person until the app
   re-registers under the survivor's account (a refresh takes the account's current person over).

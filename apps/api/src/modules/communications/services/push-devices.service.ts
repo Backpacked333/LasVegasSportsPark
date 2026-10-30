@@ -67,7 +67,10 @@ export function tokenHintOf(token: string): string {
  *   unique index on the token hash guarantees one active registration per token, and a racing
  *   registration that loses the insert retries once.
  * - Revoking erases the token; a revoked device receives nothing. Account recovery (identity's
- *   `account_relinked`) revokes every device of the account (`revokeForAccount`).
+ *   `account_relinked`) revokes every device of the account last seen at or before the relink
+ *   instant (`revokeForAccount`); one the recovered sign-in registers or refreshes afterwards
+ *   stays active. That comparison orders two wall-clock stamps taken by different processes, so
+ *   it assumes synchronized API clocks (see `revokeForAccount`).
  * The token is stored only while active and never returned, logged or audited (`tokenHint` only).
  */
 @Injectable()
@@ -255,13 +258,38 @@ export class PushDevicesService {
 
   /**
    * SPK-AT-025, SPK-IAM-006 (`communications.revoke_push_on_relink`): the account was recovered
-   * to another sign-in identity, so the devices registered under the old sign-in receive nothing
-   * more. Replay-safe: an already revoked device is left as it is.
+   * to another sign-in identity at `relinkedAt` (the event's `occurredAt`, stamped in the relink
+   * transaction), so the devices registered under the old sign-in receive nothing more.
+   *
+   * §4.12: the handler applies the state the event describes, not the state at handler time.
+   * After the relink commits, only the new sign-in resolves to the account. A device whose
+   * `last_seen_at` is after `relinkedAt` is taken to have been registered, or refreshed with the
+   * same token, by the recovered sign-in: its owner holds that device, so it stays active even
+   * when the follow-up runs late (backlog, retry, a dead-lettered event requeued later).
+   * Registration and refresh are the only writers of `last_seen_at`. A device last seen at or
+   * before the relink instant is revoked. Replay-safe: an already revoked device is left as it
+   * is, and a replay compares against the same instant.
+   *
+   * Assumption (not enforced here): `relinkedAt` comes from the clock of the process that ran
+   * the relink, `last_seen_at` from the clock of the process that handled the registration or
+   * refresh, so the comparison is only as good as the agreement between those clocks; all API
+   * processes must share a synchronized clock. A registration or refresh by the old sign-in stays
+   * active when its stamp falls after `relinkedAt`: one made up to the clock offset between the
+   * two processes before the relink was stamped (an instance whose clock runs ahead, or a
+   * backward clock step), or one authenticated before the relink committed and stamped after
+   * it. The window is the clock offset plus the relink's commit latency plus the request's own
+   * latency. The handler runs once and nothing re-checks the device afterwards, so such a device
+   * keeps receiving pushes until the recovered owner revokes it
+   * (`POST /me/push-devices/{id}/revoke`) or another account registers its token. A clock-free
+   * comparison needs the sign-in generation on both sides (the relinked account revision in the
+   * event, the account revision the principal was resolved at stored on the device row): an
+   * identity/kernel follow-up, README "Known gaps".
    */
   async revokeForAccount(
     trx: Trx,
     organizationId: string,
     accountId: string,
+    relinkedAt: Date,
     correlationId: string | null,
   ): Promise<number> {
     const rows = await trx
@@ -270,6 +298,7 @@ export class PushDevicesService {
       .where('organization_id', '=', organizationId)
       .where('account_id', '=', accountId)
       .where('status', '=', 'active')
+      .where('last_seen_at', '<=', relinkedAt)
       .orderBy('id')
       .forUpdate()
       .execute();
@@ -278,6 +307,7 @@ export class PushDevicesService {
         actor: systemPrincipal(organizationId, 'communications.revoke_push_on_relink'),
         correlationId,
         reason: 'account recovered to another sign-in identity',
+        details: { relinkedAt: relinkedAt.toISOString() },
       });
     }
     return rows.length;
@@ -287,7 +317,12 @@ export class PushDevicesService {
     trx: Trx,
     row: PushDeviceRow,
     revokedReason: string,
-    options: { actor: Principal; correlationId: string | null; reason: string | null },
+    options: {
+      actor: Principal;
+      correlationId: string | null;
+      reason: string | null;
+      details?: Record<string, string>;
+    },
   ): Promise<void> {
     const to = PushDeviceMachine.next(row.status, 'revoke');
     const updated = await trx
@@ -315,7 +350,12 @@ export class PushDevicesService {
       afterRevision: row.revision + 1,
       reason: options.reason,
       correlationId: options.correlationId,
-      details: { revokedReason, tokenHint: row.token_hint, accountId: row.account_id },
+      details: {
+        revokedReason,
+        tokenHint: row.token_hint,
+        accountId: row.account_id,
+        ...options.details,
+      },
     });
     await this.outbox.enqueue(trx, PushDeviceRevoked, {
       organizationId: row.organization_id,
