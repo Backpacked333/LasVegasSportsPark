@@ -312,8 +312,10 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
 
 - `FinancialStandingService` is registered as entry's `FINANCIAL_STANDING_IMPL` (IF-39): the
   open obligations due by the arrival time that the person owes, is responsible payer of, or that
-  belong to an order registering them as participant; `outstanding` names the earliest-due one and
-  whether it is `related` to the activity's offering; a failed read is `unknown`, never a guess.
+  belong to an order registering them as participant; `outstanding` names the earliest-due one
+  whose order has a line for the activity's offering (`related: true`) when there is one, otherwise
+  the earliest-due one (`related: false`), so an older unrelated balance never hides a related one;
+  a failed read is `unknown`, never a guess.
   Whether a balance blocks arrival is entry's decision (POL-017 / DEC-056 **Pending decision**:
   informational by default). `ParticipationStandingService` (competition's
   `FINANCIAL_CONDITIONS_IMPL`) reads through the same service.
