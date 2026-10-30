@@ -2,7 +2,9 @@
  * SCR-S-25 assisted registration (SPK-REG-009, SPK-REG-004, SPK-REG-006, SPK-PAY-001,
  * SPK-PAY-002, SPK-PAY-007, SPK-PAY-012, DEC-009, DEC-019): the customer's own basket, hold,
  * quote and checkout commands, the staff actor kept apart, no guardian signature by staff, cash
- * with evidence, card payment pending, QUOTE_EXPIRED and PAYMENT_OUTCOME_UNKNOWN handled.
+ * with evidence, card payment pending, QUOTE_EXPIRED and PAYMENT_OUTCOME_UNKNOWN handled; the
+ * offering's registration options (ENR-05) and, after a reload, the basket's checkout reference:
+ * its operation, checkout and the order's payment attempts (FIN-04, ENR-06).
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -14,6 +16,8 @@ import {
   BASKET_ID,
   ENROLLMENT_ID,
   OFFERING_ID,
+  OPERATION_ID,
+  ORDER_ID,
   PAYMENT_ID,
   PERSON_ID,
   PROGRAM_ID,
@@ -21,7 +25,10 @@ import {
   apiError,
   basket,
   checkout,
+  eligibility,
   hold,
+  operation,
+  paymentAttempt,
   nameRoutes,
   offering,
   ok,
@@ -218,22 +225,191 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
     expect(screen.queryByRole('button', { name: /Price/ })).toBeNull();
   });
 
-  it('SPK-PAY-007: a basket already checking out (after a reload) says not to take payment again', async () => {
+  it('SPK-PAY-007: a basket already checking out (after a reload) follows its checkout and never invites a second payment', async () => {
     const app = createTestApp({
       routes: routes({
         'GET /baskets/{id}': ok({
           ...HELD,
           status: 'checking_out',
-          orderRef: '0192f1a0-0000-7000-8000-00000000f0f0',
+          orderRef: ORDER_ID,
+          lastOperationId: OPERATION_ID,
+        }),
+        'GET /operations/{id}': ok(
+          operation({
+            status: 'recovery_required',
+            error: { code: 'FULFILLMENT_INCOMPLETE', message: 'A line could not be confirmed.' },
+          }),
+        ),
+        'GET /payments': ok({
+          items: [paymentAttempt({ status: 'unknown', unknownSince: '2026-10-24T11:00:00.000Z' })],
+          nextCursor: null,
         }),
       }),
     });
     render(app.at(`/registrations/assisted/${BASKET_ID}`));
     const state = await screen.findByTestId('checkout-in-progress');
     expect(state).toHaveTextContent('Checkout in progress: do not take payment again');
-    expect(state).toHaveTextContent('Order reference 0192f1a0');
+    const refs = await screen.findByLabelText('Checkout references');
+    expect(within(refs).getByRole('link', { name: 'Order 0192f1a0' })).toHaveAttribute(
+      'href',
+      `/finance/orders/${ORDER_ID}`,
+    );
+    expect(await within(refs).findByText('Operation recovery_required')).toBeInTheDocument();
+    expect(screen.getByText(/FULFILLMENT_INCOMPLETE: A line could not be confirmed/)).toBeVisible();
+    const attempts = await screen.findByRole('list', { name: 'Payment attempts of the order' });
+    expect(
+      within(attempts).getByText('Attempt unknown: reconcile before any retry'),
+    ).toBeInTheDocument();
+    expect(within(attempts).getByRole('link', { name: 'Open the checkout' })).toHaveAttribute(
+      'href',
+      `/finance/checkouts/0192f1a0-0000-7000-8000-000000000704`,
+    );
+    expect(app.fake.requests.find((r) => r.route === '/payments')?.query).toMatchObject({
+      orderId: ORDER_ID,
+    });
+    expect(app.fake.requests.find((r) => r.route === '/operations/{id}')?.params).toEqual({
+      id: OPERATION_ID,
+    });
     expect(screen.queryByRole('form', { name: 'Take payment' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Price/ })).toBeNull();
+  });
+
+  it('FIN-04: a fulfilled basket opens the checkout its operation names; payment attempts not readable are not available', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /baskets/{id}': ok({
+          ...HELD,
+          status: 'fulfilled',
+          orderRef: ORDER_ID,
+          lastOperationId: OPERATION_ID,
+        }),
+        'GET /operations/{id}': ok(
+          operation({
+            status: 'succeeded',
+            result: { checkoutId: '0192f1a0-0000-7000-8000-000000000704', orderId: ORDER_ID },
+            completedAt: '2026-10-24T11:59:00.000Z',
+          }),
+        ),
+        'GET /registration-checkouts/{id}': ok(checkout()),
+        'GET /payments': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+        }),
+      }),
+    });
+    render(app.at(`/registrations/assisted/${BASKET_ID}`));
+    expect(await screen.findByText('Operation succeeded')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Enrollment 0192f1a0/ })).toHaveAttribute(
+      'href',
+      `/registrations/enrollments/${ENROLLMENT_ID}`,
+    );
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+
+  it('ENR-05: offers only the intents the offering accepts, with the participant’s read-only eligibility', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}/registration-options': ok({
+          offeringId: OFFERING_ID,
+          availableIntents: ['youth', 'trial'],
+          seasonId: null,
+          participants: [
+            {
+              personId: PERSON_ID,
+              intents: [
+                { intent: 'youth', eligibility: eligibility(false) },
+                { intent: 'trial', eligibility: eligibility(true) },
+              ],
+            },
+          ],
+        }),
+      }),
+    });
+    render(app.at(`/registrations/assisted/${BASKET_ID}`));
+    const form = await screen.findByRole('form', { name: 'Add a participant and offering' });
+    const f = within(form);
+    await user.type(f.getByLabelText(/^Participant/), PERSON_ID);
+    await waitFor(() =>
+      expect(f.getByRole('option', { name: 'Spring academy' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(f.getByLabelText('Offering: program'), PROGRAM_ID);
+    await waitFor(() =>
+      expect(f.getByRole('option', { name: /Spring academy U10/ })).toBeInTheDocument(),
+    );
+    await user.selectOptions(f.getByLabelText('Offering: offering'), OFFERING_ID);
+    expect(
+      await f.findByText(/This offering accepts: Youth enrollment, Trial/),
+    ).toBeInTheDocument();
+    const intents = within(f.getByLabelText(/^Registration intent/))
+      .getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(intents).toEqual(['Choose an intent', 'Youth enrollment', 'Trial']);
+    await user.selectOptions(f.getByLabelText(/^Registration intent/), 'youth');
+    const preview = f.getByRole('group', { name: 'Eligibility before adding (read only)' });
+    expect(within(preview).getByText('Not eligible')).toBeInTheDocument();
+    expect(
+      app.fake.requests.find((r) => r.route === '/offerings/{id}/registration-options')?.query,
+    ).toEqual({ participantPersonIds: PERSON_ID });
+  });
+
+  it('ID-03: finds the household adult by name (names only) and fills the reference', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': ok({
+          items: [
+            {
+              id: ADULT_ID,
+              givenName: 'Sam',
+              familyName: 'Rivera',
+              kind: 'adult',
+              status: 'active',
+              matchedOn: 'name',
+            },
+          ],
+          nextCursor: null,
+        }),
+      }),
+    });
+    render(app.at('/registrations/assisted'));
+    const finder = await screen.findByRole('group', { name: 'Find the household adult' });
+    await user.type(within(finder).getByLabelText(/^Find the household adult/), 'R');
+    await user.click(
+      within(finder).getByRole('button', { name: 'Search for the household adult' }),
+    );
+    expect(within(finder).getByText('Enter at least two characters.')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/people')).toBe(false);
+    await user.type(within(finder).getByLabelText(/^Find the household adult/), 'iv');
+    await user.click(
+      within(finder).getByRole('button', { name: 'Search for the household adult' }),
+    );
+    await user.click(
+      await within(finder).findByRole('button', { name: 'Use Sam Rivera as the household adult' }),
+    );
+    expect(screen.getByLabelText(/^Household adult/)).toHaveValue(ADULT_ID);
+    expect(app.fake.requests.find((r) => r.route === '/people')?.query).toEqual({
+      query: 'Riv',
+      limit: '10',
+    });
+  });
+
+  it('a person search the viewer may not use is not available, and the reference stays', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+        }),
+      }),
+    });
+    render(app.at('/registrations/assisted'));
+    const finder = await screen.findByRole('group', { name: 'Find the payer' });
+    await user.type(within(finder).getByLabelText(/^Find the payer/), 'Rivera');
+    await user.click(within(finder).getByRole('button', { name: 'Search for the payer' }));
+    expect(
+      await within(finder).findByText(/Person search is not available to you/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Payer/)).toHaveValue('');
   });
 
   it('shows a basket the viewer may not see as not available', async () => {

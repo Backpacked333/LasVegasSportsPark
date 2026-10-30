@@ -33,6 +33,11 @@ export const PAYMENT_ID = '0192f1a0-0000-7000-8000-000000001101';
 export const REFUND_ID = '0192f1a0-0000-7000-8000-000000001102';
 export const CREDIT_ID = '0192f1a0-0000-7000-8000-000000001103';
 export const EXCEPTION_ID = '0192f1a0-0000-7000-8000-000000001201';
+export const PACKAGE_ID = '0192f1a0-0000-7000-8000-000000001401';
+export const REDEMPTION_ID = '0192f1a0-0000-7000-8000-000000001402';
+export const SUSPENSION_ID = '0192f1a0-0000-7000-8000-000000001403';
+export const PROVIDER_EVENT_ID = '0192f1a0-0000-7000-8000-000000001404';
+export const OPERATION_ID = '0192f1a0-0000-7000-8000-000000000709';
 
 type Model<N extends keyof Schemas> = NonNullable<Schema<N>>;
 
@@ -436,6 +441,18 @@ export function paymentAttempt(
     updatedAt: NOW,
     ...overrides,
   };
+}
+
+/** `GET /payments/{id}` (FIN-02): the attempt with what is still refundable and its refunds. */
+export function paymentDetail(
+  overrides: Partial<Model<'PaymentAttempt'>> = {},
+  detail: { refundableMinor?: number; refunds?: Model<'PaymentRefundSummary'>[] } = {},
+): Model<'PaymentDetail'> {
+  return {
+    ...paymentAttempt(overrides),
+    refundableMinor: detail.refundableMinor ?? 12500,
+    refunds: detail.refunds ?? [],
+  } as Model<'PaymentDetail'>;
 }
 
 export function checkout(overrides: Partial<Model<'Checkout'>> = {}): Model<'Checkout'> {
@@ -864,6 +881,127 @@ export function reconciliationReport(
     ...overrides,
   };
 }
+
+/** ENR-02: the offering an enrollment names, with its facility zone (SPK-SCHED-008). */
+export function enrollmentOffering(kind: Model<'OfferingKind'> = 'term') {
+  return {
+    id: OFFERING_ID,
+    name: 'Spring academy U10',
+    kind,
+    startsOn: '2026-11-02',
+    endsOn: '2026-12-14',
+    facilityId: FACILITY_A,
+    timezone: 'America/Los_Angeles',
+  } as never;
+}
+
+export function packageEntitlement(
+  overrides: Partial<Model<'PackageEntitlement'>> = {},
+): Model<'PackageEntitlement'> {
+  return {
+    id: PACKAGE_ID,
+    participantPersonId: PERSON_ID,
+    enrollmentId: ENROLLMENT_ID,
+    offeringId: OFFERING_ID,
+    offeringName: 'Ten-session pack',
+    entitlementDefinitionId: ENTITLEMENT_ID,
+    appliesTo: { offeringIds: [OFFERING_B_ID], programIds: [] },
+    credits: 10,
+    redeemedCount: 1,
+    remainingCredits: 9,
+    status: 'active',
+    expiresAt: '2027-01-31T08:00:00.000Z',
+    issuedAt: NOW,
+    expiredAt: null,
+    revokedAt: null,
+    revokedReason: null,
+    redemptions: [
+      {
+        id: REDEMPTION_ID,
+        sessionBookingId: '0192f1a0-0000-7000-8000-000000001405',
+        kind: 'redeem',
+        reversesRedemptionId: null,
+        reason: null,
+        redeemedAt: '2026-10-22T17:00:00.000Z',
+      },
+    ],
+    revision: 2,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+export function membershipSuspension(
+  overrides: Partial<Model<'MembershipSuspension'>> = {},
+): Model<'MembershipSuspension'> {
+  return {
+    id: SUSPENSION_ID,
+    enrollmentId: ENROLLMENT_ID,
+    participantPersonId: PERSON_ID,
+    from: '2026-11-02T08:00:00.000Z',
+    until: null,
+    reason: 'Injury',
+    status: 'active',
+    endedAt: null,
+    endedReason: null,
+    revision: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+export function providerEvent(
+  overrides: Partial<Model<'ProviderEvent'>> = {},
+): Model<'ProviderEvent'> {
+  return {
+    id: PROVIDER_EVENT_ID,
+    provider: 'fake',
+    providerEventId: 'evt_1',
+    eventType: 'payment.succeeded',
+    signatureVerified: true,
+    status: 'processed',
+    attempts: 1,
+    lastError: null,
+    receivedAt: '2026-10-24T11:00:00.000Z',
+    processedAt: '2026-10-24T11:00:01.000Z',
+    ...overrides,
+  };
+}
+
+export function operation(overrides: Partial<Model<'Operation'>> = {}): Model<'Operation'> {
+  return {
+    id: OPERATION_ID,
+    kind: 'finance.registration_checkout',
+    status: 'running',
+    correlationId: null,
+    result: null,
+    error: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    completedAt: null,
+    ...overrides,
+  };
+}
+
+/** `GET /facilities` (K-04): both test facilities with their IANA zones. */
+export const facilitiesRoute: FakeHandler = {
+  status: 200,
+  body: {
+    items: [
+      {
+        id: FACILITY_A,
+        slug: 'north',
+        name: 'North complex',
+        timezone: 'America/Los_Angeles',
+        status: 'active',
+        address: null,
+        inStaffScope: true,
+      },
+    ],
+  },
+};
 
 /** A §4.10 error response. */
 export function apiError(

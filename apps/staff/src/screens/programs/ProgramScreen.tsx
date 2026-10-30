@@ -9,6 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError, fieldErrorsOf } from '../../features/registration-finance/CommandError';
 import { useFacilities } from '../../features/registration-finance/facilities';
@@ -21,6 +22,7 @@ import {
 } from '../../features/registration-finance/labels';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { OfferingForm } from './OfferingForm';
 import { ProgramForm, ageBandText } from './ProgramsScreen';
@@ -124,11 +126,12 @@ export function ProgramScreen() {
   const { nameOf } = useFacilities();
   const [state, setState] = useState<'' | PublicationState>('');
   const program = useApiQuery({ path: '/programs/{id}', request: { path: { id: programId } } });
-  const offerings = useApiQuery({
+  // §4.5: keyset pages with "Load more"; nothing is silently cut off.
+  const offerings = useApiPages({
     path: '/programs/{id}/offerings',
     request: {
       path: { id: programId },
-      query: { limit: 200, ...(state ? { publicationState: state } : {}) },
+      query: { limit: 50, ...(state ? { publicationState: state } : {}) },
     },
     enabled: program.data !== undefined,
   });
@@ -171,16 +174,16 @@ export function ProgramScreen() {
               <QueryBoundary
                 query={offerings}
                 label="offerings"
-                isEmpty={(page) => page.items.length === 0}
+                isEmpty={(items) => items.length === 0}
                 empty={{
                   title: 'No offerings',
                   description:
                     'This program has no dated offerings in this state. Create a draft offering below.',
                 }}
               >
-                {(page) => (
+                {(items) => (
                   <ul className="list" aria-label="Offerings">
-                    {page.items.map((offering) => (
+                    {items.map((offering) => (
                       <li key={offering.id}>
                         <div className="row-text">
                           <Link className="row-title" to={`/programs/offerings/${offering.id}`}>
@@ -197,6 +200,7 @@ export function ProgramScreen() {
                   </ul>
                 )}
               </QueryBoundary>
+              <LoadMore pages={offerings} label="offerings" />
             </section>
             {data.status !== 'archived' ? <NewOffering programId={data.id} /> : null}
           </>

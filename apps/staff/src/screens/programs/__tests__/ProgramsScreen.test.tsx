@@ -1,7 +1,9 @@
 /**
  * SCR-S-14 programs (SPK-CAT-001, SPK-YOUTH-001, SPK-UX-008): list, create with an idempotency
- * key, keep input on a validation failure, permission restriction shown as not available.
+ * key, keep input on a validation failure, permission restriction shown as not available, keyset
+ * paging with "Load more" (§4.5).
  */
+import { fakeResponse } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -128,5 +130,31 @@ describe('SCR-S-14 ProgramsScreen', () => {
     expect(screen.getByText(/creating a program needs a connection/)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Program name/)).toHaveValue('Futsal clinic');
     await waitFor(() => expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false));
+  });
+
+  it('§4.5: pages programs with the API cursor and never hides that more exist', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /programs': (request) =>
+          fakeResponse(
+            200,
+            request.query.cursor === 'p2'
+              ? {
+                  items: [program({ id: `${PROGRAM_ID.slice(0, -1)}3`, name: 'Summer camp' })],
+                  nextCursor: null,
+                }
+              : { items: [program()], nextCursor: 'p2' },
+          ),
+      },
+    });
+    render(app.at('/programs'));
+    const list = await screen.findByRole('list', { name: 'Programs' });
+    await user.click(screen.getByRole('button', { name: 'Load more programs' }));
+    expect(await within(list).findByRole('link', { name: 'Summer camp' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more programs' })).toBeNull();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/programs').map((r) => r.query.cursor ?? null),
+    ).toEqual([null, 'p2']);
   });
 });
