@@ -140,11 +140,14 @@ export const STAFF_AREAS: readonly StaffArea[] = [
       'Accounts and roles, integrations and configuration, migration imports, support cases, access hardware.',
     links: [
       { path: '/admin/accounts', title: 'Accounts, roles and permissions', screenIds: 'SCR-S-46' },
+      { path: '/admin/audit', title: 'Audit records', screenIds: 'SCR-S-46' },
       {
         path: '/admin/integrations',
         title: 'Integrations and configuration',
         screenIds: 'SCR-S-47',
       },
+      { path: '/admin/capabilities', title: 'Capability switches', screenIds: 'SCR-S-47' },
+      { path: '/admin/provider-events', title: 'Provider events', screenIds: 'SCR-S-47' },
       {
         path: '/admin/migration',
         title: 'Migration imports and reconciliation',

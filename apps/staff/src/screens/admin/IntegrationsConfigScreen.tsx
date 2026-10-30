@@ -2,22 +2,27 @@
  * SCR-S-47 Integrations and configuration (§5.1, §5.2, SPK-SCHED-008, DEC-013, DEC-018 to DEC-023;
  * SPK-UX-008, SPK-UX-009).
  *
- * - Provider connections: the six §5.2 provider-selection gates, each shown as waiting on its
- *   decision with its owner. No provider, account or evidence level is invented: until a provider
- *   is selected and approved the API runs against its test adapters, and the API publishes no
- *   integration register, so the §5.1 fields and the documented → tested → accepted → live
- *   evidence are shown as not available yet.
+ * - Provider connections: the integration register (`GET /v1/admin/integrations`, K-09). Each
+ *   §5.2 provider-selection gate is shown as waiting on the decision the API names, with its owner;
+ *   its twelve §5.1 register fields are "not recorded" while the API returns them empty, and its
+ *   documented → tested → accepted → live evidence level is shown only as the API reports it.
+ *   The adapters the API runs behind each gate are listed with their kind (deterministic test
+ *   adapters today), whether they may serve production, the §5.2 scenarios they reproduce and the
+ *   queue that reconciles their outcomes. No provider, account or evidence is invented. No gate
+ *   with adapters is the empty state "fakes only".
  * - API connection: `GET /v1/health` (version and database), "Check again" is the connection test.
- * - Facility settings: name, time zone (checked as an IANA name, SPK-SCHED-008) and local date as
- *   the Today feed returns them; the API has no organization or facility settings command, so they
- *   are read-only here.
+ * - Organization and facility settings: `GET /v1/admin/settings` with each record's revision, the
+ *   facility time zone checked as an IANA name (SPK-SCHED-008) and the facility's local date from
+ *   that zone. Changing settings stays Proposed (no API command, DEC-013; addresses DEC-001), so
+ *   they are read-only here.
+ * - Capability switches and provider events have their own pages (linked).
  * - Policy versions and effective dates: `GET /v1/policy-versions` with their approvals.
  * Offline, everything is read-only with the age of what is shown.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { useApiQuery } from '../../api/useApiQuery';
-import { useFacilityChoices } from '../../features/insight-admin/facilities';
 import {
   ApiGap,
   CommandError,
@@ -25,15 +30,27 @@ import {
   PendingNote,
 } from '../../features/insight-admin/feedback';
 import { SelectField } from '../../features/insight-admin/fields';
-import { formatInstant, isValidTimeZone, shortId } from '../../features/insight-admin/format';
 import {
+  formatInstant,
+  formatScalar,
+  isValidTimeZone,
+  localDateOf,
+} from '../../features/insight-admin/format';
+import {
+  ADAPTER_KIND_LABELS,
   DECISIONS,
   EVIDENCE_LEVELS,
+  FACILITY_STATUS_BADGES,
+  ORGANIZATION_STATUS_BADGES,
   POLICY_BADGES,
-  PROVIDER_GATES,
-  REGISTER_FIELDS,
+  REGISTER_FIELD_LABELS,
+  SCENARIO_LABELS,
+  decisionOwner,
+  gateTitle,
+  roleLabel,
 } from '../../features/insight-admin/labels';
-import { useApp } from '../../providers/AppProviders';
+import { AdminNav } from '../../features/insight-admin/nav';
+import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 
@@ -112,87 +129,230 @@ function ApiConnection() {
   );
 }
 
+type IntegrationGate = Schema<'IntegrationGate'>;
+
+function AdapterRow({ adapter }: { adapter: Schema<'IntegrationAdapter'> }) {
+  return (
+    <li>
+      <span className="row-title">
+        {adapter.adapter.name} · {adapter.port}
+      </span>{' '}
+      <StatusBadge
+        tone={adapter.adapter.kind === 'fake' ? 'info' : 'neutral'}
+        label={ADAPTER_KIND_LABELS[adapter.adapter.kind]}
+      />{' '}
+      <StatusBadge
+        tone={adapter.productionAllowed ? 'warning' : 'neutral'}
+        label={adapter.productionAllowed ? 'may serve production' : 'never serves production'}
+      />
+      <span className="caption">
+        {' '}
+        {adapter.id}
+        {adapter.scenarios.length > 0
+          ? ` · reproduces ${adapter.scenarios.map((s) => SCENARIO_LABELS[s]).join(', ')}`
+          : ''}
+        {adapter.reconciliationOwner
+          ? ` · outcomes reconciled by ${roleLabel(adapter.reconciliationOwner)}`
+          : ''}
+      </span>
+    </li>
+  );
+}
+
+function GateRow({ gate }: { gate: IntegrationGate }) {
+  const title = gateTitle(gate.gate);
+  const fields = Object.entries(REGISTER_FIELD_LABELS) as [
+    keyof Schema<'IntegrationRegister'>,
+    string,
+  ][];
+  const recorded = fields.filter(([key]) => gate.register[key] !== null).length;
+  return (
+    <li aria-labelledby={`gate-${gate.gate}`}>
+      <div className="row-text">
+        <span className="row-title" id={`gate-${gate.gate}`}>
+          {title}
+        </span>
+        {gate.status === 'pending_decision' ? (
+          <StatusBadge tone="pending" label="Waiting on a decision" />
+        ) : (
+          <StatusBadge tone="info" label={gate.status} />
+        )}
+        <span className="caption">
+          Provider not selected: {gate.decisionRef} (owner: {decisionOwner(gate.decisionRef)}).
+        </span>
+        <span className="caption">
+          Evidence ({EVIDENCE_LEVELS.join(' → ')}):{' '}
+          {gate.evidenceLevel ?? 'not recorded until a provider is selected'}.
+        </span>
+        <details className="ia-definition">
+          <summary>
+            Register fields (§5.1): {recorded} of {fields.length} recorded
+          </summary>
+          <dl className="ia-dl">
+            {fields.map(([key, label]) => (
+              <div key={key}>
+                <dt>{label}</dt>
+                <dd>{gate.register[key] ?? `Not recorded (pending ${gate.decisionRef})`}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+        {gate.adapters.length === 0 ? (
+          <span className="caption">No adapter is registered behind this gate.</span>
+        ) : (
+          <ul aria-label={`Adapters behind ${title}`}>
+            {gate.adapters.map((adapter) => (
+              <AdapterRow key={adapter.id} adapter={adapter} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </li>
+  );
+}
+
 function ProviderGates() {
+  const register = useApiQuery({ path: '/admin/integrations' });
   return (
     <section className="ia-section" aria-labelledby="providers-title">
       <h3 id="providers-title">Provider connections</h3>
+      <InsightQueryBoundary
+        query={register}
+        label="the integration register"
+        isEmpty={(data) => data.gates.length === 0}
+        empty={{
+          title: 'No providers configured',
+          description: 'The API listed no provider-selection gate: it runs on test adapters only.',
+        }}
+        deniedDescription="Reading the integration register is for the general manager and system administration."
+      >
+        {(data) => {
+          const live = data.gates.flatMap((g) => g.adapters).filter((a) => a.productionAllowed);
+          return (
+            <>
+              <p className="caption" role="status">
+                {live.length === 0
+                  ? 'No provider is selected: the API runs against its test adapters only, and no production account exists (§5.2).'
+                  : `${live.length} adapter${live.length === 1 ? '' : 's'} may serve production.`}
+              </p>
+              <ul className="list" aria-label="Provider-selection gates">
+                {data.gates.map((gate) => (
+                  <GateRow key={gate.gate} gate={gate} />
+                ))}
+              </ul>
+            </>
+          );
+        }}
+      </InsightQueryBoundary>
       <p className="caption">
-        No provider is selected. Until the technical lead and the account owner approve one (§5.2),
-        the API runs against its test adapters only, and no production account exists.
+        <Link to="/admin/provider-events">Provider events received by the inbox</Link>
       </p>
-      <ul className="list" aria-label="Provider-selection gates">
-        {PROVIDER_GATES.map((gate) => (
-          <li key={gate.id} aria-labelledby={`gate-${gate.id}`}>
-            <div className="row-text">
-              <span className="row-title" id={`gate-${gate.id}`}>
-                {gate.title}
-              </span>
-              <StatusBadge tone="pending" label="Waiting on a decision" />
-              <span className="caption">
-                Provider not selected: {gate.decision} (owner: {DECISIONS.providers.owner}; part of{' '}
-                {DECISIONS.providers.ids.join(', ')}).
-              </span>
-              <span className="caption">
-                Evidence ({EVIDENCE_LEVELS.join(' → ')}): not recorded until a provider is selected.
-              </span>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <ApiGap title="Integration register">
-        The API does not publish the §5.1 register ({REGISTER_FIELDS.join(', ').toLowerCase()}) or
-        the evidence level of each capability, so they cannot be shown or tested from here.
-      </ApiGap>
     </section>
   );
 }
 
-function FacilitySettings() {
-  const { choices, loading, error, refetch } = useFacilityChoices();
-  const me = useApiQuery({ path: '/me' });
+function SettingsValues({ settings, label }: { settings: Record<string, unknown>; label: string }) {
+  const entries = Object.entries(settings);
+  if (entries.length === 0) {
+    return <span className="caption">No {label} recorded.</span>;
+  }
+  return (
+    <dl className="ia-dl" aria-label={label}>
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <dt>{key}</dt>
+          <dd>{formatScalar(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function FacilitySettingsRow({ facility }: { facility: Schema<'AdminFacilitySettings'> }) {
+  const now = useNow(60_000);
+  const valid = isValidTimeZone(facility.timezone);
+  const status = FACILITY_STATUS_BADGES[facility.status];
+  return (
+    <li aria-labelledby={`facility-settings-${facility.id}`}>
+      <div className="row-text">
+        <span className="row-title" id={`facility-settings-${facility.id}`}>
+          {facility.name}
+        </span>
+        <StatusBadge tone={status.tone} label={status.label} />
+        <span>
+          Time zone: {facility.timezone}{' '}
+          <StatusBadge
+            tone={valid ? 'success' : 'warning'}
+            label={valid ? 'valid IANA time zone' : 'not a recognised IANA time zone'}
+          />
+        </span>
+        <span className="caption">
+          {valid
+            ? `Local date ${localDateOf(now, facility.timezone)}; facility-local times on every screen use this zone (SPK-SCHED-008).`
+            : 'Facility-local times cannot be shown until the time zone is a valid IANA name (SPK-SCHED-008).'}
+        </span>
+        <span className="caption">
+          {facility.slug} · revision {facility.revision} · address{' '}
+          {facility.address
+            ? formatScalar(facility.address)
+            : `not set (${DECISIONS.facilityInventory.ids.join(', ')})`}
+        </span>
+        <SettingsValues settings={facility.settings} label={`settings of ${facility.name}`} />
+      </div>
+    </li>
+  );
+}
+
+function OrganizationSettings() {
+  const settings = useApiQuery({ path: '/admin/settings' });
   return (
     <section className="ia-section" aria-labelledby="facility-settings-title">
       <h3 id="facility-settings-title">Organization and facility settings</h3>
-      {me.data?.principal.organizationId ? (
-        <p className="caption">Organization {shortId(me.data.principal.organizationId)}</p>
-      ) : null}
-      {loading ? (
-        <p role="progressbar" aria-busy="true" aria-label="Loading facility settings">
-          Loading facility settings…
-        </p>
-      ) : error ? (
-        <CommandError error={error} onRetry={refetch} />
-      ) : choices.length === 0 ? (
-        <p className="caption">No facility is listed for you.</p>
-      ) : (
-        <ul className="list" aria-label="Facility settings">
-          {choices.map((facility) => {
-            const valid = facility.timezone ? isValidTimeZone(facility.timezone) : false;
-            return (
-              <li key={facility.id}>
-                <div className="row-text">
-                  <span className="row-title">{facility.label}</span>
-                  <span>
-                    Time zone: {facility.timezone ?? 'not reported'}{' '}
-                    <StatusBadge
-                      tone={valid ? 'success' : 'warning'}
-                      label={valid ? 'valid IANA time zone' : 'not a recognised IANA time zone'}
-                    />
-                  </span>
-                  <span className="caption">
-                    Local date {facility.localDate ?? 'not reported'}; facility-local times on every
-                    screen use this zone (SPK-SCHED-008).
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <InsightQueryBoundary
+        query={settings}
+        label="the organization and facility settings"
+        empty={{ title: 'Not available', description: '' }}
+        deniedDescription="Reading settings is for the general manager and system administration."
+      >
+        {(data) => {
+          const org = data.organization;
+          const status = ORGANIZATION_STATUS_BADGES[org.status];
+          return (
+            <>
+              <dl className="ia-dl">
+                <dt>Organization</dt>
+                <dd>
+                  {org.name} ({org.slug}) <StatusBadge tone={status.tone} label={status.label} /> ·
+                  revision {org.revision}
+                </dd>
+                <dt>Organization settings</dt>
+                <dd>
+                  <SettingsValues settings={org.settings} label="organization settings" />
+                </dd>
+              </dl>
+              {data.facilities.length === 0 ? (
+                <p className="caption">No facility is configured for this organization.</p>
+              ) : (
+                <ul className="list" aria-label="Facility settings">
+                  {data.facilities.map((facility) => (
+                    <FacilitySettingsRow key={facility.id} facility={facility} />
+                  ))}
+                </ul>
+              )}
+            </>
+          );
+        }}
+      </InsightQueryBoundary>
       <ApiGap title="Editing organization and facility settings">
-        The API has no command to change organization or facility settings, such as the facility
-        time zone, so they are read-only here.
+        Changing organization or facility settings, such as a facility time zone, is proposed and
+        has no API command yet ({DECISIONS.providers.ids.join(', ')}); addresses wait on{' '}
+        {DECISIONS.facilityInventory.ids.join(', ')}. They are read-only here.
       </ApiGap>
+      <p className="caption">
+        <Link to="/admin/capabilities">
+          Capability switches (conditional capabilities, DEC-016)
+        </Link>
+      </p>
     </section>
   );
 }
@@ -354,12 +514,13 @@ export function IntegrationsConfigScreen() {
   return (
     <section aria-labelledby="integrations-title" className="ia-screen">
       <h2 id="integrations-title">Integrations and configuration</h2>
+      <AdminNav />
       <PendingNote decisions={DECISIONS.providers.ids} owner={DECISIONS.providers.owner}>
         Every external provider and the ownership of every production account.
       </PendingNote>
       <ProviderGates />
       <ApiConnection />
-      <FacilitySettings />
+      <OrganizationSettings />
       <PolicyVersions />
     </section>
   );

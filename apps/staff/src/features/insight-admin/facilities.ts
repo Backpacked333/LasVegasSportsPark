@@ -1,14 +1,17 @@
 /**
- * Facilities a staff member may choose on the Reports and Administration screens: the principal's
- * facility scope from `GET /v1/me` (empty = the whole organization, then the facilities the Today
- * feed lists), named from the Today feed as the facility switcher does (§4.3). The API has no
- * facility directory, so an unnamed facility shows a short reference. The time zone and local date
- * come from the same feed (SPK-SCHED-008); nothing here decides authorization.
+ * Facilities a staff member may choose on the Reports and Administration screens (SCR-S-43 to
+ * SCR-S-48): the organization's facility directory (`GET /v1/facilities`, K-04) with each
+ * facility's name and IANA time zone (SPK-SCHED-008), limited to the facilities the API says are
+ * in this principal's staff scope (`inStaffScope`). The principal's facility scope from `GET /v1/me`
+ * says whether organization-wide reports apply (empty scope = the whole organization). A
+ * facility's local date is derived from its time zone and the injected clock; nothing here decides
+ * authorization, every read and command is still checked by the API.
  */
 import type { ApiError } from '@sportspark/api-client';
 import { useMemo } from 'react';
 import { useApiQuery } from '../../api/useApiQuery';
-import { facilityLabel } from '../../layout/FacilitySwitcher';
+import { useNow } from '../../providers/AppProviders';
+import { localDateOf } from './format';
 
 export interface FacilityChoice {
   id: string;
@@ -30,27 +33,35 @@ export function useFacilityChoices(): {
   refetch: () => void;
 } {
   const me = useApiQuery({ path: '/me' });
-  const today = useApiQuery({ path: '/today', staleTime: 5 * 60_000 });
+  const directory = useApiQuery({ path: '/facilities', staleTime: 5 * 60_000 });
+  const now = useNow(60_000);
   return useMemo(() => {
-    const feed = today.data?.facilities ?? [];
-    const names = new Map(feed.map((f) => [f.facilityId, f.name]));
-    const byId = new Map(feed.map((f) => [f.facilityId, f]));
     const scopedIds = me.data?.principal.facilityIds ?? [];
-    const ids = scopedIds.length > 0 ? scopedIds : feed.map((f) => f.facilityId);
+    const listed = (directory.data?.items ?? []).filter(
+      (f) => f.inStaffScope !== false && (scopedIds.length === 0 || scopedIds.includes(f.id)),
+    );
     return {
-      choices: ids.map((id) => ({
-        id,
-        label: facilityLabel(id, names),
-        timezone: byId.get(id)?.timezone ?? null,
-        localDate: byId.get(id)?.localDate ?? null,
+      choices: listed.map((f) => ({
+        id: f.id,
+        label: f.name,
+        timezone: f.timezone,
+        localDate: f.timezone ? safeLocalDate(now, f.timezone) : null,
       })),
       scoped: scopedIds.length > 0,
-      loading: me.isLoading || today.isLoading,
-      error: ids.length === 0 ? (me.error ?? today.error ?? null) : null,
+      loading: me.isLoading || directory.isLoading,
+      error: listed.length === 0 ? (directory.error ?? me.error ?? null) : null,
       refetch: () => {
         void me.refetch();
-        void today.refetch();
+        void directory.refetch();
       },
     };
-  }, [me, today]);
+  }, [me, directory, now]);
+}
+
+function safeLocalDate(at: Date, timeZone: string): string | null {
+  try {
+    return localDateOf(at, timeZone);
+  } catch {
+    return null;
+  }
 }

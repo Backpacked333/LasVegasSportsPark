@@ -12,6 +12,7 @@ import {
   RUN_1,
   metricDefinition,
   ok,
+  facilityList,
   reportResponse,
   reportRun,
 } from '../../../features/insight-admin/__tests__/fixtures';
@@ -29,6 +30,7 @@ function app(routes: Record<string, FakeHandler> = {}) {
     routes: {
       'GET /reports/metric-definitions': DEFINITIONS,
       'GET /reports/daily-schedule': ok(reportResponse('daily_schedule')),
+      'GET /facilities': facilityList(),
       ...routes,
     },
   });
@@ -231,5 +233,64 @@ describe('SCR-S-43 OperatingReportsScreen', () => {
       'page',
     );
     await waitFor(() => expect(screen.getByLabelText('Date (required)')).toHaveValue('2026-10-24'));
+  });
+
+  it('REP-03: says how the figures were read and which settings the report used', async () => {
+    const user = userEvent.setup();
+    const base = reportResponse('daily_schedule');
+    render(
+      app({
+        'GET /reports/daily-schedule': ok({
+          ...base,
+          freshness: { ...base.freshness, consistency: 'snapshot' },
+          settings: [
+            {
+              setting: 'REPORTING_OPERATING_DAY_START',
+              configured: true,
+              value: '05:00',
+              pendingDecision: 'DEC-001',
+              effect: 'A reported day runs from 05:00 local time to 05:00 the next day.',
+            },
+          ],
+        }),
+      }).at('/reports'),
+    );
+    await within(await screen.findByLabelText('Facility (required)')).findByRole('option', {
+      name: 'North Park 1',
+    });
+    await user.selectOptions(screen.getByLabelText('Facility (required)'), FACILITY_A);
+    await user.click(screen.getByRole('button', { name: 'Show report' }));
+    const report = await screen.findByRole('article', { name: 'Daily schedule' });
+    expect(
+      within(report).getByText('Every figure was read in one consistent snapshot.'),
+    ).toBeInTheDocument();
+    const settings = within(report).getByRole('region', { name: 'Settings this report used' });
+    expect(within(settings).getByText('configured')).toBeInTheDocument();
+    expect(within(settings).getByText(/REPORTING_OPERATING_DAY_START = 05:00/)).toBeInTheDocument();
+    expect(
+      within(settings).getByText('Configured by the operator; DEC-001 is still pending.'),
+    ).toBeInTheDocument();
+  });
+
+  it('REP-03: a run stored before snapshot reads says so and lists no settings', async () => {
+    const user = userEvent.setup();
+    render(app().at('/reports'));
+    await within(await screen.findByLabelText('Facility (required)')).findByRole('option', {
+      name: 'North Park 1',
+    });
+    await user.selectOptions(screen.getByLabelText('Facility (required)'), FACILITY_A);
+    await user.click(screen.getByRole('button', { name: 'Show report' }));
+    const report = await screen.findByRole('article', { name: 'Daily schedule' });
+    expect(
+      within(report).getByText('Stored before reports were read in one snapshot.'),
+    ).toBeInTheDocument();
+    expect(within(report).queryByRole('region', { name: 'Settings this report used' })).toBeNull();
+  });
+
+  it('offers only the facilities in the staff scope from GET /v1/facilities (inStaffScope)', async () => {
+    render(app({ 'GET /facilities': facilityList([{}, { inStaffScope: false }]) }).at('/reports'));
+    const select = await screen.findByLabelText('Facility (required)');
+    expect(await within(select).findByRole('option', { name: 'North Park 1' })).toBeInTheDocument();
+    expect(within(select).queryByRole('option', { name: 'North Park 2' })).toBeNull();
   });
 });

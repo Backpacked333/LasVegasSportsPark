@@ -53,6 +53,11 @@ export interface TextFieldProps {
   placeholder?: string;
   inputMode?: 'text' | 'decimal' | 'numeric';
   maxLength?: number;
+  /**
+   * Enter in this field runs this instead of submitting the enclosing form (a search inside a
+   * command form must never send the command).
+   */
+  onEnter?: () => void;
 }
 
 export function TextField({
@@ -79,6 +84,16 @@ export function TextField({
           aria-describedby={describedBy}
           aria-invalid={invalid || undefined}
           onChange={(event) => onChange(event.target.value)}
+          onKeyDown={
+            rest.onEnter
+              ? (event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    rest.onEnter?.();
+                  }
+                }
+              : undefined
+          }
         />
       )}
     </FieldFrame>
