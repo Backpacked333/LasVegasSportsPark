@@ -13,8 +13,12 @@ acceptance (§6.2): a passing test or a successful bundle export is not native a
 
 ```bash
 pnpm install
-# API in development mode (local identity provider, in-process PGlite):
-AUTH_LOCAL_SECRET=$(openssl rand -hex 32) pnpm --filter @sportspark/api dev
+# API in development mode (local identity provider, PGlite kept in PGLITE_DATA_DIR). NODE_ENV has
+# no default: the API refuses to start without it.
+export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
+# Synthetic accounts to sign in with (K-14; root README "Local sign-in"); idempotent:
+pnpm --filter @sportspark/api seed:dev
+pnpm --filter @sportspark/api dev
 # The app (Expo dev server; open in a simulator, an emulator or a development build):
 SPORTSPARK_API_BASE_URL=http://localhost:3000/v1 pnpm --filter @sportspark/mobile start
 ```
@@ -22,9 +26,12 @@ SPORTSPARK_API_BASE_URL=http://localhost:3000/v1 pnpm --filter @sportspark/mobil
 - An Android emulator reaches the host at `http://10.0.2.2:3000/v1`; a physical device needs the
   computer's LAN address.
 - Sign in from Account or Home: development builds offer **Development sign-in**, which asks the
-  API's `POST /v1/dev/tokens` for a token for an existing local account id. That route exists only
-  when the API runs with `AUTH_MODE=local` outside production. The API has no development seed, so
-  the account must already exist in the database you run against.
+  API's `POST /v1/dev/tokens` for a token for a local account id. That route exists only when the
+  API runs with `AUTH_MODE=local` outside production. Use an `accountId` that
+  `pnpm --filter @sportspark/api seed:dev` prints: `dev-parent` is the customer account (a guardian
+  holding the six permissions over a child); the others are staff accounts for the staff
+  dashboard. Keep the same `AUTH_LOCAL_SECRET` and `PGLITE_DATA_DIR` (or `DATABASE_URL`) for the
+  seed and the API, so both use the same database.
 - `SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES` sets the age after which shown data is called stale.
   The value is pending (DEC-032, DEC-033); unset, the app shows data age but never calls it stale.
 
