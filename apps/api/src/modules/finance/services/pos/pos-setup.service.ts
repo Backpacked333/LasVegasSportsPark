@@ -47,7 +47,7 @@ import {
   PosRegisterMachine,
   PosRegisterSessionMachine,
 } from '../../finance.state-machines';
-import { requirePosRead } from './pos-access';
+import { posListFacilityScope, requirePosRead } from './pos-access';
 import {
   expectedCash,
   toPosProduct,
@@ -340,6 +340,16 @@ export class PosSetupService {
       q = q.where((eb) =>
         eb.or([eb('facility_id', 'is', null), eb('facility_id', '=', facilityId)]),
       );
+    } else {
+      // §4.3, §4.14: without a facility the list is narrowed to the facilities the caller's
+      // reading roles cover (organization-wide products stay visible to them).
+      const scope = posListFacilityScope(principal);
+      if (scope !== null) {
+        if (scope.length === 0) return { items: [], nextCursor: null };
+        q = q.where((eb) =>
+          eb.or([eb('facility_id', 'is', null), eb('facility_id', 'in', [...scope])]),
+        );
+      }
     }
     if (query.status) q = q.where('status', '=', query.status);
     if (cursor) q = q.where(afterKeysetDesc('pos_products', cursor));
@@ -505,7 +515,17 @@ export class PosSetupService {
       .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
       .limit(query.limit + 1);
-    if (query.facilityId) q = q.where('facility_id', '=', query.facilityId);
+    if (query.facilityId) {
+      q = q.where('facility_id', '=', query.facilityId);
+    } else {
+      // §4.3, §4.14: without a facility the list is narrowed to the facilities the caller's
+      // reading roles cover, as the per-record reads are (a register names its open session).
+      const scope = posListFacilityScope(principal);
+      if (scope !== null) {
+        if (scope.length === 0) return { items: [], nextCursor: null };
+        q = q.where('facility_id', 'in', [...scope]);
+      }
+    }
     if (query.status) q = q.where('status', '=', query.status);
     if (cursor) q = q.where(afterKeysetDesc('pos_registers', cursor));
     const page = keysetPage(await q.execute(), query.limit);

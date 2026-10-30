@@ -266,7 +266,10 @@ export function toRefundable(row: RefundableRow): Refundable {
     capturedMinor: row.captured_minor,
     refundedMinor: row.refunded_minor,
     reservedMinor: row.reserved_minor,
-    availableMinor: row.captured_minor - row.refunded_minor - row.reserved_minor,
+    compensatedMinor: row.compensated_minor,
+    // MONEY-02: funds a compensation credit took are no longer refundable.
+    availableMinor:
+      row.captured_minor - row.refunded_minor - row.reserved_minor - row.compensated_minor,
     currency: row.currency,
   };
 }
@@ -367,6 +370,8 @@ export function toInstallmentPlan(
     retryPolicy: { maxAttempts: retry.maxAttempts, retryIntervalHours: retry.retryIntervalHours },
     noticePolicy: { daysBefore: notice.daysBefore },
     outstandingMinor,
+    hold:
+      row.held_at && row.hold_reason ? { reason: row.hold_reason, heldAt: iso(row.held_at) } : null,
     installments: installments.map(toInstallment),
     revision: row.revision,
   };
@@ -420,6 +425,14 @@ export function toSettlement(row: SettlementRow): SettlementReconciliation {
 // ---------------------------------------------------------------------------------------------
 
 export const LIVE_ATTEMPT_STATES = ['created', 'action_required', 'processing', 'unknown'] as const;
+
+/**
+ * MONEY-05 (§4.11, SPK-PAY-010/011): the journal purpose of a point-of-sale card capture the
+ * provider reported after its tender was recorded as failed (source `payment_attempt`, keyed by the
+ * attempt): the money sits in the processor against `overpayment_liability` until it is refunded
+ * or applied, and its refund settles against that liability.
+ */
+export const POS_LATE_CAPTURE_PURPOSE = 'pos_capture_after_failure';
 
 export function toLiveAttempt(row: PaymentAttemptRow): LiveAttempt {
   return {

@@ -1,11 +1,13 @@
 import { errors } from '@sportspark/contracts';
+import { pgErrorCode } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { UnitOfWork } from '../../../kernel';
+import { UnitOfWork, databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createPolicyVersionFixture } from '../../catalog';
 import { ENROLLMENT_PORT, EnrollmentsService, type EnrollmentPort } from '../../enrollment';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import { CheckoutFinalizer } from '../services/checkout-finalizer.service';
+import { FinancePolicyResolver } from '../services/finance-policy.resolver';
 import { createCreditFixture } from '../testing/finance-fixtures';
 import {
   adult,
@@ -24,6 +26,16 @@ import {
  * the place being gone (a definitive failure compensated per policy, SPK-AT-006).
  */
 const flaky = { failures: 0, kind: 'crash' as 'crash' | 'domain' | 'capacity' };
+
+async function refusedBy(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    const c = databaseConstraintOf(error);
+    return c ? `${c.code}:${c.constraint ?? ''}` : (pgErrorCode(error) ?? String(error));
+  }
+  throw new Error('expected the database to refuse the statement');
+}
 
 function flakyEnrollmentPort(real: EnrollmentsService): EnrollmentPort {
   return new Proxy(real, {
@@ -275,6 +287,124 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
     await drain(t);
   });
 
+  it('SPK-PAY-008, §4.7 invariant 6 (MONEY-02): a credit compensation gives back only what was not refunded, and consumes it, so nothing is returned twice', async () => {
+    flaky.kind = 'domain';
+    flaky.failures = 1;
+    const checkout = await paidCheckout(10_000);
+    expect(checkout.status).toBe('recovery_required');
+    const attemptId = (checkout['payment'] as { id: string }).id;
+    const partial = await post(t, `/v1/payments/${attemptId}/refunds`, finance.header, {
+      amountMinor: 4_000,
+      reason: 'Partial goodwill refund',
+    });
+    expect(partial.body.status).toBe('succeeded');
+    const compensated = await post(
+      t,
+      `/v1/registration-checkouts/${checkout.id}/compensate`,
+      finance.header,
+      { method: 'credit', reason: 'Family accepted a credit for the rest' },
+    );
+    expect(compensated.status, JSON.stringify(compensated.body)).toBe(201);
+    const credit = await t.http
+      .get(`/v1/credits/${compensated.body.recovery.creditId as string}`)
+      .set(parent.header);
+    expect(credit.body).toMatchObject({ sourceKind: 'compensation', originalMinor: 6_000 });
+    // The payment shows nothing left to refund, and why: the rest went back as credit.
+    const payment = await t.http.get(`/v1/payments/${attemptId}`).set(finance.header);
+    expect(payment.body).toMatchObject({ refundableMinor: 0, compensatedMinor: 6_000 });
+    const refundView = await t.http
+      .get(`/v1/refunds/${partial.body.id as string}`)
+      .set(finance.header);
+    expect(refundView.body.refundable).toEqual({
+      capturedMinor: 10_000,
+      refundedMinor: 4_000,
+      reservedMinor: 0,
+      compensatedMinor: 6_000,
+      availableMinor: 0,
+      currency: 'USD',
+    });
+    // A further refund is refused, naming every part of what was captured.
+    const again = await post(t, `/v1/payments/${attemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'Refund the rest too',
+    });
+    expect(again.status).toBe(409);
+    expect(again.body.details).toEqual({
+      code: 'REFUND_EXCEEDS_REFUNDABLE',
+      availableMinor: 0,
+      capturedMinor: 10_000,
+      refundedMinor: 4_000,
+      reservedMinor: 0,
+      compensatedMinor: 6_000,
+    });
+    // The database refuses it whoever writes it, and never gives compensated funds back.
+    const refundableRow = () =>
+      t.db
+        .selectFrom('payment_refundables')
+        .selectAll()
+        .where('payment_attempt_id', '=', attemptId)
+        .executeTakeFirstOrThrow();
+    expect(await refundableRow()).toMatchObject({
+      captured_minor: 10_000,
+      refunded_minor: 4_000,
+      compensated_minor: 6_000,
+    });
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ reserved_minor: 1 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      ),
+    ).toBe('23514:payment_refundables_within_captured');
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ compensated_minor: 0 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      ),
+    ).toBe('23514:payment_refundables_compensated_accumulate');
+    await drain(t);
+  });
+
+  it('SPK-PAY-008 (MONEY-02): a credit compensation waits while a refund of the payment is still reserved', async () => {
+    flaky.kind = 'domain';
+    flaky.failures = 1;
+    const checkout = await paidCheckout(8_000);
+    const attemptId = (checkout['payment'] as { id: string }).id;
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        trx
+          .updateTable('payment_refundables')
+          .set({ reserved_minor: 3_000 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      );
+    const refused = await post(
+      t,
+      `/v1/registration-checkouts/${checkout.id}/compensate`,
+      finance.header,
+      { method: 'credit', reason: 'Family accepted a credit' },
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('REFUND_PENDING');
+    const still = await t.http.get(`/v1/registration-checkouts/${checkout.id}`).set(finance.header);
+    expect(still.body.status).toBe('recovery_required');
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        trx
+          .updateTable('payment_refundables')
+          .set({ reserved_minor: 0 })
+          .where('payment_attempt_id', '=', attemptId)
+          .execute(),
+      );
+  });
+
   it('SPK-PAY-009 / §4.11 step 10: compensating a checkout paid entirely with a credit gives the credit back', async () => {
     const setup = await offering(t, { basePriceMinor: 5_000 });
     const creditId = await createCreditFixture(t, {
@@ -419,5 +549,59 @@ describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with 
     });
     expect(credited.body).toMatchObject({ status: 'compensated', recovery: { plan: 'credit' } });
     await drain(t);
+  });
+  it('SPK-PAY-002, SPK-PAY-006 (MONEY-08): a term an approved installment or deposit version leaves out is recorded as the engineering default it falls back to', async () => {
+    const resolver = t.app.get(FinancePolicyResolver);
+    const depositKey = `party-deposit-${Date.now()}`;
+    await createPolicyVersionFixture(t, {
+      kind: 'installment',
+      key: depositKey,
+      content: { installments: 2, intervalDays: 14 },
+    });
+    const deposit = await resolver.bookingDeposit(t.organizationId, depositKey, t.clock.now());
+    expect(deposit).toMatchObject({ count: 2, intervalDays: 14 });
+    expect(deposit.defaults).toEqual([
+      'installment.retryMaxAttempts: engineering default 3 (POL-016, DEC-008)',
+      'installment.retryIntervalHours: engineering default 72 (POL-016, DEC-008)',
+      'installment.noticeDaysBefore: engineering default 3 (POL-016, DEC-008)',
+    ]);
+    // An organization installment policy that states only some terms: the quote says which
+    // terms are defaults, not that the whole approved version applies.
+    await createPolicyVersionFixture(t, {
+      kind: 'installment',
+      key: 'finance',
+      version: 9,
+      content: { retryMaxAttempts: 4, maxInstallments: 3 },
+    });
+    const quote = await installmentQuote();
+    const policies = quote['policies'] as {
+      installmentPolicyVersionId: string;
+      defaults: string[];
+    };
+    expect(policies.installmentPolicyVersionId).toEqual(expect.any(String));
+    expect(policies.defaults).toEqual(
+      expect.arrayContaining([
+        // The version does not say whether installments are offered: that is a default too.
+        'installment.enabled: engineering default true (POL-016, DEC-008)',
+        'installment.intervalDays: engineering default 30 (POL-016, DEC-008)',
+        'installment.retryIntervalHours: engineering default 72 (POL-016, DEC-008)',
+        'installment.noticeDaysBefore: engineering default 3 (POL-016, DEC-008)',
+      ]),
+    );
+    expect(policies.defaults.some((d) => d.startsWith('installment.retryMaxAttempts'))).toBe(false);
+    expect(policies.defaults.some((d) => d.startsWith('installment:'))).toBe(false);
+    // A version that states `enabled` records no default for it.
+    await createPolicyVersionFixture(t, {
+      kind: 'installment',
+      key: 'finance',
+      version: 10,
+      content: { enabled: true, retryMaxAttempts: 4, maxInstallments: 3 },
+    });
+    const stated = await installmentQuote();
+    const statedDefaults = (stated['policies'] as { defaults: string[] }).defaults;
+    expect(statedDefaults.some((d) => d.startsWith('installment.enabled'))).toBe(false);
+    expect(statedDefaults).toContain(
+      'installment.intervalDays: engineering default 30 (POL-016, DEC-008)',
+    );
   });
 });

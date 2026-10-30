@@ -55,7 +55,8 @@ export interface CashTenderListItem {
 /**
  * Cash and externally recorded tenders (SPK-PAY-012): only permitted desk and finance staff,
  * within their facility scope, with evidence (a reference at least), against an EXISTING
- * obligation. A tender is a receipt like any other (allocation, visible excess, journal to
+ * obligation that no provider charge is paying meanwhile and whose checkout is not still awaiting
+ * its own payment (MoneyFacts.assertPayableOutsideCheckout). A tender is a receipt like any other (allocation, visible excess, journal to
  * `cash_on_hand`) and is reconciled later in a cash-drawer reconciliation. It never creates
  * participation: registrations paid in cash go through the checkout (quote, holds, capacity).
  */
@@ -150,6 +151,9 @@ export class CashTendersService {
           obligationCurrency: obligation.currency,
         });
       }
+      // SPK-PAY-007 (MONEY-06), §4.11 (MONEY-01): no tender beside a provider charge still in
+      // flight or unknown, and none into a checkout's order while that checkout awaits payment.
+      await this.facts.assertPayableOutsideCheckout(trx, obligation, principal);
       const payerPersonId =
         input.payerPersonId ??
         obligation.debtor_person_id ??

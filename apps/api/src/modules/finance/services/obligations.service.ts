@@ -35,7 +35,6 @@ import {
   LIVE_ATTEMPT_STATES,
   afterKeysetAsc,
   decodeKeyset,
-  outcomeUnknownDetails,
   iso,
   isoOrNull,
   isStaffLike,
@@ -589,19 +588,10 @@ export class ObligationsService {
           remainingMinor: remaining,
         });
       }
-      // SPK-PAY-007, §4.7 invariant 5: the checkout or the installment worker may already be
-      // charging this debt; no second charge while that outcome is pending or unknown.
-      const charging = await trx
-        .selectFrom('payment_attempts')
-        .select(['id', 'status', 'purpose', 'payer_person_id'])
-        .where('organization_id', '=', organizationId)
-        .where('obligation_id', '=', obligationId)
-        .where('purpose', 'in', ['checkout', 'installment'])
-        .where('status', 'in', ['created', 'action_required', 'processing', 'unknown'])
-        .executeTakeFirst();
-      if (charging) {
-        throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(principal, charging));
-      }
+      // SPK-PAY-007, §4.7 invariant 5, §4.11: the checkout, the installment worker or another
+      // payer may already be charging this debt (no second charge while that outcome is pending
+      // or unknown), and a checkout still awaiting payment is paid through its own retry.
+      await this.facts.assertPayableOutsideCheckout(trx, obligation, principal);
       if (!principal.personId) throw errors.accessDenied();
       return this.payments.createAttemptInTrx(trx, {
         organizationId,

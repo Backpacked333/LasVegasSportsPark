@@ -34,6 +34,7 @@ import {
   type RecordAuthorityPort,
 } from '../finance.ports';
 import {
+  POS_LATE_CAPTURE_PURPOSE,
   financeSystem,
   minutesFrom,
   organizationOf,
@@ -60,6 +61,9 @@ export interface ReserveRefundInput {
 export interface RefundEvidence {
   status: 'succeeded' | 'failed' | 'processing';
   providerReference: string | null;
+  /** What the provider says it refunded (MONEY-09): compared with the refund attempt. */
+  amountMinor?: number | null;
+  currency?: string | null;
   failureReason?: string | null;
   source: EvidenceSource;
   inboxEventId?: string | null;
@@ -225,24 +229,33 @@ export class RefundsService {
       }))
       .where('organization_id', '=', input.organizationId)
       .where('payment_attempt_id', '=', input.paymentAttemptId)
-      .where(sql<boolean>`refunded_minor + reserved_minor + ${input.amountMinor} <= captured_minor`)
+      .where(
+        sql<boolean>`refunded_minor + reserved_minor + compensated_minor + ${input.amountMinor} <= captured_minor`,
+      )
       .returningAll()
       .executeTakeFirst();
     if (!reserved) {
       const current = await this.refundable(trx, input.organizationId, input.paymentAttemptId);
-      const unreserved = current.captured_minor - current.refunded_minor;
+      // MONEY-02: what a compensation credit took is neither refundable nor pending.
+      const unreserved =
+        current.captured_minor - current.refunded_minor - current.compensated_minor;
       if (current.reserved_minor > 0 && input.amountMinor <= unreserved) {
         // The funds exist but a pending (possibly unknown) refund holds them (SPK-PAY-008).
         throw errors.refundPending({
           availableMinor: unreserved - current.reserved_minor,
           reservedMinor: current.reserved_minor,
+          compensatedMinor: current.compensated_minor,
         });
       }
+      // The details name every part of what was captured, so an operator sees money a
+      // compensation credit already returned (MONEY-02) instead of an unexplained gap.
       throw errors.resourceConflict('The refund exceeds the refundable amount.', {
         code: 'REFUND_EXCEEDS_REFUNDABLE',
         availableMinor: unreserved - current.reserved_minor,
         capturedMinor: current.captured_minor,
         refundedMinor: current.refunded_minor,
+        reservedMinor: current.reserved_minor,
+        compensatedMinor: current.compensated_minor,
       });
     }
     const payment = await trx
@@ -399,6 +412,8 @@ export class RefundsService {
         {
           status: result.status,
           providerReference: result.providerReference,
+          amountMinor: result.amountMinor,
+          currency: result.currency,
           failureReason: result.failureReason,
           source: 'sync_response',
         },
@@ -455,6 +470,45 @@ export class RefundsService {
   ): Promise<RefundRow> {
     const row = await this.load(trx, organizationId, refundId, true);
     if (!row) throw errors.notFound('refund', refundId);
+    // §4.11 step 6, SPK-PAY-001 (MONEY-09): evidence about another refund, amount or currency than
+    // the one recorded is a contradiction for the finance operator; nothing is booked from it.
+    const mismatch =
+      evidence.providerReference &&
+      row.provider_reference &&
+      evidence.providerReference !== row.provider_reference
+        ? 'provider reference mismatch'
+        : (evidence.amountMinor !== undefined &&
+              evidence.amountMinor !== null &&
+              evidence.amountMinor !== row.amount_minor) ||
+            (evidence.currency && evidence.currency !== row.currency)
+          ? 'amount or currency mismatch'
+          : null;
+    if (mismatch) {
+      await this.exceptions.raise(trx, {
+        organizationId,
+        category: 'finance.refund_evidence_conflict',
+        severity: 'critical',
+        title: `Conflicting refund evidence (${mismatch}); nothing was changed`,
+        affectedType: 'refund_attempt',
+        affectedId: refundId,
+        ownerQueue: 'finance_operator',
+        dedupeKey: `refund-conflict:${refundId}:${mismatch}`,
+        details: {
+          reason: mismatch,
+          recordedStatus: row.status,
+          reportedStatus: evidence.status,
+          recordedAmountMinor: row.amount_minor,
+          reportedAmountMinor: evidence.amountMinor ?? null,
+          recordedCurrency: row.currency,
+          reportedCurrency: evidence.currency ?? null,
+          providerReference: evidence.providerReference,
+          source: evidence.source,
+          inboxEventId: evidence.inboxEventId ?? null,
+          correlationId,
+        },
+      });
+      return row;
+    }
     if (evidence.status === 'processing') return row; // still pending: nothing changes
     const event: RefundEvent = evidence.status === 'succeeded' ? 'succeed' : 'fail';
     const target: RefundState = evidence.status;
@@ -486,6 +540,16 @@ export class RefundsService {
         .where('organization_id', '=', organizationId)
         .where('payment_attempt_id', '=', row.payment_attempt_id)
         .execute();
+      // MONEY-05: a late point-of-sale capture was booked to overpayment liability; giving it
+      // back settles that liability rather than booking a refund expense.
+      const lateCapture = await trx
+        .selectFrom('journals')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('source_type', '=', 'payment_attempt')
+        .where('source_id', '=', row.payment_attempt_id)
+        .where('purpose', '=', POS_LATE_CAPTURE_PURPOSE)
+        .executeTakeFirst();
       await this.ledger.post(trx, {
         organizationId,
         sourceType: 'refund',
@@ -496,7 +560,10 @@ export class RefundsService {
         actor,
         correlationId,
         lines: [
-          { account: 'refunds', debitMinor: row.amount_minor },
+          {
+            account: lateCapture ? 'overpayment_liability' : 'refunds',
+            debitMinor: row.amount_minor,
+          },
           { account: 'cash_processor', creditMinor: row.amount_minor },
         ],
       });
@@ -639,6 +706,8 @@ export class RefundsService {
         {
           status: found.status,
           providerReference: found.providerReference,
+          amountMinor: found.amountMinor,
+          currency: found.currency,
           failureReason: found.failureReason,
           source: 'reconciliation',
         },

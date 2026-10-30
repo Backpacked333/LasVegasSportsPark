@@ -25,7 +25,14 @@ import {
   type Trx,
 } from '../../../kernel';
 import { FinanceEvents } from '../finance.events';
-import { daysFrom, type CreditRow, type Reader, type ReceiptRow } from '../finance.shared';
+import {
+  LIVE_ATTEMPT_STATES,
+  daysFrom,
+  outcomeUnknownDetails,
+  type CreditRow,
+  type Reader,
+  type ReceiptRow,
+} from '../finance.shared';
 import { LedgerService } from '../ledger/ledger.service';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 
@@ -122,6 +129,54 @@ export class MoneyFacts {
       .where('id', '=', id);
     if (forUpdate) q = q.forUpdate();
     return q.executeTakeFirst();
+  }
+
+  /**
+   * The guard every payment into an existing obligation outside the checkout applies, under the
+   * obligation's row lock (ObligationsService.pay, CashTendersService.record, CreditsService.redeem;
+   * the checkout's own payment and the installment worker have theirs):
+   * - SPK-PAY-007, §4.7 invariant 5 (MONEY-06): no money is taken while a provider charge of this
+   *   obligation (its checkout, an installment collection or a direct payment) is in flight or
+   *   unknown, so a capture found later never pays the debt twice (PAYMENT_OUTCOME_UNKNOWN naming
+   *   the attempt to its payer and staff). Contribution payments of a team obligation may run side
+   *   by side (SPK-PAY-005: their excess stays visible).
+   * - §4.11, SPK-PAY-005 (MONEY-01): an obligation of an order whose checkout still awaits payment
+   *   is paid through that checkout (its retry), never beside it, so a hold expiry or an abort
+   *   never leaves received money on a canceled order and a retry never charges a second time
+   *   (CHECKOUT_PAYMENT_PENDING naming the checkout).
+   */
+  async assertPayableOutsideCheckout(
+    trx: Trx,
+    obligation: ObligationRow,
+    principal: Principal,
+  ): Promise<void> {
+    const charging = await trx
+      .selectFrom('payment_attempts')
+      .select(['id', 'status', 'purpose', 'payer_person_id'])
+      .where('organization_id', '=', obligation.organization_id)
+      .where('obligation_id', '=', obligation.id)
+      .where('purpose', 'in', ['checkout', 'installment', 'obligation'])
+      .where('status', 'in', [...LIVE_ATTEMPT_STATES])
+      .executeTakeFirst();
+    if (charging) throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(principal, charging));
+    if (!obligation.order_id) return;
+    const order = await trx
+      .selectFrom('orders')
+      .select('payment_status')
+      .where('organization_id', '=', obligation.organization_id)
+      .where('id', '=', obligation.order_id)
+      .executeTakeFirst();
+    if (order?.payment_status !== 'awaiting_payment') return;
+    const checkout = await trx
+      .selectFrom('checkouts')
+      .select('id')
+      .where('organization_id', '=', obligation.organization_id)
+      .where('order_id', '=', obligation.order_id)
+      .executeTakeFirst();
+    throw errors.resourceConflict(
+      'This balance belongs to a registration checkout that is still awaiting payment; pay it through that checkout.',
+      { code: 'CHECKOUT_PAYMENT_PENDING', checkoutId: checkout?.id ?? null },
+    );
   }
 
   async createObligation(trx: Trx, input: CreateObligationInput): Promise<ObligationRow> {

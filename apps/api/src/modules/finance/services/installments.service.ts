@@ -12,6 +12,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  OperationalExceptions,
   Outbox,
   RecoveryMode,
   UnitOfWork,
@@ -19,6 +20,7 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
+import { ENROLLMENT_PORT, type EnrollmentPort } from '../../enrollment';
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
 import {
@@ -52,6 +54,7 @@ export class InstallmentsService {
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(ENROLLMENT_PORT) private readonly enrollments: EnrollmentPort,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
@@ -59,6 +62,7 @@ export class InstallmentsService {
     private readonly facts: MoneyFacts,
     private readonly payments: PaymentsService,
     private readonly recovery: RecoveryMode,
+    private readonly exceptions: OperationalExceptions,
   ) {}
 
   async planView(db: Reader, plan: InstallmentPlanRow): Promise<InstallmentPlan> {
@@ -143,20 +147,46 @@ export class InstallmentsService {
     const existing = await this.loadInstallment(this.db, organizationId, id);
     if (!existing) throw errors.protectedNotFound('installment');
     assertExpectedRevision(input.expectedRevision, existing.revision);
-    const planId = await this.collectInternal(principal, organizationId, id, correlationId);
-    const plan = await this.loadPlan(this.db, organizationId, planId);
+    const outcome = await this.collectInternal(principal, organizationId, id, correlationId);
+    if (outcome.held) {
+      // MONEY-04 (SPK-PAY-006, §4.11 step 10): every registration of the order was canceled; the
+      // remaining installments wait for the cancellation decision (DEC-009) instead of a charge.
+      throw errors.resourceConflict(
+        'Every registration this plan pays for was canceled; the installment is not collected.',
+        { code: 'INSTALLMENT_REGISTRATION_CANCELED', planId: outcome.planId },
+      );
+    }
+    const plan = await this.loadPlan(this.db, organizationId, outcome.planId);
     return this.planView(this.db, plan as InstallmentPlanRow);
   }
 
+  /**
+   * Starts one collection. Lock order everywhere (MONEY-07): the obligation, then its installment
+   * (the capture path allocates to the obligation before it marks the installment paid, and
+   * ObligationsService.pay locks the obligation), so a direct payment and a collection of the same
+   * installment are serialized and the second one sees the first one's live charge.
+   */
   private async collectInternal(
     actor: Principal,
     organizationId: string,
     id: string,
     correlationId: string | null,
-  ): Promise<string> {
-    const attempt = await this.uow.run(async ({ trx }) => {
-      const installment = await this.loadInstallment(trx, organizationId, id, true);
-      if (!installment) throw errors.notFound('installment', id);
+  ): Promise<{ planId: string; held: boolean }> {
+    const result = await this.uow.run(async ({ trx }) => {
+      const known = await this.loadInstallment(trx, organizationId, id);
+      if (!known) throw errors.notFound('installment', id);
+      const obligation = await this.facts.loadObligation(
+        trx,
+        organizationId,
+        known.obligation_id,
+        true,
+      );
+      const installment = (await this.loadInstallment(
+        trx,
+        organizationId,
+        id,
+        true,
+      )) as InstallmentRow;
       if (installment.status !== 'scheduled' && installment.status !== 'failed') {
         throw errors.invalidTransition('Installment', installment.status, 'collect');
       }
@@ -177,7 +207,21 @@ export class InstallmentsService {
         if (live.purpose !== 'installment' || live.status === 'unknown') {
           throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(actor, live));
         }
-        return live;
+        return { attempt: live, planId: plan.id, held: false };
+      }
+      // MONEY-04: a held plan is never charged (the database refuses the attempt as well, 0613).
+      if (
+        plan.held_at ||
+        (await this.holdIfRegistrationsCanceled(
+          trx,
+          organizationId,
+          plan,
+          installment,
+          actor,
+          correlationId,
+        ))
+      ) {
+        return { attempt: null, planId: plan.id, held: true };
       }
       const retry = plan.retry_policy as { maxAttempts: number };
       if (installment.attempt_count >= retry.maxAttempts) {
@@ -189,11 +233,6 @@ export class InstallmentsService {
           },
         );
       }
-      const obligation = await this.facts.loadObligation(
-        trx,
-        organizationId,
-        installment.obligation_id,
-      );
       if (!obligation || obligation.status !== 'open') {
         throw errors.invalidTransition('Obligation', obligation?.status ?? 'missing', 'collect');
       }
@@ -231,13 +270,93 @@ export class InstallmentsService {
         correlationId,
         details: { paymentAttemptId: created.id, attempt: installment.attempt_count + 1 },
       });
-      return created;
+      return { attempt: created, planId: plan.id, held: false };
     });
-    if (attempt.status === 'created') {
-      await this.payments.execute(organizationId, attempt.id, correlationId);
+    if (result.attempt?.status === 'created') {
+      await this.payments.execute(organizationId, result.attempt.id, correlationId);
     }
-    const installment = (await this.loadInstallment(this.db, organizationId, id)) as InstallmentRow;
-    return installment.plan_id;
+    return { planId: result.planId, held: result.held };
+  }
+
+  /**
+   * MONEY-04 (SPK-PAY-006, SPK-AT-006, §4.11 step 10: never charge for a registration the family
+   * did not receive): whether every enrollment the plan's order registered has been canceled
+   * (ENROLLMENT_PORT). Then the plan is held: the hold is recorded on the plan once (0613), with
+   * the one exception that gives the finance operator the decision the cancellation consequence
+   * asks for (DEC-009 pending). A held plan is never collected and its payer is never told of a
+   * coming charge; resolving the exception does not lift the hold, and nothing raises it again.
+   * An order line without an enrollment, or one whose enrollment cannot be read, never holds it.
+   */
+  private async holdIfRegistrationsCanceled(
+    trx: Trx,
+    organizationId: string,
+    plan: InstallmentPlanRow,
+    installment: InstallmentRow,
+    actor: Principal,
+    correlationId: string | null,
+  ): Promise<boolean> {
+    const lines = await trx
+      .selectFrom('order_lines')
+      .select('enrollment_id')
+      .where('organization_id', '=', organizationId)
+      .where('order_id', '=', plan.order_id)
+      .execute();
+    if (lines.length === 0 || lines.some((l) => !l.enrollment_id)) return false;
+    const enrollmentIds = [...new Set(lines.map((l) => l.enrollment_id as string))];
+    for (const enrollmentId of enrollmentIds) {
+      const enrollment = await this.enrollments.getEnrollment(organizationId, enrollmentId, trx);
+      if (!enrollment || enrollment.status !== 'canceled') return false;
+    }
+    const held = await trx
+      .updateTable('installment_plans')
+      .set((eb) => ({
+        held_at: this.clock.now(),
+        hold_reason: 'registrations_canceled',
+        revision: eb('revision', '+', 1),
+      }))
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', plan.id)
+      .where('held_at', 'is', null)
+      .returning(['revision'])
+      .executeTakeFirst();
+    // Another collection or notice of the same plan recorded the hold first: it raised the one
+    // exception, so this one only refuses.
+    if (!held) return true;
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: 'finance.hold_installment_plan',
+      targetType: 'installment_plan',
+      targetId: plan.id,
+      beforeRevision: held.revision - 1,
+      afterRevision: held.revision,
+      reason: 'Every registration the plan pays for was canceled',
+      correlationId,
+      details: {
+        holdReason: 'registrations_canceled',
+        orderId: plan.order_id,
+        installmentId: installment.id,
+        enrollmentIds,
+      },
+    });
+    await this.exceptions.raise(trx, {
+      organizationId,
+      category: 'finance.installment_registration_canceled',
+      severity: 'high',
+      title:
+        'Every registration an installment plan pays for was canceled; decide what is still owed before collecting',
+      affectedType: 'installment_plan',
+      affectedId: plan.id,
+      ownerQueue: 'finance_operator',
+      dedupeKey: `installment-registration-canceled:${plan.id}`,
+      details: {
+        orderId: plan.order_id,
+        installmentId: installment.id,
+        enrollmentIds,
+        correlationId,
+      },
+    });
+    return true;
   }
 
   /**
@@ -283,8 +402,16 @@ export class InstallmentsService {
         id,
         organizationId,
       });
-      const installment = await this.loadInstallment(trx, organizationId, id, true);
-      if (!installment) throw errors.protectedNotFound('installment');
+      const known = await this.loadInstallment(trx, organizationId, id);
+      if (!known) throw errors.protectedNotFound('installment');
+      // Lock order everywhere: the obligation, then its installment (see collectInternal).
+      await this.facts.loadObligation(trx, organizationId, known.obligation_id, true);
+      const installment = (await this.loadInstallment(
+        trx,
+        organizationId,
+        id,
+        true,
+      )) as InstallmentRow;
       assertExpectedRevision(input.expectedRevision, installment.revision);
       if (installment.status !== 'scheduled' && installment.status !== 'failed') {
         throw errors.invalidTransition('Installment', installment.status, 'extend');
@@ -386,6 +513,22 @@ export class InstallmentsService {
     )) as InstallmentPlanRow;
     const noticeAt = new Date(installment.due_at).getTime() - noticeDaysBefore(plan) * 86_400_000;
     if (this.clock.now().getTime() < noticeAt) return; // a timer for a due date since moved
+    // MONEY-04: a held plan is not collected, so its payer is not told a charge is coming; the
+    // notice stays unsent (a decision that resumes the plan, DEC-009, would schedule it again).
+    if (
+      plan.held_at ||
+      (plan.status === 'active' &&
+        (await this.holdIfRegistrationsCanceled(
+          trx,
+          organizationId,
+          plan,
+          installment,
+          financeSystem(organizationId, 'finance.installments'),
+          correlationId,
+        )))
+    ) {
+      return;
+    }
     await trx
       .updateTable('installments')
       .set({ notice_sent_at: this.clock.now(), revision: installment.revision + 1 })
@@ -407,59 +550,92 @@ export class InstallmentsService {
     });
   }
 
-  /** Worker sweep: due installments and scheduled retries. */
+  /**
+   * Worker sweep: due installments and scheduled retries of plans that are not held, oldest due
+   * first. An installment whose plan this sweep finds held (its registrations were canceled,
+   * MONEY-04) does not use up the sweep: the sweep reads further pages until `limit` installments
+   * were taken up or none is left, so a plan held on the way never starves later due dates.
+   */
   async collectDue(limit = 50): Promise<number> {
     const now = this.clock.now();
-    const rows = await this.db
-      .selectFrom('installments')
-      .innerJoin('installment_plans', 'installment_plans.id', 'installments.plan_id')
-      .innerJoin('orders', (join) =>
-        join
-          .onRef('orders.organization_id', '=', 'installment_plans.organization_id')
-          .onRef('orders.id', '=', 'installment_plans.order_id'),
-      )
-      .select(['installments.id as id', 'installments.organization_id as organization_id'])
-      .where('installment_plans.status', '=', 'active')
-      // Only plans whose checkout was paid and fulfilled (see assertOrderCollectable).
-      .where('orders.payment_status', '=', 'paid')
-      .where('orders.fulfillment_status', '=', 'fulfilled')
-      .where((eb) =>
-        eb.or([
-          eb.and([
-            eb('installments.status', '=', 'scheduled'),
-            eb('installments.due_at', '<=', now),
-          ]),
-          eb.and([
-            eb('installments.status', '=', 'failed'),
-            eb('installments.next_retry_at', '<=', now),
-          ]),
-        ]),
-      )
-      .orderBy('installments.due_at')
-      .limit(limit)
-      .execute();
     let collected = 0;
+    let taken = 0;
+    let after: { dueAt: Date; id: string } | null = null;
     const recovering = new Map<string, boolean>();
-    for (const row of rows) {
-      // §5.8, SPK-AT-028: on restored state a due installment may already have been charged after
-      // the backup; no new charge (a new idempotency key) starts until recovery is resumed.
-      let paused = recovering.get(row.organization_id);
-      if (paused === undefined) {
-        paused = await this.recovery.isActive(row.organization_id);
-        recovering.set(row.organization_id, paused);
-      }
-      if (paused) continue;
-      try {
-        await this.collectInternal(
-          financeSystem(row.organization_id, 'finance.installments'),
-          row.organization_id,
-          row.id,
-          null,
+    while (taken < limit) {
+      let q = this.db
+        .selectFrom('installments')
+        .innerJoin('installment_plans', 'installment_plans.id', 'installments.plan_id')
+        .innerJoin('orders', (join) =>
+          join
+            .onRef('orders.organization_id', '=', 'installment_plans.organization_id')
+            .onRef('orders.id', '=', 'installment_plans.order_id'),
+        )
+        .select([
+          'installments.id as id',
+          'installments.organization_id as organization_id',
+          'installments.due_at as due_at',
+        ])
+        .where('installment_plans.status', '=', 'active')
+        // MONEY-04: a held plan is never swept (its one exception was raised when it was held).
+        .where('installment_plans.held_at', 'is', null)
+        // Only plans whose checkout was paid and fulfilled (see assertOrderCollectable).
+        .where('orders.payment_status', '=', 'paid')
+        .where('orders.fulfillment_status', '=', 'fulfilled')
+        .where((eb) =>
+          eb.or([
+            eb.and([
+              eb('installments.status', '=', 'scheduled'),
+              eb('installments.due_at', '<=', now),
+            ]),
+            eb.and([
+              eb('installments.status', '=', 'failed'),
+              eb('installments.next_retry_at', '<=', now),
+            ]),
+          ]),
+        )
+        .orderBy('installments.due_at')
+        .orderBy('installments.id')
+        .limit(limit);
+      if (after) {
+        const cursor: { dueAt: Date; id: string } = after;
+        q = q.where((eb) =>
+          eb.or([
+            eb('installments.due_at', '>', cursor.dueAt),
+            eb.and([
+              eb('installments.due_at', '=', cursor.dueAt),
+              eb('installments.id', '>', cursor.id),
+            ]),
+          ]),
         );
-        collected += 1;
-      } catch (error) {
-        this.logger.warn(`installment ${row.id} collection skipped: ${String(error)}`);
       }
+      const rows = await q.execute();
+      for (const row of rows) {
+        after = { dueAt: new Date(row.due_at), id: row.id };
+        // §5.8, SPK-AT-028: on restored state a due installment may already have been charged
+        // after the backup; no new charge (a new idempotency key) starts until recovery resumes.
+        let paused = recovering.get(row.organization_id);
+        if (paused === undefined) {
+          paused = await this.recovery.isActive(row.organization_id);
+          recovering.set(row.organization_id, paused);
+        }
+        if (paused) continue;
+        try {
+          const outcome = await this.collectInternal(
+            financeSystem(row.organization_id, 'finance.installments'),
+            row.organization_id,
+            row.id,
+            null,
+          );
+          if (outcome.held) continue;
+          collected += 1;
+        } catch (error) {
+          this.logger.warn(`installment ${row.id} collection skipped: ${String(error)}`);
+        }
+        taken += 1;
+        if (taken >= limit) break;
+      }
+      if (rows.length < limit) break;
     }
     return collected;
   }

@@ -1045,6 +1045,20 @@ export class CheckoutService {
         .where('organization_id', '=', organizationId)
         .where('id', '=', checkout.order_id)
         .executeTakeFirstOrThrow();
+      // §4.11, SPK-PAY-005 (MONEY-01): a checkout still awaiting payment has received nothing of
+      // its own; money already received for its order came another way and is never charged again.
+      const received = await trx
+        .selectFrom('receipts')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('order_id', '=', order.id)
+        .executeTakeFirst();
+      if (received) {
+        throw errors.resourceConflict(
+          'Money was already received for this order; it is not charged again.',
+          { code: 'CHECKOUT_MONEY_RECEIVED', receiptId: received.id },
+        );
+      }
       // The obligation the capture will be allocated to (as PaymentsService.onCaptured does).
       const due = await trx
         .selectFrom('obligations')

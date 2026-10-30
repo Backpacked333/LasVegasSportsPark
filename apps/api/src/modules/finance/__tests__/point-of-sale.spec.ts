@@ -1,10 +1,11 @@
-import { newId } from '@sportspark/contracts';
+import { newId, type DomainError } from '@sportspark/contracts';
 import { json, pgErrorCode } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { databaseConstraintOf } from '../../../kernel';
-import type { TestApp } from '../../../testing';
+import { staffPrincipal, type TestApp } from '../../../testing';
 import { authHeaderForPerson, createStaffMemberFixture } from '../../identity';
 import { FakePaymentTokens, fakeFeeFor } from '../providers/fake-payment.provider';
+import { PosSalesService } from '../services/pos/pos-sales.service';
 import { approveTaxFee } from './stage3-doubles';
 import {
   adult,
@@ -654,6 +655,117 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
     }
   });
 
+  it('DEC-016 (CAPABILITIES-01): a sale partly paid by card is completed, returned and its register closed after the switch is turned off', async () => {
+    const plain = await product(2_500);
+    const { registerId, sessionId } = await openSession();
+    const s = await sale(sessionId, customer.personId);
+    const added = await line(s.id, plain, 2);
+    const card = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+      kind: 'card',
+      amountMinor: 2_500,
+      paymentMethodToken: FakePaymentTokens.succeed,
+    });
+    expect(card.body).toMatchObject({ status: 'open', remainingMinor: 2_500 });
+    await t.disableCapability('point_of_sale');
+    try {
+      // Settling the existing sale is not a new commitment: the remaining cash is taken.
+      const cash = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+        kind: 'cash',
+        amountMinor: 2_500,
+      });
+      expect(cash.status, JSON.stringify(cash.body)).toBe(201);
+      expect(cash.body.status).toBe('paid');
+      // Nothing new is sold: another line and a new sale stay refused.
+      const more = await line(s.id, plain, 1);
+      expect(more.status).toBe(403);
+      expect(more.body.details).toMatchObject({ code: 'CAPABILITY_DISABLED' });
+      expect(
+        (await post(t, '/v1/pos-sales', desk.header, { registerSessionId: sessionId })).status,
+      ).toBe(403);
+      // The sale is unwound: one unit back to the card, one from the drawer.
+      const lineId = added.body.lines[0].id as string;
+      for (const tenderKind of ['card', 'cash']) {
+        const back = await post(t, `/v1/pos-sales/${s.id}/returns`, finance.header, {
+          lines: [{ saleLineId: lineId, quantity: 1 }],
+          tenderKind,
+          reason: 'Unwinding after the switch was turned off',
+        });
+        expect(back.status, JSON.stringify(back.body)).toBe(201);
+      }
+      const session = await t.http.get(`/v1/pos-register-sessions/${sessionId}`).set(desk.header);
+      expect(session.body.expectedCashMinor).toBe(10_000);
+      const closed = await post(t, `/v1/pos-register-sessions/${sessionId}/close`, desk.header, {
+        countedCashMinor: session.body.expectedCashMinor as number,
+        expectedRevision: session.body.revision,
+      });
+      expect(closed.status, JSON.stringify(closed.body)).toBe(201);
+      expect(closed.body).toMatchObject({ status: 'closed', varianceMinor: 0 });
+      const retired = await post(t, `/v1/pos-registers/${registerId}/retire`, manager.header, {
+        reason: 'Point of sale turned off',
+      });
+      expect(retired.status, JSON.stringify(retired.body)).toBe(201);
+      expect(retired.body.status).toBe('retired');
+    } finally {
+      await t.enableCapability('point_of_sale');
+    }
+  });
+
+  it('§4.9 (COMMANDS-04): a void or return decided on a stale view of the sale is refused and changes nothing', async () => {
+    const plain = await product(4_000);
+    const { sessionId } = await openSession();
+    const s = await sale(sessionId);
+    const added = await line(s.id, plain, 1);
+    const seenByA = added.body.revision as number;
+    // Operator B takes 20.00 cash on the same sale; the drawer now holds it.
+    const tendered = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+      kind: 'cash',
+      amountMinor: 2_000,
+    });
+    expect(tendered.status).toBe(201);
+    expect(tendered.body.revision).toBeGreaterThan(seenByA);
+    const before = await t.http.get(`/v1/pos-register-sessions/${sessionId}`).set(desk.header);
+    const stale = await post(t, `/v1/pos-sales/${s.id}/void`, desk.header, {
+      reason: 'Customer left',
+      expectedRevision: seenByA,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    const after = await t.http.get(`/v1/pos-sales/${s.id}`).set(desk.header);
+    expect(after.body).toMatchObject({ status: 'open', settledMinor: 2_000 });
+    const drawer = await t.http.get(`/v1/pos-register-sessions/${sessionId}`).set(desk.header);
+    expect(drawer.body.expectedCashMinor).toBe(before.body.expectedCashMinor);
+    // A stale line or tender is refused the same way.
+    const staleLine = await post(t, `/v1/pos-sales/${s.id}/lines`, desk.header, {
+      productId: plain,
+      quantity: 1,
+      expectedRevision: seenByA,
+    });
+    expect(staleLine.body.code).toBe('STALE_REVISION');
+    const staleTender = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+      kind: 'cash',
+      amountMinor: 2_000,
+      expectedRevision: seenByA,
+    });
+    expect(staleTender.body.code).toBe('STALE_REVISION');
+    const paid = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+      kind: 'cash',
+      amountMinor: 2_000,
+      expectedRevision: after.body.revision,
+    });
+    expect(paid.body.status).toBe('paid');
+    const staleReturn = await post(t, `/v1/pos-sales/${s.id}/returns`, finance.header, {
+      lines: [{ saleLineId: added.body.lines[0].id as string, quantity: 1 }],
+      tenderKind: 'cash',
+      reason: 'Changed mind',
+      expectedRevision: after.body.revision,
+    });
+    expect(staleReturn.status).toBe(409);
+    expect(staleReturn.body.code).toBe('STALE_REVISION');
+    expect(
+      await t.db.selectFrom('pos_returns').select('id').where('sale_id', '=', s.id).execute(),
+    ).toHaveLength(0);
+  });
+
   it('§4.7 invariants 5 and 6: the database refuses over-tendering, lines on a paid sale, edits and over-returns', async () => {
     const plain = await product(2_000);
     const { registerId, sessionId } = await openSession();
@@ -844,6 +956,163 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
     expect((await t.http.get(`/v1/pos-sales/${s.id}/receipt`).set(stranger.header)).status).toBe(
       404,
     );
+  });
+
+  it('§4.3, §4.14 (AUTHZ-PRIVACY-05): register and product lists without a facility are narrowed to the facilities the caller reads', async () => {
+    const annex = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: annex,
+        organization_id: t.organizationId,
+        slug: `annex-${annex.slice(0, 8)}`,
+        name: 'Annex',
+        timezone: 'America/Los_Angeles',
+      })
+      .execute();
+    codeCounter += 1;
+    const home = await post(t, '/v1/pos-registers', manager.header, {
+      facilityId: t.facilityId,
+      code: `HM${codeCounter}`,
+      name: 'Home desk',
+    });
+    const away = await post(t, '/v1/pos-registers', manager.header, {
+      facilityId: annex,
+      code: `AX${codeCounter}`,
+      name: 'Annex desk',
+    });
+    expect([home.status, away.status]).toEqual([201, 201]);
+    const annexProduct = await post(t, '/v1/pos-products', manager.header, {
+      sku: `SKU-${newId().slice(-8).toUpperCase()}`,
+      name: 'Annex towel',
+      kind: 'merchandise',
+      priceMinor: 900,
+      currency: 'USD',
+      chargePolicyKeys: [],
+      facilityId: annex,
+    });
+    expect(annexProduct.status, JSON.stringify(annexProduct.body)).toBe(201);
+    const everywhere = await product(700);
+
+    async function listed(header: { Authorization: string }, path: string) {
+      const ids: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const res = await t.http
+          .get(path)
+          .query({ limit: 100, ...(cursor ? { cursor } : {}) })
+          .set(header);
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        ids.push(...(res.body.items as Array<{ id: string }>).map((i) => i.id));
+        cursor = res.body.nextCursor as string | null;
+      } while (cursor);
+      return ids;
+    }
+
+    const scopedDesk = await createStaffMemberFixture(t, {
+      roles: ['front_desk'],
+      facilityIds: [t.facilityId],
+    });
+    const scopedFinance = await createStaffMemberFixture(t, {
+      roles: ['finance_operator'],
+      facilityIds: [t.facilityId],
+    });
+    for (const member of [scopedDesk, scopedFinance]) {
+      const header = await authHeaderForPerson(t, member.personId);
+      const registers = await listed(header, '/v1/pos-registers');
+      expect(registers).toContain(home.body.id);
+      expect(registers).not.toContain(away.body.id);
+      const products = await listed(header, '/v1/pos-products');
+      expect(products).toContain(everywhere);
+      expect(products).not.toContain(annexProduct.body.id);
+    }
+    // An organization-wide reader still lists every facility.
+    const all = await listed(manager.header, '/v1/pos-registers');
+    expect(all).toEqual(expect.arrayContaining([home.body.id, away.body.id]));
+    expect(await listed(manager.header, '/v1/pos-products')).toContain(annexProduct.body.id);
+  });
+
+  it('§4.7 invariant 6 (MONEY-10): one return naming a sale line twice cannot take more units than were sold', async () => {
+    const plain = await product(1_000);
+    const { sessionId } = await openSession();
+    const s = await sale(sessionId);
+    await line(s.id, plain, 1);
+    const paid = await post(t, `/v1/pos-sales/${s.id}/lines`, desk.header, {
+      productId: plain,
+      quantity: 1,
+    });
+    const [a, b] = paid.body.lines as Array<{ id: string }>;
+    const tendered = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+      kind: 'cash',
+      amountMinor: 2_000,
+    });
+    expect(tendered.body.status).toBe('paid');
+    const share = { quantity: 1, amountMinor: 1_000, baseMinor: 1_000, charges: [] };
+    const twiceA = () =>
+      t.db
+        .insertInto('pos_returns')
+        .values({
+          id: newId(),
+          organization_id: t.organizationId,
+          sale_id: s.id,
+          currency: 'USD',
+          lines: json([
+            { saleLineId: a?.id, ...share },
+            { saleLineId: a?.id, ...share },
+          ]),
+          amount_minor: 2_000,
+          tender_kind: 'cash',
+          refund_attempt_id: null,
+          register_session_id: sessionId,
+          evidence: null,
+          reason: 'direct',
+          approved_by: json({}),
+          approved_by_person_id: finance.personId,
+          returned_at: new Date(),
+        })
+        .execute();
+    // The database refuses it whoever writes it ...
+    expect(await refusedBy(twiceA())).toBe('23514:pos_returns_within_quantity');
+    // ... and the service counts the units it names together before it gets there.
+    // A finance operator acting in-process, past the HTTP schema that lists each line once.
+    const operator = staffPrincipal(t.organizationId, ['finance_operator'], {
+      personId: finance.personId,
+      accountId: finance.accountId,
+    });
+    const viaService = await t.app
+      .get(PosSalesService)
+      .createReturn(
+        operator,
+        s.id,
+        {
+          lines: [
+            { saleLineId: a?.id as string, quantity: 1 },
+            { saleLineId: a?.id as string, quantity: 1 },
+          ],
+          tenderKind: 'cash',
+          reason: 'Duplicate line',
+        },
+        null,
+      )
+      .then(
+        () => 'accepted',
+        (error: DomainError) => (error.details as { code?: string } | undefined)?.code,
+      );
+    expect(viaService).toBe('RETURN_EXCEEDS_QUANTITY');
+    expect(
+      await t.db.selectFrom('pos_returns').select('id').where('sale_id', '=', s.id).execute(),
+    ).toHaveLength(0);
+    // Each line returned once is fine.
+    const both = await post(t, `/v1/pos-sales/${s.id}/returns`, finance.header, {
+      lines: [
+        { saleLineId: a?.id, quantity: 1 },
+        { saleLineId: b?.id, quantity: 1 },
+      ],
+      tenderKind: 'cash',
+      reason: 'Both back',
+    });
+    expect(both.status, JSON.stringify(both.body)).toBe(201);
+    expect(both.body.status).toBe('returned');
   });
 
   it('§4.7 invariant 6: two concurrent returns of the whole sale — exactly one is recorded', async () => {
