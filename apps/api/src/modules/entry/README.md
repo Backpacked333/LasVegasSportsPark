@@ -150,12 +150,17 @@ enforced by the kernel for every command.
 
 - Provided: `ATTENDANCE_PORT` (`effectiveAttendance`, `openVisitOf`) for reporting, trials and the
   Today workspace.
-- Consumed: `FINANCIAL_STANDING_PORT` — answered by finance's `ParticipationStandingService`
-  (`standingOf(person, {offeringId, at})`: due, open obligations of the participant, `related` when
-  one belongs to the activity's offering) when the finance module is part of the application. An
-  explicit `FINANCIAL_STANDING_IMPL` takes precedence (tests script it); without either, every
-  standing is `unknown`, shown as an `info` issue that never blocks. Blocking on an unrelated
-  balance stays governed by `blockOnUnrelatedBalance: false` (DEC-056). The standing covers every
+- Consumed: `FINANCIAL_STANDING_PORT` — resolves `FINANCIAL_STANDING_IMPL` first, which finance
+  registers as `FinancialStandingService` (FIN-03, IF-39), so in the assembled application the
+  standing is finance's real answer (`standingOf(person, {offeringId, at})`: due, open obligations
+  of the participant and of everyone merged into them, `related` when one belongs to the
+  activity's offering; `unknown` only on a failed read). A test may register its own
+  `FINANCIAL_STANDING_IMPL` instead. Without it, finance's `ParticipationStandingService` answers
+  when it is in the container; without either, every standing is `unknown`, shown as an `info`
+  issue that never blocks. Blocking on an unrelated balance stays governed by
+  `blockOnUnrelatedBalance: false` (POL-017, DEC-056). Evidence:
+  `apps/api/src/__tests__/cross-module-ports.spec.ts` ("SPK-ENTRY-004: the arrival standing comes
+  from finance (clear, or an outstanding unrelated balance)"). The standing covers every
   obligation the person owes, pays for or participates in (possibly another adult's order), so
   its issues are projected per reader at read time (`issuesFor`): staff see them with the
   obligation id; the assigned coach or official and a customer do not (AUTHZ-PRIVACY-01).
