@@ -395,6 +395,7 @@ describe('discipline and disputes (SPK-DISC-001..005, SPK-RESULT-005, SPK-AT-013
     const withdrawn = await post(`/appeals/${decisionAppeal.body.id}/decide`, leagueManager, {
       action: 'withdraw',
       expectedRevision: decisionAppeal.body.revision,
+      reason: 'The player withdrew the appeal at the desk.',
     });
     expect(withdrawn.body.status).toBe('withdrawn');
     expect(await appealStatus()).toBe('none');
@@ -413,6 +414,71 @@ describe('discipline and disputes (SPK-DISC-001..005, SPK-RESULT-005, SPK-AT-013
     expect(
       (await get(`/disciplinary-decisions/${second.body.id}`, leagueManager)).body.status,
     ).toBe('issued');
+  });
+
+  it("§4.9 / SPK-DISC-002: league management withdrawing a subject's appeal names its reason; a reasonless or blank one changes neither the appeal nor the suspension's appeal status", async () => {
+    const subject = await adultCustomer(t);
+    const decision = await post('/disciplinary-decisions', leagueManager, {
+      subjectPersonId: subject.personId,
+      basis: 'dissent',
+      decision: 'suspension',
+      suspension: {
+        scope: 'competitions',
+        competitionIds: [season.competitionId],
+        matchCount: 1,
+        completionCriteria: 'one match served',
+      },
+    });
+    expect(decision.status).toBe(201);
+    const appealStatus = async () =>
+      (await get(`/suspensions/${decision.body.suspensionId}`, leagueManager)).body.appealStatus;
+    const appeal = await post('/appeals', subject, {
+      decisionId: decision.body.id,
+      grounds: 'The referee misheard what was said.',
+    });
+    expect(appeal.status).toBe(201);
+    expect(await appealStatus()).toBe('pending');
+
+    for (const extra of [{}, { reason: '   ' }]) {
+      const refused = await post(`/appeals/${appeal.body.id}/decide`, leagueManager, {
+        action: 'withdraw',
+        expectedRevision: appeal.body.revision,
+        ...extra,
+      });
+      expect(refused.status).toBe(400);
+      expect(refused.body.code).toBe('VALIDATION_FAILED');
+    }
+    // the reason is trimmed for a decision too: a blank one is no reason
+    const blankDenial = await post(`/appeals/${appeal.body.id}/decide`, leagueManager, {
+      action: 'deny',
+      expectedRevision: appeal.body.revision,
+      reason: '   ',
+    });
+    expect(blankDenial.status).toBe(400);
+    expect(blankDenial.body.code).toBe('VALIDATION_FAILED');
+    // nothing changed: the appeal is open at the same revision and still pending on the suspension
+    expect((await get(`/appeals/${appeal.body.id}`, leagueManager)).body).toMatchObject({
+      status: 'submitted',
+      revision: appeal.body.revision,
+    });
+    expect(await appealStatus()).toBe('pending');
+
+    const withdrawn = await post(`/appeals/${appeal.body.id}/decide`, leagueManager, {
+      action: 'withdraw',
+      expectedRevision: appeal.body.revision,
+      reason: '  The player withdrew the appeal in writing.  ',
+    });
+    expect(withdrawn.status).toBe(200);
+    expect(withdrawn.body).toMatchObject({ status: 'withdrawn', decidedAt: null });
+    expect(await appealStatus()).toBe('none');
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['reason', 'details'])
+      .where('target_id', '=', appeal.body.id)
+      .where('action', '=', 'competition.manage_discipline')
+      .executeTakeFirstOrThrow();
+    expect(audit.reason).toBe('The player withdrew the appeal in writing.');
+    expect(audit.details).toMatchObject({ operation: 'withdraw', status: 'withdrawn' });
   });
 
   it('SPK-RESULT-005: a captain of a competing entry disputes within the protest window; the reviewer decides with a publication consequence; outsiders and late disputes are refused', async () => {

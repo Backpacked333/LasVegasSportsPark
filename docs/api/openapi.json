@@ -68451,7 +68451,7 @@
     },
     "/disputes/{id}/decide": {
       "post": {
-        "summary": "Review, decide or withdraw a dispute",
+        "summary": "Review, decide or withdraw a dispute (a decision or a withdrawal names its reason)",
         "tags": [
           "Competition"
         ],
@@ -69968,7 +69968,7 @@
     },
     "/appeals/{id}/decide": {
       "post": {
-        "summary": "Review, grant, deny or withdraw an appeal",
+        "summary": "Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason)",
         "tags": [
           "Competition"
         ],
@@ -70374,7 +70374,7 @@
     },
     "/pools/{id}/entries/{teamEntryId}/remove": {
       "post": {
-        "summary": "Remove an entry from a pool (CMP-15; capability tournaments)",
+        "summary": "Remove an entry from a pool (CMP-15; never gated by capability tournaments)",
         "tags": [
           "Competition"
         ],

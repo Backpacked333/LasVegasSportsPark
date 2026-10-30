@@ -3242,7 +3242,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Review, grant, deny or withdraw an appeal */
+        /** Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason) */
         post: {
             parameters: {
                 query?: never;
@@ -13399,7 +13399,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Review, decide or withdraw a dispute */
+        /** Review, decide or withdraw a dispute (a decision or a withdrawal names its reason) */
         post: {
             parameters: {
                 query?: never;
@@ -33113,7 +33113,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Remove an entry from a pool (CMP-15; capability tournaments) */
+        /** Remove an entry from a pool (CMP-15; never gated by capability tournaments) */
         post: {
             parameters: {
                 query?: never;
