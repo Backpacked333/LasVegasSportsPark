@@ -1,4 +1,4 @@
-import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
+import { systemPrincipal, type Principal } from '@sportspark/contracts';
 import { isUniqueViolation } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing';
@@ -178,9 +178,11 @@ describe('activity reminders (COM-06, communications.compose_activity_reminders)
     });
 
     it('the database rejects a second reminder mark for one event revision and any change to a mark', async () => {
+      // A mark names a real event of its organization (reminder_marks_event_fk, 1009).
+      const event = await practice(w, 900, 'south');
       const values = {
         organization_id: w.t.organizationId,
-        scheduling_event_id: newId(),
+        scheduling_event_id: event.id,
         event_revision: 1,
         composed_at: w.t.clock.now(),
       };
