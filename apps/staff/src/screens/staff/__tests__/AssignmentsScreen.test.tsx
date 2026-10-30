@@ -2,7 +2,8 @@
  * SCR-S-33 Assignment management and replacement: SPK-STAFF-002 (proposed and offered never
  * cover), SPK-STAFF-003 (overlap and turnaround refusals shown with the API's code), SPK-AT-012
  * (replacement after a decline; the uncovered slot is escalated), §4.9 expected revision and
- * STALE_REVISION reload, protected NOT_FOUND as not available.
+ * STALE_REVISION reload, protected NOT_FOUND as not available; the person is chosen from the
+ * staff directory (ID-05) and transitions are the API's `availableActions` (WRK-01).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -13,8 +14,9 @@ import {
   FIXTURE_1,
   OFFICIAL,
   assignmentRecord,
+  nameEntry,
   oneFacilityMe,
-  person,
+  personNames,
 } from '../../../features/operations/testing';
 import { FACILITY_A, createTestApp } from '../../../testing/test-app';
 
@@ -67,20 +69,41 @@ const UNCOVERED_ROW = {
   uncovered: 1,
 };
 
+/** `GET /v1/assignments` items carry the events the viewer may perform now (WRK-01). */
+function staffList(items: Record<string, unknown>[], availableActions: string[]) {
+  return {
+    status: 200,
+    body: { items: items.map((a) => ({ ...a, availableActions })), nextCursor: null },
+  };
+}
+
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     'GET /me': oneFacilityMe(),
     'GET /reports/uncovered-assignments': report([UNCOVERED_ROW]),
-    'GET /assignments': {
+    'GET /assignments': staffList(
+      [assignmentRecord({ status: 'proposed' })],
+      ['offer', 'withdraw'],
+    ),
+    'GET /person-names': personNames([
+      nameEntry(OFFICIAL, 'Jordan', 'Lee', 'adult'),
+      nameEntry(CANDIDATE, 'Casey', 'Lee', 'adult'),
+    ]),
+    'GET /staff-directory': {
       status: 200,
-      body: { items: [assignmentRecord({ status: 'proposed' })], nextCursor: null },
+      body: {
+        items: [
+          {
+            personId: OFFICIAL,
+            displayName: 'Jordan Lee',
+            roles: ['official'],
+            facilityIds: [],
+            scopes: [{ role: 'official', facilityIds: [] }],
+          },
+        ],
+        nextCursor: null,
+      },
     },
-    'GET /people/{id}': (req) =>
-      fakeResponse(
-        200,
-        person(req.params.id ?? '', req.params.id === OFFICIAL ? 'Jordan' : 'Casey', 'Lee', 'adult')
-          .body,
-      ),
     ...extra,
   };
 }
@@ -128,8 +151,17 @@ describe('SCR-S-33 AssignmentsScreen', () => {
     expect(screen.getByLabelText('Role')).toHaveValue('referee');
     expect(screen.getByLabelText('Fixture, event or session (record id)')).toHaveValue(FIXTURE_1);
     await user.click(screen.getByRole('button', { name: 'Propose and offer' }));
-    expect(screen.getByText('Name the person by their record id.')).toBeInTheDocument();
-    await user.type(screen.getByLabelText('Person (record id)'), OFFICIAL);
+    expect(screen.getByText('Choose the person from the staff directory.')).toBeInTheDocument();
+    // ID-05: officials only for an official slot, at the selected facility.
+    const picker = screen.getByLabelText('Person');
+    await waitFor(() =>
+      expect(
+        within(picker).getByRole('option', { name: 'Jordan Lee (official)' }),
+      ).toBeInTheDocument(),
+    );
+    const directory = app.fake.requests.find((r) => r.route === '/staff-directory');
+    expect(directory?.query).toMatchObject({ role: 'official', facilityId: FACILITY_A });
+    await user.selectOptions(picker, OFFICIAL);
     await user.click(screen.getByRole('button', { name: 'Propose and offer' }));
     expect(await screen.findByText(/committed to another assignment/)).toBeInTheDocument();
     expect(screen.getByText(/Error code: RESOURCE_CONFLICT/)).toBeInTheDocument();
@@ -150,6 +182,7 @@ describe('SCR-S-33 AssignmentsScreen', () => {
     const app = createTestApp({
       routes: routes({
         'GET /assignments/{id}': { status: 200, body: assignmentRecord() },
+        'GET /assignments': staffList([assignmentRecord()], ['withdraw']),
         'POST /assignments/{id}/withdraw': {
           status: 409,
           body: apiErrorBody('STALE_REVISION', { nextAction: 'reload_and_retry' }),
@@ -160,7 +193,9 @@ describe('SCR-S-33 AssignmentsScreen', () => {
     expect(await screen.findByText('Offered (not covering)')).toBeInTheDocument();
     // Accept and decline belong to the assignee; staff may withdraw an offer.
     expect(screen.queryByRole('button', { name: /^Accept/ })).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Withdraw' }));
+    await user.click(await screen.findByRole('button', { name: 'Withdraw' }));
+    const list = app.fake.requests.find((r) => r.route === '/assignments');
+    expect(list?.query).toMatchObject({ targetType: 'fixture', targetId: FIXTURE_1 });
     await user.click(screen.getByRole('button', { name: 'Confirm withdrawal' }));
     expect(screen.getByText('A reason is required.')).toBeInTheDocument();
     await user.type(screen.getByLabelText('Reason for withdrawing'), 'Fixture moved');
@@ -281,5 +316,40 @@ describe('SCR-S-33 AssignmentsScreen', () => {
     });
     render(app.at(`/staff/assignments/${ASSIGNMENT_1}`));
     expect(await screen.findByTestId('state-unavailable')).toBeInTheDocument();
+  });
+
+  it('WRK-01: offers only the transitions the API lists for the viewer', async () => {
+    const accepted = assignmentRecord({ status: 'accepted' });
+    const app = createTestApp({
+      routes: routes({
+        'GET /assignments/{id}': { status: 200, body: accepted },
+        // The state allows complete and withdraw, but the viewer's roles perform neither here.
+        'GET /assignments': staffList([accepted], []),
+      }),
+    });
+    render(app.at(`/staff/assignments/${ASSIGNMENT_1}`));
+    expect(await screen.findByText('Accepted')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/assignments')).toBe(true),
+    );
+    expect(screen.queryByRole('button', { name: 'Mark completed' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Withdraw' })).toBeNull();
+  });
+
+  it('shows the actions read’s failure with its code and Try again', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /assignments/{id}': { status: 200, body: assignmentRecord() },
+        'GET /assignments': () =>
+          fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+      }),
+    });
+    render(app.at(`/staff/assignments/${ASSIGNMENT_1}`));
+    const section = (await screen.findByRole('heading', { name: 'Change this assignment' }))
+      .parentElement as HTMLElement;
+    expect(await within(section).findByTestId('state-error')).toHaveTextContent(
+      'INTEGRATION_UNAVAILABLE',
+    );
+    expect(within(section).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 });

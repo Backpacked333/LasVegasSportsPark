@@ -7,8 +7,9 @@
  *   as covering (SPK-STAFF-002), and the labels say so.
  * - Assignments (`GET /v1/assignments`) show all six states including "Proposed".
  * - Proposing (`POST /v1/assignments`) lets the API check qualification, availability, overlaps
- *   and turnaround (SPK-STAFF-003); its refusal is shown with its code and message. There is no
- *   person search in the API, so the person is named by their record id.
+ *   and turnaround (SPK-STAFF-003); its refusal is shown with its code and message. The person is
+ *   chosen from the staff directory (`GET /v1/staff-directory`, ID-05), narrowed to officials or
+ *   coaches by the kind of assignment and to the selected facility.
  * - The client never decides who may manage assignments: ACCESS_DENIED renders as not available.
  */
 import type { Schema } from '@sportspark/api-client';
@@ -38,6 +39,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { StaffPicker, type StaffRole } from '../../features/operations/StaffPicker';
 
 type Assignment = Schema<'Assignment'>;
 type AssignmentStatus = Schema<'AssignmentStatus'>;
@@ -259,7 +261,14 @@ const ENGAGEMENT_OPTIONS = ['regular', 'temporary', 'substitute'].map((v) => ({
   label: humanize(v),
 }));
 
+/** The directory role that holds an assignment kind (supervisors and organisers: any staff). */
+const ROLE_OF_KIND: Record<string, StaffRole | undefined> = {
+  official: 'official',
+  coach: 'coach',
+};
+
 function ProposeForm({ seed }: { seed: ProposalSeed }) {
+  const { facilityId } = useOperatingFacility();
   const [personId, setPersonId] = useState('');
   const [kind, setKind] = useState(seed.kind ?? '');
   const [targetType, setTargetType] = useState(seed.targetType ?? '');
@@ -282,7 +291,7 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
 
   const submit = () => {
     const next: Record<string, string> = {};
-    if (!personId.trim()) next.personId = 'Name the person by their record id.';
+    if (!personId) next.personId = 'Choose the person from the staff directory.';
     if (!kind) next.kind = 'Choose the kind of assignment.';
     if (!targetType) next.targetType = 'Choose what the assignment is for.';
     if (!targetId.trim()) next.targetId = 'Name the fixture, event or session.';
@@ -294,7 +303,7 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
     void command
       .submit({
         body: {
-          personId: personId.trim(),
+          personId,
           kind: kind as Assignment['kind'],
           targetType: targetType as Assignment['targetType'],
           targetId: targetId.trim(),
@@ -319,21 +328,26 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
           submit();
         }}
       >
-        <TextField
-          label="Person (record id)"
-          value={personId}
-          onChange={setPersonId}
-          required
-          hint="The service has no person search yet: copy the id from the person's record."
-          error={missing.personId ?? apiErrors.personId}
-        />
         <SelectField
           label="Kind"
           value={kind}
-          onChange={setKind}
+          onChange={(v) => {
+            setKind(v);
+            setPersonId('');
+          }}
           options={KIND_OPTIONS}
           placeholder="Choose a kind"
           error={missing.kind ?? apiErrors.kind}
+        />
+        <StaffPicker
+          key={kind}
+          label="Person"
+          value={personId}
+          onChange={(id) => setPersonId(id)}
+          facilityId={facilityId}
+          role={ROLE_OF_KIND[kind]}
+          hint="The service checks qualification, availability, overlaps and turnaround when you propose."
+          error={missing.personId ?? apiErrors.personId}
         />
         <SelectField
           label="For"

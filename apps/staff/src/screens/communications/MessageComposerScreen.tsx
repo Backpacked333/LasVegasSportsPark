@@ -12,7 +12,10 @@
  *   pending): the API decides and its refusal is shown.
  * - Composing creates the notice (`POST /v1/notifications`) without sending it; the preview and
  *   the confirmation are step 2 (NotificationScreen). Offline, the draft stays on screen.
- * - The API has no audience picker (people, team entries), so they are named by record id.
+ * - Participants and named people are found with the staff person search (`GET /v1/people`, as the
+ *   viewer's role allows; names only) and added to the audience by their id; ids from a link stay
+ *   accepted. Their names are shown through `GET /v1/person-names`. Team entries are named by
+ *   record id (no staff team-entry search in this area).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -34,6 +37,8 @@ import {
   inputZoneHint,
   instantFromZonedInput,
 } from '../../features/operations/format';
+import { nameOf, usePersonNames } from '../../features/operations/context';
+import { PersonSearch } from '../../features/operations/PersonSearch';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
@@ -241,6 +246,13 @@ export function Composer({
           hint="Members of each team entry, and the guardians of child members."
           error={apiErrors['audience.teamEntryIds']}
         />
+        <AddPeople
+          onAdd={(as, id) =>
+            as === 'participant'
+              ? setSubjects((prev) => appendId(prev, id))
+              : setPersons((prev) => appendId(prev, id))
+          }
+        />
         <TextAreaField
           label="Participants (record ids, one per line)"
           value={subjects}
@@ -249,6 +261,7 @@ export function Composer({
           hint="Reaches the people who currently hold permission to receive messages about each participant."
           error={apiErrors['audience.subjectPersonIds']}
         />
+        <ChosenNames ids={idList(subjects)} label="Participants" />
         <TextAreaField
           label="Named people (record ids, one per line)"
           value={persons}
@@ -256,6 +269,7 @@ export function Composer({
           rows={2}
           error={apiErrors['audience.personIds']}
         />
+        <ChosenNames ids={idList(persons)} label="Named people" />
         {problems.audience || apiErrors.audience ? (
           <span className="error-text" role="alert">
             {problems.audience ?? apiErrors.audience}
@@ -320,5 +334,59 @@ export function Composer({
         <CommandError error={command.error} onRetry={submit} />
       ) : null}
     </form>
+  );
+}
+
+function appendId(list: string, id: string): string {
+  const ids = idList(list);
+  return ids.includes(id) ? list : [...ids, id].join('\n');
+}
+
+/** Find a person (names only) and add them as a participant or a named recipient. */
+function AddPeople({ onAdd }: { onAdd: (as: 'participant' | 'person', id: string) => void }) {
+  const [as, setAs] = useState<'participant' | 'person'>('participant');
+  return (
+    <div className="ops-section" role="group" aria-label="Add people to the audience">
+      <fieldset className="ops-fieldset">
+        <legend>Add a person found by name as</legend>
+        {(
+          [
+            ['participant', 'A participant (reaches who receives messages about them)'],
+            ['person', 'A named recipient'],
+          ] as const
+        ).map(([value, label]) => (
+          <label key={value} className="ops-check">
+            <input
+              type="radio"
+              name="add-as"
+              value={value}
+              checked={as === value}
+              onChange={() => setAs(value)}
+            />
+            {label}
+          </label>
+        ))}
+      </fieldset>
+      <PersonSearch
+        label="Find a person to add"
+        chooseLabel="Add"
+        onChoose={(p) => onAdd(as, p.id)}
+      />
+    </div>
+  );
+}
+
+/** Names of the people already in a list (never contact details, SPK-COMMS-006). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function ChosenNames({ ids: all, label }: { ids: string[]; label: string }) {
+  // Only well-formed ids are asked for; anything else is the API's validation answer at compose.
+  const ids = all.filter((id) => UUID.test(id));
+  const names = usePersonNames(ids);
+  if (ids.length === 0) return null;
+  return (
+    <p className="caption" aria-label={`${label} chosen`}>
+      {label}: {ids.map((id) => nameOf(names, id)).join('; ')}
+    </p>
   );
 }

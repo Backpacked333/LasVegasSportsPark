@@ -3,14 +3,23 @@
  * (compose against an audience, preview names and a count with no contact details, confirm the
  * send), SPK-COMMS-007 (essential versus promotional chosen explicitly), SPK-COMMS-003 / SPK-AT-017
  * (recipients excluded at the recheck reported by count), SPK-COMMS-004 (exact delivery states),
- * STALE_REVISION re-preview, ACCESS_DENIED as not available, offline draft kept.
+ * STALE_REVISION re-preview, ACCESS_DENIED as not available, offline draft kept; recipients named
+ * by the API (SPK-UX-006), one failed delivery retried with a reason (COM-02), people added to an
+ * audience by the staff person search (ID-02).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ADULT, CHILD_1, oneFacilityMe, person } from '../../../features/operations/testing';
-import { FACILITY_A, createTestApp } from '../../../testing/test-app';
+import {
+  ADULT,
+  CHILD_1,
+  CHILD_2,
+  nameEntry,
+  oneFacilityMe,
+  personNames,
+} from '../../../features/operations/testing';
+import { FACILITY_A, createTestApp, mePermissions } from '../../../testing/test-app';
 
 const NOTICE = '0192f1a0-0000-7000-8000-0000000003a1';
 const RECIPIENT_A = '0192f1a0-0000-7000-8000-0000000003b1';
@@ -115,6 +124,7 @@ function recipient(id: string, personId: string, status: string) {
     basis: 'staff_role',
     basisDetail: 'front_desk',
     subjectPersonIds: [],
+    displayName: personId === ADULT ? 'Sam Rivera' : 'Robin Park',
     status,
     resolvedAt: '2026-10-24T12:00:00.000Z',
     authorizedAt: status === 'authorized' ? '2026-10-24T12:00:00.000Z' : null,
@@ -143,16 +153,11 @@ const DELIVERIES = {
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     'GET /me': oneFacilityMe(),
-    'GET /people/{id}': (req) =>
-      fakeResponse(
-        200,
-        person(
-          req.params.id ?? '',
-          req.params.id === ADULT ? 'Sam' : 'Robin',
-          req.params.id === ADULT ? 'Rivera' : 'Park',
-          'adult',
-        ).body,
-      ),
+    'GET /person-names': personNames([
+      nameEntry(ADULT, 'Sam', 'Rivera', 'adult'),
+      nameEntry(CHILD_1, 'Robin', 'Park', 'adult'),
+      nameEntry(CHILD_2, 'Alex', 'Rivera'),
+    ]),
     ...extra,
   };
 }
@@ -344,12 +349,20 @@ describe('SCR-S-40 Delivery status', () => {
       '1 recipient was excluded at the recheck',
     );
     expect(screen.getByText(/DEC-041/)).toBeInTheDocument();
-    expect(screen.getByText('Retrying a failed delivery is not available yet')).toBeInTheDocument();
-    const first = 'Recipient 1 (staff role: front_desk)';
+    // Without the retry action the failed delivery is not offered for retry.
+    expect(
+      screen.getByText('Retrying a failed delivery is not available to you'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Retry the failed delivery/ })).toBeNull();
+    // SPK-UX-006: recipients by the name the API gives, never a contact detail.
+    const first = 'Sam Rivera (staff role: front_desk)';
     const sam = await screen.findByRole('listitem', { name: first });
     const deliveries = within(sam).getByRole('list', { name: `Deliveries to ${first}` });
     // SPK-COMMS-006: recipients are not read one by one (the person read carries contacts).
     expect(app.fake.requests.some((r) => r.route === '/people/{id}')).toBe(false);
+    expect(
+      screen.getByRole('listitem', { name: 'Robin Park (staff role: front_desk)' }),
+    ).toBeInTheDocument();
     expect(within(deliveries).getByText(/Push/)).toBeInTheDocument();
     expect(within(deliveries).getByText(/Provider rejected/)).toBeInTheDocument();
     expect(
@@ -399,5 +412,147 @@ describe('SCR-S-40 Delivery status', () => {
     });
     render(app.at(`/communications/notifications/${NOTICE}`));
     expect(await screen.findByTestId('state-unavailable')).toBeInTheDocument();
+  });
+
+  describe('COM-02 retrying one failed delivery', () => {
+    const FAILED = '0192f1a0-0000-7000-8000-0000000003c3';
+    const retryRoutes = (extra: Record<string, FakeHandler> = {}) =>
+      routes({
+        'GET /me/permissions': mePermissions({
+          actions: [{ id: 'communications.retry_delivery', facilityIds: [FACILITY_A] }],
+        }),
+        'GET /notifications/{id}': { status: 200, body: notification('dispatched') },
+        'GET /notifications/{id}/deliveries': DELIVERIES,
+        ...extra,
+      });
+
+    it('SPK-COMMS-004: retries a failed email with a reason, the expected revision and one key', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: retryRoutes({
+          'POST /delivery-attempts/{id}/retry': {
+            status: 201,
+            body: attempt('0192f1a0-0000-7000-8000-0000000003c9', RECIPIENT_A, 'email', 'queued', {
+              retryOfAttemptId: FAILED,
+            }),
+          },
+        }),
+      });
+      render(app.at(`/communications/notifications/${NOTICE}`));
+      const label = 'Email to Sam Rivera (staff role: front_desk)';
+      await user.click(
+        await screen.findByRole('button', { name: `Retry the failed delivery: ${label}` }),
+      );
+      // Unknown and in-app outcomes are never offered for retry.
+      expect(screen.queryByRole('button', { name: /Retry the failed delivery: Push/ })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: /Retry the failed delivery: In-app/ }),
+      ).toBeNull();
+      const form = screen.getByRole('form', { name: `Retry the failed delivery: ${label}` });
+      await user.click(within(form).getByRole('button', { name: 'Confirm retry' }));
+      expect(within(form).getByText('A reason is required.')).toBeInTheDocument();
+      expect(app.fake.requests.some((r) => r.route === '/delivery-attempts/{id}/retry')).toBe(
+        false,
+      );
+      await user.type(within(form).getByLabelText('Reason for retrying'), 'Address corrected');
+      await user.click(within(form).getByRole('button', { name: 'Confirm retry' }));
+      expect(await screen.findByText('Retry queued')).toBeInTheDocument();
+      const retry = app.fake.requests.find((r) => r.route === '/delivery-attempts/{id}/retry');
+      expect(retry?.params.id).toBe(FAILED);
+      expect(retry?.body).toEqual({ reason: 'Address corrected', expectedRevision: 1 });
+      expect(retry?.headers['idempotency-key']).toBeTruthy();
+      await waitFor(() =>
+        expect(
+          app.fake.requests.filter((r) => r.route === '/notifications/{id}/deliveries'),
+        ).toHaveLength(2),
+      );
+    });
+
+    it('shows the API’s refusal of a superseded notice with its code', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: retryRoutes({
+          'POST /delivery-attempts/{id}/retry': {
+            status: 409,
+            body: apiErrorBody('RESOURCE_CONFLICT', {
+              message: 'A newer notice replaced this one; it is not resent.',
+              details: { code: 'NOTICE_SUPERSEDED' },
+              nextAction: 'reload_and_retry',
+            }),
+          },
+        }),
+      });
+      render(app.at(`/communications/notifications/${NOTICE}`));
+      await user.click(
+        await screen.findByRole('button', { name: /Retry the failed delivery: Email/ }),
+      );
+      await user.type(screen.getByLabelText('Reason for retrying'), 'Address corrected');
+      await user.click(screen.getByRole('button', { name: 'Confirm retry' }));
+      expect(await screen.findByText(/A newer notice replaced this one/)).toBeInTheDocument();
+      expect(screen.getByTestId('state-error')).toHaveTextContent('RESOURCE_CONFLICT');
+      expect(screen.queryByText('Retry queued')).toBeNull();
+    });
+
+    it('does not offer a retry of an attempt already retried', async () => {
+      const app = createTestApp({
+        routes: retryRoutes({
+          'GET /notifications/{id}/deliveries': {
+            status: 200,
+            body: {
+              ...DELIVERIES.body,
+              attempts: [
+                ...DELIVERIES.body.attempts,
+                attempt('0192f1a0-0000-7000-8000-0000000003c9', RECIPIENT_A, 'email', 'queued', {
+                  retryOfAttemptId: FAILED,
+                }),
+              ],
+            },
+          },
+        }),
+      });
+      render(app.at(`/communications/notifications/${NOTICE}`));
+      expect(await screen.findByText(/Retry, Email/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Retry the failed delivery/ })).toBeNull();
+    });
+  });
+});
+
+describe('SCR-S-39 audience by name (ID-02)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('adds a participant found by name to the audience and shows the name, never a contact', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': {
+          status: 200,
+          body: {
+            items: [
+              {
+                id: CHILD_2,
+                givenName: 'Alex',
+                familyName: 'Rivera',
+                kind: 'child',
+                status: 'active',
+                matchedOn: 'name',
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+      }),
+    });
+    render(app.at('/communications/compose'));
+    const form = await screen.findByRole('form', { name: 'Compose a message' });
+    const search = within(form).getByRole('search', { name: 'Find a person to add' });
+    await user.type(within(search).getByLabelText('Find a person to add'), 'Alex');
+    await user.click(within(search).getByRole('button', { name: 'Search' }));
+    await user.click(await within(form).findByRole('button', { name: 'Add Alex Rivera' }));
+    expect(within(form).getByLabelText('Participants (record ids, one per line)')).toHaveValue(
+      CHILD_2,
+    );
+    expect(await within(form).findByText('Participants: Alex Rivera')).toBeInTheDocument();
+    // The search did not submit the composer.
+    expect(app.fake.requests.some((r) => r.route === '/notifications')).toBe(false);
   });
 });

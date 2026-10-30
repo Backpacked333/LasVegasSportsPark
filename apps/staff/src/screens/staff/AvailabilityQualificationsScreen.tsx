@@ -8,8 +8,10 @@
  *   evidence and does not invent requirements.
  * - Availability windows per person (`GET /v1/availability` needs a person): add an available or
  *   unavailable window, withdraw one with a reason (kept for history).
- * - The API has no directory of officials and coaches: people are those with qualification
- *   evidence, the viewer, or a record id typed in.
+ * - Officials and coaches come from the staff directory (`GET /v1/staff-directory`, ID-05: names,
+ *   roles and facility scopes in effect, never contacts; coaches and officials only for viewers
+ *   with the workforce directory permission), filtered by role and the selected facility, searched
+ *   by name and paged. People are chosen from it, never typed as record ids.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -40,6 +42,13 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { LoadMore } from '../../ui/LoadMore';
+import {
+  StaffPicker,
+  roleWords,
+  useStaffDirectory,
+  type StaffRole,
+} from '../../features/operations/StaffPicker';
 
 type Qualification = Schema<'Qualification'>;
 type QualificationStatus = Schema<'QualificationStatus'>;
@@ -70,6 +79,7 @@ export function AvailabilityQualificationsScreen() {
     [qualifications.data],
   );
   const names = usePersonNames(people);
+  const [availabilityFor, setAvailabilityFor] = useState<{ id: string; name: string } | null>(null);
   return (
     <section aria-labelledby="availability-title">
       <h2 id="availability-title">Availability and qualifications</h2>
@@ -112,10 +122,110 @@ export function AvailabilityQualificationsScreen() {
         </QueryBoundary>
         <RecordQualification />
       </section>
+      <OfficialsAndCoaches
+        facilityId={facility.facilityId}
+        ready={!facility.loading}
+        onChoose={(person) => setAvailabilityFor(person)}
+      />
       <AvailabilitySection
+        key={availabilityFor?.id ?? 'me'}
         myPersonId={facility.personId}
+        initial={availabilityFor}
         people={people.map((id) => ({ id, name: nameOf(names, id) }))}
       />
+    </section>
+  );
+}
+
+const STAFFING_ROLES: readonly { value: StaffRole | ''; label: string }[] = [
+  { value: '', label: 'Officials and coaches' },
+  { value: 'official', label: 'Officials' },
+  { value: 'coach', label: 'Coaches' },
+];
+
+/** SCR-S-32 "Assignment scope per official and coach" from the staff directory (ID-05). */
+function OfficialsAndCoaches({
+  facilityId,
+  ready,
+  onChoose,
+}: {
+  facilityId: string | null;
+  /** The viewer's facility scope is known (`GET /me` answered). */
+  ready: boolean;
+  onChoose: (person: { id: string; name: string }) => void;
+}) {
+  const [role, setRole] = useState<StaffRole | ''>('');
+  const [search, setSearch] = useState('');
+  const directory = useStaffDirectory({
+    facilityId,
+    role: role || undefined,
+    query: search,
+    enabled: ready,
+  });
+  const staffing = (directory.data ?? []).filter((s) =>
+    role ? true : s.roles.some((r) => r === 'official' || r === 'coach'),
+  );
+  return (
+    <section className="ops-section" aria-labelledby="officials-title">
+      <h3 id="officials-title">Officials and coaches</h3>
+      <div className="ops-form">
+        <SelectField
+          label="Role"
+          value={role}
+          onChange={(v) => setRole(v as StaffRole | '')}
+          options={STAFFING_ROLES.map((r) => ({ value: r.value, label: r.label }))}
+        />
+        <TextField
+          label="Find by name"
+          value={search}
+          onChange={setSearch}
+          type="search"
+          hint="The first letters of the given or family name."
+        />
+      </div>
+      <QueryBoundary
+        query={directory}
+        label="officials and coaches"
+        isEmpty={() => staffing.length === 0}
+        empty={{
+          title: 'No officials or coaches',
+          description: facilityId
+            ? 'Nobody holds an official or coach role at this facility now (or the directory leaves them out for your role).'
+            : 'Nobody holds an official or coach role now (or the directory leaves them out for your role).',
+        }}
+      >
+        {() => (
+          <ul className="list" aria-label="Officials and coaches">
+            {staffing.map((s) => (
+              <li key={s.personId} aria-label={s.displayName}>
+                <div className="row-text">
+                  <span className="row-title">{s.displayName}</span>
+                  <span className="caption">
+                    {s.scopes
+                      .map(
+                        (scope) =>
+                          `${roleWords([scope.role])}: ${
+                            scope.facilityIds.length === 0
+                              ? 'every facility'
+                              : `${scope.facilityIds.length} ${scope.facilityIds.length === 1 ? 'facility' : 'facilities'}`
+                          }`,
+                      )
+                      .join(' · ')}
+                  </span>
+                </div>
+                <Button
+                  variant="secondary"
+                  aria-label={`Availability of ${s.displayName}`}
+                  onClick={() => onChoose({ id: s.personId, name: s.displayName })}
+                >
+                  Availability
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={directory} label="officials and coaches" />
     </section>
   );
 }
@@ -238,7 +348,7 @@ function QualificationRow({
 }
 
 function RecordQualification() {
-  const { timezone } = useOperatingFacility();
+  const { timezone, facilityId } = useOperatingFacility();
   const [open, setOpen] = useState(false);
   const [personId, setPersonId] = useState('');
   const [kind, setKind] = useState('');
@@ -270,7 +380,7 @@ function RecordQualification() {
     void command
       .submit({
         body: {
-          ...(personId.trim() ? { personId: personId.trim() } : {}),
+          ...(personId ? { personId } : {}),
           kind: kind.trim(),
           ...(level.trim() ? { level: level.trim() } : {}),
           ...(evidence.trim() ? { evidenceReference: evidence.trim() } : {}),
@@ -290,11 +400,12 @@ function RecordQualification() {
         submit();
       }}
     >
-      <TextField
-        label="Person (record id)"
+      <StaffPicker
+        label="Official or coach"
         value={personId}
-        onChange={setPersonId}
-        hint="Leave empty to record your own evidence."
+        onChange={(id) => setPersonId(id)}
+        facilityId={facilityId}
+        hint="Leave unchosen to record your own evidence."
         error={apiErrors.personId}
       />
       <TextField
@@ -362,15 +473,22 @@ function RecordQualification() {
 function AvailabilitySection({
   myPersonId,
   people,
+  initial,
 }: {
   myPersonId: string | null;
   people: { id: string; name: string }[];
+  /** A person chosen from the officials and coaches list. */
+  initial: { id: string; name: string } | null;
 }) {
   const now = useNow(60_000);
-  const [choice, setChoice] = useState<string>('me');
-  const [typed, setTyped] = useState('');
-  const personId =
-    choice === 'me' ? myPersonId : choice === 'other' ? typed.trim() || null : choice;
+  const { facilityId } = useOperatingFacility();
+  const [choice, setChoice] = useState<string>(initial?.id ?? 'me');
+  const [picked, setPicked] = useState('');
+  const known = [
+    ...(initial && !people.some((p) => p.id === initial.id) ? [initial] : []),
+    ...people,
+  ];
+  const personId = choice === 'me' ? myPersonId : choice === 'other' ? picked || null : choice;
   const from = useMemo(() => new Date(now.getTime() - 86_400_000).toISOString(), [now]);
   const to = useMemo(() => new Date(now.getTime() + 30 * 86_400_000).toISOString(), [now]);
   const windows = useApiQuery({
@@ -387,12 +505,17 @@ function AvailabilitySection({
         onChange={setChoice}
         options={[
           { value: 'me', label: 'Mine' },
-          ...people.map((p) => ({ value: p.id, label: p.name })),
-          { value: 'other', label: 'Another person (record id)' },
+          ...known.map((p) => ({ value: p.id, label: p.name })),
+          { value: 'other', label: 'Someone from the staff directory' },
         ]}
       />
       {choice === 'other' ? (
-        <TextField label="Person (record id)" value={typed} onChange={setTyped} />
+        <StaffPicker
+          label="Official or coach"
+          value={picked}
+          onChange={(id) => setPicked(id)}
+          facilityId={facilityId}
+        />
       ) : null}
       {personId ? (
         <>
