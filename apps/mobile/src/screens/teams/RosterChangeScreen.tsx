@@ -87,6 +87,7 @@ function EligibilityCheck({
           error={check.error}
           onRetry={() => void check.refetch()}
           unavailableText="Checking eligibility is not available to you for this team."
+          read
         />
       );
     return <StateView variant="loading" label="the eligibility check" />;

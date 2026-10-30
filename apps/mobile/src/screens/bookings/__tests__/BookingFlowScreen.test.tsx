@@ -196,6 +196,35 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(second?.body).toEqual(first?.body);
   });
 
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a booking that committed with its answer lost is "This may already have been done", and booking the same time again keeps the key, so it is never booked twice', async () => {
+    let attempts = 0;
+    const app = renderFlow(
+      rentalRoutes({
+        'POST /bookings': () => {
+          attempts += 1;
+          if (attempts === 1) throw new TypeError('Network request failed');
+          return fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+              nextAction: 'reload_current_state',
+            }),
+          );
+        },
+      }),
+    );
+    await chooseRentalHour();
+    await press('Book now');
+    await press('Check again');
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.queryByLabelText('No answer yet')).toBeNull();
+    await press('Reload');
+    await press('Book now');
+    await waitFor(() => expect(posts(app)).toHaveLength(3));
+    const keys = posts(app).map((r) => r.headers['idempotency-key']);
+    expect(new Set(keys).size).toBe(1);
+  });
+
   it('SPK-UX-008: free times read earlier stay listed offline under the offline notice with their age, and booking is disabled', async () => {
     const app = renderFlow(rentalRoutes());
     await chooseRentalHour();

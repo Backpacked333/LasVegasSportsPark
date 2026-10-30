@@ -214,6 +214,99 @@ describe('SCR-C-14 CheckoutScreen', () => {
     expect(new Set(checkoutRequests(app).map((r) => r.headers['idempotency-key'])).size).toBe(1);
   });
 
+  it('SPK-PAY-007: a 5xx answer is no definite answer: "being confirmed, do not pay again", no payment methods, and "Check now" keeps the key', async () => {
+    let calls = 0;
+    const app = renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(201, checkout());
+        },
+      }),
+    });
+    await choosePaymentAndPay();
+    expect(
+      await screen.findByLabelText('Payment outcome being confirmed. Do not pay again.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay $226.00' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Succeeds at once' })).toBeNull();
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check now' }));
+    });
+    await waitFor(() =>
+      expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`),
+    );
+    const [first, second] = checkoutRequests(app);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: "Check now" that finds the checkout committed with its answer lost offers no payment, reads the price again and opens the checkout it names', async () => {
+    let calls = 0;
+    const app = renderCheckout({
+      routes: routes({
+        'GET /registration-quotes/{id}': () =>
+          fakeResponse(
+            200,
+            calls >= 2
+              ? quote({ status: 'consumed', consumedByCheckoutId: IDS.checkout })
+              : quote(),
+          ),
+        'POST /registration-checkouts': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('Network request failed');
+          return fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+              nextAction: 'reload_current_state',
+            }),
+          );
+        },
+      }),
+    });
+    await choosePaymentAndPay();
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('button', { name: 'Check now' }));
+    });
+    expect(
+      await screen.findByText(
+        'A checkout already exists for this price. It is never charged twice.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Pay $226.00' })).toBeNull();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    // The checkout exists: the device still remembers its price until the outcome screen has it.
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote);
+    fireEvent.press(screen.getByRole('button', { name: 'See your payment and registration' }));
+    expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
+    expect(new Set(checkoutRequests(app).map((r) => r.headers['idempotency-key'])).size).toBe(1);
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: while the price still reads unused, the answer is "This may already have been done" and nothing is offered to pay', async () => {
+    renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+              nextAction: 'reload_current_state',
+            }),
+          ),
+      }),
+    });
+    await choosePaymentAndPay();
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay $226.00' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeOnTheScreen();
+  });
+
   it('SPK-AT-005: losing the final place charges nothing and offers the waitlist', async () => {
     const app = renderCheckout({
       routes: routes({

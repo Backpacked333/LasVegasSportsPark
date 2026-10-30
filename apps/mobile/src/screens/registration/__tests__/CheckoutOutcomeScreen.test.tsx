@@ -4,7 +4,12 @@
  * only when the API confirms it; processing refreshed on return to the app; unknown, failed,
  * recovery and compensation each in their own words; not available and offline states.
  */
-import { fakeResponse, type FakeHandler, type FakeRequest } from '@sportspark/api-client/testing';
+import {
+  apiErrorBody,
+  fakeResponse,
+  type FakeHandler,
+  type FakeRequest,
+} from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import {
   IDS,
@@ -272,6 +277,50 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
       app.fake.requests.filter((r) => r.route === '/registration-checkouts/{id}').length,
     ).toBeGreaterThan(1);
   });
+
+  it.each([
+    ['INTEGRATION_UNAVAILABLE', 503, 'retry_later'],
+    ['IDEMPOTENCY_OUTCOME_UNAVAILABLE', 409, 'reload_current_state'],
+  ])(
+    'SPK-PAY-007: a payment retry answered %s may have been taken: no other method is offered, never "Something went wrong"',
+    async (code, status, nextAction) => {
+      const app = renderOutcome({
+        routes: routes({
+          'GET /registration-checkouts/{id}': {
+            status: 200,
+            body: checkout({
+              status: 'awaiting_payment',
+              payment: payment({ status: 'failed', failureReason: 'The card was declined.' }),
+              receipt: null,
+              nextAction: 'retry_payment',
+            }),
+          },
+          'POST /registration-checkouts/{id}/payments': () =>
+            fakeResponse(status, apiErrorBody(code, { nextAction })),
+        }),
+      });
+      fireEvent.press(await screen.findByRole('radio', { name: 'Succeeds at once' }));
+      const readsBefore = app.fake.requests.filter(
+        (r) => r.route === '/registration-checkouts/{id}',
+      ).length;
+      await act(async () => {
+        fireEvent.press(screen.getByRole('button', { name: 'Try this payment method' }));
+      });
+      expect(
+        (await screen.findAllByLabelText('Payment outcome being confirmed. Do not pay again.'))
+          .length,
+      ).toBeGreaterThan(0);
+      expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Try this payment method' })).toBeNull();
+      expect(screen.queryByRole('radio', { name: 'Succeeds at once' })).toBeNull();
+      // The checkout is read again until the API reports the new attempt.
+      await waitFor(() =>
+        expect(
+          app.fake.requests.filter((r) => r.route === '/registration-checkouts/{id}').length,
+        ).toBeGreaterThan(readsBefore),
+      );
+    },
+  );
 
   it('SPK-UX-010: line words agree with the badges above them before the checkout completes', () => {
     expect(outcomeLineStatus({ status: 'recovery_required', payment: null }).label).toBe(

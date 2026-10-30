@@ -368,9 +368,13 @@ describe('SCR-C-09 trial and pickup intents', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Book the session' }));
     });
-    expect(await screen.findByText(/This may already have gone through/)).toBeOnTheScreen();
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/this may already have gone through/)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });
     expect(await screen.findByText(/Error code: CAPACITY_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByText('This session is full.')).toBeOnTheScreen();

@@ -95,6 +95,8 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
   const [changed, setChanged] = useState(false);
   const [checking, setChecking] = useState(false);
   const [failure, setFailure] = useState<ApiError | null>(null);
+  // The failure is of the confirm-time re-read (a GET), which changed nothing.
+  const [failureRead, setFailureRead] = useState(false);
   const [done, setDone] = useState<{
     booking: Booking;
     accepted: FinancialConsequence | null;
@@ -152,6 +154,7 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
 
   const send = async (body: ReturnType<typeof bodyFor>) => {
     setFailure(null);
+    setFailureRead(false);
     try {
       const result = await cancel.submit({ path: { id: booking.id }, body });
       setDone({ booking: result, accepted: basis === 'paid' ? acknowledged : null });
@@ -193,6 +196,7 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
       setChecking(false);
       if (reread.error) {
         setFailure(reread.error);
+        setFailureRead(true);
         return;
       }
       const fresh = reread.data?.data as CancellationPreview | undefined;
@@ -374,7 +378,8 @@ export function CancelBooking({ booking, onReload }: { booking: Booking; onReloa
       {failure ? (
         <CommandFailure
           error={failure}
-          what="the cancellation"
+          what={failureRead ? 'what canceling would change' : 'the cancellation'}
+          read={failureRead}
           onRetry={() => void confirm()}
           onReload={() => {
             setFailure(null);

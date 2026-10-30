@@ -295,6 +295,43 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(keys[0]).toBe(keys[1]);
   });
 
+  it('SPK-PAY-007 IDEMPOTENCY_OUTCOME_UNAVAILABLE: when "Check again" finds the payment committed with its answer lost, paying stays blocked and the balance is read again', async () => {
+    let attempts = 0;
+    const app = renderObligation({
+      'POST /obligations/{id}/payments': () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('Network request failed');
+        return fakeResponse(
+          409,
+          apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+            nextAction: 'reload_current_state',
+            correlationId: 'c-pay-lost',
+          }),
+        );
+      },
+    });
+    await pay();
+    const balanceReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/obligations/{id}').length;
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
+    });
+    const before = balanceReads();
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: c-pay-lost'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('Something went wrong')).toBeNull();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    });
+    await waitFor(() => expect(balanceReads()).toBeGreaterThan(before));
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    expect(new Set(payments(app).map((r) => r.headers['idempotency-key'])).size).toBe(1);
+  });
+
   it('PAYMENT_OUTCOME_UNKNOWN: a payment already in progress is never started again', async () => {
     renderObligation({
       'POST /obligations/{id}/payments': () =>

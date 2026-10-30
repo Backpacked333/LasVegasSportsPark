@@ -71,7 +71,7 @@ export function PaymentsUnchecked({ payments }: { payments: LivePayments['paymen
         We could not check for a payment already on its way. If you paid recently, check again
         before paying: a second payment is refused while one is being confirmed.
       </Body>
-      <CommandFailure error={failed} onRetry={() => void payments.refetch()} />
+      <CommandFailure error={failed} onRetry={() => void payments.refetch()} read />
     </View>
   );
 }

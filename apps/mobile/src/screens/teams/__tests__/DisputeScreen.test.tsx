@@ -282,7 +282,7 @@ describe('SCR-C-29 DisputeScreen', () => {
       expect(screen.queryByText(/You withdrew this dispute/)).toBeNull();
       // The reason is kept for the retry.
       expect(screen.getByLabelText('Reason for withdrawing').props.value).toBe('Settled.');
-      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(
         await screen.findByText('You withdrew this dispute. The league no longer reviews it.'),
       ).toBeOnTheScreen();

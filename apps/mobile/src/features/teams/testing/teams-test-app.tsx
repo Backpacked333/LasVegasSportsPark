@@ -1,10 +1,14 @@
 /**
  * The foundation test app (real providers, fake API, fixed clock, manual connectivity) with the
  * helpers the team screen tests share: idempotency keys per route, request bodies, settling until
- * nothing is in flight, and withholding an answer to produce an unknown outcome.
+ * nothing is in flight, and withholding or dropping an answer to produce an unknown outcome: a
+ * timeout (`withholdAnswers`) or a connection lost after sending (`dropAnswers`).
  */
 import { waitFor } from '@testing-library/react-native';
 import { createTestApp, type TestAppOptions } from '../../../testing/test-app';
+
+/** A lost connection after the request was sent (`kind: 'network'`), see testing/test-app. */
+export { dropAnswers } from '../../../testing/test-app';
 
 export function createTeamsTestApp(options: TestAppOptions = {}) {
   const app = createTestApp(options);

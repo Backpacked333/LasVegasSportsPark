@@ -19,8 +19,10 @@ import {
   playerWorkspace,
   workspace,
 } from '../../../features/teams/testing/fixtures';
+import { WITHHELD_REVOKE_REASON } from '../../../features/teams/InvitationIssued';
 import {
   createTeamsTestApp,
+  dropAnswers,
   withholdAnswers,
 } from '../../../features/teams/testing/teams-test-app';
 import { REVOKE_REASON, RosterScreen } from '../RosterScreen';
@@ -194,6 +196,288 @@ describe('SCR-C-23 RosterScreen', () => {
     // The token is never shown as text on screen.
     expect(screen.queryByText(/tok_abcdefghijklmnopqrstuvwxyz/)).toBeNull();
     share.mockRestore();
+  });
+
+  it('§4.14: an invitation created but whose link was lost is shown as created, then revoked and issued again under a new key', async () => {
+    const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' });
+    const created = '0192f1a0-0000-7000-8000-000000000555';
+    let posts = 0;
+    const app = createTeamsTestApp({
+      routes: routes({
+        'POST /team-entries/{id}/invitations': () => {
+          posts += 1;
+          // The first answer is lost; "Check again" under the same key finds it created.
+          if (posts <= 2) {
+            return fakeResponse(
+              409,
+              apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+                message: 'This request already succeeded.',
+                nextAction: 'revoke_and_reissue',
+                correlationId: 'corr-w1',
+                details: { resourceId: created },
+              }),
+            );
+          }
+          return fakeResponse(201, issued({ id: '0192f1a0-0000-7000-8000-000000000556' }));
+        },
+        'POST /team-invitations/{id}/revoke': {
+          status: 200,
+          body: invitation({ id: created, status: 'revoked' }),
+        },
+      }),
+    });
+    dropAnswers(app, 'POST', /\/team-entries\/[^/]+\/invitations$/);
+    render(<RosterScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    fireEvent.changeText(
+      await screen.findByLabelText('Recipient 1: email address'),
+      'sam@example.test',
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
+    });
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    await app.settle();
+    const reads = app.requestsTo('GET', '/team-entries/{id}').length;
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    const withheld = await screen.findByTestId('recipient-1-withheld');
+    expect(
+      within(withheld).getByLabelText('Created, but the link cannot be shown again'),
+    ).toBeOnTheScreen();
+    expect(
+      within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD. Reference: corr-w1'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    // Nothing is sent again beside the created invitation, and the open invitations are re-read.
+    expect(screen.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
+    await waitFor(() =>
+      expect(app.requestsTo('GET', '/team-entries/{id}').length).toBeGreaterThan(reads),
+    );
+    await act(async () => {
+      fireEvent.press(
+        within(withheld).getByRole('button', { name: 'Revoke and issue a new link' }),
+      );
+    });
+    const shareButton = await screen.findByRole('button', {
+      name: 'Share the invitation for sam@example.test',
+    });
+    expect(app.requestsTo('POST', '/team-invitations/{id}/revoke')[0]?.path).toBe(
+      `/team-invitations/${created}/revoke`,
+    );
+    expect(app.bodiesOf('POST', '/team-invitations/{id}/revoke')).toEqual([
+      { reason: WITHHELD_REVOKE_REASON },
+    ]);
+    const keys = app.keysOf('POST', '/team-entries/{id}/invitations');
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    await act(async () => {
+      fireEvent.press(shareButton);
+    });
+    expect((share.mock.calls[0]?.[0] as { message: string }).message).toContain(
+      'id=0192f1a0-0000-7000-8000-000000000556&token=tok_abcdefghijklmnopqrstuvwxyz',
+    );
+    share.mockRestore();
+    await app.settle();
+  });
+
+  it('§4.14: an invitation whose link was lost but that was accepted meanwhile is not issued again', async () => {
+    const created = '0192f1a0-0000-7000-8000-000000000555';
+    const app = createTeamsTestApp({
+      routes: routes({
+        'POST /team-entries/{id}/invitations': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+              nextAction: 'revoke_and_reissue',
+              details: { resourceId: created },
+            }),
+          ),
+        'POST /team-invitations/{id}/revoke': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('INVALID_TRANSITION', {
+              nextAction: 'reload_current_state',
+              details: { machine: 'TeamInvitation', from: 'accepted', event: 'revoke' },
+            }),
+          ),
+      }),
+    });
+    dropAnswers(app, 'POST', /\/team-entries\/[^/]+\/invitations$/);
+    render(<RosterScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    fireEvent.changeText(
+      await screen.findByLabelText('Recipient 1: email address'),
+      'sam@example.test',
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
+    });
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
+    });
+    const withheld = await screen.findByTestId('recipient-1-withheld');
+    await act(async () => {
+      fireEvent.press(
+        within(withheld).getByRole('button', { name: 'Revoke and issue a new link' }),
+      );
+    });
+    // "Open invitations" lists only pending ones: an accepted invitation is on the roster.
+    expect(
+      await within(withheld).findByText(
+        'It can no longer be revoked: it was accepted already. It is shown under "Roster" below. Nothing new was created.',
+      ),
+    ).toBeOnTheScreen();
+    expect(within(withheld).queryByText(/under "Open invitations"/)).toBeNull();
+    expect(app.requestsTo('POST', '/team-entries/{id}/invitations')).toHaveLength(2);
+    await app.settle();
+  });
+
+  it('§4.14: an invitation whose link was lost but that was declined meanwhile no longer appears among the open invitations', async () => {
+    const created = '0192f1a0-0000-7000-8000-000000000555';
+    const app = createTeamsTestApp({
+      routes: routes({
+        'POST /team-entries/{id}/invitations': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+              nextAction: 'revoke_and_reissue',
+              details: { resourceId: created },
+            }),
+          ),
+        'POST /team-invitations/{id}/revoke': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('INVALID_TRANSITION', {
+              nextAction: 'reload_current_state',
+              details: { machine: 'TeamInvitation', from: 'declined', event: 'revoke' },
+            }),
+          ),
+      }),
+    });
+    render(<RosterScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    fireEvent.changeText(
+      await screen.findByLabelText('Recipient 1: email address'),
+      'sam@example.test',
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
+    });
+    const withheld = await screen.findByTestId('recipient-1-withheld');
+    await act(async () => {
+      fireEvent.press(
+        within(withheld).getByRole('button', { name: 'Revoke and issue a new link' }),
+      );
+    });
+    expect(
+      await within(withheld).findByText(
+        'It can no longer be revoked: it was declined already. It no longer appears under "Open invitations". Nothing new was created.',
+      ),
+    ).toBeOnTheScreen();
+    expect(app.requestsTo('POST', '/team-entries/{id}/invitations')).toHaveLength(1);
+    await app.settle();
+  });
+
+  it('§4.14: when the API cannot name the created invitation, the captain is told it is listed under "Open invitations" only while still open', async () => {
+    const app = createTeamsTestApp({
+      routes: routes({
+        'POST /team-entries/{id}/invitations': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+              nextAction: 'revoke_and_reissue',
+              details: { resourceId: null },
+            }),
+          ),
+      }),
+    });
+    render(<RosterScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    fireEvent.changeText(
+      await screen.findByLabelText('Recipient 1: email address'),
+      'sam@example.test',
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
+    });
+    const withheld = await screen.findByTestId('recipient-1-withheld');
+    expect(
+      within(withheld).getByText(
+        'If it is still open, it is listed under "Open invitations": revoke it there. Once it is accepted or declined it no longer appears there. Then create a new one.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      within(withheld).queryByRole('button', { name: 'Revoke and issue a new link' }),
+    ).toBeNull();
+    await app.settle();
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a same-key retry that finds the first attempt committed is "This may already have been done"; "Send" skips the recipient until "Start a new one"', async () => {
+    let posts = 0;
+    const app = createTeamsTestApp({
+      routes: routes({
+        'POST /team-entries/{id}/invitations': () => {
+          posts += 1;
+          if (posts === 2) {
+            return fakeResponse(
+              409,
+              apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+                nextAction: 'reload_current_state',
+                correlationId: 'corr-l1',
+              }),
+            );
+          }
+          return fakeResponse(201, issued());
+        },
+      }),
+    });
+    dropAnswers(app, 'POST', /\/team-entries\/[^/]+\/invitations$/);
+    render(<RosterScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    fireEvent.changeText(
+      await screen.findByLabelText('Recipient 1: email address'),
+      'sam@example.test',
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
+    });
+    await app.settle();
+    const reads = app.requestsTo('GET', '/team-entries/{id}').length;
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
+    });
+    const lost = await screen.findByTestId('recipient-1-withheld');
+    expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-l1'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
+    await waitFor(() =>
+      expect(app.requestsTo('GET', '/team-entries/{id}').length).toBeGreaterThan(reads),
+    );
+    const afterAnswer = app.requestsTo('GET', '/team-entries/{id}').length;
+    await act(async () => {
+      fireEvent.press(within(lost).getByRole('button', { name: 'Reload' }));
+    });
+    await waitFor(() =>
+      expect(app.requestsTo('GET', '/team-entries/{id}').length).toBeGreaterThan(afterAnswer),
+    );
+    expect(app.requestsTo('POST', '/team-entries/{id}/invitations')).toHaveLength(2);
+    await act(async () => {
+      fireEvent.press(within(lost).getByRole('button', { name: 'Start a new one' }));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
+    });
+    expect(
+      await screen.findByRole('button', { name: 'Share the invitation for sam@example.test' }),
+    ).toBeOnTheScreen();
+    const keys = app.keysOf('POST', '/team-entries/{id}/invitations');
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    await app.settle();
   });
 
   it('checks the recipient before sending and keeps the draft', async () => {
@@ -553,7 +837,11 @@ describe('SCR-C-23 RosterScreen', () => {
       await chooseCaptainToPat();
       expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
       expect(screen.queryByTestId('handover-done')).toBeNull();
-      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      // A 5xx may come after part of the command committed: never "Not done" (§4.9).
+      expect(
+        screen.getByLabelText('No answer yet: this may already have been recorded'),
+      ).toBeOnTheScreen();
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
       expect(await screen.findByTestId('handover-done')).toBeOnTheScreen();
       const keys = app.keysOf('POST', '/team-entries/{id}/roles/handover');
       expect(keys).toHaveLength(2);
@@ -589,12 +877,34 @@ describe('SCR-C-23 RosterScreen', () => {
         expect(screen.getByText(/Error code: TIMEOUT/)).toBeOnTheScreen();
         expect(screen.queryByTestId('handover-done')).toBeNull();
         expect(screen.queryByLabelText(/is captain from/)).toBeNull();
-        fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+        fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
         expect(await screen.findByTestId('handover-done')).toBeOnTheScreen();
         const [first, second] = app.keysOf('POST', '/team-entries/{id}/roles/handover');
         expect(second).toBe(first);
         await app.settle();
       });
+    });
+
+    it('SPK-UX-008: a connection lost after sending is "No answer yet", never "Not done", and is checked under the same key', async () => {
+      const app = createTeamsTestApp({
+        routes: routes({
+          'POST /team-entries/{id}/roles/handover': { status: 200, body: handover() },
+        }),
+      });
+      dropAnswers(app, 'POST', /\/roles\/handover$/);
+      render(<RosterScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      await chooseCaptainToPat();
+      expect(
+        await screen.findByLabelText('No answer yet: this may already have been recorded'),
+      ).toBeOnTheScreen();
+      expect(screen.getByText(/Error code: NETWORK_UNAVAILABLE/)).toBeOnTheScreen();
+      expect(screen.queryByLabelText('Not done')).toBeNull();
+      expect(screen.queryByTestId('handover-done')).toBeNull();
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+      expect(await screen.findByTestId('handover-done')).toBeOnTheScreen();
+      const [first, second] = app.keysOf('POST', '/team-entries/{id}/roles/handover');
+      expect(second).toBe(first);
+      await app.settle();
     });
 
     it('a refused handover is "not available"', async () => {

@@ -13,11 +13,15 @@
  * 3. The answer, whatever it is, hands off to the checkout outcome (SCR-C-15), which shows success
  *    only when the API confirms it.
  *
- * Payment uncertainty (SPK-PAY-007): when the request gets no answer (timeout, connection lost,
- * app backgrounded), the outcome is unknown, never "failed". The screen says "Do not pay again"
- * and asks again with the same idempotency key (§4.9) when the app returns to the foreground or
- * the connection comes back, or when the customer taps "Check now"; the API also keeps one
- * checkout per quote, so asking again can never charge twice.
+ * Payment uncertainty (SPK-PAY-007): when the request gets no definite answer (`mayHaveTakenEffect`:
+ * timeout, connection lost, app backgrounded, the same key still running, any 5xx), the outcome is
+ * unknown, never "failed". The screen says "Do not pay again" and asks again with the same
+ * idempotency key (§4.9) when the app returns to the foreground or the connection comes back, or
+ * when the customer taps "Check now"; the API also keeps one checkout per quote, so asking again
+ * can never charge twice. When asking again finds that the first attempt committed but its answer
+ * was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the checkout exists: it reads "This may already have
+ * been done", the price and basket are read again (the price then names the checkout, which this
+ * screen opens), and paying is not offered.
  *
  * Approval before payment (SPK-REG-007, DEC-028 pending): a basket awaiting approval cannot be
  * paid. States: loading; ready (hold active); validation failure; permission restriction (payer
@@ -29,6 +33,7 @@ import type { ApiError, Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
+import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
@@ -158,8 +163,18 @@ function CheckoutContent({
         router.replace(registrationRoutes.outcome(result.id));
       } catch (error) {
         const apiError = error as ApiError;
-        if (apiError.isOffline || apiError.code === 'IDEMPOTENCY_IN_PROGRESS') {
+        if (mayHaveTakenEffect(apiError)) {
+          // No definite answer (a lost connection or timeout, the same key still running, any
+          // 5xx, PAYMENT_OUTCOME_UNKNOWN): the checkout may exist and its payment may be on its
+          // way, so it is never a failure and is asked again under the same key (SPK-PAY-007).
           setUnknownOutcome(body);
+        } else if (tookEffectOutcomeLost(apiError)) {
+          // An earlier attempt under this key committed and its answer was lost: the checkout
+          // exists. The price is read again (it reads "consumed" and names the checkout) and
+          // paying is not offered; the remembered quote still leads back here.
+          setUnknownOutcome(null);
+          setFailure({ error: apiError, retry: () => void pay(body) });
+          refetch();
         } else {
           setUnknownOutcome(null);
           // A definite refusal (4xx) created no checkout: nothing is left to look for later.
@@ -170,7 +185,7 @@ function CheckoutContent({
         }
       }
     },
-    [checkout, update, quote.id, router],
+    [checkout, update, quote.id, router, refetch],
   );
   useResumeUnknownOutcome(unknownOutcome, (body) => void pay(body));
 
@@ -207,6 +222,9 @@ function CheckoutContent({
   const conflict = conflictCode(failure?.error ?? null);
   const capacityLost =
     failure?.error.code === 'CAPACITY_UNAVAILABLE' || conflict === 'HOLD_EXPIRED';
+  // A command of this screen committed with its answer lost: nothing is offered to pay until the
+  // price and basket read again show where it stands (the failure's "Reload").
+  const outcomeLost = failure !== null && tookEffectOutcomeLost(failure.error);
   const body: CheckoutBody =
     dueNow === 0
       ? { quoteId: quote.id, authorizeFutureInstallments: false }
@@ -221,6 +239,7 @@ function CheckoutContent({
     !basket.approvalPending &&
     !offline &&
     unknownOutcome === null &&
+    !outcomeLost &&
     (dueNow === 0 || token !== null) &&
     (!installments || authorized);
 
@@ -393,7 +412,7 @@ function CheckoutContent({
         </Section>
       ) : null}
 
-      {usable && held && unknownOutcome === null ? (
+      {usable && held && unknownOutcome === null && !outcomeLost ? (
         <ButtonRow>
           <Button
             label={dueNow === 0 ? 'Confirm registration' : `Pay ${m(dueNow)}`}
