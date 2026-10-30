@@ -5,8 +5,12 @@
  * the rule set's protest deadline (`GET /v1/rule-sets/{id}`, `protestDeadlineHours`), counted
  * from the official result's publication; the API checks it on submission and the app shows the
  * window it read, never one of its own. The reviewer, decision, publication consequence and appeal
- * status are the API's (shown here and on the game's results). How appeals and the discipline
- * procedure work is DEC-010 (League manager/operator, pending).
+ * status are the API's (shown here and on the game's results). A dispute still submitted or under
+ * review can be withdrawn with a reason (`POST /v1/disputes/{id}/withdraw`, CMP-12,
+ * features/teams/DisputeWithdraw.tsx). How appeals and the discipline procedure work is DEC-010
+ * (League manager/operator, pending), so no appeal is offered. Times are in the facility's zone
+ * from the game's venue (SPK-SCHED-008). The API lists a captain's disputes per game only
+ * (`GET /v1/disputes` is for league staff), so there is no list across the season here.
  *
  * States: loading; empty (no disputes yet for this game); ready; validation failure (outside the
  * window: "The dispute window closed <time>"; a missing reason); permission restriction (role not
@@ -24,6 +28,7 @@ import { formatInstant, plural } from '../../features/teams/format';
 import type { Viewer, Workspace } from '../../features/teams/queries';
 import { idParam } from '../../features/teams/routes';
 import { PUBLICATION_CONSEQUENCE_LABELS, disputeStatus } from '../../features/teams/status';
+import { DisputeWithdraw } from '../../features/teams/DisputeWithdraw';
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
 import {
   Body,
@@ -64,10 +69,12 @@ function WindowNotice({
   ruleSetId,
   ruleSetLabel,
   official,
+  timeZone,
 }: {
   ruleSetId: string;
   ruleSetLabel: string;
   official: ResultRevision | null;
+  timeZone: string | null;
 }) {
   const ruleSet = useApiQuery({ path: '/rule-sets/{id}', request: { path: { id: ruleSetId } } });
   const hours = ruleSet.data?.content.protestDeadlineHours;
@@ -90,13 +97,21 @@ function WindowNotice({
         label="Dispute window"
         value={`${plural(hours, 'hour')} after the official result is published (${ruleSetLabel})`}
       />
-      {closes ? <Detail label="Window closes" value={formatInstant(closes)} /> : null}
+      {closes ? <Detail label="Window closes" value={formatInstant(closes, timeZone)} /> : null}
       <Body muted>The service checks the window when you submit.</Body>
     </View>
   );
 }
 
-function ExistingDisputes({ disputes }: { disputes: Dispute[] }) {
+function ExistingDisputes({
+  disputes,
+  timeZone,
+  onReload,
+}: {
+  disputes: Dispute[];
+  timeZone: string | null;
+  onReload: () => void;
+}) {
   if (disputes.length === 0) return <Body>No disputes for this game yet.</Body>;
   return (
     <View accessibilityRole="list" style={styles.group}>
@@ -104,12 +119,13 @@ function ExistingDisputes({ disputes }: { disputes: Dispute[] }) {
         <View key={d.id} style={styles.group} testID={`dispute-${d.id}`}>
           <StatusBadge {...disputeStatus(d)} />
           <Body>{d.reason}</Body>
-          <Body muted>{`Submitted ${formatInstant(d.submittedAt)}`}</Body>
+          <Body muted>{`Submitted ${formatInstant(d.submittedAt, timeZone)}`}</Body>
           {d.publicationConsequence ? (
             <Body>{PUBLICATION_CONSEQUENCE_LABELS[d.publicationConsequence]}</Body>
           ) : null}
           {d.decisionReason ? <Body>{`Decision: ${d.decisionReason}`}</Body> : null}
           {d.appealStatus !== 'none' ? <Body>{`Appeal: ${d.appealStatus}`}</Body> : null}
+          <DisputeWithdraw dispute={d} onReload={onReload} />
         </View>
       ))}
     </View>
@@ -120,10 +136,12 @@ function DisputeForm({
   workspace,
   fixtureId,
   official,
+  timeZone,
 }: {
   workspace: Workspace;
   fixtureId: string;
   official: ResultRevision | null;
+  timeZone: string | null;
 }) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -182,7 +200,7 @@ function DisputeForm({
       <View style={styles.group} testID="dispute-submitted">
         <StatusBadge {...disputeStatus(d)} />
         <Body>
-          {`Submitted ${formatInstant(d.submittedAt)}. The league reviews it; the decision and any change to the published result appear on the game's results.`}
+          {`Submitted ${formatInstant(d.submittedAt, timeZone)}. The league reviews it; the decision and any change to the published result appear on the game's results.`}
         </Body>
       </View>
     );
@@ -252,7 +270,7 @@ function DisputeForm({
           <StatusBadge tone="danger" label="Dispute window closed" />
           <Body>
             {closedAt
-              ? `The dispute window closed ${formatInstant(closedAt)}. Your draft is kept.`
+              ? `The dispute window closed ${formatInstant(closedAt, timeZone)}. Your draft is kept.`
               : 'The dispute window has closed. Your draft is kept.'}
           </Body>
           <Body muted>{`Error code: ${submitDispute.error.code}`}</Body>
@@ -306,6 +324,7 @@ function DisputeContent({
   }
   const { official } = orderRevisions(results.data);
   const f = fixture.data;
+  const timeZone = f.venue?.timezone ?? null;
   return (
     <View>
       <Title>{`Dispute: ${f.home.teamName} vs ${f.away?.teamName ?? 'Bye'}`}</Title>
@@ -314,6 +333,7 @@ function DisputeContent({
           ruleSetId={workspace.ruleSet.id}
           ruleSetLabel={`rule set ${workspace.ruleSet.name}, version ${workspace.ruleSet.version}`}
           official={official}
+          timeZone={timeZone}
         />
         {official ? null : <Body>There is no official result for this game yet.</Body>}
       </Section>
@@ -325,12 +345,23 @@ function DisputeContent({
           isEmpty={(list) => list.length === 0}
           empty={{ title: 'No disputes yet', description: 'No disputes for this game yet.' }}
         >
-          {(list) => <ExistingDisputes disputes={list} />}
+          {(list) => (
+            <ExistingDisputes
+              disputes={list}
+              timeZone={timeZone}
+              onReload={() => void disputes.refetch()}
+            />
+          )}
         </QueryBoundary>
       </Section>
       <Section title="File a dispute">
         <Body muted>{`Filed for ${workspace.team.name} as its captain.`}</Body>
-        <DisputeForm workspace={workspace} fixtureId={fixtureId} official={official} />
+        <DisputeForm
+          workspace={workspace}
+          fixtureId={fixtureId}
+          official={official}
+          timeZone={timeZone}
+        />
       </Section>
       <Section title="Decisions and appeals">
         <StateView

@@ -7,11 +7,13 @@
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import {
+  CAPTAIN_ACTIONS,
   IDS,
   ROSTER,
   baseRoutes,
   member,
   playerWorkspace,
+  workspace,
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { RosterChangeScreen } from '../RosterChangeScreen';
@@ -276,6 +278,32 @@ describe('SCR-C-26 RosterChangeScreen', () => {
         'Changing the roster is not available to you for this team. Your captain manages it.',
       ),
     ).toBeOnTheScreen();
+  });
+
+  it('CMP-02: a captain the API does not list roster changes for now is given no invented reason', async () => {
+    // The season is completed: the API lists manage_roster only while the roster is open and
+    // names no reason, so the captain is not told "Your captain manages it".
+    const app = renderChange({
+      'GET /team-entries/{id}': {
+        status: 200,
+        body: workspace({
+          season: { ...workspace().season, status: 'completed' },
+          viewer: {
+            roles: ['captain'],
+            actingAsCaptain: true,
+            availableActions: CAPTAIN_ACTIONS.filter(
+              (a) => a !== 'competition.manage_roster' && a !== 'competition.handover_team_role',
+            ),
+          },
+        }),
+      },
+    });
+    expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Changing the roster is not available for this team now.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/Your captain manages it/)).toBeNull();
+    expect(app.requestsTo('GET', '/team-entries/{id}/eligibility')).toHaveLength(0);
   });
 
   it('offline: changes are disabled with an explanation', async () => {

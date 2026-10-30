@@ -14,6 +14,11 @@
  * - Roster membership with effective dates, including history and pending rows
  *   (`GET /v1/team-entries/{id}/roster?includeHistory=true`, SPK-COMP-005), with eligibility as
  *   reason codes only (SPK-CAP-002).
+ * - Hand over the captain or co-captain role to an active roster member
+ *   (`POST /v1/team-entries/{id}/roles/handover`, CMP-13; features/teams/RoleHandover.tsx).
+ *
+ * Each tool is offered only when the workspace lists its action for this viewer
+ * (`viewer.availableActions`, CMP-02); the API authorizes every command again.
  *
  * States: loading; empty (no roster members yet); ready; validation failure (recipient contact
  * invalid; roster limit reached per the rule set); permission restriction (the API's NOT_FOUND or
@@ -22,15 +27,24 @@
  * partial completion per recipient; recovery: a failed send is retried under the same key.
  */
 import type { Schema } from '@sportspark/api-client';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay } from '../../features/teams/format';
 import { InvitationIssued } from '../../features/teams/InvitationIssued';
-import { rosterNames, WORKSPACE_KEY, type Workspace } from '../../features/teams/queries';
-import { idParam } from '../../features/teams/routes';
+import {
+  notAvailableNow,
+  rosterNames,
+  TEAM_ACTIONS,
+  WORKSPACE_KEY,
+  type Viewer,
+  type Workspace,
+} from '../../features/teams/queries';
+import { RoleHandover } from '../../features/teams/RoleHandover';
+import { idParam, teamRoutes } from '../../features/teams/routes';
 import {
   eligibilityIndicatorStatus,
   invitationStatus,
@@ -225,10 +239,13 @@ function recipientOf(invitation: TeamInvitation, names: Map<string, string>): st
 function PendingInvitation({
   invitation,
   recipient,
+  canRevoke,
   onReload,
 }: {
   invitation: TeamInvitation;
   recipient: string;
+  /** `competition.revoke_team_invitation` is listed for this viewer (CMP-02). */
+  canRevoke: boolean;
   onReload: () => void;
 }) {
   const { reachable } = useConnectivity();
@@ -250,7 +267,7 @@ function PendingInvitation({
         detail={invitation.message ?? undefined}
         status={invitationStatus(invitation)}
       />
-      {confirming ? (
+      {!canRevoke ? null : confirming ? (
         <>
           <Body>{`Revoke the invitation for ${recipient}? Its link stops working.`}</Body>
           <ButtonRow>
@@ -294,7 +311,16 @@ function PendingInvitation({
   );
 }
 
-function JoinRequestItem({ request, name }: { request: JoinRequest; name: string }) {
+function JoinRequestItem({
+  request,
+  name,
+  canDecide,
+}: {
+  request: JoinRequest;
+  name: string;
+  /** `competition.decide_join_request` is listed for this viewer (CMP-02). */
+  canDecide: boolean;
+}) {
   const { reachable } = useConnectivity();
   const decide = useApiCommand('post', '/join-requests/{id}/decide', {
     invalidate: [WORKSPACE_KEY, ROSTER_KEY],
@@ -332,21 +358,23 @@ function JoinRequestItem({ request, name }: { request: JoinRequest; name: string
         detail={request.message ?? undefined}
         status={{ tone: 'info', label: 'Requested to join' }}
       />
-      <ButtonRow>
-        <Button
-          label={`Approve ${name}`}
-          onPress={() => submit('approve')}
-          busy={decide.isProcessing && lastDecision === 'approve'}
-          disabled={reachable === false || decide.isProcessing}
-        />
-        <Button
-          label={`Decline ${name}`}
-          variant="secondary"
-          onPress={() => submit('decline')}
-          busy={decide.isProcessing && lastDecision === 'decline'}
-          disabled={reachable === false || decide.isProcessing}
-        />
-      </ButtonRow>
+      {canDecide ? (
+        <ButtonRow>
+          <Button
+            label={`Approve ${name}`}
+            onPress={() => submit('approve')}
+            busy={decide.isProcessing && lastDecision === 'approve'}
+            disabled={reachable === false || decide.isProcessing}
+          />
+          <Button
+            label={`Decline ${name}`}
+            variant="secondary"
+            onPress={() => submit('decline')}
+            busy={decide.isProcessing && lastDecision === 'decline'}
+            disabled={reachable === false || decide.isProcessing}
+          />
+        </ButtonRow>
+      ) : null}
       {decide.error ? (
         <CommandFailure
           error={decide.error}
@@ -397,8 +425,18 @@ export function RosterList({ members, now }: { members: RosterMember[]; now: Dat
   );
 }
 
-function RosterContent({ workspace, refetch }: { workspace: Workspace; refetch: () => void }) {
+function RosterContent({
+  workspace,
+  viewer,
+  refetch,
+}: {
+  workspace: Workspace;
+  viewer: Viewer;
+  refetch: () => void;
+}) {
   const now = useNow();
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const roster = useApiQuery({
     path: '/team-entries/{id}/roster',
     request: { path: { id: workspace.entry.id }, query: { includeHistory: 'true' } },
@@ -408,7 +446,13 @@ function RosterContent({ workspace, refetch }: { workspace: Workspace; refetch: 
   return (
     <View>
       <Title>{`${workspace.team.name}: roster`}</Title>
-      <InviteForm workspace={workspace} />
+      {viewer.can(TEAM_ACTIONS.invite) ? (
+        <InviteForm workspace={workspace} />
+      ) : (
+        <Section title="Invite players">
+          <Body>{notAvailableNow('Inviting players')}</Body>
+        </Section>
+      )}
       <Section title="Open invitations">
         {(workspace.pendingInvitations ?? []).length === 0 ? (
           <Body>No open invitations.</Body>
@@ -418,6 +462,7 @@ function RosterContent({ workspace, refetch }: { workspace: Workspace; refetch: 
               key={invitation.id}
               invitation={invitation}
               recipient={recipientOf(invitation, names)}
+              canRevoke={viewer.can(TEAM_ACTIONS.revokeInvitation)}
               onReload={refetch}
             />
           ))
@@ -432,10 +477,24 @@ function RosterContent({ workspace, refetch }: { workspace: Workspace; refetch: 
               key={request.id}
               request={request}
               name={names.get(request.personId) ?? 'A player'}
+              canDecide={viewer.can(TEAM_ACTIONS.decideJoinRequest)}
             />
           ))
         )}
       </Section>
+      {viewer.can(TEAM_ACTIONS.handoverRole) ? (
+        <Section title="Captain and co-captain" testID="leaders">
+          <RoleHandover
+            workspace={workspace}
+            viewer={viewer}
+            onReload={refetch}
+            onDone={() => {
+              void queryClient.invalidateQueries({ queryKey: WORKSPACE_KEY });
+              router.replace(teamRoutes.workspace(workspace.entry.id));
+            }}
+          />
+        </Section>
+      ) : null}
       <Section title="Roster" testID="roster">
         <StatusBadge
           tone={r.rosterComplete ? 'success' : 'warning'}
@@ -463,7 +522,7 @@ export function RosterScreen({ entryId }: { entryId: string | null }) {
     >
       {(ws, viewer, reload) =>
         viewer.captainView ? (
-          <RosterContent workspace={ws} refetch={reload} />
+          <RosterContent workspace={ws} viewer={viewer} refetch={reload} />
         ) : (
           <CaptainOnly what="Managing the roster" />
         )

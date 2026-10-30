@@ -4,8 +4,10 @@
  * `GET /v1/fixtures/{id}/results` for the result revisions the person may see (official and
  * replaced ones: "Official", "Corrected on <date>", "Replaced by a correction on <date>"), keeping
  * every earlier result, its reason and publication time visible; and `GET /v1/fixtures/{id}/disputes`
- * for the disputes this person may see, with their status and decision. A captain can open the
- * dispute form (SCR-C-29). Incident narratives are never shown (SPK-DISC-004).
+ * for the disputes this person may see, with their status and decision; one still open can be
+ * withdrawn by its submitter or a captain of the submitting entry (CMP-12). A captain can open the
+ * dispute form (SCR-C-29). Incident narratives are never shown (SPK-DISC-004). Times are in the
+ * facility's zone from the game's venue (SPK-SCHED-008).
  *
  * States: loading; empty (no official result yet); ready; permission restriction (NOT_FOUND: not
  * available); stale version (a correction published: the new revision is shown, the old one kept
@@ -25,6 +27,7 @@ import {
   fixtureStatus,
   resultStatus,
 } from '../../features/teams/status';
+import { DisputeWithdraw } from '../../features/teams/DisputeWithdraw';
 import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, Detail, Section, Title } from '../../features/teams/ui';
 import { Button } from '../../ui/Button';
@@ -55,6 +58,7 @@ function OfficialResult({
   revision: ResultRevision;
   fixture: FixtureDetail;
 }) {
+  const timeZone = fixture.venue?.timezone ?? null;
   const score = scoreText(revision, fixture);
   const forfeiting =
     revision.forfeitingEntryId === fixture.home.entryId
@@ -75,7 +79,7 @@ function OfficialResult({
         />
       ) : null}
       {revision.publishedAt ? (
-        <Detail label="Published" value={formatInstant(revision.publishedAt)} />
+        <Detail label="Published" value={formatInstant(revision.publishedAt, timeZone)} />
       ) : null}
       {revision.supersedesRevisionId && revision.reason ? (
         <Detail label="Reason for the correction" value={revision.reason} />
@@ -84,20 +88,31 @@ function OfficialResult({
   );
 }
 
-function DisputeRow({ dispute }: { dispute: Dispute }) {
-  const parts = [`Submitted ${formatInstant(dispute.submittedAt)}`, dispute.reason];
+function DisputeRow({
+  dispute,
+  timeZone,
+  onReload,
+}: {
+  dispute: Dispute;
+  timeZone: string | null;
+  onReload: () => void;
+}) {
+  const parts = [`Submitted ${formatInstant(dispute.submittedAt, timeZone)}`, dispute.reason];
   if (dispute.decisionReason) parts.push(`Decision: ${dispute.decisionReason}`);
   if (dispute.publicationConsequence) {
     parts.push(PUBLICATION_CONSEQUENCE_LABELS[dispute.publicationConsequence]);
   }
   if (dispute.appealStatus !== 'none') parts.push(`Appeal: ${dispute.appealStatus}`);
   return (
-    <ListRow
-      title="Dispute"
-      detail={parts.join('. ')}
-      status={disputeStatus(dispute)}
-      testID={`dispute-${dispute.id}`}
-    />
+    <View>
+      <ListRow
+        title="Dispute"
+        detail={parts.join('. ')}
+        status={disputeStatus(dispute)}
+        testID={`dispute-${dispute.id}`}
+      />
+      <DisputeWithdraw dispute={dispute} onReload={onReload} />
+    </View>
   );
 }
 
@@ -130,10 +145,11 @@ function ResultsContent({
         <View>
           <Title>{`${f.home.teamName} vs ${f.away?.teamName ?? 'Bye'}`}</Title>
           <Section title="Game">
-            <StatusBadge {...fixtureStatus(f)} />
+            <StatusBadge {...fixtureStatus(f, f.venue?.timezone)} />
             {f.scheduledStart ? (
-              <Detail label="Kickoff" value={formatInstant(f.scheduledStart)} />
+              <Detail label="Kickoff" value={formatInstant(f.scheduledStart, f.venue?.timezone)} />
             ) : null}
+            {f.venue ? <Detail label="Where" value={f.venue.facilityName} /> : null}
           </Section>
           <Section title="Result">
             <QueryBoundary
@@ -163,7 +179,7 @@ function ResultsContent({
                             title={scoreText(r, f) ?? CLASSIFICATION_LABELS[r.classification]}
                             detail={
                               r.publishedAt
-                                ? `Published ${formatInstant(r.publishedAt)}`
+                                ? `Published ${formatInstant(r.publishedAt, f.venue?.timezone)}`
                                 : undefined
                             }
                             status={resultStatus(r)}
@@ -190,7 +206,12 @@ function ResultsContent({
             <Section title="Disputes">
               <View accessibilityRole="list">
                 {disputes.data?.map((d) => (
-                  <DisputeRow key={d.id} dispute={d} />
+                  <DisputeRow
+                    key={d.id}
+                    dispute={d}
+                    timeZone={f.venue?.timezone ?? null}
+                    onReload={() => void disputes.refetch()}
+                  />
                 ))}
               </View>
             </Section>

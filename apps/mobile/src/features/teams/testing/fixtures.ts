@@ -36,7 +36,25 @@ export const IDS = {
   dispute: id(80),
   bracketNode: id(90),
   operation: id(99),
+  availabilityRequest: id(110),
+  pool: id(120),
+  facility: id(130),
+  supportCase: id(140),
+  coCaptainRole: id(101),
 } as const;
+
+/** Every workspace action the API lists for a captain of an approved entry in an active season. */
+export const CAPTAIN_ACTIONS = [
+  'competition.withdraw_team_entry',
+  'competition.manage_team',
+  'competition.invite_player',
+  'competition.revoke_team_invitation',
+  'competition.decide_join_request',
+  'competition.manage_roster',
+  'competition.handover_team_role',
+  'competition.request_availability',
+  'competition.renew_team_entry',
+];
 
 const T0 = '2026-09-01T12:00:00.000Z';
 
@@ -268,12 +286,15 @@ export function workspace(
     pendingInvitations: [invitation()],
     pendingJoinRequests: [joinRequest()],
     upcomingFixtures: [upcoming()],
-    viewer: { roles: ['captain'], actingAsCaptain: true, availableActions: [] },
+    viewer: { roles: ['captain'], actingAsCaptain: true, availableActions: CAPTAIN_ACTIONS },
     ...overrides,
   };
 }
 
-/** The same workspace as a roster player (not captain) sees it: no invitations or requests. */
+/**
+ * The same workspace as a roster player (not captain) sees it: the management lists are null
+ * (CMP-02: not visible to this viewer) and no workspace action is available.
+ */
 export function playerWorkspace(): Schema<'TeamEntryWorkspace'> {
   return workspace({
     roles: [
@@ -286,8 +307,8 @@ export function playerWorkspace(): Schema<'TeamEntryWorkspace'> {
         effectiveTo: null,
       },
     ],
-    pendingInvitations: [],
-    pendingJoinRequests: [],
+    pendingInvitations: null,
+    pendingJoinRequests: null,
     viewer: { roles: ['member'], actingAsCaptain: false, availableActions: [] },
   });
 }
@@ -613,6 +634,151 @@ export function division(overrides: Partial<Schema<'Division'>> = {}): Schema<'D
     revision: 1,
     createdAt: T0,
     updatedAt: T0,
+    ...overrides,
+  };
+}
+
+export function venue(overrides: Partial<Schema<'FixtureVenue'>> = {}): Schema<'FixtureVenue'> {
+  return {
+    facilityId: IDS.facility,
+    facilityName: 'Las Vegas Sports Park',
+    timezone: 'America/Los_Angeles',
+    resources: [{ id: id(131), name: 'Field 2' }],
+    ...overrides,
+  };
+}
+
+/** A row of `GET /v1/me/team-entries` (CMP-02): the viewer captains the team. */
+export function myTeamEntry(overrides: Partial<Schema<'MyTeamEntry'>> = {}): Schema<'MyTeamEntry'> {
+  return {
+    teamEntry: teamEntry(),
+    teamName: 'Desert Foxes',
+    seasonId: IDS.season,
+    seasonName: 'Fall 2026',
+    divisionName: 'Coed Division 2',
+    members: [{ personId: IDS.me, roles: ['captain'], rosterStatus: 'active' }],
+    nextFixture: {
+      fixtureId: IDS.fixture,
+      scheduledStart: '2026-10-31T17:00:00.000Z',
+      opponentTeamName: 'Canyon Hawks',
+      venue: venue(),
+      readiness: { status: 'blocked', blockingCount: 1, unknownCount: 0 },
+    },
+    ...overrides,
+  };
+}
+
+/** A row of `GET /v1/me/team-invitations` or `GET /v1/team-invitations/{id}` (CMP-03). */
+export function teamInvitationView(
+  overrides: Partial<Schema<'TeamInvitationView'>> = {},
+): Schema<'TeamInvitationView'> {
+  return {
+    id: IDS.invitation,
+    teamEntryId: IDS.opponentEntry,
+    teamName: 'Canyon Hawks',
+    seasonName: 'Fall 2026',
+    invitedBy: { personId: IDS.player2, displayName: 'Pat Player' },
+    message: 'Join us on Saturdays.',
+    status: 'pending',
+    effectiveStatus: 'pending',
+    expiresAt: '2026-10-31T12:00:00.000Z',
+    revision: 1,
+    ...overrides,
+  };
+}
+
+/** An answer in `FixtureDetail.responses` (CMP-04): revision null while none is recorded. */
+export function fixtureResponse(
+  overrides: Partial<Schema<'FixtureResponse'>> & { personId: string },
+): Schema<'FixtureResponse'> {
+  return { state: 'no_response', revision: null, respondedAt: null, ...overrides };
+}
+
+/** `GET /v1/fixtures/{id}` for the upcoming game, as the captain (and guardian) reads it. */
+export function upcomingFixtureDetail(
+  overrides: Partial<Schema<'FixtureDetail'>> = {},
+): Schema<'FixtureDetail'> {
+  return fixtureDetail({
+    ...fixture(),
+    venue: venue(),
+    rosterStatus: 'active',
+    myResponse: 'available',
+    responses: [
+      fixtureResponse({
+        personId: IDS.me,
+        state: 'available',
+        revision: 2,
+        respondedAt: '2026-10-23T12:00:00.000Z',
+      }),
+      fixtureResponse({ personId: IDS.child }),
+    ],
+    ...overrides,
+  });
+}
+
+export function availabilityRequest(
+  overrides: Partial<Schema<'AvailabilityRequest'>> = {},
+): Schema<'AvailabilityRequest'> {
+  return {
+    id: IDS.availabilityRequest,
+    fixtureId: IDS.fixture,
+    teamEntryId: IDS.entry,
+    requestedByPersonId: IDS.me,
+    message: null,
+    requestedAt: '2026-10-22T12:00:00.000Z',
+    recipientCount: 2,
+    ...overrides,
+  };
+}
+
+export function pool(overrides: Partial<Schema<'Pool'>> = {}): Schema<'Pool'> {
+  return {
+    id: IDS.pool,
+    seasonId: IDS.season,
+    divisionId: IDS.division,
+    name: 'Pool A',
+    entries: [
+      { teamEntryId: IDS.entry, teamName: 'Desert Foxes', seed: 1 },
+      { teamEntryId: IDS.opponentEntry, teamName: 'Canyon Hawks', seed: 2 },
+    ],
+    revision: 2,
+    createdAt: T0,
+    updatedAt: T0,
+    ...overrides,
+  };
+}
+
+export function poolStandings(
+  overrides: Partial<Schema<'PoolStandings'>> = {},
+): Schema<'PoolStandings'> {
+  const table = standings();
+  return {
+    poolId: IDS.pool,
+    seasonId: IDS.season,
+    divisionId: IDS.division,
+    ruleSetId: IDS.ruleSet,
+    ruleSetVersion: 3,
+    computedAt: '2026-10-23T20:00:00.000Z',
+    sourceResultIds: [IDS.officialResult],
+    pendingFixtureIds: [IDS.fixture],
+    rows: table.rows,
+    tiebreakExplanations: table.tiebreakExplanations,
+    ...overrides,
+  };
+}
+
+/** `POST /v1/me/support-requests` answer: the status only (SUP-01, §4.14). */
+export function customerCase(
+  overrides: Partial<Schema<'CustomerCase'>> = {},
+): Schema<'CustomerCase'> {
+  return {
+    id: IDS.supportCase,
+    category: 'team',
+    title: 'Field 2 lights',
+    status: 'open',
+    createdAt: '2026-10-24T12:00:00.000Z',
+    updatedAt: '2026-10-24T12:00:00.000Z',
+    resolvedAt: null,
     ...overrides,
   };
 }

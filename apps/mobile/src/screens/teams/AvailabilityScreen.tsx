@@ -1,33 +1,47 @@
 /**
- * SCR-C-24 Availability request and responses (SPK-CAP-003, SPK-READY-002, DEC-064). For each
- * upcoming game of the team (`GET /v1/team-entries/{id}`): the roster's answers counted per state,
- * and the person's own answer, recorded with `POST /v1/fixtures/{id}/availability`. A guardian
- * may answer for a child on the roster over whom they hold `register` (from `GET /v1/me`; the API
- * re-checks). Availability is never shown as attendance or eligibility, and a missing answer never
- * blocks a game.
+ * SCR-C-24 Availability request and responses (SPK-CAP-001, SPK-CAP-003, SPK-READY-002, DEC-064,
+ * DEC-090). For each upcoming game of the team (`GET /v1/team-entries/{id}`): the roster's answers
+ * counted per state; the answers this person may give, read from the game (`GET /v1/fixtures/{id}`,
+ * CMP-04 `responses`, with each answer's revision); and, for the captain, the request to the
+ * players without an answer
+ * (features/teams/AvailabilityRequests.tsx, CMP-14). An answer is recorded with
+ * `POST /v1/fixtures/{id}/availability`, sending the revision read (`expectedRevision`) when an
+ * answer exists. Availability is never shown as attendance or eligibility, and a missing answer
+ * never blocks a game. Times are in the facility's time zone from the game's venue (SPK-SCHED-008).
+ *
+ * Answering for a child: which permission allows it is DEC-090 (**Pending decision**). The API
+ * lists in `responses` the person's own answer and those of every rostered child they hold
+ * `register` over, its proposed rule; the screen offers exactly what the API lists and holds no
+ * default of its own, so it follows the decision when the API does. SCR-C-20's RSVP control
+ * answers for the signed-in person only and does not read `responses` (see the teams README).
  *
  * "Tentative" is offered only once DEC-064 (Product and operations) decides to enable it: until
- * then it is not offered, and an existing tentative answer is still shown as such.
- *
- * Not available from the API (reported): a captain's availability request or reminder to the
- * roster (no command exists; players answer at any time), and the current answer of a child a
- * guardian answers for (only the acting person's own answer is returned).
+ * then it is not offered, and an existing tentative answer is still shown as such. When answers
+ * close is the API's (at kickoff until a rule set defines a cutoff, DEC-002): a late answer is
+ * refused with `AVAILABILITY_CLOSED` and said so.
  *
  * States: loading; empty (no games published); ready; validation failure (an answer for a game the
  * person is not rostered for); permission restriction (answering for another person needs
- * authority: not available); stale version (the game moved or ended since loading: reload);
- * offline (answers are not queued, so the control is disabled with an explanation); processing;
- * success (the answer shown); recovery: a failed answer is retried under the same key.
+ * authority: not available); stale version (the answer changed or the game moved since loading:
+ * reload; closed at kickoff); offline (answers are not queued, so the control is disabled with an
+ * explanation); processing; success (the answer shown); recovery: a failed answer is retried under
+ * the same key.
  */
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiQuery } from '../../api/useApiQuery';
 import {
-  useMe,
+  AvailabilityClosed,
+  AvailabilityRequests,
+  availabilityClosedAt,
+} from '../../features/teams/AvailabilityRequests';
+import {
+  rosterNames,
+  TEAM_ACTIONS,
   WORKSPACE_KEY,
-  respondableChildren,
   type Viewer,
   type Workspace,
 } from '../../features/teams/queries';
@@ -44,76 +58,83 @@ import {
   Body,
   ButtonRow,
   CommandFailure,
+  Detail,
   OfflineNotice,
   Section,
+  Subheading,
   Title,
 } from '../../features/teams/ui';
-import { useConnectivity, useNow } from '../../providers/AppProviders';
+import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing } from '../../ui/theme';
 
 type Upcoming = Schema<'UpcomingFixture'>;
+type FixtureResponse = Schema<'FixtureResponse'>;
+
+const FIXTURE_KEY = ['api', '/fixtures/{id}'] as const;
 
 /** The answers this build offers. Tentative waits on DEC-064 and is not offered. */
 export const OFFERED_ANSWERS: readonly RsvpState[] = ['available', 'unavailable'];
 
 function AnswerControl({
-  game,
-  respondent,
+  fixtureId,
+  response,
+  name,
+  timeZone,
   onReload,
 }: {
-  game: Upcoming;
-  /** Null for the signed-in person; a child's id and name otherwise. */
-  respondent: { personId: string; name: string } | null;
+  fixtureId: string;
+  /** The answer as the API returned it (revision null while none is recorded). */
+  response: FixtureResponse;
+  /** Null for the signed-in person; the child's name otherwise. */
+  name: string | null;
+  timeZone: string | null;
   onReload: () => void;
 }) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const respond = useApiCommand('post', '/fixtures/{id}/availability', {
-    invalidate: [WORKSPACE_KEY],
+    invalidate: [WORKSPACE_KEY, FIXTURE_KEY],
   });
   const [chosen, setChosen] = useState<RsvpState | null>(null);
-  const whose = respondent ? `${respondent.name}'s answer` : 'Your answer';
-  // Only the acting person's own answer is returned by the API.
-  const current: RsvpState | null | undefined = respond.data
-    ? respond.data.state
-    : respondent
-      ? undefined
-      : game.myResponse;
+  const whose = name ? `${name}'s answer` : 'Your answer';
+  // The fresher of the read and the last recorded answer (the read refreshes after success).
+  const recorded =
+    respond.data && respond.data.revision >= (response.revision ?? 0) ? respond.data : null;
+  const current: RsvpState = recorded ? recorded.state : response.state;
+  const revision = recorded ? recorded.revision : response.revision;
 
   const submit = (state: RsvpState) => {
     setChosen(state);
     void respond
       .submit({
-        path: { id: game.fixture.id },
-        body: { state, ...(respondent ? { personId: respondent.personId } : {}) },
+        path: { id: fixtureId },
+        body: {
+          state,
+          ...(name ? { personId: response.personId } : {}),
+          ...(revision !== null ? { expectedRevision: revision } : {}),
+        },
       })
       .catch(() => undefined);
   };
 
   const answers: RsvpState[] = [...OFFERED_ANSWERS];
-  if (current && current !== 'no_response') answers.push('no_response');
+  if (current !== 'no_response') answers.push('no_response');
 
   return (
-    <View
-      style={styles.answer}
-      testID={`answer-${game.fixture.id}-${respondent?.personId ?? 'me'}`}
-    >
-      <Body>
-        {current === undefined
-          ? `${whose}: not shown here (the service returns only your own)`
-          : `${whose}: ${rsvpStatus(current).label}`}
-      </Body>
+    <View style={styles.answer} testID={`answer-${fixtureId}-${name ? response.personId : 'me'}`}>
+      <Body>{`${whose}: ${rsvpStatus(current).label}`}</Body>
       <ButtonRow>
         {answers.map((state) => (
           <Button
             key={state}
             label={
               state === 'no_response'
-                ? `Clear ${respondent ? `${respondent.name}'s` : 'my'} answer`
-                : `${respondent ? `${respondent.name}: ` : ''}${RSVP_LABELS[state]}`
+                ? `Clear ${name ? `${name}'s` : 'my'} answer`
+                : `${name ? `${name}: ` : ''}${RSVP_LABELS[state]}`
             }
             variant={current === state ? 'primary' : 'secondary'}
             onPress={() => submit(state)}
@@ -123,7 +144,9 @@ function AnswerControl({
           />
         ))}
       </ButtonRow>
-      {respond.error ? (
+      {respond.error && availabilityClosedAt(respond.error) !== null ? (
+        <AvailabilityClosed error={respond.error} timeZone={timeZone} what="Answers" />
+      ) : respond.error ? (
         <CommandFailure
           error={respond.error}
           onRetry={() => chosen && submit(chosen)}
@@ -131,62 +154,113 @@ function AnswerControl({
             respond.reset();
             onReload();
           }}
-          unavailableText={`Answering for ${respondent ? respondent.name : 'this person'} is not available to you.`}
+          unavailableText={`Answering for ${name ?? 'this person'} is not available to you.`}
         />
       ) : null}
     </View>
   );
 }
 
-function GameCard({
+function Answers({
   game,
+  workspace,
   viewer,
-  dependents,
-  onReload,
 }: {
   game: Upcoming;
+  workspace: Workspace;
   viewer: Viewer;
-  /** Children on this roster the signed-in person may answer for. */
-  dependents: { personId: string; name: string }[];
-  onReload: () => void;
 }) {
+  const detail = useApiQuery({
+    path: '/fixtures/{id}',
+    request: { path: { id: game.fixture.id } },
+  });
+  if (detail.data === undefined) {
+    return detail.error ? (
+      <QueryErrorView
+        error={detail.error}
+        onRetry={() => void detail.refetch()}
+        unavailable={{ description: 'The answers you can give for this game are not available.' }}
+      />
+    ) : (
+      <StateView variant="loading" label="the answers you can give" />
+    );
+  }
+  const names = rosterNames(workspace);
+  const responses = [...detail.data.responses].sort((a, b) =>
+    a.personId === viewer.personId ? -1 : b.personId === viewer.personId ? 1 : 0,
+  );
+  const timeZone = detail.data.venue?.timezone ?? null;
+  if (responses.length === 0) {
+    return <Body muted>You are not on this roster, so there is no answer to give here.</Body>;
+  }
+  return (
+    <View>
+      {responses.map((response) => (
+        <AnswerControl
+          key={response.personId}
+          fixtureId={game.fixture.id}
+          response={response}
+          name={
+            response.personId === viewer.personId
+              ? null
+              : (names.get(response.personId) ?? 'Family member')
+          }
+          timeZone={timeZone}
+          onReload={() => void detail.refetch()}
+        />
+      ))}
+    </View>
+  );
+}
+
+function GameCard({
+  game,
+  workspace,
+  viewer,
+}: {
+  game: Upcoming;
+  workspace: Workspace;
+  viewer: Viewer;
+}) {
+  // The same read as Answers (one request): the venue gives the facility's zone.
+  const detail = useApiQuery({
+    path: '/fixtures/{id}',
+    request: { path: { id: game.fixture.id } },
+  });
+  const venue = detail.data?.venue ?? null;
   const title = game.opponent ? `vs ${game.opponent.teamName}` : 'Bye';
   return (
     <Section title={title} testID={`game-${game.fixture.id}`}>
-      <StatusBadge {...fixtureStatus(game.fixture)} />
+      <StatusBadge {...fixtureStatus(game.fixture, venue?.timezone)} />
+      {venue ? (
+        <Detail
+          label="Where"
+          value={`${venue.facilityName}${venue.resources.length > 0 ? `, ${venue.resources.map((r) => r.name).join(', ')}` : ''}`}
+        />
+      ) : null}
       <View
         accessible
         accessibilityLabel={`Answers from the roster: ${availabilitySummaryText(game.availability)}`}
       >
         <Body>{`Answers from the roster: ${availabilitySummaryText(game.availability)}`}</Body>
       </View>
-      {viewer.onRoster ? <AnswerControl game={game} respondent={null} onReload={onReload} /> : null}
-      {dependents.map((child) => (
-        <AnswerControl key={child.personId} game={game} respondent={child} onReload={onReload} />
-      ))}
-      {!viewer.onRoster && dependents.length === 0 ? (
-        <Body muted>You are not on this roster, so there is no answer to give here.</Body>
+      <Answers game={game} workspace={workspace} viewer={viewer} />
+      {viewer.can(TEAM_ACTIONS.requestAvailability) ? (
+        <View style={styles.request}>
+          <Subheading>Ask the roster</Subheading>
+          <AvailabilityRequests
+            fixtureId={game.fixture.id}
+            teamEntryId={workspace.entry.id}
+            timeZone={venue?.timezone}
+          />
+        </View>
       ) : null}
     </Section>
   );
 }
 
-function AvailabilityContent({
-  workspace,
-  viewer,
-  reload,
-}: {
-  workspace: Workspace;
-  viewer: Viewer;
-  reload: () => void;
-}) {
-  const now = useNow();
-  const me = useMe();
+function AvailabilityContent({ workspace, viewer }: { workspace: Workspace; viewer: Viewer }) {
   const { reachable } = useConnectivity();
-  const dependents = respondableChildren(workspace, me.data, now).map((m) => ({
-    personId: m.personId,
-    name: m.displayName,
-  }));
   const games = workspace.upcomingFixtures;
   return (
     <View>
@@ -208,15 +282,6 @@ function AvailabilityContent({
         </View>
         {reachable === false ? <OfflineNotice what="Answering availability" /> : null}
       </Section>
-      {viewer.captainView ? (
-        <Section title="Ask the roster">
-          <StateView
-            variant="unavailable"
-            title="Requests not available yet"
-            description="Sending an availability request to the roster is not available in this version. Players can answer here at any time, and the counts update as they do."
-          />
-        </Section>
-      ) : null}
       {games.length === 0 ? (
         <StateView
           variant="empty"
@@ -225,13 +290,7 @@ function AvailabilityContent({
         />
       ) : (
         games.map((game) => (
-          <GameCard
-            key={game.fixture.id}
-            game={game}
-            viewer={viewer}
-            onReload={reload}
-            dependents={dependents}
-          />
+          <GameCard key={game.fixture.id} game={game} workspace={workspace} viewer={viewer} />
         ))
       )}
     </View>
@@ -243,11 +302,9 @@ export function AvailabilityScreen({ entryId }: { entryId: string | null }) {
     <TeamFrame
       entryId={entryId}
       what="this team's games"
-      unavailableOffline={['availability answers']}
+      unavailableOffline={['availability answers', 'availability requests']}
     >
-      {(ws, viewer, reload) => (
-        <AvailabilityContent workspace={ws} viewer={viewer} reload={reload} />
-      )}
+      {(ws, viewer) => <AvailabilityContent workspace={ws} viewer={viewer} />}
     </TeamFrame>
   );
 }
@@ -265,6 +322,12 @@ export function AvailabilityRoute() {
 
 const styles = StyleSheet.create({
   answer: {
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  request: {
     gap: spacing.xs,
     paddingVertical: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,

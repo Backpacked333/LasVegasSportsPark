@@ -2,11 +2,17 @@
  * SCR-C-28 Standings and results (SPK-RESULT-001, SPK-RESULT-002, SPK-RESULT-003,
  * SPK-RESULT-004, SPK-DISC-004, POL-025, POL-027). Official standings from official results only
  * (`GET /v1/seasons/{id}/standings`), with the versioned rule set they were calculated with and
- * the explanation of every tiebreak; this team's games (`GET /v1/seasons/{id}/fixtures`) open
- * their result revisions (FixtureResultsScreen: "Official", "Corrected on <date>"); the published
+ * the explanation of every tiebreak; this team's games (`GET /v1/seasons/{id}/fixtures`, each
+ * dated in its venue's zone from `GET /v1/fixtures/{id}`, SPK-SCHED-008) open their result
+ * revisions (FixtureResultsScreen: "Official", "Corrected on <date>"); the published
  * bracket where the season has one (`GET /v1/seasons/{id}/bracket-nodes`). Restricted incident
  * narratives are never requested or shown (SPK-DISC-004). Sharing standings publicly depends on
  * the public information policy (DEC-012, pending) and is not offered.
+ *
+ * Tournament pools (CMP-15, §3.16, capability `tournaments`, DEC-078): a pool's table is
+ * PoolStandingsScreen. Where the organization has tournaments turned on, this screen says that the
+ * API does not yet name the pool a team plays in (no pool list for a division or an entry,
+ * reported), so no pool table can be listed here; with tournaments off nothing is shown.
  *
  * States: loading; empty (no official results yet); ready; permission restriction (not
  * available); stale version (the standings revision changed: "Calculated <time>" and refetch on
@@ -16,6 +22,7 @@
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay, formatInstant, ordinal, plural } from '../../features/teams/format';
 import type { Workspace } from '../../features/teams/queries';
@@ -25,6 +32,7 @@ import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, Section, Title } from '../../features/teams/ui';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { colors, spacing, type } from '../../ui/theme';
 
 /** The published component is nullable (reported); a null answer reads as "no official results". */
@@ -70,7 +78,14 @@ export function standingsRowLabel(row: StandingsRow, ours: boolean): string {
 /** Above this text scale the table's fixed columns no longer fit: rows are stacked instead. */
 export const LARGE_TEXT_SCALE = 1.3;
 
-function StandingsTable({ standings, entryId }: { standings: Standings; entryId: string }) {
+/** The table of a division or a pool (SPK-RESULT-003): the rows as the API ordered them. */
+export function StandingsTable({
+  standings,
+  entryId,
+}: {
+  standings: Pick<Standings, 'rows'>;
+  entryId: string;
+}) {
   const { fontScale } = useWindowDimensions();
   if (fontScale > LARGE_TEXT_SCALE) {
     // SPK-UX-009 large text: one readable row per team instead of clipped numeric cells.
@@ -132,7 +147,7 @@ function StandingsTable({ standings, entryId }: { standings: Standings; entryId:
   );
 }
 
-function TiebreakList({
+export function TiebreakList({
   explanations,
   names,
 }: {
@@ -177,8 +192,36 @@ function opponentName(fixture: Fixture, entryId: string, names: Map<string, stri
   return `vs ${names.get(other) ?? 'Opponent'}`;
 }
 
-function Results({ workspace, names }: { workspace: Workspace; names: Map<string, string> }) {
+/**
+ * One played game. Its day is the facility's (SPK-SCHED-008): `GET /v1/fixtures/{id}` gives
+ * `venue.timezone` (the read SCR-C-28's result screen makes too, so it is shared); while it loads
+ * or if it fails the device's zone is used.
+ */
+function ResultRow({
+  fixture,
+  entryId,
+  names,
+}: {
+  fixture: Fixture;
+  entryId: string;
+  names: Map<string, string>;
+}) {
   const router = useRouter();
+  const detail = useApiQuery({ path: '/fixtures/{id}', request: { path: { id: fixture.id } } });
+  const timeZone = detail.data?.venue?.timezone;
+  return (
+    <ListRow
+      title={opponentName(fixture, entryId, names)}
+      detail={fixture.scheduledStart ? formatDay(fixture.scheduledStart, timeZone) : undefined}
+      status={fixtureStatus(fixture, timeZone)}
+      onPress={() => router.push(teamRoutes.result(entryId, fixture.id))}
+      accessibilityHint="Opens the official result and its history"
+      testID={`result-${fixture.id}`}
+    />
+  );
+}
+
+function Results({ workspace, names }: { workspace: Workspace; names: Map<string, string> }) {
   const entryId = workspace.entry.id;
   const fixtures = useApiQuery({
     path: '/seasons/{id}/fixtures',
@@ -197,15 +240,7 @@ function Results({ workspace, names }: { workspace: Workspace; names: Map<string
             {page.items
               .filter((f) => PLAYED.has(f.status))
               .map((f) => (
-                <ListRow
-                  key={f.id}
-                  title={opponentName(f, entryId, names)}
-                  detail={f.scheduledStart ? formatDay(f.scheduledStart) : undefined}
-                  status={fixtureStatus(f)}
-                  onPress={() => router.push(teamRoutes.result(entryId, f.id))}
-                  accessibilityHint="Opens the official result and its history"
-                  testID={`result-${f.id}`}
-                />
+                <ResultRow key={f.id} fixture={f} entryId={entryId} names={names} />
               ))}
           </View>
         )}
@@ -299,7 +334,23 @@ function StandingsContent({ workspace }: { workspace: Workspace }) {
       ) : null}
       <Results workspace={workspace} names={names} />
       <Bracket workspace={workspace} names={names} />
+      <TournamentPools />
     </View>
+  );
+}
+
+/** Shown only while the organization has tournaments on (DEC-016, DEC-078). */
+function TournamentPools() {
+  const tournaments = usePermissions().isCapabilityEnabled('tournaments');
+  if (tournaments !== true) return null;
+  return (
+    <Section title="Tournament pools" testID="tournament-pools">
+      <StateView
+        variant="unavailable"
+        title="Pool tables not listed yet"
+        description="This league can run tournament pools, but the service does not yet say which pool a team plays in, so pool tables cannot be listed here."
+      />
+    </Section>
   );
 }
 

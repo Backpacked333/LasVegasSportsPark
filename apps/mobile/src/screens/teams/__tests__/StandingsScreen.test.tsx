@@ -2,10 +2,12 @@
  * SCR-C-28 Standings and results (SPK-RESULT-001, SPK-RESULT-002, SPK-RESULT-003,
  * SPK-RESULT-004, SPK-DISC-004): official standings with the rule set version and tiebreak
  * explanation, the team's results opening their revisions ("Official", "Corrected on <date>",
- * history kept), the published bracket, disputes, and the empty, error and not-available states.
+ * history kept), the published bracket, disputes (withdrawable while open, CMP-12), tournament
+ * pools only where tournaments are on (DEC-078), times in the facility's zone, and the empty,
+ * error and not-available states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen, within } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   baseRoutes,
@@ -15,8 +17,10 @@ import {
   playerWorkspace,
   result,
   standings,
+  venue,
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
+import { mePermissions } from '../../../testing/test-app';
 import { FixtureResultsScreen } from '../FixtureResultsScreen';
 import { StandingsScreen, standingsRowLabel } from '../StandingsScreen';
 
@@ -112,6 +116,34 @@ describe('SCR-C-28 StandingsScreen', () => {
     });
   });
 
+  it('SPK-SCHED-008: a played game is dated in the facility’s zone from its fixture read', async () => {
+    // 05:00 UTC on Oct 18 is 10 PM on Oct 17 in Las Vegas: the facility's day is shown.
+    const late = fixture({
+      id: IDS.playedFixture,
+      status: 'played',
+      scheduledStart: '2026-10-18T05:00:00.000Z',
+      scheduledEnd: '2026-10-18T06:00:00.000Z',
+    });
+    const app = createTeamsTestApp({
+      routes: routes({
+        'GET /seasons/{id}/fixtures': { status: 200, body: { items: [late], nextCursor: null } },
+        'GET /fixtures/{id}': {
+          status: 200,
+          body: fixtureDetail({
+            scheduledStart: late.scheduledStart,
+            scheduledEnd: late.scheduledEnd,
+            venue: venue(),
+          }),
+        },
+      }),
+    });
+    render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`result-${IDS.playedFixture}`);
+    expect(await within(row).findByText('Oct 17, 2026')).toBeOnTheScreen();
+    expect(app.requestsTo('GET', '/fixtures/{id}')[0]?.params).toEqual({ id: IDS.playedFixture });
+    await app.settle();
+  });
+
   it('shows the published bracket where the season has one', async () => {
     const app = createTeamsTestApp({
       routes: routes({
@@ -183,6 +215,25 @@ describe('SCR-C-28 StandingsScreen', () => {
     render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
     expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
     expect(app.requestsTo('GET', '/seasons/{id}/standings')).toHaveLength(0);
+  });
+
+  it('DEC-078: with tournaments on, says pool tables cannot be listed for a team yet', async () => {
+    const app = createTeamsTestApp({
+      routes: routes({ 'GET /me/permissions': mePermissions({ enabled: ['tournaments'] }) }),
+    });
+    render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    const pools = await screen.findByTestId('tournament-pools');
+    expect(within(pools).getByRole('header', { name: 'Tournament pools' })).toBeOnTheScreen();
+    expect(within(pools).getByLabelText('Pool tables not listed yet')).toBeOnTheScreen();
+  });
+
+  it('DEC-016: with tournaments off (as every switch starts), no pool section is shown', async () => {
+    const app = createTeamsTestApp({ routes: routes() });
+    render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    await screen.findByTestId(`standings-row-${IDS.entry}`);
+    await waitFor(() => expect(app.requestsTo('GET', '/me/permissions')).toHaveLength(1));
+    await app.settle();
+    expect(screen.queryByTestId('tournament-pools')).toBeNull();
   });
 
   it('labels a row for screen readers without colour', () => {
@@ -293,5 +344,42 @@ describe('SCR-C-28 FixtureResultsScreen', () => {
       wrapper: app.wrapper,
     });
     expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
+  });
+
+  it('CMP-12: an open dispute can be withdrawn from the result', async () => {
+    const app = createTeamsTestApp({
+      routes: resultRoutes({
+        'POST /disputes/{id}/withdraw': {
+          status: 200,
+          body: dispute({ status: 'withdrawn', revision: 2 }),
+        },
+      }),
+    });
+    render(<FixtureResultsScreen entryId={IDS.entry} fixtureId={IDS.playedFixture} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this dispute' }));
+    fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Resolved.');
+    fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
+    expect(
+      await screen.findByText('You withdrew this dispute. The league no longer reviews it.'),
+    ).toBeOnTheScreen();
+    expect(app.bodiesOf('POST', '/disputes/{id}/withdraw')).toEqual([
+      { reason: 'Resolved.', expectedRevision: 1 },
+    ]);
+    await app.settle();
+  });
+
+  it('SPK-SCHED-008: kickoff and venue in the facility’s zone', async () => {
+    const app = createTeamsTestApp({
+      routes: resultRoutes({
+        'GET /fixtures/{id}': { status: 200, body: fixtureDetail({ venue: venue() }) },
+      }),
+    });
+    render(<FixtureResultsScreen entryId={IDS.entry} fixtureId={IDS.playedFixture} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByLabelText(/^Kickoff: Sat, Oct 17, 10:00\sAM PDT$/)).toBeOnTheScreen();
+    expect(screen.getByLabelText('Where: Las Vegas Sports Park')).toBeOnTheScreen();
   });
 });

@@ -11,8 +11,12 @@
  * Someone new joins through an invitation (SCR-C-23): the captain cannot look people up. When the
  * rule set requires league approval for a guest or substitute (POL-032), the API refuses with
  * `approval_required`; the app shows "League approval required" (not a denial) and that the
- * league manager adds the player: no approval request can be recorded by the API (reported).
- * Effective dates are the server's "now"; removal keeps match history (SPK-COMP-005).
+ * league manager adds the player: recording a guest or substitute approval request is pending
+ * DEC-002 and DEC-028 (the API has no such command). Effective dates are the server's "now";
+ * removal keeps match history (SPK-COMP-005). The screen is offered only when the workspace lists
+ * `competition.manage_roster` for this viewer (CMP-02). A manager for whom the API does not list it
+ * now (for example after the season ended) is told it is not available for this team now, with no
+ * reason the API did not give; a viewer without the management view is told the captain manages it.
  *
  * States: loading; ready; validation failure (ELIGIBILITY_FAILED with reasons: suspended, roster
  * limit, conflicting participation); permission restriction (ACCESS_DENIED or NOT_FOUND: not
@@ -26,7 +30,12 @@ import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay } from '../../features/teams/format';
-import { WORKSPACE_KEY, type Workspace } from '../../features/teams/queries';
+import {
+  notAvailableNow,
+  TEAM_ACTIONS,
+  WORKSPACE_KEY,
+  type Workspace,
+} from '../../features/teams/queries';
 import { idParam } from '../../features/teams/routes';
 import { isCurrentPlayer, rosterMemberStatus } from '../../features/teams/status';
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
@@ -367,10 +376,13 @@ export function RosterChangeScreen({ entryId }: { entryId: string | null }) {
   return (
     <TeamFrame entryId={entryId} what="this team's roster" unavailableOffline={['roster changes']}>
       {(ws, viewer, reload) =>
-        viewer.captainView ? (
+        !viewer.captainView ? (
+          <CaptainOnly what="Changing the roster" />
+        ) : viewer.can(TEAM_ACTIONS.manageRoster) ? (
           <RosterChangeContent workspace={ws} reload={reload} />
         ) : (
-          <CaptainOnly what="Changing the roster" />
+          // CMP-02: not listed now; the API gives no reason, so none is invented here.
+          <StateView variant="unavailable" description={notAvailableNow('Changing the roster')} />
         )
       }
     </TeamFrame>

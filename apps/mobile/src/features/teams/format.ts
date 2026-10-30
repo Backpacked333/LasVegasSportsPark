@@ -3,8 +3,10 @@
  * the API in integer minor units with their currency (SPK-PAY-001) and are never computed here;
  * instants are the server's.
  *
- * Times are shown in the device's time zone with the zone named: fixtures do not carry their
- * facility's time zone in the API (SPK-SCHED-008; reported as an API gap).
+ * Times are shown in the facility's time zone where the API gives one (a fixture's `venue.timezone`
+ * from `GET /v1/fixtures/{id}`, CMP-04; `MyTeamEntry.nextFixture.venue`; SPK-SCHED-008), and
+ * otherwise (while that read loads or when it fails) in the device's time zone; the zone is always
+ * named.
  */
 
 /** Minor-unit digits of an ISO 4217 currency from the platform's Intl data (USD 2, JPY 0). */
@@ -63,29 +65,48 @@ export function formatDateRange(startsOn: string, endsOn: string): string {
     : `${formatDateOnly(startsOn)} to ${formatDateOnly(endsOn)}`;
 }
 
-/** An instant as "Sat, Oct 24, 12:10 PM UTC" in the device's time zone (zone always named). */
-export function formatInstant(iso: string): string {
+/**
+ * An instant as "Sat, Oct 24, 12:10 PM UTC", in the facility's IANA zone when given (SPK-SCHED-008)
+ * and the device's zone otherwise; the zone is always named. An unknown zone falls back to the
+ * device's, still named, rather than failing.
+ */
+export function formatInstant(iso: string, timeZone?: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat('en-US', {
+  const options: Intl.DateTimeFormatOptions = {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
     timeZoneName: 'short',
-  }).format(date);
+  };
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat('en-US', { ...options, timeZone }).format(date);
+    } catch {
+      // RangeError for a zone the platform does not know: the device's zone, named, below.
+    }
+  }
+  return new Intl.DateTimeFormat('en-US', options).format(date);
 }
 
-/** An instant's calendar day as "Oct 24, 2026" in the device's time zone. */
-export function formatDay(iso: string): string {
+/**
+ * An instant's calendar day as "Oct 24, 2026", in the facility's IANA zone when given
+ * (SPK-SCHED-008) and the device's zone otherwise (also for a zone the platform does not know).
+ */
+export function formatDay(iso: string, timeZone?: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(date);
+  const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat('en-US', { ...options, timeZone }).format(date);
+    } catch {
+      // RangeError for a zone the platform does not know: the device's zone, below.
+    }
+  }
+  return new Intl.DateTimeFormat('en-US', options).format(date);
 }
 
 /** "1st", "2nd", "3rd", "11th", "22nd" for a standings position. */
