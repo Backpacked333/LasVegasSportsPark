@@ -27,6 +27,7 @@ export function RootNavigator() {
         <Stack.Screen name="sessions/[sessionId]" options={{ title: 'Activity' }} />
         {/* Package G (conditional, behind their capability switches; reached from Account). */}
         <Stack.Screen name="bookings/index" options={{ title: 'Rentals and parties' }} />
+        <Stack.Screen name="bookings/[id]" options={{ title: 'Booking' }} />
         <Stack.Screen name="bookings/new/[offeringId]" options={{ title: 'Book' }} />
         <Stack.Screen name="memberships/index" options={{ title: 'Memberships' }} />
         <Stack.Screen name="session-packages/index" options={{ title: 'Session packages' }} />
