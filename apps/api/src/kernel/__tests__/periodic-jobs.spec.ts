@@ -1,7 +1,8 @@
+import { Logger } from '@nestjs/common';
 import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTestApp, type TestApp } from '../../testing/test-app';
-import type { AppConfig } from '../config';
+import { createTestApp, TEST_CONFIG_ENV, type TestApp } from '../../testing/test-app';
+import { loadConfig, type AppConfig } from '../config';
 import { UnitOfWork } from '../database/unit-of-work';
 import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
 import {
@@ -35,6 +36,11 @@ describe('periodic jobs (K-06, §4.12)', () => {
   let sent: number[] = [];
   let afterRow: ((row: number) => Promise<void>) | null = null;
   let perRowContext: PeriodicJobContext | null = null;
+  /** kerneltest.hung: while `hang`, a pass waits on a call that never returns. */
+  let hang = false;
+  let hungContext: PeriodicJobContext | null = null;
+  /** kerneltest.slow_passes: how long each pass takes on the FixedClock. */
+  let slowPassMs = 0;
 
   const job = (name: string, run: PeriodicJob['run'], intervalSeconds = 60): PeriodicJob => ({
     name,
@@ -43,12 +49,12 @@ describe('periodic jobs (K-06, §4.12)', () => {
     run,
   });
 
-  /** A second runner as another worker process would build it. */
-  const otherRunner = (workerId: string) => {
+  /** A second runner as another worker process would build it (with its own technical values). */
+  const otherRunner = (workerId: string, overrides: Partial<AppConfig> = {}) => {
     const config = t.app.get<AppConfig>(APP_CONFIG);
     return new PeriodicJobRunner(
       t.app.get(DATABASE),
-      { ...config, WORKER_ID: workerId },
+      { ...config, ...overrides, WORKER_ID: workerId },
       t.app.get(CLOCK),
       registry,
       t.app.get(UnitOfWork),
@@ -99,6 +105,20 @@ describe('periodic jobs (K-06, §4.12)', () => {
       }),
     );
     registry.register(
+      job('kerneltest.hung', async (context) => {
+        hungContext = context;
+        started?.resolve();
+        if (hang) await new Promise<never>(() => undefined);
+        return { processed: 1, remaining: 0 };
+      }),
+    );
+    registry.register(
+      job('kerneltest.slow_passes', async () => {
+        t.clock.advance(slowPassMs);
+        return { processed: 1, remaining: 5 };
+      }),
+    );
+    registry.register(
       job('kerneltest.after_failure', async () => {
         count('kerneltest.after_failure');
         return { processed: 0, remaining: 0 };
@@ -114,6 +134,9 @@ describe('periodic jobs (K-06, §4.12)', () => {
     sent = [];
     afterRow = null;
     perRowContext = null;
+    hang = false;
+    hungContext = null;
+    slowPassMs = 0;
   });
 
   const leaseOf = (name: string) =>
@@ -192,7 +215,7 @@ describe('periodic jobs (K-06, §4.12)', () => {
     expect(lease.consecutive_failures).toBe(0);
   });
 
-  it('SPK-AT-023, ASYNC-06: a pass that outlives PERIODIC_JOBS_LEASE_SECONDS keeps its lease on a timer, so no other worker takes the job over mid-pass (PGlite and TEST_DATABASE_URL)', async () => {
+  it('SPK-AT-023, ASYNC-06: a pass running past the lease it was claimed with keeps the lease on a timer while it shows progress, so no other worker takes the job over mid-pass (PGlite and TEST_DATABASE_URL)', async () => {
     const config = t.app.get<AppConfig>(APP_CONFIG);
     const leaseMs = config.PERIODIC_JOBS_LEASE_SECONDS * 1000;
     counts.set('kerneltest.gated', 0);
@@ -294,6 +317,192 @@ describe('periodic jobs (K-06, §4.12)', () => {
       .set({ locked_by: null, locked_until: null })
       .where('job_name', '=', 'kerneltest.per_row')
       .execute();
+  });
+
+  it('SPK-AT-023, ASYNC-06: a takeover the run never noticed (it made no renewal afterwards) is still reported as leaseLost and logged, and the run records nothing', async () => {
+    gate = deferred();
+    started = deferred();
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    try {
+      const before = await leaseOf('kerneltest.gated');
+      const run = otherRunner('worker-unaware').runOnce(['kerneltest.gated'], {
+        ignoreInterval: true,
+      });
+      await started.promise;
+      // The pass never renews; meanwhile its lease lapsed (a pause) and another worker claimed it.
+      await t.db
+        .updateTable('periodic_job_leases')
+        .set({
+          locked_by: 'worker-other:lease',
+          locked_until: new Date(t.clock.now().getTime() + 300_000),
+        })
+        .where('job_name', '=', 'kerneltest.gated')
+        .execute();
+      gate.resolve();
+      const [summary] = await run;
+      expect(summary).toMatchObject({ ran: true, failed: false, leaseLost: true, processed: 1 });
+      const after = await leaseOf('kerneltest.gated');
+      expect(after.locked_by).toBe('worker-other:lease');
+      expect(after.last_finished_at).toEqual(before.last_finished_at);
+      expect(after.consecutive_failures).toBe(before.consecutive_failures);
+      expect(
+        warn.mock.calls.some(([message]) =>
+          String(message).includes('kerneltest.gated: another runner took the job over'),
+        ),
+      ).toBe(true);
+    } finally {
+      gate?.resolve();
+      warn.mockRestore();
+      await t.db
+        .updateTable('periodic_job_leases')
+        .set({ locked_by: null, locked_until: null })
+        .where('job_name', '=', 'kerneltest.gated')
+        .execute();
+    }
+  });
+
+  it('§4.12, ASYNC-06: a pass that never returns and shows no progress is given up after PERIODIC_JOBS_LEASE_SECONDS: the runner stops waiting, counts a failure its failure owner hears about, and the job is taken over once the lease lapses (PGlite and TEST_DATABASE_URL)', async () => {
+    const config = t.app.get<AppConfig>(APP_CONFIG);
+    const leaseMs = config.PERIODIC_JOBS_LEASE_SECONDS * 1000;
+    const exceptions = () =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .select(['owner_queue', 'status'])
+        .where('category', '=', PERIODIC_JOB_FAILING_CATEGORY)
+        .where('dedupe_key', '=', 'periodic_job:kerneltest.hung')
+        .execute();
+    hang = true;
+    started = deferred();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const first = otherRunner('worker-hung', { PERIODIC_JOBS_FAILURE_THRESHOLD: 1 }).runOnce(
+        ['kerneltest.hung'],
+        { ignoreInterval: true },
+      );
+      await started.promise;
+      const claimedAt = t.clock.now().getTime();
+      // Two thirds of a lease after the pass started: still within the progress window, renewed.
+      t.clock.advance((leaseMs * 2) / 3);
+      await vi.advanceTimersByTimeAsync(leaseMs / 3);
+      await vi.waitFor(
+        async () => {
+          const lease = await leaseOf('kerneltest.hung');
+          expect(new Date(lease.locked_until!).getTime()).toBe(claimedAt + (leaseMs * 5) / 3);
+        },
+        { timeout: 5000 },
+      );
+      // A whole lease without progress: the next tick gives up instead of renewing.
+      t.clock.advance(leaseMs / 3);
+      await vi.advanceTimersByTimeAsync(leaseMs / 3);
+      const [summary] = await first;
+      expect(summary).toMatchObject({
+        ran: true,
+        passes: 0,
+        failed: true,
+        abandoned: true,
+        leaseLost: false,
+      });
+      expect(summary?.error).toMatch(/^PeriodicJobAbandoned: .*no progress/);
+      expect(hungContext?.lease?.signal.aborted).toBe(true);
+      expect(await renewJobLease(hungContext!)).toBe(false);
+      // Counted as a failure, the hold left to lapse (the pass may still be running).
+      const given = await leaseOf('kerneltest.hung');
+      expect(given.locked_by).toMatch(/^worker-hung:/);
+      expect(new Date(given.locked_until!).getTime()).toBe(claimedAt + (leaseMs * 5) / 3);
+      expect(given.consecutive_failures).toBe(1);
+      expect(given.last_error).toMatch(/no progress for PERIODIC_JOBS_LEASE_SECONDS/);
+      const raised = await exceptions();
+      expect(raised.length).toBeGreaterThan(0);
+      expect(raised.every((e) => e.owner_queue === 'scheduler' && e.status === 'open')).toBe(true);
+      // Until the lease lapses nobody takes the job over; then another worker does.
+      const early = await otherRunner('worker-next').runOnce(['kerneltest.hung'], {
+        ignoreInterval: true,
+      });
+      expect(early[0]).toMatchObject({ ran: false });
+      t.clock.advance((leaseMs * 2) / 3 + 1000);
+      hang = false;
+      const [takeover] = await otherRunner('worker-next').runOnce(['kerneltest.hung'], {
+        ignoreInterval: true,
+      });
+      expect(takeover).toMatchObject({ ran: true, failed: false, abandoned: false, processed: 1 });
+      const after = await leaseOf('kerneltest.hung');
+      expect(after.locked_by).toBeNull();
+      expect(after.consecutive_failures).toBe(0);
+      expect((await exceptions()).every((e) => e.status === 'resolved')).toBe(true);
+    } finally {
+      hang = false;
+      vi.useRealTimers();
+    }
+  });
+
+  it('§4.12, ASYNC-06: a pass that keeps renewing is still given up at PERIODIC_JOBS_MAX_RUN_SECONDS (PGlite and TEST_DATABASE_URL)', async () => {
+    const config = t.app.get<AppConfig>(APP_CONFIG);
+    const leaseMs = config.PERIODIC_JOBS_LEASE_SECONDS * 1000;
+    hang = true;
+    started = deferred();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const first = otherRunner('worker-capped', {
+        PERIODIC_JOBS_MAX_RUN_SECONDS: config.PERIODIC_JOBS_LEASE_SECONDS * 2,
+      }).runOnce(['kerneltest.hung'], { ignoreInterval: true });
+      await started.promise;
+      const context = hungContext!;
+      for (let step = 1; step <= 3; step += 1) {
+        // The job renews before each provider call, well within the progress window.
+        t.clock.advance((leaseMs * 2) / 3);
+        expect(await renewJobLease(context)).toBe(true);
+        await vi.advanceTimersByTimeAsync(leaseMs / 3);
+      }
+      const [summary] = await first;
+      expect(summary).toMatchObject({ ran: true, failed: true, abandoned: true, leaseLost: false });
+      expect(summary?.error).toMatch(/PERIODIC_JOBS_MAX_RUN_SECONDS/);
+      expect(context.lease?.signal.aborted).toBe(true);
+      expect(await renewJobLease(context)).toBe(false);
+      const given = await leaseOf('kerneltest.hung');
+      expect(given.locked_by).toMatch(/^worker-capped:/);
+      expect(given.consecutive_failures).toBe(1);
+    } finally {
+      hang = false;
+      vi.useRealTimers();
+      await t.db
+        .updateTable('periodic_job_leases')
+        .set({ locked_by: null, locked_until: null, consecutive_failures: 0, last_error: null })
+        .where('job_name', '=', 'kerneltest.hung')
+        .execute();
+    }
+  });
+
+  it('§4.12, ASYNC-06: a run that reaches PERIODIC_JOBS_MAX_RUN_SECONDS at a pass boundary starts no further pass and is not a failure', async () => {
+    const config = t.app.get<AppConfig>(APP_CONFIG);
+    // Each pass takes one lease (renewing as it goes); the run may last two.
+    slowPassMs = config.PERIODIC_JOBS_LEASE_SECONDS * 1000;
+    const [summary] = await otherRunner('worker-slow-passes', {
+      PERIODIC_JOBS_MAX_RUN_SECONDS: config.PERIODIC_JOBS_LEASE_SECONDS * 2,
+    }).runOnce(['kerneltest.slow_passes'], { ignoreInterval: true });
+    expect(summary).toMatchObject({
+      ran: true,
+      passes: 2,
+      processed: 2,
+      remaining: 5,
+      failed: false,
+      abandoned: false,
+      leaseLost: false,
+    });
+    expect((await leaseOf('kerneltest.slow_passes')).locked_by).toBeNull();
+  });
+
+  it('PERIODIC_JOBS_MAX_RUN_SECONDS below PERIODIC_JOBS_LEASE_SECONDS is refused at boot', () => {
+    expect(() =>
+      loadConfig({
+        ...TEST_CONFIG_ENV,
+        PERIODIC_JOBS_LEASE_SECONDS: '300',
+        PERIODIC_JOBS_MAX_RUN_SECONDS: '299',
+      }),
+    ).toThrow(/PERIODIC_JOBS_MAX_RUN_SECONDS must be at least PERIODIC_JOBS_LEASE_SECONDS/);
+    expect(
+      loadConfig({ ...TEST_CONFIG_ENV, PERIODIC_JOBS_MAX_RUN_SECONDS: '300' })
+        .PERIODIC_JOBS_MAX_RUN_SECONDS,
+    ).toBe(300);
   });
 
   it('renewJobLease is true for a job called without a runner (no lease to keep)', async () => {
