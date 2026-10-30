@@ -103,17 +103,29 @@ export const INTENT_CAPACITY_UNITS: Record<
 };
 
 /**
- * ENR-10 (DEC-016; DEC-072, DEC-074, DEC-076, DEC-077): the capability switch a new commitment of
- * the intent needs. Adding the line, holding it and starting its checkout re-check it, so
- * disabling a capability stops new sales of offerings already published; releasing, cancelling,
- * expiring and recording payment outcomes never check it.
+ * ENR-10 (DEC-016; DEC-072, DEC-074, DEC-076, DEC-077, DEC-082): the capability switch a new
+ * commitment of the intent needs, wherever it is made: adding, opening or holding a basket line,
+ * starting its checkout, joining a waitlist for it, accepting a waitlist offer of it, a staff
+ * offer of it, and converting a trial into it (CAPABILITIES-03, CAPABILITIES-04). Disabling a
+ * capability therefore stops new sales of offerings already published; releasing, cancelling,
+ * expiring, reading and recording payment outcomes never check it. `pickup` is never a basket line
+ * (its booking is POST /v1/session-bookings); it is listed so the waitlist and registration options
+ * apply the same switch as the booking command.
  */
 export const INTENT_CAPABILITIES: Partial<Record<RegistrationIntent, CapabilityId>> = {
   membership: 'memberships',
   package_purchase: 'session_packages',
   rental_request: 'rentals',
   party_request: 'parties',
+  pickup: 'pickup_sessions',
 };
+
+/** The intents behind a capability (the reverse of INTENT_CAPABILITIES). */
+export function intentsOfCapability(capability: CapabilityId): RegistrationIntent[] {
+  return (Object.keys(INTENT_CAPABILITIES) as RegistrationIntent[]).filter(
+    (intent) => INTENT_CAPABILITIES[intent] === capability,
+  );
+}
 
 /** ENR-10 (SPK-COND-003): intents that exist only with their reservation (POST /bookings). */
 export const BOOKING_INTENTS: readonly RegistrationIntent[] = ['rental_request', 'party_request'];

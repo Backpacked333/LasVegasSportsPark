@@ -4,13 +4,23 @@ import { UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createOfferingSessionFixture } from '../../catalog';
 import { BASKET_PORT, type BasketPort } from '../enrollment.ports';
+import { BasketsService } from '../services/baskets.service';
+import { RegistrationEvaluator } from '../services/registration-evaluator';
 import {
   AssessmentMachine,
   BookingMachine,
   PackageEntitlementMachine,
 } from '../enrollment.state-machines';
-import { membershipOffering, packageOffering } from './package-g-support';
-import { acknowledge, adult, enrollmentTestApp, offering, post, type Actor } from './support';
+import { definitionWithScope, membershipOffering, packageOffering } from './package-g-support';
+import {
+  acknowledge,
+  adult,
+  drain,
+  enrollmentTestApp,
+  offering,
+  post,
+  type Actor,
+} from './support';
 
 /** ENR-10: Package G intents, module-local machines and capability gates (DEC-016). */
 describe('Package G enrollment foundation (ENR-10)', () => {
@@ -211,6 +221,172 @@ describe('Package G enrollment foundation (ENR-10)', () => {
     );
     expect(canceled.status).toBe(200);
     expect(canceled.body.status).toBe('canceled');
+  });
+
+  it('CAPABILITIES-03 / DEC-072: a membership waitlist is not joined, and its offer opens and holds no line, while memberships is off', async () => {
+    await t.enableCapability('memberships');
+    const membership = await offering(t, {
+      kind: 'membership',
+      entitlementDefinitionId: await definitionWithScope(t, 'membership_benefit', {
+        attendance: { mode: 'none' },
+        term: { kind: 'offering_dates' },
+        renewal: { noticeLeadDays: null },
+      }),
+      basePriceMinor: 0,
+      capacityUnits: [{ unit: 'seats', limit: 1 }],
+      ageBand: { minAgeYears: 18 },
+    });
+    const holder = await adult(t);
+    const waiter = await adult(t);
+    const late = await adult(t);
+    for (const actor of [holder, waiter, late]) {
+      await acknowledge(t, membership, actor.personId, actor.personId);
+    }
+    // The only place is held in the holder's basket; the waiter queues for it.
+    const basket = await openBasket(holder);
+    const line = await post(t, `/v1/baskets/${basket.id}/lines`, holder.header, {
+      participantPersonId: holder.personId,
+      offeringId: membership.offeringId,
+      intent: 'membership',
+    });
+    expect(line.status, JSON.stringify(line.body)).toBe(201);
+    expect((await post(t, `/v1/baskets/${basket.id}/hold`, holder.header, {})).status).toBe(200);
+    const join = (actor: Actor) =>
+      post(t, '/v1/waitlist-entries', actor.header, {
+        offeringId: membership.offeringId,
+        participantPersonId: actor.personId,
+        intent: 'membership',
+      });
+    const entry = await join(waiter);
+    expect(entry.status, JSON.stringify(entry.body)).toBe(201);
+    // The place comes back and is offered while the switch is on.
+    expect(
+      (await post(t, `/v1/baskets/${basket.id}/release`, holder.header, { reason: 'changed mind' }))
+        .status,
+    ).toBe(200);
+    await drain(t);
+    const offered = await t.http
+      .get(`/v1/waitlist-entries/${entry.body.id as string}`)
+      .set(waiter.header);
+    expect(offered.body.status).toBe('offered');
+    const offer = offered.body.offers[0] as { id: string; revision: number };
+
+    await t.disableCapability('memberships');
+    try {
+      const refusedJoin = await join(late);
+      expect(refusedJoin.status).toBe(403);
+      expect(refusedJoin.body.details).toMatchObject({
+        code: 'CAPABILITY_DISABLED',
+        capability: 'memberships',
+      });
+      const refused = await post(t, `/v1/waitlist-offers/${offer.id}/accept`, waiter.header, {
+        expectedRevision: offer.revision,
+      });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+      expect(refused.body.details).toMatchObject({
+        code: 'CAPABILITY_DISABLED',
+        capability: 'memberships',
+      });
+      // No basket, line or application was opened for the waiter, and the offer keeps its place.
+      expect(
+        await t.db
+          .selectFrom('baskets')
+          .select('id')
+          .where('owner_person_id', '=', waiter.personId)
+          .execute(),
+      ).toEqual([]);
+      expect(
+        await t.db
+          .selectFrom('applications')
+          .select('id')
+          .where('participant_person_id', '=', waiter.personId)
+          .execute(),
+      ).toEqual([]);
+      const still = await t.http.get(`/v1/waitlist-offers/${offer.id}`).set(waiter.header);
+      expect(still.body.status).toBe('offered');
+      // Declining (never gated) still works.
+      const declined = await post(t, `/v1/waitlist-offers/${offer.id}/decline`, waiter.header, {
+        expectedRevision: offer.revision,
+      });
+      expect(declined.status, JSON.stringify(declined.body)).toBe(200);
+    } finally {
+      await t.disableCapability('memberships');
+    }
+  });
+
+  it('CAPABILITIES-03 / CAPABILITIES-04: every caller of openForLine and holdOpenedBasket gets the line checks', async () => {
+    const baskets = t.app.get(BasketsService);
+    const evaluator = t.app.get(RegistrationEvaluator);
+    const uow = t.app.get(UnitOfWork);
+    const actor = systemPrincipal(t.organizationId, 'test.caller');
+    const membership = await membershipOffering(t, {
+      attendance: { mode: 'none' },
+      term: { kind: 'offering_dates' },
+      renewal: { noticeLeadDays: null },
+    });
+    const rental = await offering(t, { kind: 'rental', basePriceMinor: 5_000 });
+    const open = (offeringId: string, intent: 'membership' | 'rental_request' | 'pickup') =>
+      uow.run(async ({ trx }) => {
+        const person = await evaluator.participant(trx, t.organizationId, buyer.personId);
+        const snapshot = await evaluator.snapshot(trx, t.organizationId, offeringId);
+        const evaluation = await evaluator.evaluate(trx, t.organizationId, {
+          snapshot,
+          person,
+          intent,
+        });
+        return baskets.openForLine(trx, t.organizationId, {
+          owner: person,
+          payerPersonId: person.id,
+          actor,
+          participant: person,
+          snapshot,
+          intent,
+          sessionId: null,
+          evaluation,
+          applicationId: null,
+          correlationId: null,
+        });
+      });
+    const codeOf = async (work: Promise<unknown>) => {
+      try {
+        await work;
+        return 'opened';
+      } catch (error) {
+        if (!DomainError.is(error)) throw error;
+        return (error.details as { code?: string } | undefined)?.code ?? error.code;
+      }
+    };
+    // A rental line exists only with its booking, whichever switch is on.
+    await t.enableCapability('rentals');
+    expect(await codeOf(open(rental.offeringId, 'rental_request'))).toBe('BOOKING_REQUIRED');
+    await t.disableCapability('rentals');
+    // A session intent is never a basket line.
+    expect(await codeOf(open(membership.offeringId, 'pickup'))).toBe('VALIDATION_FAILED');
+    // A membership line is opened only while memberships is on ...
+    expect(await codeOf(open(membership.offeringId, 'membership'))).toBe('CAPABILITY_DISABLED');
+    await t.enableCapability('memberships');
+    const opened = await open(membership.offeringId, 'membership');
+    // ... and held only while it still is.
+    await t.disableCapability('memberships');
+    const hold = uow.run(({ trx }) =>
+      baskets.holdOpenedBasket(
+        trx,
+        t.organizationId,
+        opened.basket,
+        opened.lineId,
+        actor,
+        [],
+        new Date(t.clock.now().getTime() + 600_000),
+        null,
+      ),
+    );
+    expect(await codeOf(hold)).toBe('CAPABILITY_DISABLED');
+    const line = await t.db
+      .selectFrom('basket_lines')
+      .select(['outcome', 'enrollment_id'])
+      .where('id', '=', opened.lineId)
+      .executeTakeFirstOrThrow();
+    expect(line).toEqual({ outcome: 'pending', enrollment_id: null });
   });
 
   it('§4.6: the module-local Package G machines refuse transitions they do not define', () => {

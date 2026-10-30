@@ -515,6 +515,7 @@ export class BookingsService implements BookingQueryPort {
       applicationId: null,
       existingBasketId,
       noEquivalence: true,
+      forBooking: true,
       correlationId,
     });
     const pool = await this.capacity.ensureBookingPool(trx, organizationId, {

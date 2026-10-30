@@ -27,6 +27,7 @@ import {
   staff,
   type Actor,
 } from './support';
+import { membershipOffering } from './package-g-support';
 import { withStage3Doubles } from './stage3-doubles';
 
 /** A stub finance policy (stands in for DEC-009): the refund the test sets, else none. */
@@ -482,6 +483,7 @@ describe('registration commands of stage 3 (ENR-03, ENR-04, ENR-05, ENR-06)', ()
     expect(res.body).toEqual({
       offeringId: league.offeringId,
       availableIntents: ['individual_league', 'join_team', 'create_team_entry', 'youth'],
+      unavailableIntents: [],
       seasonId: season.seasonId,
       participants: [],
     });
@@ -511,6 +513,78 @@ describe('registration commands of stage 3 (ENR-03, ENR-04, ENR-05, ENR-06)', ()
           .set(programManager.header)
       ).status,
     ).toBe(200);
+  });
+
+  it('CAPABILITIES-07 / DEC-016: an intent whose switch is off is unavailable with its reason, and no eligibility is shown for it', async () => {
+    const program = await createProgramFixture(t, { ageBand: { minAgeYears: 18 } });
+    const membership = await membershipOffering(
+      t,
+      {
+        attendance: { mode: 'none' },
+        term: { kind: 'offering_dates' },
+        renewal: { noticeLeadDays: null },
+      },
+      {},
+    );
+    const pickup = await offering(t, { kind: 'pickup', programId: program, basePriceMinor: 0 });
+    const desk = await staff(t, ['front_desk']);
+    const options = (offeringId: string, actor: Actor) =>
+      t.http
+        .get(
+          `/v1/offerings/${offeringId}/registration-options?participantPersonIds=${parent.personId}`,
+        )
+        .set(actor.header);
+    // memberships is off (the test default): staff and the customer are told so, with the reason,
+    // and the participant gets no eligibility for an intent nobody can use now.
+    for (const actor of [parent, desk]) {
+      const off = await options(membership.offeringId, actor);
+      expect(off.status, JSON.stringify(off.body)).toBe(200);
+      expect(off.body.availableIntents).toEqual([]);
+      expect(off.body.unavailableIntents).toEqual([
+        {
+          intent: 'membership',
+          code: 'CAPABILITY_DISABLED',
+          capability: 'memberships',
+          applicabilityReferences: ['DEC-016', 'DEC-072'],
+        },
+      ]);
+      expect(off.body.participants).toEqual([
+        expect.objectContaining({ personId: parent.personId, intents: [] }),
+      ]);
+    }
+    // The line the options would have offered is refused the same way.
+    const basket = await post(t, '/v1/baskets', desk.header, { ownerPersonId: parent.personId });
+    const line = await post(t, `/v1/baskets/${basket.body.id as string}/lines`, desk.header, {
+      participantPersonId: parent.personId,
+      offeringId: membership.offeringId,
+      intent: 'membership',
+      expectedRevision: basket.body.revision,
+    });
+    expect(line.status).toBe(403);
+    expect(line.body.details.code).toBe('CAPABILITY_DISABLED');
+    // Switched on, the intent is available with its evaluation; pickup follows pickup_sessions.
+    await t.enableCapability('memberships');
+    try {
+      const on = await options(membership.offeringId, desk);
+      expect(on.body.availableIntents).toEqual(['membership']);
+      expect(on.body.unavailableIntents).toEqual([]);
+      expect(on.body.participants[0].intents.map((i: { intent: string }) => i.intent)).toEqual([
+        'membership',
+      ]);
+    } finally {
+      await t.disableCapability('memberships');
+    }
+    expect((await options(pickup.offeringId, desk)).body.availableIntents).toEqual(['pickup']);
+    await t.disableCapability('pickup_sessions');
+    try {
+      const pickupOff = await options(pickup.offeringId, desk);
+      expect(pickupOff.body.availableIntents).toEqual([]);
+      expect(pickupOff.body.unavailableIntents).toEqual([
+        expect.objectContaining({ intent: 'pickup', capability: 'pickup_sessions' }),
+      ]);
+    } finally {
+      await t.enableCapability('pickup_sessions');
+    }
   });
 
   // -------------------------------------------------------------------------------------------

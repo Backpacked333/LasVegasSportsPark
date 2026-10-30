@@ -4,6 +4,7 @@ import {
   errors,
   newId,
   type AcceptWaitlistOfferInput,
+  type CapabilityId,
   type DeclineWaitlistOfferInput,
   type JoinWaitlistInput,
   type ListWaitlistQuery,
@@ -29,6 +30,7 @@ import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  CapabilityService,
   DATABASE,
   Outbox,
   UnitOfWork,
@@ -39,7 +41,12 @@ import {
 import type { OfferingSnapshot } from '../../catalog';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
-import { SESSION_INTENT_COMMANDS } from '../enrollment.policy';
+import {
+  BOOKING_INTENTS,
+  INTENT_CAPABILITIES,
+  SESSION_INTENT_COMMANDS,
+  intentsOfCapability,
+} from '../enrollment.policy';
 import type { WaitlistPort } from '../enrollment.ports';
 import {
   actorSnapshot,
@@ -95,7 +102,59 @@ export class WaitlistService implements WaitlistPort {
     private readonly bookings: SessionBookingsService,
     private readonly sessions: CatalogSessions,
     private readonly scope: EnrollmentFacilityScope,
+    private readonly capabilities: CapabilityService,
   ) {}
+
+  // -------------------------------------------------------------------------------------------
+  // What a waiter may still be given (CAPABILITIES-03, GAPS-TRIAGE-01)
+  // -------------------------------------------------------------------------------------------
+
+  /** The session booking kind accepting an offer of a session queue creates. */
+  private sessionKindOf(intent: WaitlistEntryRow['intent']): 'trial' | 'makeup' | 'pickup' {
+    return intent === 'trial' ? 'trial' : intent === 'makeup' ? 'makeup' : 'pickup';
+  }
+
+  /**
+   * CAPABILITIES-03, GAPS-TRIAGE-01: refuses waiting for, being offered or accepting a place that
+   * could not be taken now. A Package G intent needs its switch (DEC-016; pickup DEC-082,
+   * memberships DEC-072, session packages DEC-074), and the seat a session queue's acceptance books
+   * (priced from the offering, as `accept` books it) must owe nothing: a single session cannot be
+   * paid for yet (`SESSION_PAYMENT_UNAVAILABLE`).
+   */
+  private async assertObtainable(
+    trx: Trx,
+    organizationId: string,
+    entry: { intent: WaitlistEntryRow['intent']; offering_id: string; session_id: string | null },
+  ): Promise<void> {
+    const capability = INTENT_CAPABILITIES[entry.intent];
+    if (capability) await this.capabilities.require(organizationId, capability, trx);
+    if (entry.session_id) {
+      await this.bookings.assertSessionPayable(
+        trx,
+        organizationId,
+        entry.offering_id,
+        this.sessionKindOf(entry.intent),
+      );
+    }
+  }
+
+  /** Whether `assertObtainable` lets the entry be offered (offer generation holds the queue otherwise). */
+  private async obtainable(
+    trx: Trx,
+    organizationId: string,
+    entry: WaitlistEntryRow,
+  ): Promise<boolean> {
+    try {
+      await this.assertObtainable(trx, organizationId, entry);
+      return true;
+    } catch (error) {
+      const code = DomainError.is(error)
+        ? (error.details as { code?: unknown } | undefined)?.code
+        : undefined;
+      if (code === 'CAPABILITY_DISABLED' || code === 'SESSION_PAYMENT_UNAVAILABLE') return false;
+      throw error;
+    }
+  }
 
   // -------------------------------------------------------------------------------------------
   // Loading and views
@@ -225,6 +284,14 @@ export class WaitlistService implements WaitlistPort {
     ) {
       throw errors.accessDenied('Only staff set a waitlist priority.');
     }
+    // CAPABILITIES-04, SPK-COND-003: a rental or party exists only with its reservation and
+    // staffing (POST /v1/bookings); nobody waits for a bare rental or party line.
+    if (BOOKING_INTENTS.includes(input.intent)) {
+      throw errors.validation(
+        'A rental or party is requested with its space, equipment and staff: POST /v1/bookings.',
+        { code: 'BOOKING_REQUIRED', path: 'intent' },
+      );
+    }
     const session = sessionScoped
       ? await this.sessions.get(organizationId, input.offeringId, input.sessionId as string)
       : undefined;
@@ -240,6 +307,13 @@ export class WaitlistService implements WaitlistPort {
         organizationId,
         facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
         subjectPersonIds: [person.id],
+      });
+      // CAPABILITIES-03 (DEC-016), GAPS-TRIAGE-01: joining is a new commitment of what the queue
+      // waits for; a place that could not be taken now is not waited for either.
+      await this.assertObtainable(trx, organizationId, {
+        intent: input.intent,
+        offering_id: input.offeringId,
+        session_id: session?.id ?? null,
       });
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
       const evaluation = await this.evaluator.evaluate(trx, organizationId, {
@@ -568,7 +642,10 @@ export class WaitlistService implements WaitlistPort {
    * row lock serializes concurrent generators; every offer holds each pool its participant needs,
    * so it reserves a defined place until expiry (SPK-REG-008). Generation stops at the first entry
    * that cannot be served so a lower-priority entry is never offered first. Replay-safe: with no
-   * free place left nothing more is offered.
+   * free place left nothing more is offered. A queue whose place could not be accepted now (its
+   * capability switch is off, or its session seat would owe money) is held as it is: no offer is
+   * made, so nobody loses their place to an offer they could not accept, and re-enabling the
+   * switch offers the free places again (`resumeQueuesOf`, CAPABILITIES-03).
    */
   async offerFromPool(
     trx: Trx,
@@ -609,6 +686,7 @@ export class WaitlistService implements WaitlistPort {
         continue;
       }
       if (existing === 'pending') continue;
+      if (!(await this.obtainable(trx, organizationId, entry))) break;
       const required = await this.requiredPools(trx, organizationId, entry);
       if (required.length === 0) continue;
       if (required.some((p) => p.capacity - p.committed - p.held < 1)) break;
@@ -797,6 +875,8 @@ export class WaitlistService implements WaitlistPort {
           nextWaitlistEntryId: next?.entry.id ?? null,
         });
       }
+      // CAPABILITIES-03, GAPS-TRIAGE-01: staff never offer a place the family could not accept.
+      await this.assertObtainable(trx, organizationId, entry);
       const full = next.required.find((p) => p.capacity - p.committed - p.held < 1);
       if (full) {
         throw errors.capacityUnavailable('No place is free to offer.', {
@@ -1066,6 +1146,10 @@ export class WaitlistService implements WaitlistPort {
       assertExpectedRevision(input.expectedRevision, offer.revision);
       if (offer.status !== 'offered')
         throw errors.invalidTransition('WaitlistOffer', offer.status, 'accept');
+      // CAPABILITIES-03 (DEC-016), GAPS-TRIAGE-01: accepting is the new commitment. Refused, the
+      // offer stays `offered` with its place held until it is declined or expires (expiry is
+      // never gated).
+      await this.assertObtainable(trx, organizationId, entry);
       if (new Date(offer.expires_at).getTime() <= now.getTime()) {
         throw errors.capacityUnavailable('This offer has expired; its place was released.', {
           offerId,
@@ -1128,15 +1212,15 @@ export class WaitlistService implements WaitlistPort {
       let enrollmentId: string | null = null;
       let bookingId: string | null = null;
       if (session) {
-        // §4.7 (1), SPK-REG-009: a customer accepting pays for the booking themselves (finance
-        // lets only the payer pay); staff may name a payer or keep the one the entry recorded.
+        // §4.7 (1), SPK-REG-009: a customer accepting books as the payer themselves; staff may name
+        // a payer or keep the one the entry recorded. The seat owes nothing (assertObtainable), so
+        // the booking is confirmed at once.
         const payerPersonId = staffLike
           ? (input.payerPersonId ?? entry.payer_person_id ?? null)
           : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
             principal.personId);
         const booking = await this.bookings.createInTrx(trx, organizationId, {
-          kind:
-            entry.intent === 'trial' ? 'trial' : entry.intent === 'makeup' ? 'makeup' : 'pickup',
+          kind: this.sessionKindOf(entry.intent),
           snapshot,
           session,
           person,
@@ -1436,5 +1520,52 @@ export class WaitlistService implements WaitlistPort {
       .where('id', '=', entry.id)
       .where('revision', '=', entry.revision)
       .execute();
+  }
+
+  /**
+   * CAPABILITIES-03 (DEC-016): follow-up of `core.capability_changed` when a switch is enabled.
+   * Offer generation held the queues of the capability's intents while it was off, so their free
+   * places are offered again now (through `enrollment.capacity_released`, the same handler and
+   * order as any freed place). Replay-safe: a pool with no free place, or no one waiting, is left.
+   */
+  async resumeQueuesOf(
+    trx: Trx,
+    organizationId: string,
+    capability: CapabilityId,
+    correlationId: string | null,
+  ): Promise<number> {
+    const intents = intentsOfCapability(capability);
+    if (intents.length === 0) return 0;
+    const pools = await trx
+      .selectFrom('waitlist_entries')
+      .innerJoin('capacity_pools', (join) =>
+        join
+          .onRef('capacity_pools.organization_id', '=', 'waitlist_entries.organization_id')
+          .onRef('capacity_pools.id', '=', 'waitlist_entries.pool_id'),
+      )
+      .select([
+        'capacity_pools.id',
+        'capacity_pools.capacity',
+        'capacity_pools.committed',
+        'capacity_pools.held',
+      ])
+      .distinct()
+      .where('waitlist_entries.organization_id', '=', organizationId)
+      .where('waitlist_entries.status', '=', 'waiting')
+      .where('waitlist_entries.intent', 'in', intents)
+      .where('capacity_pools.status', '=', 'active')
+      .orderBy('capacity_pools.id')
+      .execute();
+    const freed = pools
+      .map((p) => ({ poolId: p.id, quantity: p.capacity - p.committed - p.held }))
+      .filter((p) => p.quantity > 0);
+    await this.capacity.enqueueCapacityReleased(
+      trx,
+      organizationId,
+      freed,
+      'capability_enabled',
+      correlationId,
+    );
+    return freed.length;
   }
 }

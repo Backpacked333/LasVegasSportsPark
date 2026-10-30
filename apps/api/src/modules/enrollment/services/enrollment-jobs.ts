@@ -33,7 +33,9 @@ export const BOOKING_LIFECYCLE_JOB = 'enrollment.booking_lifecycle';
  *   elapsed suspensions and composes the one renewal notice a definition asks for.
  * - enrollment.booking_lifecycle (ENR-13): undecided requests expire at their start, an unstaffed
  *   booking that starts raises a critical exception for the scheduler, ended bookings complete.
- * Expiry and lifecycle work is never capability-gated (DEC-016).
+ * Expiry and lifecycle work is never capability-gated (DEC-016). A renewal notice is not
+ * lifecycle work but an invitation to a new commitment: it waits while `memberships` is off and is
+ * composed once the switch is back on (CAPABILITIES-06, `renewalNoticeIfDue`).
  */
 @Injectable()
 export class EnrollmentJobs implements OnModuleInit {

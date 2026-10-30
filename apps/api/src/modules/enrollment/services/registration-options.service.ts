@@ -1,16 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  CAPABILITIES,
   DomainError,
   PUBLIC_PUBLICATION_STATES,
   RegistrationIntentSchema,
   errors,
   type Principal,
+  type RegistrationIntent,
   type RegistrationOptions,
 } from '@sportspark/contracts';
-import { AuthorizationService } from '../../../kernel';
+import { AuthorizationService, CapabilityService } from '../../../kernel';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
 import { EnrollmentActions } from '../enrollment.actions';
-import { INTENT_OFFERING_KINDS } from '../enrollment.policy';
+import { INTENT_CAPABILITIES, INTENT_OFFERING_KINDS } from '../enrollment.policy';
 import { isStaffLike, organizationOf } from '../enrollment.shared';
 import { CustomerScope } from './customer-scope';
 import { EnrollmentFacilityScope } from './facility-scope';
@@ -23,7 +25,10 @@ import { RegistrationEvaluator } from './registration-evaluator';
  * each intent's eligibility. The evaluation is the registration evaluator's, run read-only: no
  * hold, basket, application or other write, and unknown evidence stays unknown (never a pass).
  * People the caller may not register are omitted, never reported; customers see published
- * offerings only (else protected NOT_FOUND, §4.10).
+ * offerings only (else protected NOT_FOUND, §4.10). CAPABILITIES-07 (DEC-016): an intent whose
+ * capability switch is off is not available now: it is listed in `unavailableIntents` with
+ * `CAPABILITY_DISABLED`, its capability and applicability decisions, and no eligibility is
+ * evaluated for it, so no client offers a line or booking the command would refuse.
  */
 @Injectable()
 export class RegistrationOptionsService {
@@ -33,6 +38,7 @@ export class RegistrationOptionsService {
     private readonly customers: CustomerScope,
     private readonly scope: EnrollmentFacilityScope,
     @Inject(TEAM_ENTRY_QUERY_PORT) private readonly teamEntries: TeamEntryQueryPort,
+    private readonly capabilities: CapabilityService,
   ) {}
 
   async options(
@@ -71,9 +77,24 @@ export class RegistrationOptionsService {
             ? await this.customers.subjectIds(principal, EnrollmentActions.apply)
             : [],
         );
-    const availableIntents = RegistrationIntentSchema.options.filter((intent) =>
+    const accepted = RegistrationIntentSchema.options.filter((intent) =>
       INTENT_OFFERING_KINDS[intent].includes(snapshot.offering.kind),
     );
+    const availableIntents: RegistrationIntent[] = [];
+    const unavailableIntents: RegistrationOptions['unavailableIntents'] = [];
+    for (const intent of accepted) {
+      const capability = INTENT_CAPABILITIES[intent];
+      if (capability && !(await this.capabilities.isEnabled(organizationId, capability))) {
+        unavailableIntents.push({
+          intent,
+          code: 'CAPABILITY_DISABLED',
+          capability,
+          applicabilityReferences: [...CAPABILITIES[capability].applicabilityReferences],
+        });
+      } else {
+        availableIntents.push(intent);
+      }
+    }
     const season = await this.teamEntries.seasonForOffering(organizationId, offeringId);
     const participants: RegistrationOptions['participants'] = [];
     for (const personId of participantPersonIds) {
@@ -103,6 +124,7 @@ export class RegistrationOptionsService {
     return {
       offeringId: snapshot.offering.id,
       availableIntents,
+      unavailableIntents,
       seasonId: season?.seasonId ?? null,
       participants,
     };

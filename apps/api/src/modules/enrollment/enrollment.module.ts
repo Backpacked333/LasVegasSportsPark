@@ -1,7 +1,13 @@
 import { Module, type OnModuleInit, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { EventPayload } from '@sportspark/contracts';
-import { EventHandlerRegistry, lazyPort, moduleSettings, runWithTransaction } from '../../kernel';
+import {
+  CapabilityChanged,
+  EventHandlerRegistry,
+  lazyPort,
+  moduleSettings,
+  runWithTransaction,
+} from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
 import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
 import { CommunicationsModule, SESSION_AUDIENCE_IMPL } from '../communications';
@@ -543,6 +549,28 @@ export class EnrollmentModule implements OnModuleInit {
             change.after,
             event.correlationId,
           );
+        }),
+      { failureOwner: 'program_manager' },
+    );
+    // CAPABILITIES-03, CAPABILITIES-06 (DEC-016): while a switch was off, offer generation held
+    // its queues and renewal notices waited. Once it is enabled again the free places are offered
+    // and the notices still owed become due. Disabling needs no follow-up (the gates read the
+    // switch at every command). Replay-safe: only free places and unsent notices move.
+    this.registry.on<EventPayload<typeof CapabilityChanged>>(
+      CapabilityChanged.type,
+      'enrollment.resume_after_capability_enabled',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, async () => {
+          if (!event.payload.enabled) return;
+          await this.waitlist.resumeQueuesOf(
+            ctx.trx,
+            event.organizationId,
+            event.payload.capability,
+            event.correlationId,
+          );
+          if (event.payload.capability === 'memberships') {
+            await this.memberships.resumeRenewalNotices(ctx.trx, event.organizationId);
+          }
         }),
       { failureOwner: 'program_manager' },
     );

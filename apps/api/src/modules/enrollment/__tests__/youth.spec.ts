@@ -6,6 +6,7 @@ import { createOfferingSessionFixture, createProgramFixture } from '../../catalo
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
 import { ENROLLMENT_PORT, type EnrollmentPort } from '../enrollment.ports';
 import { createEnrollmentFixture } from '../testing/enrollment-fixtures';
+import { membershipOffering } from './package-g-support';
 import {
   acknowledge,
   adult,
@@ -152,7 +153,7 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       }
     });
 
-    it('applies its entry requirements and payment rules; an unpaid booking expires with its hold', async () => {
+    it('GAPS-TRIAGE-01 / SPK-PLACE-004: entry requirements apply, and a priced booking is refused before any seat is held', async () => {
       const priced = await offering(t, {
         kind: 'pickup',
         programId: program,
@@ -169,27 +170,48 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       expect(refused.status).toBe(422);
       expect(refused.body.code).toBe('MISSING_ACKNOWLEDGMENT');
       await acknowledge(t, priced, unsigned.personId, unsigned.personId);
-      const pending = await post(t, '/v1/session-bookings', unsigned.header, {
+      // No checkout takes a single session (POL-045 / DEC-082 pending): no 201 for a booking
+      // nobody can pay, and no seat, booking or hold is left behind.
+      for (const actor of [unsigned, frontDesk]) {
+        const unpayable = await post(t, '/v1/session-bookings', actor.header, {
+          offeringId: priced.offeringId,
+          sessionId: pricedSession,
+          participantPersonId: unsigned.personId,
+        });
+        expect(unpayable.status, JSON.stringify(unpayable.body)).toBe(409);
+        expect(unpayable.body).toMatchObject({
+          code: 'RESOURCE_CONFLICT',
+          nextAction: 'resolve_conflict',
+          details: {
+            code: 'SESSION_PAYMENT_UNAVAILABLE',
+            kind: 'pickup',
+            amountMinor: 1_000,
+            pendingDecisions: ['POL-045', 'DEC-082'],
+          },
+        });
+      }
+      expect(
+        await t.db
+          .selectFrom('session_bookings')
+          .select('id')
+          .where('session_id', '=', pricedSession)
+          .execute(),
+      ).toEqual([]);
+      const seats = await t.db
+        .selectFrom('capacity_pools')
+        .select(['held', 'committed'])
+        .where('scope_id', '=', pricedSession)
+        .execute();
+      expect(seats.every((p) => p.held === 0 && p.committed === 0)).toBe(true);
+      // Nor can anyone wait for such a seat (it could never be booked from an offer either).
+      const waiting = await post(t, '/v1/waitlist-entries', unsigned.header, {
         offeringId: priced.offeringId,
-        sessionId: pricedSession,
         participantPersonId: unsigned.personId,
+        intent: 'pickup',
+        sessionId: pricedSession,
       });
-      expect(pending.status).toBe(201);
-      expect(pending.body).toMatchObject({ status: 'pending', price: { basePriceMinor: 1_000 } });
-      const confirm = await post(
-        t,
-        `/v1/session-bookings/${pending.body.id as string}/confirm`,
-        unsigned.header,
-        { expectedRevision: 1 },
-      );
-      expect(confirm.status).toBe(409);
-      expect(confirm.body.details.code).toBe('PAYMENT_REQUIRED');
-      t.clock.advance(11 * 60_000);
-      await drain(t);
-      const expired = await t.http
-        .get(`/v1/session-bookings/${pending.body.id as string}`)
-        .set(unsigned.header);
-      expect(expired.body).toMatchObject({ status: 'expired' });
+      expect(waiting.status).toBe(409);
+      expect(waiting.body.details.code).toBe('SESSION_PAYMENT_UNAVAILABLE');
       const notPickup = await offering(t, { programId: program });
       const notPickupSession = await session(notPickup, '2026-11-14T02:00:00Z');
       const wrong = await post(t, '/v1/session-bookings', unsigned.header, {
@@ -200,7 +222,7 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       expect(wrong.status).toBe(400);
     });
 
-    it('SPK-PLACE-004 / SPK-PAY-002: a booking whose only charge is an approved fee stays pending and confirm refuses', async () => {
+    it('GAPS-TRIAGE-01 / SPK-PAY-002: a booking whose only charge is an approved fee owes money and is refused the same way', async () => {
       const feeOnly = await offering(t, {
         kind: 'pickup',
         programId: program,
@@ -218,26 +240,17 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         sessionId: feeSession,
         participantPersonId: actor.personId,
       });
-      expect(booked.status).toBe(201);
-      expect(booked.body).toMatchObject({
-        status: 'pending',
-        price: { basePriceMinor: 0, chargeLines: [expect.objectContaining({ amountMinor: 500 })] },
+      expect(booked.status).toBe(409);
+      expect(booked.body.details).toMatchObject({
+        code: 'SESSION_PAYMENT_UNAVAILABLE',
+        amountMinor: 0,
       });
-      expect(booked.body.expiresAt).not.toBeNull();
-      const confirm = await post(
-        t,
-        `/v1/session-bookings/${booked.body.id as string}/confirm`,
-        actor.header,
-        { expectedRevision: booked.body.revision },
-      );
-      expect(confirm.status).toBe(409);
-      expect(confirm.body.details.code).toBe('PAYMENT_REQUIRED');
       const seats = await t.db
         .selectFrom('capacity_pools')
         .select(['held', 'committed'])
         .where('scope_id', '=', feeSession)
-        .executeTakeFirstOrThrow();
-      expect(seats).toEqual({ held: 1, committed: 0 });
+        .execute();
+      expect(seats.every((p) => p.held === 0 && p.committed === 0)).toBe(true);
     });
   });
 
@@ -555,6 +568,115 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
       convertedEnrollmentId: enrollmentId,
       noShowAt,
       attendedAt: null,
+    });
+  });
+
+  it('GAPS-TRIAGE-01 / SPK-YOUTH-003: a priced trial is refused, with or without a session, and nothing is recorded', async () => {
+    const trialProgram = await createProgramFixture(t, {
+      ageBand: { minAgeYears: 5, maxAgeYears: 12 },
+    });
+    const pricedTrial = await offering(t, {
+      kind: 'trial',
+      programId: trialProgram,
+      basePriceMinor: 2_000,
+    });
+    const trialSession = await session(
+      pricedTrial,
+      new Date(t.clock.now().getTime() + 120 * 60_000).toISOString(),
+    );
+    const kid = await child(t, [parent]);
+    await acknowledge(t, pricedTrial, kid, parent.personId);
+    for (const sessionId of [trialSession, undefined]) {
+      const refused = await post(t, '/v1/trial-participations', parent.header, {
+        offeringId: pricedTrial.offeringId,
+        participantPersonId: kid,
+        ...(sessionId ? { sessionId } : {}),
+      });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+      expect(refused.body.details).toMatchObject({
+        code: 'SESSION_PAYMENT_UNAVAILABLE',
+        kind: 'trial',
+        amountMinor: 2_000,
+        pendingDecisions: ['DEC-003'],
+      });
+    }
+    expect(
+      await t.db
+        .selectFrom('trial_participations')
+        .select('id')
+        .where('participant_person_id', '=', kid)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('session_bookings')
+        .select('id')
+        .where('session_id', '=', trialSession)
+        .execute(),
+    ).toEqual([]);
+  });
+
+  it('CAPABILITIES-04 / SPK-COND-003: a trial converts only into participation: a rental needs its booking, a membership its switch', async () => {
+    const trialProgram = await createProgramFixture(t, {
+      ageBand: { minAgeYears: 5, maxAgeYears: 12 },
+    });
+    const trial = await offering(t, { kind: 'trial', programId: trialProgram, basePriceMinor: 0 });
+    const kid = await child(t, [parent]);
+    await acknowledge(t, trial, kid, parent.personId);
+    const created = await post(t, '/v1/trial-participations', parent.header, {
+      offeringId: trial.offeringId,
+      participantPersonId: kid,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = created.body.id as string;
+    const convert = (targetOfferingId: string, intent?: string) =>
+      post(t, `/v1/trial-participations/${id}/convert`, parent.header, {
+        targetOfferingId,
+        ...(intent ? { intent } : {}),
+        expectedRevision: created.body.revision,
+      });
+    // A rental exists only with its reservation and staffing (POST /v1/bookings), whatever the
+    // rentals switch says: no follow-up line would ever book the space.
+    const rental = await offering(t, { kind: 'rental', basePriceMinor: 5_000 });
+    for (const intent of ['rental_request', 'party_request']) {
+      const refused = await convert(rental.offeringId, intent);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+      expect(refused.body.details.code).toBe('BOOKING_REQUIRED');
+    }
+    // A membership is a Package G sale: refused while memberships is off (the test default).
+    const membership = await membershipOffering(t, {
+      attendance: { mode: 'none' },
+      term: { kind: 'offering_dates' },
+      renewal: { noticeLeadDays: null },
+    });
+    const gated = await convert(membership.offeringId, 'membership');
+    expect(gated.status).toBe(403);
+    expect(gated.body.details).toMatchObject({
+      code: 'CAPABILITY_DISABLED',
+      capability: 'memberships',
+    });
+    // Nothing was written by the refusals: no application, no follow-up basket, the trial as it was.
+    expect(
+      await t.db
+        .selectFrom('applications')
+        .select('id')
+        .where('participant_person_id', '=', kid)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('basket_lines')
+        .select('id')
+        .where('trial_participation_id', '=', id)
+        .execute(),
+    ).toEqual([]);
+    // Participation is still a conversion.
+    const term = await offering(t, { programId: trialProgram, basePriceMinor: 18_000 });
+    const converted = await convert(term.offeringId);
+    expect(converted.status, JSON.stringify(converted.body)).toBe(201);
+    expect(converted.body.basket.lines[0]).toMatchObject({
+      intent: 'youth',
+      trialParticipationId: id,
     });
   });
 

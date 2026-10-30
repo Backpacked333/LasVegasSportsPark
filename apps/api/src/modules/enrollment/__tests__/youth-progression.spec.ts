@@ -262,6 +262,50 @@ describe('youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006)', () => {
     expect(inScope.body.items.length).toBeGreaterThan(0);
   });
 
+  it("GAPS-TRIAGE-04 / §4.10: the coach of a child's offering reads an empty page before the first assessment; any other coach learns nothing", async () => {
+    const newcomer = await child(t, [guardian]);
+    await createEnrollmentFixture(t, {
+      offeringId: setup.offeringId,
+      participantPersonId: newcomer,
+      status: 'confirmed',
+    });
+    const read = (actor: Actor, personId: string, query = '') =>
+      t.http.get(`/v1/participants/${personId}/assessments${query}`).set(actor.header);
+    // The accepted coach is an authorized reader: an empty page, with or without the offering.
+    for (const query of ['', `?offeringId=${setup.offeringId}`]) {
+      const res = await read(coach, newcomer, query);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body).toEqual({ items: [], nextCursor: null });
+    }
+    // Another author's draft changes nothing a coach can see or learn.
+    const drafted = await post(t, '/v1/assessments', author.header, {
+      templateId,
+      participantPersonId: newcomer,
+      offeringId: setup.offeringId,
+      skillAreaKey: 'passing',
+      observedOn: '2026-11-12',
+      scaleValue: 1,
+      visibility: 'staff_only',
+      staffNote: STAFF_NOTE,
+    });
+    expect(drafted.status, JSON.stringify(drafted.body)).toBe(201);
+    expect((await read(coach, newcomer)).body).toEqual({ items: [], nextCursor: null });
+    // A coach with no assignment on the child's offering gets NOT_FOUND alike for a child with
+    // only another author's draft, a child with published assessments, and a person who does not
+    // exist; so does the offering's own coach asking about another offering.
+    const otherCoach = await staff(t, ['coach']);
+    for (const personId of [newcomer, kid, newId()]) {
+      expect((await read(otherCoach, personId)).status).toBe(404);
+    }
+    const elsewhere = await offering(t, { kind: 'term', programId, basePriceMinor: 0 });
+    expect((await read(coach, newcomer, `?offeringId=${elsewhere.offeringId}`)).status).toBe(404);
+    expect((await read(coach, newId())).status).toBe(404);
+    // A program manager in scope sees the draft; the guardian learns nothing.
+    const managed = await read(reviewer, newcomer);
+    expect(managed.body.items.map((a: { id: string }) => a.id)).toEqual([drafted.body.id]);
+    expect((await read(guardian, newcomer)).status).toBe(404);
+  });
+
   it('the database rejects an assessment on an unapproved template, a reviewer equal to the author and a published staff_only assessment', async () => {
     const draftTemplate = newId();
     await t.db

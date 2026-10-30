@@ -1,4 +1,5 @@
 import { z } from '../zod';
+import { CapabilityIdSchema } from '../capabilities';
 import { Revision, withCommandMeta } from '../commands';
 import { CurrencyCode } from '../money';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
@@ -1184,15 +1185,35 @@ export const RegistrationOptionsQuery = z.object({
 export type RegistrationOptionsQuery = z.infer<typeof RegistrationOptionsQuery>;
 
 /**
+ * CAPABILITIES-07 (DEC-016): an intent the offering takes that cannot be used now, and why. The
+ * only reason today is its capability switch being off (`CAPABILITY_DISABLED`, the same
+ * `details.code` the command answers), with the capability and the decisions that decide whether
+ * it applies.
+ */
+export const UnavailableRegistrationIntentSchema = z
+  .object({
+    intent: RegistrationIntentSchema,
+    code: z.enum(['CAPABILITY_DISABLED']),
+    capability: CapabilityIdSchema,
+    applicabilityReferences: z.array(z.string()),
+  })
+  .openapi('UnavailableRegistrationIntent');
+export type UnavailableRegistrationIntent = z.infer<typeof UnavailableRegistrationIntentSchema>;
+
+/**
  * What an offering accepts (SPK-REG-001) and, for each named participant the caller may register,
  * the read-only eligibility of each intent (SPK-REG-002): nothing is held, written or charged, and
  * unknown evidence stays unknown. `seasonId` links an individual league offering to the season a
- * placement request names (SPK-PLACE-001).
+ * placement request names (SPK-PLACE-001). `availableIntents` are the intents that can be used
+ * now; an intent the offering takes whose capability switch is off is listed in
+ * `unavailableIntents` with its reason instead, and no participant eligibility is evaluated for it
+ * (CAPABILITIES-07, DEC-016).
  */
 export const RegistrationOptionsSchema = z
   .object({
     offeringId: z.uuid(),
     availableIntents: z.array(RegistrationIntentSchema),
+    unavailableIntents: z.array(UnavailableRegistrationIntentSchema),
     seasonId: z.uuid().nullable(),
     participants: z.array(
       z.object({

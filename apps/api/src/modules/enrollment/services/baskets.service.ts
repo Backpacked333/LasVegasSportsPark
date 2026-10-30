@@ -1400,7 +1400,7 @@ export class BasketsService implements BasketPort {
   }
 
   // -------------------------------------------------------------------------------------------
-  // Baskets opened by other commands (waitlist acceptance, trial conversion)
+  // Baskets opened by other commands (waitlist acceptance, trial conversion, bookings)
   // -------------------------------------------------------------------------------------------
 
   async openForLine(
@@ -1421,9 +1421,34 @@ export class BasketsService implements BasketPort {
       existingBasketId?: string | null;
       /** ENR-13: a booking line has no equivalence key (each booking is its own reservation). */
       noEquivalence?: boolean;
+      /**
+       * ENR-13 (SPK-COND-003): the line of a rental or party booking that `BookingsService` has
+       * already reserved and staffed; the only caller that may open a `rental_request` or
+       * `party_request` line.
+       */
+      forBooking?: boolean;
       correlationId: string | null;
     },
   ): Promise<{ basket: BasketRow; lineId: string }> {
+    // CAPABILITIES-03, CAPABILITIES-04: every caller (waitlist acceptance, trial conversion, the
+    // booking command) gets the checks POST /baskets/{id}/lines applies, so no path opens a line
+    // its own command, its reservation or its capability switch would refuse.
+    const ownCommand = SESSION_INTENT_COMMANDS[input.intent];
+    if (ownCommand) {
+      throw errors.validation(
+        `A ${input.intent} registration has its own command: ${ownCommand}.`,
+        {
+          path: 'intent',
+        },
+      );
+    }
+    if (BOOKING_INTENTS.includes(input.intent) && !input.forBooking) {
+      throw errors.validation(
+        'A rental or party is requested with its space, equipment and staff: POST /v1/bookings.',
+        { code: 'BOOKING_REQUIRED', path: 'intent' },
+      );
+    }
+    await this.assertLinesCapable(trx, organizationId, [{ intent: input.intent }]);
     const now = this.clock.now();
     const basketId = input.existingBasketId ?? newId();
     const price = await this.evaluator.priceSnapshot(
@@ -1513,6 +1538,9 @@ export class BasketsService implements BasketPort {
   ): Promise<{ basket: BasketRow; enrollmentId: string }> {
     const line = (await this.lineRows(trx, organizationId, basket.id)).find((l) => l.id === lineId);
     if (!line) throw errors.internal('basket line vanished');
+    // CAPABILITIES-03 (DEC-016): a Package G line is held only while its switch is on, whoever
+    // holds it, before any hold moves to it.
+    await this.assertLinesCapable(trx, organizationId, [line]);
     for (const holdId of existingHoldIds) {
       await this.capacity.reassignHold(
         trx,

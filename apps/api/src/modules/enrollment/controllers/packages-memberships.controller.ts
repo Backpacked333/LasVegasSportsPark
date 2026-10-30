@@ -2,6 +2,7 @@ import { Controller, Get, HttpCode, Post } from '@nestjs/common';
 import {
   CreateMembershipSuspensionBody,
   EndMembershipSuspensionBody,
+  ListMembershipSuspensionsQuery,
   ListMyMembershipsQuery,
   ListMyPackageEntitlementsQuery,
   ListPackageEntitlementsQuery,
@@ -77,6 +78,16 @@ export class PackagesMembershipsController {
     @ZodQuery(ListMyMembershipsQuery) query: ListMyMembershipsQuery,
   ): Promise<Page<Membership>> {
     return this.memberships.listMine(principal, query);
+  }
+
+  /** GAPS-TRIAGE-02: staff who may suspend the membership read its suspensions (ids, revisions). */
+  @Get('enrollments/:id/membership-suspensions')
+  suspensions(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodQuery(ListMembershipSuspensionsQuery) query: ListMembershipSuspensionsQuery,
+  ): Promise<Page<MembershipSuspension>> {
+    return this.memberships.listSuspensions(principal, params.id, query);
   }
 
   @Post('enrollments/:id/membership-suspensions')
