@@ -31,13 +31,23 @@ import {
   audienceOf,
   organizationOf,
   toCheckin,
+  type CheckinAudience,
   type CheckinRow,
 } from '../entry.shared';
 import { SessionCheckinMachine } from '../entry.state-machines';
 import { ActivityResolver, refOf, type ResolvedActivity } from './activity-resolver';
 import { ArrivalChecks, hasBlocking, type ParticipationBasis } from './arrival-checks';
-import { StaffScope } from './staff-scope';
+import { StaffScope, type ActivityAuthority } from './staff-scope';
 import { VisitsService } from './visits.service';
+
+/**
+ * The projection a check-in command answers with (AUTHZ-PRIVACY-01): desk authority sees the
+ * check-in as staff; a coach or official acting through an accepted assignment sees it without
+ * finance facts (`issuesFor`).
+ */
+function audienceOfAuthority(authority: ActivityAuthority): CheckinAudience {
+  return authority === 'assigned' ? 'assigned' : 'staff';
+}
 
 /** The withdrawal reason of a check-in whose activity its owning module canceled (ENT-03). */
 export const ACTIVITY_CANCELED = 'activity_canceled';
@@ -81,7 +91,7 @@ export class CheckinsService {
   ): Promise<SessionCheckin> {
     const organizationId = organizationOf(principal);
     const activity = await this.resolver.resolve(organizationId, body.activity);
-    await this.scope.requireForActivity(
+    const authority = await this.scope.requireForActivity(
       principal,
       EntryActions.checkIn,
       EntryActions.checkInAssigned,
@@ -167,7 +177,7 @@ export class CheckinsService {
           throw error;
         });
       await this.afterChange(trx, principal, organizationId, row, null, correlationId, body.reason);
-      return toCheckin(row);
+      return toCheckin(row, audienceOfAuthority(authority));
     });
   }
 
@@ -181,7 +191,7 @@ export class CheckinsService {
     const stored = await this.load(this.uow.reader(), organizationId, id);
     if (!stored) throw errors.notFound('session_checkin', id);
     const activity = await this.resolver.resolve(organizationId, refOf(activityDetailOf(stored)));
-    await this.scope.requireForActivity(
+    const authority = await this.scope.requireForActivity(
       principal,
       EntryActions.checkIn,
       EntryActions.checkInAssigned,
@@ -238,7 +248,7 @@ export class CheckinsService {
         correlationId,
         body.reason,
       );
-      return toCheckin(updated);
+      return toCheckin(updated, audienceOfAuthority(authority));
     });
   }
 
@@ -252,7 +262,7 @@ export class CheckinsService {
     const stored = await this.load(this.uow.reader(), organizationId, id);
     if (!stored) throw errors.notFound('session_checkin', id);
     const activity = await this.resolver.resolve(organizationId, refOf(activityDetailOf(stored)));
-    await this.scope.requireForActivity(
+    const authority = await this.scope.requireForActivity(
       principal,
       EntryActions.checkIn,
       EntryActions.checkInAssigned,
@@ -289,7 +299,7 @@ export class CheckinsService {
         correlationId,
         body.reason,
       );
-      return toCheckin(updated);
+      return toCheckin(updated, audienceOfAuthority(authority));
     });
   }
 
@@ -357,7 +367,8 @@ export class CheckinsService {
    * Protected read (§4.14 object- and field-level authorization, SPK-UX-007): desk and support
    * staff of the facility, the coach or official assigned to the check-in's activity, or a holder
    * of `view` over the person; otherwise NOT_FOUND. A customer reads the check-in without the
-   * staff actor's identifiers.
+   * staff actor's identifiers; neither a customer nor the assigned coach or official sees a
+   * balance issue or an obligation id (a blocking one reads `desk_review_required`).
    */
   async get(principal: Principal, id: string): Promise<SessionCheckin> {
     const organizationId = organizationOf(principal);
@@ -382,7 +393,7 @@ export class CheckinsService {
     if (field.allowed && principal.personId) {
       const activity = await this.resolver.resolve(organizationId, refOf(activityDetailOf(row)));
       if (await this.scope.isAssigned(organizationId, activity, principal.personId)) {
-        return toCheckin(row, 'staff');
+        return toCheckin(row, 'assigned');
       }
     }
     throw errors.protectedNotFound('session_checkin');

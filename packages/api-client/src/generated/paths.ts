@@ -49633,7 +49633,7 @@ export type components = {
             severity: "blocking" | "warning" | "info";
         };
         /** @enum {string} */
-        ArrivalIssueCode: "no_participation" | "enrollment_not_confirmed" | "missing_acknowledgment" | "outstanding_balance" | "balance_unknown" | "activity_canceled" | "activity_ended" | "not_on_site";
+        ArrivalIssueCode: "no_participation" | "enrollment_not_confirmed" | "missing_acknowledgment" | "outstanding_balance" | "balance_unknown" | "activity_canceled" | "activity_ended" | "not_on_site" | "desk_review_required";
         Assessment: {
             /** Format: uuid */
             authorPersonId: string;

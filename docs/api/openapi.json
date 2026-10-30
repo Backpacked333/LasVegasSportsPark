@@ -28848,7 +28848,8 @@
           "balance_unknown",
           "activity_canceled",
           "activity_ended",
-          "not_on_site"
+          "not_on_site",
+          "desk_review_required"
         ]
       },
       "ArrivalIssue": {
