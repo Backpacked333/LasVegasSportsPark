@@ -321,6 +321,54 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
     }
   });
 
+  it('§4.9 COMMANDS-04: a reversal decided on a stale view of the entitlement answers STALE_REVISION and returns nothing', async () => {
+    const buyer = await adult(t);
+    const { entitlementId } = await buy(buyer, 3);
+    expect((await book(buyer, sessions[0]!, entitlementId)).status).toBe(201);
+    const seen = await t.db
+      .selectFrom('package_entitlements')
+      .select('revision')
+      .where('id', '=', entitlementId)
+      .executeTakeFirstOrThrow();
+    // Another redemption meanwhile moves the entitlement on.
+    expect((await book(buyer, sessions[1]!, entitlementId)).status).toBe(201);
+    const [first] = await t.db
+      .selectFrom('package_redemptions')
+      .select('id')
+      .where('package_entitlement_id', '=', entitlementId)
+      .where('kind', '=', 'redeem')
+      .orderBy('redeemed_at')
+      .orderBy('id')
+      .execute();
+    const stale = await post(t, `/v1/package-redemptions/${first!.id}/reverse`, frontDesk.header, {
+      reason: 'Session was moved by the facility',
+      expectedRevision: seen.revision,
+    });
+    expect(stale.status, JSON.stringify(stale.body)).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    const after = await t.db
+      .selectFrom('package_entitlements')
+      .select(['redeemed_count', 'revision'])
+      .where('id', '=', entitlementId)
+      .executeTakeFirstOrThrow();
+    expect(after.redeemed_count).toBe(2);
+    const reversals = await t.db
+      .selectFrom('package_redemptions')
+      .select('id')
+      .where('package_entitlement_id', '=', entitlementId)
+      .where('kind', '=', 'reversal')
+      .execute();
+    expect(reversals).toHaveLength(0);
+    const current = await post(
+      t,
+      `/v1/package-redemptions/${first!.id}/reverse`,
+      frontDesk.header,
+      { reason: 'Session was moved by the facility', expectedRevision: after.revision },
+    );
+    expect(current.status, JSON.stringify(current.body)).toBe(200);
+    expect(current.body).toMatchObject({ redeemedCount: 1, remainingCredits: 2 });
+  });
+
   it('POL-007, POL-039: a canceled package booking returns its credit only as the approved cancellation policy says', async () => {
     const policyId = await cancellationPolicy(t, {
       text: 'Credits return until a day before the session.',

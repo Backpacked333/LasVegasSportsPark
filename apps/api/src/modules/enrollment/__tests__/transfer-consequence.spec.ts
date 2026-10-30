@@ -34,13 +34,23 @@ const differencePolicy: FinancePolicyPort = {
     };
     return consequence;
   },
-  cancellationConsequence: async () => ({
-    kind: 'none',
-    amountMinor: null,
-    currency: null,
-    explanation: 'No consequence.',
-    policyVersionId: null,
-  }),
+  // A full refund of what was paid for a priced place (stands in for DEC-009); nothing otherwise.
+  cancellationConsequence: async (_organizationId, input) =>
+    input.price && input.price.amountMinor > 0
+      ? {
+          kind: 'refund',
+          amountMinor: input.price.amountMinor,
+          currency: input.price.currency,
+          explanation: 'A full refund before the offering starts.',
+          policyVersionId: null,
+        }
+      : {
+          kind: 'none',
+          amountMinor: null,
+          currency: null,
+          explanation: 'No consequence.',
+          policyVersionId: null,
+        },
 };
 
 /**
@@ -214,5 +224,76 @@ describe('transfer financial consequence is recorded and owned (SPK-REG-010, §4
     expect(flat.status).toBe(200);
     expect(flat.body.previousEnrollment.transferConsequence).toMatchObject({ kind: 'none' });
     expect(await exceptionsFor(even.enrollmentId)).toEqual([]);
+  });
+
+  it('MONEY-04 / §4.7 invariant 12: an accepted cancellation refund opens a finance follow-up once; a cancellation with no consequence raises nothing', async () => {
+    const { enrollmentId } = await confirmedIn(10_000);
+    const cancellationExceptions = () =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .selectAll()
+        .where('affected_id', '=', enrollmentId)
+        .where('category', '=', 'enrollment.cancellation_consequence_pending')
+        .execute();
+    // The consequence must be accepted as recomputed; refused, nothing is raised.
+    const unaccepted = await post(t, `/v1/enrollments/${enrollmentId}/cancel`, parent.header, {
+      reason: 'Moving away',
+      expectedRevision: 2,
+    });
+    expect(unaccepted.status).toBe(409);
+    expect(await cancellationExceptions()).toEqual([]);
+    const idempotencyKey = key();
+    const cancel = () =>
+      t.http
+        .post(`/v1/enrollments/${enrollmentId}/cancel`)
+        .set(parent.header)
+        .set('Idempotency-Key', idempotencyKey)
+        .send({
+          reason: 'Moving away',
+          expectedRevision: 2,
+          acceptedConsequence: { kind: 'refund', amountMinor: 10_000, currency: 'USD' },
+        });
+    const canceled = await cancel();
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+    expect(canceled.body.status).toBe('canceled');
+    expect(await cancellationExceptions()).toEqual([
+      expect.objectContaining({
+        status: 'open',
+        owner_queue: 'finance_operator',
+        affected_type: 'enrollment',
+        details: expect.objectContaining({
+          consequence: expect.objectContaining({
+            kind: 'refund',
+            amountMinor: 10_000,
+            currency: 'USD',
+          }),
+          orderRef: `order-${enrollmentId}`,
+          previousStatus: 'confirmed',
+        }),
+      }),
+    ]);
+    const replay = await cancel();
+    expect(replay.status).toBe(200);
+    expect(await cancellationExceptions()).toHaveLength(1);
+
+    const free = await confirmedIn(0);
+    const freeCanceled = await post(
+      t,
+      `/v1/enrollments/${free.enrollmentId}/cancel`,
+      parent.header,
+      {
+        reason: 'Moving away',
+        expectedRevision: 2,
+      },
+    );
+    expect(freeCanceled.status, JSON.stringify(freeCanceled.body)).toBe(200);
+    expect(
+      await t.db
+        .selectFrom('operational_exceptions')
+        .select('id')
+        .where('affected_id', '=', free.enrollmentId)
+        .where('category', '=', 'enrollment.cancellation_consequence_pending')
+        .execute(),
+    ).toEqual([]);
   });
 });

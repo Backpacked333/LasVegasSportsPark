@@ -950,6 +950,33 @@ export class EnrollmentsService implements EnrollmentPort {
         consequence,
         'released',
       );
+      if (consequence.kind !== 'none') {
+        // MONEY-04 (§4.7 invariant 12, §4.12): the money side of an accepted cancellation has an
+        // owner, as for a transfer. How finance settles it (a refund, a credit, a charge or a
+        // review) is DEC-009 (pending); until then finance resolves it from this follow-up. Finance
+        // separately holds an installment plan of the order (finance.installment_registration_canceled).
+        await this.exceptions.raise(trx, {
+          organizationId,
+          category: 'enrollment.cancellation_consequence_pending',
+          severity: 'warning',
+          title: `Cancellation accepted with a ${consequence.kind}${
+            consequence.amountMinor !== null
+              ? ` of ${consequence.amountMinor} ${consequence.currency ?? ''}`.trimEnd()
+              : ''
+          } to settle`,
+          affectedType: 'enrollment',
+          affectedId: id,
+          ownerQueue: 'finance_operator',
+          dedupeKey: `cancellation_consequence:${id}`,
+          details: {
+            consequence,
+            enrollmentId: id,
+            orderRef: row.order_ref,
+            payerPersonId: row.payer_person_id,
+            previousStatus: row.status,
+          },
+        });
+      }
       return this.views.view(trx, organizationId, principal, updated);
     });
   }

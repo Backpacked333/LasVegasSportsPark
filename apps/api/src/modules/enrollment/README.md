@@ -356,7 +356,8 @@ mirrored by a database transition guard.
   canceled package booking returns its credit only as the package's approved cancellation policy
   says (`packageCreditReturn.untilMinutesBeforeStart`: `returned`), else `retained_by_policy`, or
   `retained_pending_policy` when no policy states it (POL-007, POL-039). Staff reverse a redemption
-  (`POST /v1/package-redemptions/{id}/reverse`, ungated). A canceled purchase revokes the package;
+  (`POST /v1/package-redemptions/{id}/reverse`, ungated; an `expectedRevision` other than the
+  entitlement's answers STALE_REVISION, COMMANDS-04). A canceled purchase revokes the package;
   future bookings stay and raise `enrollment.revoked_package_has_bookings`. Job
   `enrollment.expire_package_entitlements`. Reads: `GET /v1/me/package-entitlements`,
   `GET /v1/package-entitlements`.
@@ -507,8 +508,10 @@ bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
   (invariant 7 for packages) is enrollment's (ENR-11, above).
 - Pickup organizer assignment (workforce) and attendance (entry) are other modules' records.
 - The money side of a non-`none` transfer or cancellation consequence is finance's. Both are
-  recorded here as facts (`cancellation_consequence`, `transfer_consequence`), and a transfer's
-  also opens a `finance_operator` exception. Finance registers `FINANCE_POLICY_IMPL`
+  recorded here as facts (`cancellation_consequence`, `transfer_consequence`), and each also opens
+  a `finance_operator` exception (`enrollment.transfer_consequence_pending`,
+  `enrollment.cancellation_consequence_pending`, MONEY-04; **Verified**,
+  `__tests__/transfer-consequence.spec.ts`). Finance registers `FINANCE_POLICY_IMPL`
   (`FinancePolicyAdapter`), which computes the consequence from the approved policy; nothing
   executes the refund, credit or charge automatically yet, and whether a charge keeps the new
   place pending until paid is pending DEC-009 (finance README, "Known gaps"). The consequence is
