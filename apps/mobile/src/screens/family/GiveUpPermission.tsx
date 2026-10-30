@@ -3,7 +3,10 @@
  * authority check", SPK-IAM-003): the holder of a grant may end it themselves
  * (`POST /v1/access-grants/{id}/revoke`, `identity.revoke_access` with self authority, as
  * `GET /v1/me/permissions` lists it). One permission at a time, with the reason the API requires
- * and the grant's revision (STALE_REVISION or INVALID_TRANSITION: reload, the grant changed).
+ * and the grant's revision (STALE_REVISION or INVALID_TRANSITION: reload, the grant changed). Any
+ * grant not yet withdrawn may be given up, as the API allows: in effect now, starting later
+ * ("Starts <date>") or paused ("Under review", "Suspended"), each labelled with its state. While a
+ * request is in flight the form cannot be cancelled: its outcome is not known yet.
  *
  * Ending a permission another adult holds over the people one manages is not offered: those grants
  * are not readable (DEC-004) and ending relationships is DEC-089.
@@ -19,7 +22,7 @@ import { spacing } from '../../ui/theme';
 import { ME_QUERY_KEY, permissionLabel } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
 import { ChoiceGroup, Paragraph, TextField } from '../account/components/forms';
-import type { GrantView } from './grants';
+import { grantStatusLabel, type GrantView } from './grants';
 
 export const ACCESS_GRANTS_KEY = ['api', '/me/access-grants'] as const;
 
@@ -29,7 +32,7 @@ export function GiveUpPermission({
   onClose,
 }: {
   personName: string;
-  /** This account's grants over the person that are in effect now. */
+  /** This account's grants over the person that are not withdrawn: in effect, later or paused. */
   grants: readonly GrantView[];
   onClose: () => void;
 }) {
@@ -92,7 +95,13 @@ export function GiveUpPermission({
           revoke.reset();
         }}
         disabled={revoke.isProcessing}
-        options={grants.map((g) => ({ value: g.grantId, label: permissionLabel(g.permission) }))}
+        options={grants.map((g) => ({
+          value: g.grantId,
+          label: permissionLabel(g.permission),
+          // In effect now needs no note; a later or paused grant says which it is.
+          detail:
+            g.status === 'effective' && !g.underReview ? undefined : grantStatusLabel(g).label,
+        }))}
       />
       <TextField
         label="Reason"
@@ -114,7 +123,13 @@ export function GiveUpPermission({
           disabled={offline || chosen === null}
           accessibilityHint={offline ? 'Needs a connection' : undefined}
         />
-        <Button label="Cancel" variant="secondary" onPress={onClose} />
+        <Button
+          label="Cancel"
+          variant="secondary"
+          onPress={onClose}
+          disabled={revoke.isProcessing}
+          accessibilityHint={revoke.isProcessing ? 'Waiting for the answer' : undefined}
+        />
       </View>
       {offline ? (
         <Paragraph muted inset={false}>

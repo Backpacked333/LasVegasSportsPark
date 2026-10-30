@@ -23,10 +23,14 @@
  * ready (details before deciding); validation failure: not applicable, "cannot accept for this
  * participant" instead; permission restriction (addressed to someone else, or the account not
  * linked or not verified for it: not available, no hint it exists); stale version (expired,
- * revoked or already answered, from the read or from INVALID_TRANSITION; STALE_REVISION on decline
- * offers Reload); offline (cannot accept or decline, invitation kept); processing; success (granted
- * scope listed, or "Declined"); partial completion: not permitted; recovery required: not
- * applicable, a failed accept or decline shows "Try again" under the same idempotency key.
+ * revoked or already answered, from the read or from INVALID_TRANSITION, which reads the
+ * invitation again and shows the closed state in the badge meanwhile, never "Open until"; an
+ * invitation the signed-in person accepted says so and points to Family and permissions;
+ * STALE_REVISION on decline offers Reload); offline (cannot accept or decline, invitation kept);
+ * processing (nothing can be cancelled while an answer is in flight); success (granted scope
+ * listed, or "Declined"); partial completion: not permitted; recovery required: not applicable, a
+ * failed accept or decline shows "Try again", which resends the same request under the same
+ * idempotency key, until the read shows the invitation closed.
  */
 import { ApiError, presentationForError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -53,6 +57,7 @@ import {
   personNameText,
   usePersonName,
   useMe,
+  type GrantPermission,
   type MeData,
 } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
@@ -121,14 +126,52 @@ export function subjectsText(subjects: FamilyView['subjects']): string {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-function noLongerOpen(error: ApiError): string | null {
-  if (error.code !== 'INVALID_TRANSITION') return null;
-  return invitationStateLabel((error.details as { from?: unknown } | undefined)?.from);
+/**
+ * The state an INVALID_TRANSITION answer names (`details.from`: the invitation is closed), or
+ * null for any other answer.
+ */
+function closedStateOf(error: ApiError | null): string | null {
+  if (!error || error.code !== 'INVALID_TRANSITION') return null;
+  const from = (error.details as { from?: unknown } | undefined)?.from;
+  return typeof from === 'string' ? from : 'closed';
 }
 
 function isDeadInvitation(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false;
-  return noLongerOpen(error) !== null || error.isNotFound;
+  return closedStateOf(error) !== null || error.isNotFound;
+}
+
+/**
+ * The badge at the top: the read's state, unless an answer was refused because the invitation is
+ * closed and the read has not caught up yet; then the closed state the API named, never "Open
+ * until" next to a closed invitation.
+ */
+function badgeOf(
+  state: InvitationState,
+  expiresAt: string,
+  refusedAs: string | null,
+): StatusBadgeProps {
+  if (state === 'pending' && refusedAs !== null) {
+    return { tone: 'neutral', label: invitationStateLabel(refusedAs) };
+  }
+  return invitationStatus(state, expiresAt);
+}
+
+/** What a closed invitation means for someone who did not accept it (journeys.md section 3). */
+function closedCopy(state: string): string {
+  const askAgain = 'Ask the sender for a new one if you still need it.';
+  switch (state) {
+    case 'accepted':
+      return 'This invitation has already been accepted, so it cannot be answered again.';
+    case 'declined':
+      return `This invitation was declined, so it can no longer be accepted, and nothing was granted from it. ${askAgain}`;
+    case 'expired':
+      return `This invitation has expired, so it cannot be answered. ${askAgain}`;
+    case 'revoked':
+      return `The sender withdrew this invitation, so it cannot be answered. ${askAgain}`;
+    default:
+      return `This invitation is no longer open, so it cannot be answered. ${askAgain}`;
+  }
 }
 
 /** Route entry: `/invitations/{id}?type=family|team`; the token comes from memory, not the route. */
@@ -162,7 +205,7 @@ export function InvitationScreen({
               type === 'team' ? (
                 <TeamInvitation me={me} invitationId={invitationId} token={token} />
               ) : (
-                <FamilyInvitation invitationId={invitationId} token={token} />
+                <FamilyInvitation me={me} invitationId={invitationId} token={token} />
               )
             }
           </LinkedPerson>
@@ -232,17 +275,49 @@ function OfflineNotice({ offline }: { offline: boolean }) {
   );
 }
 
-function StaleInvitation({ label, at }: { label: string; at?: string | null }) {
+/**
+ * A closed invitation (its state is in the badge above): what that means now. One the signed-in
+ * person accepted (an earlier answer whose outcome was not known, or one given on another device)
+ * says so and points to what it gave them (SPK-IAM-004); they are not told to ask for a new one.
+ */
+function StaleInvitation({
+  state,
+  at,
+  acceptedByYou = false,
+  granted,
+}: {
+  state: string;
+  at?: string | null;
+  acceptedByYou?: boolean;
+  /** Family access: the permissions the acceptance granted, as the API recorded them. */
+  granted?: readonly GrantPermission[];
+}) {
+  const router = useRouter();
   return (
     <View style={styles.result} testID="invitation-closed">
-      <StatusBadge tone="neutral" label={label} />
-      <Paragraph inset={false}>
-        This invitation is no longer open, so it cannot be answered. Ask the sender for a new one if
-        you still need it.
-      </Paragraph>
+      {acceptedByYou ? (
+        <>
+          <Paragraph inset={false}>You accepted this invitation.</Paragraph>
+          {granted ? (
+            <Paragraph
+              inset={false}
+            >{`Permissions granted: ${listPermissions(granted)}.`}</Paragraph>
+          ) : null}
+          <Paragraph inset={false}>
+            What you may do for each person is listed under Family and permissions.
+          </Paragraph>
+          <Button
+            label="Open Family and permissions"
+            variant="secondary"
+            onPress={() => router.push('/family')}
+          />
+        </>
+      ) : (
+        <Paragraph inset={false}>{closedCopy(state)}</Paragraph>
+      )}
       {at ? (
         <Paragraph muted inset={false}>
-          {`${label} ${formatDateTime(at)}.`}
+          {`${invitationStateLabel(state)} ${formatDateTime(at)}.`}
         </Paragraph>
       ) : null}
     </View>
@@ -267,7 +342,9 @@ function Fact({ title, detail }: { title: string; detail: string }) {
 
 /**
  * Declining is final, so it is confirmed first; the reason is optional (the API takes one). The
- * request of the intent is kept: "Try again" resends it unchanged under the same key (§4.9).
+ * request of the intent (with the revision read when it started) is kept: "Try again" resends it
+ * unchanged under the same key (§4.9), even if the read has refreshed since. While the decline is
+ * in flight it cannot be cancelled: its outcome is not known yet.
  */
 function DeclineConfirm({
   busy,
@@ -302,7 +379,13 @@ function DeclineConfirm({
           disabled={disabled}
           accessibilityHint={disabled ? 'Needs a connection' : undefined}
         />
-        <Button label="Keep invitation" variant="secondary" onPress={onCancel} />
+        <Button
+          label="Keep invitation"
+          variant="secondary"
+          onPress={onCancel}
+          disabled={busy}
+          accessibilityHint={busy ? 'Waiting for the answer to the decline' : undefined}
+        />
       </View>
     </View>
   );
@@ -311,7 +394,15 @@ function DeclineConfirm({
 // ---------------------------------------------------------------------------------------------
 // Family access
 // ---------------------------------------------------------------------------------------------
-function FamilyInvitation({ invitationId, token }: { invitationId: string; token: string | null }) {
+function FamilyInvitation({
+  me,
+  invitationId,
+  token,
+}: {
+  me: MeData;
+  invitationId: string;
+  token: string | null;
+}) {
   const view = useApiQuery({
     path: '/me/invitations/{id}',
     request: { path: { id: invitationId } },
@@ -329,6 +420,7 @@ function FamilyInvitation({ invitationId, token }: { invitationId: string; token
     >
       {(invitation) => (
         <FamilyInvitationBody
+          me={me}
           invitation={invitation}
           token={token}
           onReload={() => void view.refetch()}
@@ -370,11 +462,15 @@ function closedAt(invitation: FamilyView): string | null {
   }
 }
 
+type FamilyDecline = { token: string; reason?: string; expectedRevision: number };
+
 function FamilyInvitationBody({
+  me,
   invitation,
   token,
   onReload,
 }: {
+  me: MeData;
   invitation: FamilyView;
   token: string | null;
   onReload: () => void;
@@ -391,8 +487,15 @@ function FamilyInvitationBody({
   ] as const;
   const accept = useApiCommand('post', '/invitations/{id}/accept', { invalidate: refresh });
   const decline = useApiCommand('post', '/invitations/{id}/decline', { invalidate: refresh });
-  const declineRequest = useRef<{ token: string; reason?: string } | null>(null);
+  // The whole request of the decline intent, revision included, so "Try again" resends it as is.
+  const declineRequest = useRef<FamilyDecline | null>(null);
   const id = invitation.id;
+
+  /** A closed or unknown invitation's token is dead; a closed one is read again (stale version). */
+  const afterRefusal = (error: unknown) => {
+    if (isDeadInvitation(error)) forgetLinkSecret('invitation', id);
+    if (error instanceof ApiError && closedStateOf(error) !== null) onReload();
+  };
 
   const submitAccept = async () => {
     if (!token) return;
@@ -401,44 +504,47 @@ function FamilyInvitationBody({
       forgetLinkSecret('invitation', id);
     } catch (error) {
       // accept.error is rendered below; the invitation is kept for "Try again" unless the API says
-      // it is closed or unknown, in which case its token is dead and is not offered again.
-      if (isDeadInvitation(error)) forgetLinkSecret('invitation', id);
+      // it is closed or unknown.
+      afterRefusal(error);
     }
   };
 
-  const sendDecline = async (request: { token: string; reason?: string }) => {
+  const sendDecline = async (request: FamilyDecline) => {
     declineRequest.current = request;
     try {
-      await decline.submit({
-        path: { id },
-        body: { ...request, expectedRevision: invitation.revision },
-      });
+      await decline.submit({ path: { id }, body: request });
       forgetLinkSecret('invitation', id);
     } catch (error) {
-      if (isDeadInvitation(error)) forgetLinkSecret('invitation', id);
+      afterRefusal(error);
     }
   };
 
   if (accept.data) return <FamilyAcceptedView result={accept.data} />;
   if (decline.data) return <DeclinedView />;
 
-  const stale =
-    (accept.error && noLongerOpen(accept.error)) || (decline.error && noLongerOpen(decline.error));
-  const open = invitation.effectiveStatus === 'pending' && !stale;
+  const refusedAs = closedStateOf(accept.error) ?? closedStateOf(decline.error);
+  const pending = invitation.effectiveStatus === 'pending';
+  const open = pending && refusedAs === null;
   const busy = accept.isProcessing || decline.isProcessing;
+  const acceptedByYou =
+    invitation.effectiveStatus === 'accepted' &&
+    me.person !== null &&
+    invitation.acceptedByPersonId === me.person.id;
   return (
     <View style={styles.body}>
       <View style={styles.result}>
-        <StatusBadge {...invitationStatus(invitation.effectiveStatus, invitation.expiresAt)} />
+        <StatusBadge {...badgeOf(invitation.effectiveStatus, invitation.expiresAt, refusedAs)} />
       </View>
       <FamilyFacts invitation={invitation} />
-      {invitation.effectiveStatus !== 'pending' ? (
+      {!pending ? (
         <StaleInvitation
-          label={invitationStateLabel(invitation.effectiveStatus)}
+          state={invitation.effectiveStatus}
           at={closedAt(invitation)}
+          acceptedByYou={acceptedByYou}
+          granted={acceptedByYou ? invitation.grantedPermissions : undefined}
         />
-      ) : stale ? (
-        <StaleInvitation label={stale} />
+      ) : refusedAs !== null ? (
+        <StaleInvitation state={refusedAs} />
       ) : null}
       {open ? (
         <>
@@ -461,7 +567,11 @@ function FamilyInvitationBody({
               busy={decline.isProcessing}
               disabled={offline || accept.isProcessing}
               onConfirm={(reason) =>
-                void sendDecline(reason === undefined ? { token } : { token, reason })
+                void sendDecline({
+                  token,
+                  expectedRevision: invitation.revision,
+                  ...(reason === undefined ? {} : { reason }),
+                })
               }
               onCancel={() => {
                 setDeclining(false);
@@ -491,7 +601,8 @@ function FamilyInvitationBody({
           <OfflineNotice offline={offline && token !== null} />
         </>
       ) : null}
-      {accept.error && !noLongerOpen(accept.error) ? (
+      {/* Once the read shows the invitation closed, a failed answer has nothing left to retry. */}
+      {accept.error && pending && closedStateOf(accept.error) === null ? (
         <CommandError
           error={accept.error}
           onRetry={() => void submitAccept()}
@@ -508,7 +619,7 @@ function FamilyInvitationBody({
           }
         />
       ) : null}
-      {decline.error && !noLongerOpen(decline.error) ? (
+      {decline.error && pending && closedStateOf(decline.error) === null ? (
         <CommandError
           error={decline.error}
           onRetry={() => {
@@ -701,6 +812,8 @@ function TeamFacts({ invitation }: { invitation: TeamView }) {
   );
 }
 
+type TeamDecline = { reason?: string; expectedRevision: number };
+
 function TeamInvitationBody({
   me,
   invitation,
@@ -729,8 +842,15 @@ function TeamInvitationBody({
   const decline = useApiCommand('post', '/team-invitations/{id}/decline', {
     invalidate: refresh,
   });
-  const declineReason = useRef<string | undefined>(undefined);
+  // The whole request of the decline intent, revision included, so "Try again" resends it as is.
+  const declineRequest = useRef<TeamDecline | null>(null);
   const id = invitation.id;
+
+  /** A closed or unknown invitation's token is dead; a closed one is read again (stale version). */
+  const afterRefusal = (error: unknown) => {
+    if (isDeadInvitation(error)) forgetLinkSecret('team-invitation', id);
+    if (error instanceof ApiError && closedStateOf(error) !== null) onReload();
+  };
 
   const choose = (next: string) => {
     setParticipant(next);
@@ -745,44 +865,37 @@ function TeamInvitationBody({
       });
       forgetLinkSecret('team-invitation', id);
     } catch (error) {
-      // accept.error is rendered below; the choice is kept. A closed or unknown invitation's token
-      // is dead and is not offered again.
-      if (isDeadInvitation(error)) forgetLinkSecret('team-invitation', id);
+      // accept.error is rendered below; the choice is kept.
+      afterRefusal(error);
     }
   };
-  const sendDecline = async (reason: string | undefined) => {
-    declineReason.current = reason;
+  const sendDecline = async (request: TeamDecline) => {
+    declineRequest.current = request;
     try {
-      await decline.submit({
-        path: { id },
-        body:
-          reason === undefined
-            ? { expectedRevision: invitation.revision }
-            : { expectedRevision: invitation.revision, reason },
-      });
+      await decline.submit({ path: { id }, body: request });
       forgetLinkSecret('team-invitation', id);
     } catch (error) {
-      if (isDeadInvitation(error)) forgetLinkSecret('team-invitation', id);
+      afterRefusal(error);
     }
   };
 
   if (accept.data) return <TeamAcceptedView result={accept.data} />;
   if (decline.data) return <DeclinedView />;
 
-  const stale =
-    (accept.error && noLongerOpen(accept.error)) || (decline.error && noLongerOpen(decline.error));
-  const open = invitation.effectiveStatus === 'pending' && !stale;
+  const refusedAs = closedStateOf(accept.error) ?? closedStateOf(decline.error);
+  const pending = invitation.effectiveStatus === 'pending';
+  const open = pending && refusedAs === null;
   const busy = accept.isProcessing || decline.isProcessing;
   return (
     <View style={styles.body}>
       <View style={styles.result}>
-        <StatusBadge {...invitationStatus(invitation.effectiveStatus, invitation.expiresAt)} />
+        <StatusBadge {...badgeOf(invitation.effectiveStatus, invitation.expiresAt, refusedAs)} />
       </View>
       <TeamFacts invitation={invitation} />
-      {invitation.effectiveStatus !== 'pending' ? (
-        <StaleInvitation label={invitationStateLabel(invitation.effectiveStatus)} />
-      ) : stale ? (
-        <StaleInvitation label={stale} />
+      {!pending ? (
+        <StaleInvitation state={invitation.effectiveStatus} />
+      ) : refusedAs !== null ? (
+        <StaleInvitation state={refusedAs} />
       ) : null}
       {open ? (
         <>
@@ -818,9 +931,15 @@ function TeamInvitationBody({
             <DeclineConfirm
               busy={decline.isProcessing}
               disabled={offline || accept.isProcessing}
-              onConfirm={(reason) => void sendDecline(reason)}
+              onConfirm={(reason) =>
+                void sendDecline({
+                  expectedRevision: invitation.revision,
+                  ...(reason === undefined ? {} : { reason }),
+                })
+              }
               onCancel={() => {
                 setDeclining(false);
+                declineRequest.current = null;
                 decline.reset();
               }}
             />
@@ -848,7 +967,8 @@ function TeamInvitationBody({
           <OfflineNotice offline={offline} />
         </>
       ) : null}
-      {accept.error && !noLongerOpen(accept.error) ? (
+      {/* Once the read shows the invitation closed, a failed answer has nothing left to retry. */}
+      {accept.error && pending && closedStateOf(accept.error) === null ? (
         <CommandError
           error={accept.error}
           onRetry={() => void submitAccept()}
@@ -859,12 +979,15 @@ function TeamInvitationBody({
           }}
         />
       ) : null}
-      {decline.error && !noLongerOpen(decline.error) ? (
+      {decline.error && pending && closedStateOf(decline.error) === null ? (
         <CommandError
           error={decline.error}
-          onRetry={() => void sendDecline(declineReason.current)}
+          onRetry={() => {
+            if (declineRequest.current) void sendDecline(declineRequest.current);
+          }}
           onReload={() => {
             decline.reset();
+            declineRequest.current = null;
             setDeclining(false);
             onReload();
           }}

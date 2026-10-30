@@ -588,6 +588,67 @@ describe('SCR-C-31 giving up a permission (SPK-IAM-006)', () => {
     expect(post?.headers['idempotency-key']).toBe('key-00000001');
   });
 
+  it('SPK-IAM-005, SPK-IAM-006: a grant starting later or paused by a review can be given up too, labelled with its state', async () => {
+    const app = familyApp({
+      'GET /me/permissions': MAY_REVOKE,
+      'GET /me/access-grants': grantsRoute([
+        grantView('view'),
+        grantView('pay', { status: 'scheduled', effectiveFrom: '2026-11-15T10:00:00.000Z' }),
+        grantView('complete_forms', { status: 'suspended', underReview: true }),
+        grantView('collect', { status: 'revoked', revokedAt: SINCE }),
+      ]),
+      'POST /access-grants/{id}/revoke': () =>
+        apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    fireEvent.press(
+      await screen.findByRole('button', { name: 'Give up a permission for Sam Morgan' }),
+    );
+    const form = screen.getByTestId('give-up-form');
+    expect(within(form).getByRole('radio', { name: 'View' })).toBeOnTheScreen();
+    expect(within(form).getByRole('radio', { name: /^Pay, Starts / })).toBeOnTheScreen();
+    expect(
+      within(form).getByRole('radio', { name: 'Complete forms, Under review' }),
+    ).toBeOnTheScreen();
+    // A withdrawn grant is not offered: there is nothing left to give up.
+    expect(within(form).queryByRole('radio', { name: /^Collect/ })).toBeNull();
+    fireEvent.press(within(form).getByRole('radio', { name: /^Pay, Starts / }));
+    fireEvent.changeText(within(form).getByLabelText('Reason'), 'Not needed');
+    fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+    expect(await within(form).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    const post = app.fake.requests.find((r) => r.method === 'POST');
+    expect(post?.params.id).toBe(`grant-pay-${CHILD}`);
+    expect(post?.body).toEqual({ reason: 'Not needed', expectedRevision: 2 });
+  });
+
+  it('processing: the form cannot be cancelled while giving up is in flight', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const app = familyApp({
+      'GET /me/permissions': MAY_REVOKE,
+      'POST /access-grants/{id}/revoke': () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    fireEvent.press(
+      await screen.findByRole('button', { name: 'Give up a permission for Sam Morgan' }),
+    );
+    const form = screen.getByTestId('give-up-form');
+    fireEvent.changeText(within(form).getByLabelText('Reason'), 'Mistake');
+    expect(within(form).getByRole('button', { name: 'Cancel' })).not.toBeDisabled();
+    fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+    await waitFor(() =>
+      expect(within(form).getByRole('button', { name: 'Cancel' })).toBeDisabled(),
+    );
+    await act(async () => {
+      answer(apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }));
+    });
+    await waitFor(() =>
+      expect(within(form).getByRole('button', { name: 'Cancel' })).not.toBeDisabled(),
+    );
+  });
+
   it('stale version: STALE_REVISION reloads the permissions as they are now', async () => {
     const app = familyApp({
       'GET /me/permissions': MAY_REVOKE,
@@ -657,10 +718,150 @@ describe('SCR-C-31 households (SPK-IAM-001)', () => {
     expect(screen.getByText(/Being in a household gives nobody any permission/)).toBeOnTheScreen();
   });
 
-  it('empty: no household yet', async () => {
+  it('empty: no household yet; without the create action, only the front desk can make one', async () => {
     const app = familyApp();
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No household yet' })).toBeOnTheScreen();
+    expect(
+      await screen.findByText('The front desk can group your family into a household.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Create a household' })).toBeNull();
+  });
+
+  const MAY_GROUP = mePermissions({
+    conditionalActions: [
+      { id: 'identity.create_household', self: true },
+      { id: 'identity.add_household_member', self: true, subjectPermission: 'view' },
+    ],
+  });
+
+  function household(members: { personId: string; displayName: string; isSelf: boolean }[]) {
+    return {
+      id: '0192f1a0-0000-7000-8000-00000000f201',
+      name: 'Morgan household',
+      members: members.map((m) => ({
+        ...m,
+        kind: m.isSelf ? 'adult' : 'child',
+        label: null,
+      })),
+      otherMemberCount: 0,
+      revision: 1,
+      createdAt: SINCE,
+    };
+  }
+
+  it('SPK-IAM-001: creates a household when the API lists identity.create_household; the list is read again', async () => {
+    let created = false;
+    const app = familyApp({
+      'GET /me/permissions': MAY_GROUP,
+      'GET /me/households': () =>
+        fakeResponse(200, {
+          items: created
+            ? [household([{ personId: SELF, displayName: 'Alex Morgan', isSelf: true }])]
+            : [],
+        }),
+      'POST /households': () => {
+        created = true;
+        return fakeResponse(201, {
+          id: '0192f1a0-0000-7000-8000-00000000f201',
+          name: 'Morgan household',
+          members: [{ personId: SELF, label: null }],
+          revision: 1,
+          createdAt: SINCE,
+        });
+      },
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByText('You can create one below.')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Create a household' }));
+    const form = screen.getByTestId('household-create');
+    expect(
+      within(form).getByText(/Being in a household gives nobody any permission/),
+    ).toBeOnTheScreen();
+    fireEvent.press(within(form).getByRole('button', { name: 'Create household' }));
+    expect(within(form).getByText(/Give the household a name/)).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    fireEvent.changeText(within(form).getByLabelText('Household name'), ' Morgan household ');
+    fireEvent.press(within(form).getByRole('button', { name: 'Create household' }));
+    expect(
+      await screen.findByTestId('household-0192f1a0-0000-7000-8000-00000000f201'),
+    ).toBeOnTheScreen();
+    const post = app.fake.requests.find((r) => r.route === '/households');
+    expect(post?.body).toEqual({ name: 'Morgan household' });
+    expect(post?.headers['idempotency-key']).toBe('key-00000001');
+  });
+
+  it('SPK-IAM-001: adds a person held with view to a household, and only such a person', async () => {
+    let added = false;
+    const app = familyApp({
+      'GET /me/permissions': MAY_GROUP,
+      'GET /person-names': namesRoute([SAM, person(CHILD_TWO, 'Rio', 'Morgan', 'child')]),
+      'GET /me/households': () =>
+        fakeResponse(200, {
+          items: [
+            household([
+              { personId: SELF, displayName: 'Alex Morgan', isSelf: true },
+              ...(added ? [{ personId: CHILD, displayName: 'Sam Morgan', isSelf: false }] : []),
+            ]),
+          ],
+        }),
+      'POST /households/{id}/members': () => {
+        added = true;
+        return fakeResponse(200, {
+          id: '0192f1a0-0000-7000-8000-00000000f201',
+          name: 'Morgan household',
+          members: [
+            { personId: SELF, label: null },
+            { personId: CHILD, label: 'Son' },
+          ],
+          revision: 1,
+          createdAt: SINCE,
+        });
+      },
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId('household-0192f1a0-0000-7000-8000-00000000f201');
+    fireEvent.press(
+      await within(card).findByRole('button', { name: 'Add someone to Morgan household' }),
+    );
+    const form = within(card).getByTestId('household-add-0192f1a0-0000-7000-8000-00000000f201');
+    expect(within(form).getByText(/does not change anyone's permissions/)).toBeOnTheScreen();
+    // Sam is held with view; Rio only with collect (FAMILY), so Rio is not offered.
+    expect(within(form).getByRole('radio', { name: 'Sam Morgan' })).toBeChecked();
+    expect(within(form).queryByRole('radio', { name: 'Rio Morgan' })).toBeNull();
+    fireEvent.changeText(within(form).getByLabelText('How they are related (optional)'), 'Son');
+    fireEvent.press(within(form).getByRole('button', { name: 'Add Sam Morgan' }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('household-0192f1a0-0000-7000-8000-00000000f201')).getByLabelText(
+          'Sam Morgan, Child',
+        ),
+      ).toBeOnTheScreen(),
+    );
+    const post = app.fake.requests.find((r) => r.route === '/households/{id}/members');
+    expect(post?.params.id).toBe('0192f1a0-0000-7000-8000-00000000f201');
+    expect(post?.body).toEqual({ personId: CHILD, label: 'Son' });
+    // Once everyone held with view is a member, there is nobody left to add.
+    expect(screen.queryByRole('button', { name: 'Add someone to Morgan household' })).toBeNull();
+  });
+
+  it('a refused add (ACCESS_DENIED) is shown as not available with the API reason', async () => {
+    const app = familyApp({
+      'GET /me/permissions': MAY_GROUP,
+      'GET /me/households': ok({
+        items: [household([{ personId: SELF, displayName: 'Alex Morgan', isSelf: true }])],
+      }),
+      'POST /households/{id}/members': () =>
+        apiError(403, 'ACCESS_DENIED', {
+          message: 'You do not hold view permission over this person.',
+          nextAction: 'contact_support_or_request_access',
+        }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Add someone to Morgan household' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Add Sam Morgan' }));
+    expect(await screen.findByLabelText('You cannot add this person')).toBeOnTheScreen();
+    expect(screen.getByText('You do not hold view permission over this person.')).toBeOnTheScreen();
   });
 });
 
@@ -677,7 +878,7 @@ describe('SCR-C-31 invitations sent (SPK-IAM-004)', () => {
     const open = await screen.findByTestId(`sent-invitation-${INVITATION}`);
     expect(
       within(open).getByLabelText(
-        /^Delegate for Sam Morgan, To jo@example.test\. Collect, Open until /,
+        /^Delegate for Sam Morgan, To jo@example.test\. Requested: Collect, Open until /,
       ),
     ).toBeOnTheScreen();
     expect(
@@ -688,6 +889,55 @@ describe('SCR-C-31 invitations sent (SPK-IAM-004)', () => {
     expect(within(done).queryByRole('button', { name: /^Withdraw/ })).toBeNull();
     const read = app.fake.requests.find((r) => r.route === '/me/invitations');
     expect(read?.query.direction).toBe('sent');
+  });
+
+  it('SPK-IAM-004: an accepted invitation shows what was granted and names what was requested but not granted', async () => {
+    const accepted = '0192f1a0-0000-7000-8000-00000000c009';
+    const app = familyApp({
+      'GET /me/invitations': page([
+        sentView({
+          id: accepted,
+          status: 'accepted',
+          effectiveStatus: 'accepted',
+          requestedPermissions: ['view', 'pay', 'collect'],
+          grantedPermissions: ['view', 'collect'],
+        }),
+      ]),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`sent-invitation-${accepted}`);
+    expect(
+      within(row).getByLabelText(
+        'Delegate for Sam Morgan, To jo@example.test. Granted: View and Collect. Not granted, because you no longer held them: Pay, Accepted',
+      ),
+    ).toBeOnTheScreen();
+  });
+
+  it('processing: "Keep it open" cannot be pressed while a withdrawal is in flight', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const app = familyApp({
+      'GET /me/invitations': page([sentView()]),
+      'POST /invitations/{id}/revoke': () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    render(<FamilyScreen />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`sent-invitation-${INVITATION}`);
+    fireEvent.press(
+      within(row).getByRole('button', { name: 'Withdraw invitation for Sam Morgan' }),
+    );
+    fireEvent.changeText(within(row).getByLabelText('Reason for withdrawing'), 'Wrong address');
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw invitation' }));
+    await waitFor(() =>
+      expect(within(row).getByRole('button', { name: 'Keep it open' })).toBeDisabled(),
+    );
+    await act(async () => {
+      answer(fakeResponse(200, { ...issued({ status: 'revoked', revision: 2 }) }));
+    });
+    await waitFor(() =>
+      expect(within(row).queryByRole('button', { name: 'Keep it open' })).toBeNull(),
+    );
   });
 
   it('withdraws an open invitation with a reason and its revision; the list then shows it revoked', async () => {

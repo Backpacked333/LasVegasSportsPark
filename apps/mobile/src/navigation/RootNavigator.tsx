@@ -19,6 +19,7 @@ export function RootNavigator() {
         <Stack.Screen name="invitations/index" options={{ title: 'Invitations' }} />
         <Stack.Screen name="invitations/[id]" options={{ title: 'Invitation' }} />
         <Stack.Screen name="family" options={{ title: 'Family and permissions' }} />
+        <Stack.Screen name="forms" options={{ title: 'Forms and acknowledgments' }} />
         <Stack.Screen name="preferences" options={{ title: 'Preferences' }} />
         <Stack.Screen name="link" options={{ title: 'Link' }} />
         <Stack.Screen name="family-calendar" options={{ title: 'Family calendar' }} />

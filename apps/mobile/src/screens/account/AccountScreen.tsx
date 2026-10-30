@@ -4,10 +4,13 @@
  * account setup and recovery, and sign out. Account deletion and data requests are DEC-059
  * (Operator/privacy owner): not offered.
  *
- * Sections whose screens are built open them; forms are signed within a registration (SCR-C-13
- * has no list of its own), so that row says "Not available yet". Family shows how many people the
- * API says this account may act for; sections that need a linked participant record say so until
- * setup is finished. The conditional Package G sections (rentals and parties, memberships, session
+ * Every section opens its screen; Forms opens the forms signed for this person and the people they
+ * manage (FormsScreen; forms still to sign are presented within a registration, SCR-C-13). Family
+ * counts the people the Family screen lists: those the API says this account may act for now
+ * (`GET /v1/me` authorities) and those over whom it holds only grants paused by a review or
+ * starting later (`GET /v1/me/access-grants?direction=held`), so it never says "No family members
+ * yet" while Family lists someone as "Under review". Sections that need a linked participant
+ * record say so until setup is finished. The conditional Package G sections (rentals and parties, memberships, session
  * packages, point-of-sale receipts) always open their screens, which sit behind their capability
  * switches; a switch `GET /v1/me/permissions` reports off is marked "Turned off" (DEC-016).
  *
@@ -23,6 +26,7 @@ import { presentationForError, type CapabilityId } from '@sportspark/api-client'
 import { useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { packageGRoutes } from '../../features/package-g/routes';
 import { registrationRoutes } from '../../features/registration/routes';
@@ -35,6 +39,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { spacing } from '../../ui/theme';
+import { grantKey, HELD_GRANTS_REQUEST, managedPeople, type GrantView } from '../family/grants';
 import { formatDateTime, personDisplayName, useMe, type MeData } from './components/account-data';
 
 /** Hub sections in SPK-UX-002 order; `href: null` until the section's screen exists. */
@@ -58,8 +63,8 @@ const SECTIONS: readonly {
     href: '/credits',
     needsPerson: true,
   },
-  // Forms are presented and signed within a registration (SCR-C-13); there is no list of them.
-  { screenId: 'SCR-C-13', title: 'Forms and acknowledgments', href: null, needsPerson: true },
+  // Forms signed so far (FormsScreen); forms to sign are presented within a registration (SCR-C-13).
+  { screenId: 'SCR-C-13', title: 'Forms and acknowledgments', href: '/forms', needsPerson: true },
   { screenId: 'SCR-C-36', title: 'Preferences', href: '/preferences', needsPerson: true },
   { screenId: 'SCR-C-38', title: 'Support', href: '/support', needsPerson: false },
 ];
@@ -165,16 +170,36 @@ function RecoveryRequired() {
   );
 }
 
-function familyDetail(me: MeData): string {
-  const n = me.authorities.length;
-  if (n === 0) return 'No family members yet';
-  return `You may act for ${n} ${n === 1 ? 'person' : 'people'}`;
+const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
+
+/**
+ * The Family row, from the same sources as the Family screen (`managedPeople`). While the held
+ * grants are not loaded (or failed) it names only what `GET /v1/me` says, and never "No family
+ * members yet", since a paused grant may still be listed there.
+ */
+export function familyDetail(me: MeData, held: readonly GrantView[] | undefined): string {
+  const now = me.authorities.length;
+  if (held === undefined) {
+    return now > 0 ? `You may act for ${people(now)}` : 'People you manage and their permissions';
+  }
+  const later = managedPeople(me, held).length - now;
+  if (now === 0 && later === 0) return 'No family members yet';
+  if (later === 0) return `You may act for ${people(now)}`;
+  const paused = 'with permissions under review, paused or starting later';
+  if (now === 0) return `${people(later)} ${paused}`;
+  return `You may act for ${people(now)}; ${later} more ${paused}`;
 }
 
 function AccountHub({ me }: { me: MeData }) {
   const router = useRouter();
   const { signOut } = useApp();
   const linked = me.person !== null;
+  const held = useApiPages({
+    path: '/me/access-grants',
+    request: HELD_GRANTS_REQUEST,
+    keyOf: grantKey,
+    enabled: linked,
+  });
   return (
     <View>
       {linked ? <RecoveryRequired /> : null}
@@ -201,7 +226,7 @@ function AccountHub({ me }: { me: MeData }) {
             : section.href === null
               ? undefined
               : section.screenId === 'SCR-C-31'
-                ? familyDetail(me)
+                ? familyDetail(me, held.data)
                 : undefined;
           return (
             <ListRow

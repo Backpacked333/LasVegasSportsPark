@@ -9,7 +9,8 @@
  *   From each person: invite a second guardian or a delegate with explicit permissions
  *   (InviteAdultForm), and give up a permission one holds (GiveUpPermission, offered when
  *   `GET /v1/me/permissions` lists `identity.revoke_access`; the API re-checks).
- * - Households (`GET /v1/me/households`): grouping only, never authority (§4.5).
+ * - Households (`GET /v1/me/households`): grouping only, never authority (§4.5); create one and
+ *   add people held with `view` to one, when `GET /v1/me/permissions` lists the actions.
  * - Invitations sent (`GET /v1/me/invitations?direction=sent`) with their state; withdraw an open
  *   one.
  * - Who can act for you (`GET /v1/me/access-grants?direction=over_me`).
@@ -54,8 +55,14 @@ import { Paragraph, SectionHeader } from '../account/components/forms';
 import { PersonAccessCard } from '../account/components/PersonAccess';
 import { AccessOverMeSection } from './AccessOverMeSection';
 import { GiveUpPermission } from './GiveUpPermission';
-import { grantKey, isCurrentGrant, type GrantView } from './grants';
-import { HouseholdsSection } from './HouseholdsSection';
+import {
+  grantKey,
+  HELD_GRANTS_REQUEST,
+  isCurrentGrant,
+  managedPeople,
+  type GrantView,
+} from './grants';
+import { HouseholdsSection, type HouseholdCandidate } from './HouseholdsSection';
 import { InviteAdultForm } from './InviteAdultForm';
 import { SentInvitationsSection } from './SentInvitationsSection';
 
@@ -106,17 +113,21 @@ function FamilyContent() {
 }
 
 /**
- * Everyone this account may act for: the API's authorities (in effect now), then anyone over whom
- * it holds only a paused or later grant (so "Under review" is visible), in the API's order.
+ * People this account may add to a household it belongs to: those it holds `view` over now
+ * (`GET /v1/me` authorities), named by the API (identity.add_household_member; the API re-checks).
  */
-export function managedPeople(me: MeData, held: readonly GrantView[] | undefined): Authority[] {
-  const people: Authority[] = [...me.authorities];
-  for (const grant of held ?? []) {
-    if (!isCurrentGrant(grant)) continue;
-    if (people.some((p) => p.subjectPersonId === grant.subjectPersonId)) continue;
-    people.push({ subjectPersonId: grant.subjectPersonId, permissions: [] });
+export function householdCandidates(
+  me: MeData,
+  names: ReadonlyMap<string, PersonNameEntry>,
+): HouseholdCandidate[] {
+  const out: HouseholdCandidate[] = [];
+  for (const authority of me.authorities) {
+    if (!authority.permissions.includes('view')) continue;
+    const entry = names.get(authority.subjectPersonId);
+    if (entry?.state !== 'ready') continue;
+    out.push({ personId: authority.subjectPersonId, name: personDisplayName(entry.name) });
   }
-  return people;
+  return out;
 }
 
 function nameOf(entry: PersonNameEntry | undefined): string {
@@ -136,7 +147,7 @@ function FamilyBody({ me }: { me: MeData }) {
   const [claimToken] = useState(() => readLinkSecret('claim'));
   const held = useApiPages({
     path: '/me/access-grants',
-    request: { query: { direction: 'held', limit: 100 } },
+    request: HELD_GRANTS_REQUEST,
     keyOf: grantKey,
   });
   const permissions = usePermissions();
@@ -182,7 +193,7 @@ function FamilyBody({ me }: { me: MeData }) {
         </View>
       ) : null}
       <LoadMore pages={held} label="permissions" />
-      <HouseholdsSection />
+      <HouseholdsSection candidates={householdCandidates(me, names)} />
       <SentInvitationsSection />
       <AccessOverMeSection />
       <SectionHeader title="Claim a record from the front desk" />
@@ -233,7 +244,8 @@ function ManagedPerson({
   mayGiveUp: boolean;
 }) {
   const [open, setOpen] = useState<'invite' | 'give-up' | null>(null);
-  const effective = (grants ?? []).filter((g) => g.status === 'effective');
+  // Every grant not withdrawn or ended can be given up (the API refuses only a revoked one).
+  const givable = (grants ?? []).filter(isCurrentGrant);
   return (
     <View>
       <PersonAccessCard authority={authority} index={index} name={name} grants={grants}>
@@ -246,7 +258,7 @@ function ManagedPerson({
                 onPress={() => setOpen('invite')}
               />
             ) : null}
-            {mayGiveUp && effective.length > 0 ? (
+            {mayGiveUp && givable.length > 0 ? (
               <Button
                 label={`Give up a permission for ${subject}`}
                 variant="secondary"
@@ -256,7 +268,7 @@ function ManagedPerson({
           </View>
         ) : null}
         {open === 'give-up' ? (
-          <GiveUpPermission personName={subject} grants={effective} onClose={() => setOpen(null)} />
+          <GiveUpPermission personName={subject} grants={givable} onClose={() => setOpen(null)} />
         ) : null}
       </PersonAccessCard>
       {open === 'invite' ? (

@@ -5,8 +5,11 @@
  * this person or to an email or phone they verified, newest first, each opening its detail
  * (InvitationScreen) to read before answering. Both lists are keyset pages with "Load more".
  *
- * The API filters on the effective status, so an invitation past its expiry is not listed as open.
- * Answering needs the token from the invitation link (except declining a team invitation); the
+ * Only invitations still open are listed. The family list filters on the effective status, so
+ * one past its expiry is not returned; the team list filters on the stored status (reported), so a
+ * pending team invitation past its expiry that the sweep has not recorded yet comes back with
+ * `effectiveStatus` `expired`: such rows are left out here, and do not count against "No open
+ * invitations". The same rule is applied to both lists. Answering needs the token from the invitation link (except declining a team invitation); the
  * detail says so. Invitations this person sent are on the family screen (SCR-C-31).
  *
  * States: loading; empty ("No open invitations"); ready; validation failure: not applicable;
@@ -33,6 +36,11 @@ type FamilyView = Schema<'InvitationView'>;
 type TeamView = Schema<'TeamInvitationView'>;
 
 const PAGE_SIZE = 20;
+
+/** Still open as the API states it now (`effectiveStatus`), not only as stored. */
+function isOpen(invitation: { effectiveStatus: string }): boolean {
+  return invitation.effectiveStatus === 'pending';
+}
 
 /** In-app route of one invitation; ids only, never a token or a name (§4.14). */
 export function invitationRoute(id: string, type: 'family' | 'team'): string {
@@ -93,7 +101,9 @@ function OpenInvitations() {
     path: '/me/team-invitations',
     request: { query: { status: 'pending', limit: PAGE_SIZE } },
   });
-  const bothEmpty = family.data?.length === 0 && team.data?.length === 0;
+  const openFamily = family.data?.filter(isOpen);
+  const openTeam = team.data?.filter(isOpen);
+  const bothEmpty = openFamily?.length === 0 && openTeam?.length === 0;
   return (
     <View>
       {bothEmpty ? (
@@ -103,52 +113,56 @@ function OpenInvitations() {
           description="When someone invites you to hold permissions for a family member, or to join a team, it appears here. You can also open the link you received."
         />
       ) : null}
-      <SectionHeader title="Family access" />
-      <QueryBoundary
-        query={family}
-        label="family access invitations"
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: 'No family access invitations',
-          description: 'Open invitations to hold permissions for someone appear here.',
-        }}
-      >
-        {(items) => (
-          <View accessibilityRole="list" accessibilityLabel="Family access invitations">
-            {items.map((invitation) => (
-              <FamilyRow
-                key={invitation.id}
-                invitation={invitation}
-                onPress={() => router.push(invitationRoute(invitation.id, 'family'))}
-              />
-            ))}
-          </View>
-        )}
-      </QueryBoundary>
-      <LoadMore pages={family} label="family access invitations" />
-      <SectionHeader title="Teams" />
-      <QueryBoundary
-        query={team}
-        label="team invitations"
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: 'No team invitations',
-          description: 'Open invitations to join a team roster appear here.',
-        }}
-      >
-        {(items) => (
-          <View accessibilityRole="list" accessibilityLabel="Team invitations">
-            {items.map((invitation) => (
-              <TeamRow
-                key={invitation.id}
-                invitation={invitation}
-                onPress={() => router.push(invitationRoute(invitation.id, 'team'))}
-              />
-            ))}
-          </View>
-        )}
-      </QueryBoundary>
-      <LoadMore pages={team} label="team invitations" />
+      <View testID="invitations-family">
+        <SectionHeader title="Family access" />
+        <QueryBoundary
+          query={{ ...family, data: openFamily }}
+          label="family access invitations"
+          isEmpty={(items) => items.length === 0}
+          empty={{
+            title: 'No family access invitations',
+            description: 'Open invitations to hold permissions for someone appear here.',
+          }}
+        >
+          {(items) => (
+            <View accessibilityRole="list" accessibilityLabel="Family access invitations">
+              {items.map((invitation) => (
+                <FamilyRow
+                  key={invitation.id}
+                  invitation={invitation}
+                  onPress={() => router.push(invitationRoute(invitation.id, 'family'))}
+                />
+              ))}
+            </View>
+          )}
+        </QueryBoundary>
+        <LoadMore pages={family} label="family access invitations" />
+      </View>
+      <View testID="invitations-team">
+        <SectionHeader title="Teams" />
+        <QueryBoundary
+          query={{ ...team, data: openTeam }}
+          label="team invitations"
+          isEmpty={(items) => items.length === 0}
+          empty={{
+            title: 'No team invitations',
+            description: 'Open invitations to join a team roster appear here.',
+          }}
+        >
+          {(items) => (
+            <View accessibilityRole="list" accessibilityLabel="Team invitations">
+              {items.map((invitation) => (
+                <TeamRow
+                  key={invitation.id}
+                  invitation={invitation}
+                  onPress={() => router.push(invitationRoute(invitation.id, 'team'))}
+                />
+              ))}
+            </View>
+          )}
+        </QueryBoundary>
+        <LoadMore pages={team} label="team invitations" />
+      </View>
       <Paragraph muted>
         Answered, expired and withdrawn invitations are not listed. Invitations you sent are under
         Family and permissions.

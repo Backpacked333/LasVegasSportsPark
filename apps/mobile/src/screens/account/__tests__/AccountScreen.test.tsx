@@ -3,7 +3,7 @@
  * preferences, support"; recovery required, §4.11), and the navigation into SCR-C-31, SCR-C-36,
  * SCR-C-17, SCR-C-01 and SCR-C-02.
  */
-import { act, render, screen, within } from '@testing-library/react-native';
+import { act, render, screen, waitFor, within } from '@testing-library/react-native';
 import { fireEvent, renderRouter, screen as routerScreen } from 'expo-router/testing-library';
 import { RootNavigator } from '../../../navigation/RootNavigator';
 import { createTestApp } from '../../../testing/test-app';
@@ -47,11 +47,12 @@ const SECTION_TITLES = [
 ];
 
 describe('SCR-C-30 AccountScreen', () => {
-  it('SPK-UX-002: lists the hub sections in order; built ones open, forms say "Not available yet"', async () => {
+  it('SPK-UX-002: lists the hub sections in order, and every one opens its screen', async () => {
     const app = createTestApp({
       routes: {
         'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
         'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([]),
       },
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
@@ -78,6 +79,7 @@ describe('SCR-C-30 AccountScreen', () => {
       'Enrollments and participation',
       'Payments and obligations',
       'Credits and makeup sessions',
+      'Forms and acknowledgments',
       'Support',
     ]) {
       expect(screen.getByRole('button', { name: title })).toHaveProp(
@@ -85,9 +87,7 @@ describe('SCR-C-30 AccountScreen', () => {
         `Opens ${title}`,
       );
     }
-    // Forms are signed within a registration (SCR-C-13): there is no list to open.
-    expect(screen.getByLabelText('Forms and acknowledgments, Not available yet')).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: /^Forms and acknowledgments/ })).toBeNull();
+    expect(screen.queryByLabelText(/Not available yet/)).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Invitations, Open invitations you received' }),
     ).toBeOnTheScreen();
@@ -96,6 +96,77 @@ describe('SCR-C-30 AccountScreen', () => {
         /Account deletion and data requests is not available yet: it depends on DEC-059/,
       ),
     ).toBeOnTheScreen();
+  });
+
+  it('SPK-IAM-005: the Family row counts a person whose every grant is paused, as Family lists them, never "No family members yet"', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([
+          {
+            grantId: 'grant-view-paused',
+            relationshipId: '0192f1a0-0000-7000-8000-00000000d100',
+            relationshipKind: 'guardian',
+            actorPersonId: '0192f1a0-0000-7000-8000-00000000a001',
+            actorDisplayName: 'Alex Morgan',
+            subjectPersonId: CHILD,
+            subjectDisplayName: 'Sam Morgan',
+            permission: 'view',
+            source: 'claim',
+            effectiveFrom: '2026-09-01T10:00:00.000Z',
+            effectiveTo: null,
+            revokedAt: null,
+            status: 'suspended',
+            underReview: true,
+            revision: 2,
+          },
+        ]),
+      },
+    });
+    render(<AccountScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByRole('button', {
+        name: 'Family and permissions, 1 person with permissions under review, paused or starting later',
+      }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('No family members yet')).toBeNull();
+    const read = app.fake.requests.find((r) => r.route === '/me/access-grants');
+    expect(read?.query).toEqual({ direction: 'held', limit: '100' });
+  });
+
+  it('the Family row says "No family members yet" only once the grants read confirms it, and stays neutral when that read fails', async () => {
+    const empty = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([]),
+      },
+    });
+    const first = render(<AccountScreen />, { wrapper: empty.wrapper });
+    expect(
+      await screen.findByRole('button', { name: 'Family and permissions, No family members yet' }),
+    ).toBeOnTheScreen();
+    first.unmount();
+
+    const failing = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': () =>
+          apiError(500, 'INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+      },
+    });
+    render(<AccountScreen />, { wrapper: failing.wrapper });
+    await waitFor(() =>
+      expect(failing.fake.requests.some((r) => r.route === '/me/access-grants')).toBe(true),
+    );
+    expect(
+      await screen.findByRole('button', {
+        name: 'Family and permissions, People you manage and their permissions',
+      }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText('No family members yet')).toBeNull();
   });
 
   it('recovery required (§4.11): a registration whose payment was received but not completed is pinned first with "Do not pay again"', async () => {
@@ -184,6 +255,7 @@ describe('SCR-C-30 navigation into the account screens', () => {
         'GET /me/households': ok({ items: [] }),
         'GET /me/invitations': page([]),
         'GET /me/team-invitations': page([]),
+        'GET /acknowledgments': ok([]),
       },
     });
     const TestRootLayout = () => (
@@ -229,6 +301,17 @@ describe('SCR-C-30 navigation into the account screens', () => {
     expect(
       await routerScreen.findByRole('header', { name: 'No open invitations' }),
     ).toBeOnTheScreen();
+  });
+
+  it('opens Forms and acknowledgments from Account (SCR-C-13 signed forms)', async () => {
+    const { router } = renderApp();
+    fireEvent.press(
+      await routerScreen.findByRole('button', { name: /^Forms and acknowledgments/ }),
+    );
+    expect(router.getPathname()).toBe('/forms');
+    expect((await routerScreen.findAllByRole('header', { name: 'No forms signed' })).length).toBe(
+      2,
+    );
   });
 
   it.each([

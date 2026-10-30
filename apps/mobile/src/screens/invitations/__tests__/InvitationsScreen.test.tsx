@@ -132,9 +132,26 @@ describe('SCR-C-17 InvitationsScreen', () => {
         apiError(500, 'INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
     });
     render(<InvitationsScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
-    expect(screen.getByTestId(`invitation-family-${FAMILY_ID}`)).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    // Each list answers on its own: wait for each one, never assert one after the other's flush.
+    expect(await screen.findByTestId(`invitation-family-${FAMILY_ID}`)).toBeOnTheScreen();
+    const failure = await screen.findByTestId('invitations-team');
+    expect(await within(failure).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(within(failure).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(
+      within(screen.getByTestId('invitations-family')).queryByRole('button', { name: 'Try again' }),
+    ).toBeNull();
+  });
+
+  it('a team invitation the API returns as pending but past its expiry (effectiveStatus expired) is not listed as open', async () => {
+    const app = listApp({
+      'GET /me/invitations': page([]),
+      'GET /me/team-invitations': page([{ ...teamView(), effectiveStatus: 'expired' }]),
+    });
+    render(<InvitationsScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'No open invitations' })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'No team invitations' })).toBeOnTheScreen();
+    expect(screen.queryByTestId(`invitation-team-${TEAM_ID}`)).toBeNull();
+    expect(screen.queryByLabelText(/Expired/)).toBeNull();
   });
 
   it('asks to finish setup when the account is not linked to a person, and reads no invitations', async () => {

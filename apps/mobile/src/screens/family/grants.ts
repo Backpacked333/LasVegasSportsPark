@@ -7,7 +7,12 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import type { StatusTone } from '../../ui/StatusBadge';
-import { formatDateTime, type GrantPermission } from '../account/components/account-data';
+import {
+  formatDateTime,
+  type Authority,
+  type GrantPermission,
+  type MeData,
+} from '../account/components/account-data';
 
 export type GrantView = Schema<'GrantView'>;
 
@@ -106,3 +111,21 @@ export function isCurrentGrant(grant: GrantView): boolean {
     grant.status === 'effective' || grant.status === 'scheduled' || grant.status === 'suspended'
   );
 }
+
+/**
+ * Everyone this account manages (SCR-C-31, and the Family row of SCR-C-30): the API's authorities
+ * (in effect now), then anyone over whom it holds only a paused or later grant (so "Under review"
+ * is visible), in the API's order.
+ */
+export function managedPeople(me: MeData, held: readonly GrantView[] | undefined): Authority[] {
+  const people: Authority[] = [...me.authorities];
+  for (const grant of held ?? []) {
+    if (!isCurrentGrant(grant)) continue;
+    if (people.some((p) => p.subjectPersonId === grant.subjectPersonId)) continue;
+    people.push({ subjectPersonId: grant.subjectPersonId, permissions: [] });
+  }
+  return people;
+}
+
+/** The query of this account's held grants, shared by Family and the Account hub. */
+export const HELD_GRANTS_REQUEST = { query: { direction: 'held', limit: 100 } } as const;

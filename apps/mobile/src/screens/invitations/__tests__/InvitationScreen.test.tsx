@@ -279,13 +279,13 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     });
     const closed = await screen.findByTestId('invitation-closed');
     expect(closed).toBeOnTheScreen();
-    expect(screen.getAllByLabelText('Expired').length).toBeGreaterThan(0);
-    expect(screen.getByText(/no longer open, so it cannot be answered/)).toBeOnTheScreen();
+    expect(screen.getByLabelText('Expired')).toBeOnTheScreen();
+    expect(screen.getByText(/has expired, so it cannot be answered/)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
   });
 
-  it('stale version: INVALID_TRANSITION on accept names the state the invitation is in now', async () => {
+  it('stale version: INVALID_TRANSITION on accept names the state the invitation is in now, reads it again and never keeps "Open until"', async () => {
     const app = familyApp({
       'POST /invitations/{id}/accept': () =>
         apiError(409, 'INVALID_TRANSITION', {
@@ -299,9 +299,103 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
     expect(await screen.findByLabelText('Revoked')).toBeOnTheScreen();
+    // The invitation is read again; until that read reports it closed, the badge is the state the
+    // refusal named, not the old "Open until".
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/invitations/{id}')).toHaveLength(2),
+    );
+    expect(await screen.findByLabelText('Revoked')).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Open until /)).toBeNull();
+    expect(screen.getByText(/The sender withdrew this invitation/)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     // A closed invitation's token is dead: it is not offered again.
     expect(readLinkSecret('invitation', INVITATION)).toBeNull();
+  });
+
+  it('stale version: after INVALID_TRANSITION the refreshed read shows the closed invitation as it is now', async () => {
+    let reads = 0;
+    const app = familyApp({
+      'GET /me/invitations/{id}': () => {
+        reads += 1;
+        return fakeResponse(
+          200,
+          reads === 1
+            ? familyView()
+            : familyView({ status: 'revoked', effectiveStatus: 'revoked', revokedAt: AT }),
+        );
+      },
+      'POST /invitations/{id}/accept': () =>
+        apiError(409, 'INVALID_TRANSITION', {
+          nextAction: 'reload_current_state',
+          details: { machine: 'Invitation', from: 'revoked', event: 'accept' },
+        }),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Accept invitation' }));
+    expect(await screen.findByText(/^Revoked .*\.$/)).toBeOnTheScreen(); // the read's revokedAt
+    expect(reads).toBe(2);
+    expect(screen.getByLabelText('Revoked')).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Open until /)).toBeNull();
+  });
+
+  it('SPK-IAM-004: an invitation this person already accepted says so and points to what it gave them, not to the sender', async () => {
+    const app = familyApp({
+      'GET /me/invitations/{id}': ok(
+        familyView({
+          status: 'accepted',
+          effectiveStatus: 'accepted',
+          acceptedAt: AT,
+          acceptedByPersonId: SELF,
+          grantedPermissions: ['view', 'collect'],
+        }),
+      ),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByText('You accepted this invitation.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Accepted')).toBeOnTheScreen();
+    expect(screen.getByText('Permissions granted: View and Collect.')).toBeOnTheScreen();
+    expect(screen.queryByText(/Ask the sender/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Family and permissions' })).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+  });
+
+  it('an invitation someone else accepted, or one that was declined, is not shown as answered by this person', async () => {
+    const accepted = familyApp({
+      'GET /me/invitations/{id}': ok(
+        familyView({
+          status: 'accepted',
+          effectiveStatus: 'accepted',
+          acceptedAt: AT,
+          acceptedByPersonId: OTHER_ADULT,
+        }),
+      ),
+    });
+    const first = render(
+      <InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />,
+      { wrapper: accepted.wrapper },
+    );
+    expect(await screen.findByText(/has already been accepted/)).toBeOnTheScreen();
+    expect(screen.queryByText('You accepted this invitation.')).toBeNull();
+    first.unmount();
+
+    const declined = familyApp({
+      'GET /me/invitations/{id}': ok(
+        familyView({ status: 'declined', effectiveStatus: 'declined', declinedAt: AT }),
+      ),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: declined.wrapper,
+    });
+    expect(
+      await screen.findByText(/was declined, so it can no longer be accepted/),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Declined')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
   });
 
   it('uses the journeys.md labels for every closed state', () => {
@@ -407,6 +501,104 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     await waitFor(() => expect(reads).toBe(2));
     expect(await screen.findByRole('button', { name: 'Decline' })).toBeOnTheScreen();
     expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull();
+  });
+
+  it('§4.9: "Try again" on a decline resends the same request, revision included, under the same key after the read refreshed', async () => {
+    let reads = 0;
+    let declines = 0;
+    const app = familyApp({
+      'GET /me/invitations/{id}': () => {
+        reads += 1;
+        return fakeResponse(
+          200,
+          reads === 1
+            ? familyView()
+            : familyView({ revision: 2, expiresAt: '2026-10-29T12:00:00.000Z' }),
+        );
+      },
+      'POST /invitations/{id}/decline': () => {
+        declines += 1;
+        return declines === 1
+          ? apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })
+          : fakeResponse(200, invitation({ status: 'declined', declinedAt: AT, revision: 2 }));
+      },
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
+    fireEvent.changeText(screen.getByLabelText('Reason (optional)'), 'Not me');
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    // The read refreshes meanwhile (return to the app, reconnect) with a newer revision.
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/me/invitations/{id}'] });
+    });
+    expect(await screen.findByLabelText(/^Open until .*29/)).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByTestId('invitation-declined')).toBeOnTheScreen();
+    const sent = posts(app);
+    expect(sent.map((r) => r.body)).toEqual([
+      { token: TOKEN, expectedRevision: 1, reason: 'Not me' },
+      { token: TOKEN, expectedRevision: 1, reason: 'Not me' },
+    ]);
+    expect(sent.map((r) => r.headers['idempotency-key'])).toEqual(['key-00000001', 'key-00000001']);
+  });
+
+  it('a failed decline offers no "Try again" once the read shows the invitation closed', async () => {
+    let reads = 0;
+    const app = familyApp({
+      'GET /me/invitations/{id}': () => {
+        reads += 1;
+        return fakeResponse(
+          200,
+          reads === 1
+            ? familyView()
+            : familyView({ status: 'declined', effectiveStatus: 'declined', declinedAt: AT }),
+        );
+      },
+      'POST /invitations/{id}/decline': () =>
+        apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/me/invitations/{id}'] });
+    });
+    expect(await screen.findByLabelText('Declined')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.queryByText(/INTEGRATION_UNAVAILABLE/)).toBeNull();
+  });
+
+  it('processing: the decline cannot be cancelled while its answer is outstanding', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const app = familyApp({
+      'POST /invitations/{id}/decline': () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
+    expect(screen.getByRole('button', { name: 'Keep invitation' })).not.toBeDisabled();
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Keep invitation' })).toBeDisabled(),
+    );
+    expect(screen.getByRole('button', { name: 'Keep invitation' })).toHaveProp(
+      'accessibilityHint',
+      'Waiting for the answer to the decline',
+    );
+    await act(async () => {
+      answer(fakeResponse(200, invitation({ status: 'declined', declinedAt: AT, revision: 2 })));
+    });
+    expect(await screen.findByTestId('invitation-declined')).toBeOnTheScreen();
   });
 
   it('opened from the list without the link: shows the invitation and says to open the link to answer', async () => {
@@ -584,7 +776,7 @@ describe('SCR-C-17 InvitationScreen (team)', () => {
     expect(post?.headers['idempotency-key']).toBe('key-00000001');
   });
 
-  it('INVALID_TRANSITION on decline (expired meanwhile) shows "Expired" and no further answer', async () => {
+  it('INVALID_TRANSITION on decline (expired meanwhile) shows "Expired", reads the invitation again and offers no further answer', async () => {
     const app = teamApp({
       'POST /team-invitations/{id}/decline': () =>
         apiError(409, 'INVALID_TRANSITION', {
@@ -598,6 +790,71 @@ describe('SCR-C-17 InvitationScreen (team)', () => {
     fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
     fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
     expect(await screen.findByLabelText('Expired')).toBeOnTheScreen();
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/team-invitations/{id}')).toHaveLength(2),
+    );
+    // The read still says pending (the sweep has not run): the badge keeps the refused state.
+    expect(await screen.findByLabelText('Expired')).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Open until /)).toBeNull();
+    expect(screen.getByText(/has expired, so it cannot be answered/)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
+  });
+
+  it('§4.9: "Try again" on a team decline resends the revision read when the decline started', async () => {
+    let reads = 0;
+    let declines = 0;
+    const app = teamApp({
+      'GET /team-invitations/{id}': () => {
+        reads += 1;
+        return fakeResponse(
+          200,
+          reads === 1
+            ? teamView()
+            : teamView({ revision: 4, expiresAt: '2026-10-29T12:00:00.000Z' }),
+        );
+      },
+      'POST /team-invitations/{id}/decline': () => {
+        declines += 1;
+        return declines === 1
+          ? apiError(503, 'INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })
+          : fakeResponse(200, teamView({ status: 'declined', effectiveStatus: 'declined' }));
+      },
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="team" token={null} />, {
+      wrapper: app.wrapper,
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    await act(async () => {
+      await app.queryClient.invalidateQueries({ queryKey: ['api', '/team-invitations/{id}'] });
+    });
+    expect(await screen.findByLabelText(/^Open until .*29/)).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByTestId('invitation-declined')).toBeOnTheScreen();
+    expect(posts(app).map((r) => r.body)).toEqual([
+      { expectedRevision: 3 },
+      { expectedRevision: 3 },
+    ]);
+    expect(posts(app).map((r) => r.headers['idempotency-key'])).toEqual([
+      'key-00000001',
+      'key-00000001',
+    ]);
+  });
+
+  it('a team invitation accepted already is not answered again and does not ask for a new one', async () => {
+    const app = teamApp({
+      'GET /team-invitations/{id}': ok(
+        teamView({ status: 'accepted', effectiveStatus: 'accepted' }),
+      ),
+    });
+    render(<InvitationScreen invitationId={INVITATION} type="team" token={TOKEN} />, {
+      wrapper: app.wrapper,
+    });
+    expect(await screen.findByLabelText('Accepted')).toBeOnTheScreen();
+    expect(screen.getByText(/has already been accepted/)).toBeOnTheScreen();
+    expect(screen.queryByText(/Ask the sender/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
   });
 

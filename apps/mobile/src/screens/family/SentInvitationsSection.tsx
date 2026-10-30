@@ -1,8 +1,10 @@
 /**
  * SCR-C-31 invitations this person sent (SPK-IAM-004): `GET /v1/me/invitations?direction=sent`,
- * newest first with "Load more", each with the people it covers, the requested permissions, the
- * address it went to and its state as the API states it ("Open until <date>", "Accepted",
- * "Declined", "Expired", "Revoked"). An open one can be withdrawn
+ * newest first with "Load more", each with the people it covers, the address it went to and its
+ * state as the API states it ("Open until <date>", "Accepted", "Declined", "Expired", "Revoked").
+ * An open or unanswered one shows the permissions requested; an accepted one shows the permissions
+ * the acceptance granted (`grantedPermissions`) and names any requested one that was not granted
+ * because the sender no longer held it (SPK-IAM-004). An open one can be withdrawn
  * (`POST /v1/invitations/{id}/revoke` with a reason and its revision; STALE_REVISION or
  * INVALID_TRANSITION: the list is reloaded and shows the invitation as it is now). The one-time
  * link is never shown again (§4.14).
@@ -30,6 +32,22 @@ import {
 } from '../invitations/InvitationScreen';
 
 type InvitationView = Schema<'InvitationView'>;
+
+/**
+ * The permissions part of a sent invitation's row: what was granted once accepted (and what was
+ * requested but not granted), otherwise what was requested.
+ */
+export function sentPermissionsText(invitation: InvitationView): string {
+  if (invitation.effectiveStatus !== 'accepted') {
+    return `Requested: ${listPermissions(invitation.requestedPermissions)}`;
+  }
+  const granted = invitation.grantedPermissions;
+  const notGranted = invitation.requestedPermissions.filter((p) => !granted.includes(p));
+  const text = `Granted: ${granted.length > 0 ? listPermissions(granted) : 'no permissions'}`;
+  return notGranted.length > 0
+    ? `${text}. Not granted, because you no longer held them: ${listPermissions(notGranted)}`
+    : text;
+}
 
 export function SentInvitationsSection() {
   const sent = useApiPages({
@@ -106,7 +124,7 @@ function SentInvitationRow({ invitation }: { invitation: InvitationView }) {
     <View testID={`sent-invitation-${invitation.id}`}>
       <ListRow
         title={`${relationshipLabel(invitation.relationshipKind)} for ${subjectsText(invitation.subjects)}`}
-        detail={`${to ? `To ${to}. ` : ''}${listPermissions(invitation.requestedPermissions)}`}
+        detail={`${to ? `To ${to}. ` : ''}${sentPermissionsText(invitation)}`}
         status={invitationStatus(invitation.effectiveStatus, invitation.expiresAt)}
       />
       {open && !withdrawing && !revoke.error ? (
@@ -146,6 +164,8 @@ function SentInvitationRow({ invitation }: { invitation: InvitationView }) {
               label="Keep it open"
               variant="secondary"
               onPress={() => setWithdrawing(false)}
+              disabled={revoke.isProcessing}
+              accessibilityHint={revoke.isProcessing ? 'Waiting for the answer' : undefined}
             />
           </View>
         </View>
