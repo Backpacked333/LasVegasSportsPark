@@ -18,21 +18,21 @@ const SCREENS = [
     title: 'Obligations and orders',
     id: 'SCR-S-35',
     purpose:
-      'Obligations per customer and team with total, received, allocated and remaining; orders, lines and installment plans.',
+      'Obligations per customer and team with total, received, allocated and remaining; orders by payment and fulfillment state, lines and installment plans.',
   },
   {
     to: '/finance/payments',
     title: 'Payment attempts and unknown outcomes',
     id: 'SCR-S-36',
     purpose:
-      'Unknown and conflicting payment and refund outcomes to reconcile from provider evidence before any retry; checkouts needing recovery.',
+      'Payment attempts by state, unknown and conflicting outcomes to reconcile from provider evidence before any retry, provider events, and checkouts needing recovery.',
   },
   {
     to: '/finance/credits',
     title: 'Refunds and credits',
     id: 'SCR-S-37',
     purpose:
-      'Refunds reserve the refundable amount before execution; credits with owner, currency, uses, expiry, balance and history.',
+      'Refunds by payment and state, each reserving the refundable amount before execution; credits with owner, currency, uses, expiry, balance and history.',
   },
   {
     to: '/finance/reconciliation',

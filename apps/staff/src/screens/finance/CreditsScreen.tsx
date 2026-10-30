@@ -7,14 +7,17 @@
  * Every command carries an idempotency key per intent. Expiry and permitted uses are what finance
  * enters: the policy is pending DEC-058, so nothing is preset.
  *
- * Credits are listed per owner (`GET /v1/credits?ownerPersonId=`); `/finance/credits/{id}` opens
- * one credit. Refunds are requested from a succeeded payment attempt (see the payment screen).
+ * Credits are listed per owner (`GET /v1/credits?ownerPersonId=`, keyset pages with "Load more");
+ * `/finance/credits/{id}` opens one credit. Refunds are listed by state (`GET /v1/refunds?status=`,
+ * FIN-02; `unknown` first, as it holds reserved funds) and requested from a succeeded payment
+ * attempt (see the payment screen).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError, fieldErrorsOf } from '../../features/registration-finance/CommandError';
 import {
@@ -31,10 +34,11 @@ import {
   humanize,
   parseMoneyInput,
 } from '../../features/registration-finance/format';
-import { CREDIT_STATUS } from '../../features/registration-finance/labels';
+import { CREDIT_STATUS, REFUND_STATUS } from '../../features/registration-finance/labels';
 import { PersonName } from '../../features/registration-finance/names';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
 import { PENDING } from '../../features/registration-finance/pending';
+import { RefundList } from '../../features/registration-finance/RefundList';
 import {
   LockedNote,
   outcomePending,
@@ -42,6 +46,7 @@ import {
 } from '../../features/registration-finance/sameRequest';
 import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { Button } from '../../ui/Button';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -354,26 +359,62 @@ function IssueCredit({ ownerId }: { ownerId: string }) {
 }
 
 function OwnerCredits({ ownerId }: { ownerId: string }) {
-  const credits = useApiQuery({
+  const credits = useApiPages({
     path: '/credits',
-    request: { query: { ownerPersonId: ownerId, limit: 200 } },
+    request: { query: { ownerPersonId: ownerId, limit: 50 } },
   });
   return (
-    <QueryBoundary
-      query={credits}
-      label="credits"
-      isEmpty={(page) => page.items.length === 0}
-      empty={{ title: 'No credits', description: 'This person holds no credits.' }}
-      unavailableOffline={['approving or redeeming credits']}
-    >
-      {(page) => (
-        <ul className="list" aria-label="Credits">
-          {page.items.map((credit) => (
-            <CreditCard key={credit.id} credit={credit} />
-          ))}
-        </ul>
-      )}
-    </QueryBoundary>
+    <>
+      <QueryBoundary
+        query={credits}
+        label="credits"
+        isEmpty={(items) => items.length === 0}
+        empty={{ title: 'No credits', description: 'This person holds no credits.' }}
+        unavailableOffline={['approving or redeeming credits']}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Credits">
+            {items.map((credit) => (
+              <CreditCard key={credit.id} credit={credit} />
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={credits} label="credits" />
+    </>
+  );
+}
+
+type RefundStatus = Schema<'RefundStatus'>;
+
+/** SPK-PAY-008: refunds by state (FIN-02); `unknown` first, since it holds reserved funds. */
+function RefundsByState() {
+  const [status, setStatus] = useState<RefundStatus | ''>('unknown');
+  return (
+    <section className="rf-panel" aria-labelledby="refunds-by-state-title">
+      <h3 id="refunds-by-state-title">Refunds</h3>
+      <p className="caption">
+        Refunds start from a succeeded payment attempt: open it from{' '}
+        <Link to="/finance/payments?view=attempts">Payment attempts</Link>.
+      </p>
+      <SelectField
+        label="Refund state"
+        value={status}
+        placeholder="Every state"
+        onChange={(v) => setStatus(v as RefundStatus | '')}
+        options={Object.entries(REFUND_STATUS).map(([value, badge]) => ({
+          value,
+          label: badge.label,
+        }))}
+      />
+      <RefundList
+        filter={status ? { status } : {}}
+        label="Refunds by state"
+        emptyDescription={
+          status === 'unknown' ? 'No refund has an unknown result.' : 'No refund matches.'
+        }
+      />
+    </section>
   );
 }
 
@@ -403,10 +444,8 @@ export function CreditsScreen() {
     <section aria-labelledby="credits-title">
       <h2 id="credits-title">Refunds and credits</h2>
       <SectionNav label="Finance" links={FINANCE_LINKS} />
-      <p>
-        Refunds start from a succeeded payment attempt: open it from{' '}
-        <Link to="/finance/payments">Payment attempts</Link>. Credits are below.
-      </p>
+      {creditId ? null : <RefundsByState />}
+      <h3>Credits</h3>
       {creditId ? (
         <OneCredit creditId={creditId} />
       ) : (

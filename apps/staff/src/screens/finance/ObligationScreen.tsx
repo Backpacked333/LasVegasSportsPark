@@ -5,7 +5,9 @@
  * authorization, retry and notice policy, extensions and outstanding balance. A failed installment
  * is a financial state with an action queue (the finance operator exceptions); participation
  * consequences are evaluated separately. Read-only; a checkout whose fulfillment is
- * `recovery_required` is listed with its owner queue and links to SCR-S-36.
+ * `recovery_required` is listed with its owner queue and links to SCR-S-36. A payment still on its
+ * way (`liveAttempt`) and the obligation's payment attempts (`GET /v1/payments?obligationId=`,
+ * FIN-02) are shown with their states; unknown is never shown as paid.
  */
 import { Link, useParams } from 'react-router';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -17,13 +19,15 @@ import {
   OBLIGATION_STATUS,
 } from '../../features/registration-finance/labels';
 import { OfferingName, PersonName } from '../../features/registration-finance/names';
+import { LiveAttemptNotice } from '../../features/registration-finance/LiveAttempt';
 import { ObligationFigures } from '../../features/registration-finance/ObligationFigures';
+import { PaymentAttemptList } from '../../features/registration-finance/PaymentAttempts';
 import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { Debtor } from './ObligationsScreen';
 
-function OrderSection({ orderId }: { orderId: string }) {
+export function OrderSection({ orderId }: { orderId: string }) {
   const order = useApiQuery({ path: '/orders/{id}', request: { path: { id: orderId } } });
   return (
     <section className="rf-panel" aria-labelledby="order-title">
@@ -56,7 +60,8 @@ function OrderSection({ orderId }: { orderId: string }) {
             {data.fulfillmentStatus === 'recovery_required' ? (
               <p>
                 Recovery required: money was received but fulfillment is incomplete. Owner: finance
-                operator queue. <Link to="/finance/payments">Open checkouts needing recovery</Link>.
+                operator queue. <Link to="/finance/payments">Open checkouts needing recovery</Link>,
+                or <Link to={`/finance/orders/${data.id}`}>the order&apos;s payment attempts</Link>.
               </p>
             ) : null}
             <div className="rf-table-wrap">
@@ -235,6 +240,7 @@ export function ObligationScreen() {
               </p>
             ) : null}
             <ObligationFigures totals={data.totals} />
+            <LiveAttemptNotice attempt={data.liveAttempt} />
             {data.contributions ? (
               <section className="rf-panel" aria-labelledby="contributions-title">
                 <h3 id="contributions-title">Player contributions</h3>
@@ -268,6 +274,13 @@ export function ObligationScreen() {
               </section>
             ) : null}
             {data.orderId ? <OrderSection orderId={data.orderId} /> : null}
+            <section className="rf-panel" aria-labelledby="obligation-payments-title">
+              <h3 id="obligation-payments-title">Payment attempts</h3>
+              <PaymentAttemptList
+                filter={{ obligationId: data.id }}
+                label="Payment attempts of the obligation"
+              />
+            </section>
             <p>
               <Link to={`/finance/reconciliation?obligation=${data.id}`}>
                 Record a cash or external tender against this obligation (SCR-S-38)

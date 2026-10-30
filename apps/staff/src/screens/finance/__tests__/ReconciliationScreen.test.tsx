@@ -50,11 +50,16 @@ describe('SCR-S-38 ReconciliationScreen', () => {
     expect(within(ledger).getByText('Deferred revenue')).toBeInTheDocument();
     expect(within(ledger).getByText('-$375.00')).toBeInTheDocument();
     expect(screen.getByText(/1 unknown payment outcome/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open them' })).toHaveAttribute(
+    // FIN-02: the unknown outcomes open their own lists.
+    expect(screen.getByRole('link', { name: 'Open the payment attempts' })).toHaveAttribute(
       'href',
-      '/finance/payments',
+      '/finance/payments?view=attempts',
     );
+    expect(
+      screen.getByRole('link', { name: 'Open the refunds with an unknown result' }),
+    ).toHaveAttribute('href', '/finance/credits');
     expect(screen.getByText(/depends on DEC-022/)).toBeInTheDocument();
+    expect(screen.getByText(/a conditional screen \(SCR-S-57/)).toBeInTheDocument();
     expect(
       app.fake.requests.find((r) => r.route === '/finance/reconciliation-report')?.query,
     ).toEqual({

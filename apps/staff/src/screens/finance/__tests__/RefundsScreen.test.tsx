@@ -2,7 +2,8 @@
  * SCR-S-37 refunds and credits (SPK-PAY-008, SPK-PAY-009, SPK-AT-007, DEC-009, DEC-058): reserve
  * before execution, the amount in minor units, partial refunds with what remains, over-refund and
  * concurrent reservation answers, an unknown refund keeping its reservation until reconciled, and
- * credits with owner, uses, expiry, balance, source and history.
+ * credits with owner, uses, expiry, balance, source and history; a payment's earlier refunds and
+ * refunds by state (`GET /refunds`, FIN-02), and credits in keyset pages.
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -18,14 +19,14 @@ import {
   credit,
   nameRoutes,
   ok,
-  paymentAttempt,
+  paymentDetail,
   refund,
 } from '../../../features/registration-finance/__tests__/fixtures';
 
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     ...nameRoutes(),
-    'GET /payments/{id}': ok(paymentAttempt()),
+    'GET /payments/{id}': ok(paymentDetail()),
     'GET /refunds/{id}': ok(refund()),
     'GET /credits': ok({ items: [credit()], nextCursor: null }),
     'GET /credits/{id}': ok(credit()),
@@ -34,6 +35,7 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
 }
 
 const REFUNDS_PATH = `/finance/payments/${PAYMENT_ID}/refunds`;
+const NOW_ISO = '2026-10-24T11:00:00.000Z';
 
 async function requestRefund(user: ReturnType<typeof userEvent.setup>, amount: string) {
   const form = await screen.findByRole('form', { name: 'Request a refund' });
@@ -153,11 +155,46 @@ describe('SCR-S-37 RefundsScreen', () => {
 
   it('does not offer a refund of a payment that did not succeed', async () => {
     const app = createTestApp({
-      routes: routes({ 'GET /payments/{id}': ok(paymentAttempt({ status: 'failed' })) }),
+      routes: routes({ 'GET /payments/{id}': ok(paymentDetail({ status: 'failed' })) }),
     });
     render(app.at(REFUNDS_PATH));
     expect(await screen.findByRole('heading', { name: 'Nothing to refund' })).toBeInTheDocument();
     expect(screen.queryByRole('form', { name: 'Request a refund' })).toBeNull();
+  });
+  it('FIN-02: lists the payment’s earlier refunds with their state and reservation, and what is still refundable', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /payments/{id}': ok(paymentDetail({}, { refundableMinor: 10000 })),
+        'GET /refunds': ok({
+          items: [
+            refund({ status: 'unknown', reservationStatus: 'reserved', unknownSince: NOW_ISO }),
+          ],
+          nextCursor: null,
+        }),
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    const list = await screen.findByRole('list', { name: 'Earlier refunds of this payment' });
+    expect(within(list).getByText('Refund unknown: reservation retained')).toBeVisible();
+    expect(within(list).getByText('Amount reserved')).toBeVisible();
+    expect(within(list).getByText(/the reserved amount stays held/)).toBeVisible();
+    expect(within(list).getByRole('link', { name: /^\$25\.00 · customer refund/ })).toHaveAttribute(
+      'href',
+      `/finance/refunds/${REFUND_ID}`,
+    );
+    const facts = screen.getByLabelText('Payment');
+    expect(within(facts).getByText('$100.00')).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/refunds')?.query).toMatchObject({
+      paymentAttemptId: PAYMENT_ID,
+    });
+  });
+
+  it('a payment without refunds says so', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /refunds': ok({ items: [], nextCursor: null }) }),
+    });
+    render(app.at(REFUNDS_PATH));
+    expect(await screen.findByText('No refund has been requested for this payment.')).toBeVisible();
   });
 });
 
@@ -309,5 +346,60 @@ describe('SCR-S-37 CreditsScreen', () => {
     });
     render(app.at(`/finance/credits/${CREDIT_ID}`));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+
+  it('SPK-PAY-008: lists refunds by state, unknown first, and narrows by state', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /refunds': (request) =>
+          fakeResponse(200, {
+            items:
+              request.query.status === 'unknown'
+                ? [refund({ status: 'unknown', reservationStatus: 'reserved' })]
+                : [],
+            nextCursor: null,
+          }),
+      }),
+    });
+    render(app.at('/finance/credits'));
+    const list = await screen.findByRole('list', { name: 'Refunds by state' });
+    expect(within(list).getByText('Refund unknown: reservation retained')).toBeVisible();
+    expect(within(list).getByRole('link', { name: 'Open the payment attempt' })).toHaveAttribute(
+      'href',
+      `/finance/payments/${PAYMENT_ID}`,
+    );
+    await user.selectOptions(screen.getByLabelText('Refund state'), 'failed');
+    expect(await screen.findByText('No refund matches.')).toBeVisible();
+  });
+
+  it('§4.5: pages a person’s credits with Load more', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /credits': (request) =>
+          fakeResponse(
+            200,
+            request.query.cursor === 'c2'
+              ? {
+                  items: [
+                    credit({
+                      id: `${CREDIT_ID.slice(0, -1)}7`,
+                      originalMinor: 700,
+                      remainingMinor: 700,
+                    }),
+                  ],
+                  nextCursor: null,
+                }
+              : { items: [credit()], nextCursor: 'c2' },
+          ),
+      }),
+    });
+    render(app.at('/finance/credits'));
+    await user.type(await screen.findByLabelText(/^Credit owner reference/), ADULT_ID);
+    await user.click(await screen.findByRole('button', { name: 'Load more credits' }));
+    const list = screen.getByRole('list', { name: 'Credits' });
+    await waitFor(() => expect(list.querySelectorAll(':scope > li')).toHaveLength(2));
+    expect(screen.queryByRole('button', { name: 'Load more credits' })).toBeNull();
   });
 });

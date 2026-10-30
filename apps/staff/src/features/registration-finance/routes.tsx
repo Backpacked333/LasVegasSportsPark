@@ -10,6 +10,7 @@ import { CreditsScreen } from '../../screens/finance/CreditsScreen';
 import { FinanceScreen } from '../../screens/finance/FinanceScreen';
 import { ObligationScreen } from '../../screens/finance/ObligationScreen';
 import { ObligationsScreen } from '../../screens/finance/ObligationsScreen';
+import { OrderScreen } from '../../screens/finance/OrderScreen';
 import { PaymentAttemptScreen } from '../../screens/finance/PaymentAttemptScreen';
 import { PaymentExceptionsScreen } from '../../screens/finance/PaymentExceptionsScreen';
 import { ReconciliationScreen } from '../../screens/finance/ReconciliationScreen';
@@ -43,6 +44,7 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/finance', <FinanceScreen />],
   ['/finance/obligations', <ObligationsScreen />],
   ['/finance/obligations/:obligationId', <ObligationScreen />],
+  ['/finance/orders/:orderId', <OrderScreen />],
   ['/finance/payments', <PaymentExceptionsScreen />],
   ['/finance/payments/:paymentId', <PaymentAttemptScreen />],
   ['/finance/payments/:paymentId/refunds', <RefundsScreen />],

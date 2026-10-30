@@ -1,27 +1,40 @@
 /**
- * SCR-S-36 Payment attempts and unknown outcomes, queue (SPK-PAY-007, §4.11, §4.12, SPK-AT-006):
- * the finance operator's open exceptions (`GET /v1/exceptions?queue=finance_operator`) grouped as
- * unknown payment outcomes, unknown refund outcomes, checkouts needing recovery, provider events
- * that match no attempt, and other finance exceptions. Each shows severity and status as text,
- * age, owner queue, deadline, and links to the affected record to reconcile it.
+ * SCR-S-36 Payment attempts and unknown outcomes (SPK-PAY-007, §4.11, §4.12, SPK-AT-006), three
+ * views chosen with `?view=` (opaque, no personal data in the URL):
  *
- * The API has no list of payment attempts by state, so this queue is built from the exceptions the
- * finance module raises when an outcome becomes unknown or conflicting; an attempt can also be
- * opened by its reference. When the queue is empty the screen says there are no unknown outcomes.
+ * - Exceptions (default): the finance operator's open exceptions
+ *   (`GET /v1/exceptions?queue=finance_operator`) grouped as unknown payment outcomes, unknown
+ *   refund outcomes, checkouts needing recovery, provider events that match no attempt, and other
+ *   finance exceptions, each with severity and status as text, age, owner queue, deadline, and a
+ *   link to the affected record to reconcile it. Empty says there are no unknown outcomes.
+ * - Payment attempts (`GET /v1/payments`, FIN-02): every attempt by state (including `unknown`),
+ *   purpose and payer, in keyset pages; an attempt also opens by its reference.
+ * - Provider events (`GET /v1/provider-events`, K-08): what the inbox received with its signature
+ *   verification state, processing state, attempts and last error, never the payload (§4.14);
+ *   duplicates and reordered deliveries are absorbed by the inbox (one row per provider event id).
+ *
  * Provider selection is pending DEC-019 and the classification target DEC-039.
  */
 import type { Schema } from '@sportspark/api-client';
 import { formatAge } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { SelectField, TextField } from '../../features/registration-finance/fields';
-import { formatInstant, humanize } from '../../features/registration-finance/format';
-import { EXCEPTION_SEVERITY, EXCEPTION_STATUS } from '../../features/registration-finance/labels';
+import { formatInstant, humanize, shortRef } from '../../features/registration-finance/format';
+import {
+  EXCEPTION_SEVERITY,
+  EXCEPTION_STATUS,
+  PAYMENT_STATUS,
+  PROVIDER_EVENT_STATUS,
+} from '../../features/registration-finance/labels';
+import { PaymentAttemptList } from '../../features/registration-finance/PaymentAttempts';
 import { PENDING } from '../../features/registration-finance/pending';
 import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -86,6 +99,8 @@ export function affectedLink(
     }
     case 'settlement_reconciliation':
       return { to: '/finance/reconciliation', label: 'Open reconciliation' };
+    case 'inbox_event':
+      return { to: '/finance/payments?view=events', label: 'Open the provider events' };
     default:
       return null;
   }
@@ -119,7 +134,7 @@ function ExceptionRow({ exception }: { exception: OperationalException }) {
         ) : (
           <span className="caption">
             The affected {exception.affected ? humanize(exception.affected.type) : 'record'} has no
-            read in the API (for provider events, the inbox is not published).
+            read in the API.
           </span>
         )}
       </div>
@@ -127,49 +142,16 @@ function ExceptionRow({ exception }: { exception: OperationalException }) {
   );
 }
 
-export function PaymentExceptionsScreen() {
-  const navigate = useNavigate();
+function ExceptionsView() {
   // '' asks for the API's active set (open and acknowledged): an acknowledged unknown outcome is
   // still unresolved and must stay visible (SCR-S-36).
   const [status, setStatus] = useState<ExceptionStatus | ''>('');
-  const [reference, setReference] = useState('');
-  const [referenceError, setReferenceError] = useState<string | null>(null);
   const exceptions = useApiQuery({
     path: '/exceptions',
     request: { query: { queue: 'finance_operator', limit: 200, ...(status ? { status } : {}) } },
   });
   return (
-    <section aria-labelledby="payments-title">
-      <h2 id="payments-title">Payment attempts and unknown outcomes</h2>
-      <SectionNav label="Finance" links={FINANCE_LINKS} />
-      <p>
-        A timeout is not proof of failure. Reconcile an unknown outcome from the provider&apos;s
-        evidence before anything else risks charging the customer again (SPK-PAY-007).
-      </p>
-      <form
-        noValidate
-        aria-label="Open a payment attempt"
-        className="rf-grid"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!UUID.test(reference.trim())) {
-            setReferenceError('Enter a payment attempt reference.');
-            return;
-          }
-          setReferenceError(null);
-          navigate(`/finance/payments/${reference.trim()}`);
-        }}
-      >
-        <TextField
-          label="Payment attempt reference"
-          value={reference}
-          onChange={setReference}
-          error={referenceError}
-        />
-        <Button type="submit" variant="secondary">
-          Open the attempt
-        </Button>
-      </form>
+    <>
       <SelectField
         label="Exceptions"
         value={status}
@@ -245,6 +227,205 @@ export function PaymentExceptionsScreen() {
           </>
         )}
       </QueryBoundary>
+    </>
+  );
+}
+
+type AttemptStatus = Schema<'PaymentAttemptStatus'>;
+type Purpose = Schema<'PaymentAttemptPurpose'>;
+const UUID_RE = UUID;
+const PURPOSES: readonly Purpose[] = [
+  'checkout',
+  'obligation',
+  'contribution',
+  'installment',
+  'pos_sale',
+];
+
+function AttemptsView() {
+  const navigate = useNavigate();
+  const [status, setStatus] = useState<AttemptStatus | ''>('unknown');
+  const [purpose, setPurpose] = useState<Purpose | ''>('');
+  const [payer, setPayer] = useState('');
+  const [reference, setReference] = useState('');
+  const [referenceError, setReferenceError] = useState<string | null>(null);
+  const payerId = UUID_RE.test(payer.trim()) ? payer.trim() : '';
+  return (
+    <>
+      <form
+        noValidate
+        aria-label="Open a payment attempt"
+        className="rf-grid"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!UUID_RE.test(reference.trim())) {
+            setReferenceError('Enter a payment attempt reference.');
+            return;
+          }
+          setReferenceError(null);
+          navigate(`/finance/payments/${reference.trim()}`);
+        }}
+      >
+        <TextField
+          label="Payment attempt reference"
+          value={reference}
+          onChange={setReference}
+          error={referenceError}
+        />
+        <Button type="submit" variant="secondary">
+          Open the attempt
+        </Button>
+      </form>
+      <div className="rf-grid">
+        <SelectField
+          label="Attempt state"
+          value={status}
+          placeholder="Every state"
+          onChange={(v) => setStatus(v as AttemptStatus | '')}
+          options={Object.entries(PAYMENT_STATUS).map(([value, badge]) => ({
+            value,
+            label: badge.label,
+          }))}
+        />
+        <SelectField
+          label="Purpose"
+          value={purpose}
+          placeholder="Every purpose"
+          onChange={(v) => setPurpose(v as Purpose | '')}
+          options={PURPOSES.map((p) => ({ value: p, label: humanize(p) }))}
+        />
+        <TextField
+          label="Payer reference"
+          value={payer}
+          onChange={setPayer}
+          hint="A person reference narrows to one payer."
+        />
+      </div>
+      <PaymentAttemptList
+        filter={{
+          ...(status ? { status } : {}),
+          ...(purpose ? { purpose } : {}),
+          ...(payerId ? { payerPersonId: payerId } : {}),
+        }}
+      />
+    </>
+  );
+}
+
+type EventStatus = Schema<'ProviderEventStatus'>;
+
+function EventsView({ initialProvider }: { initialProvider: string }) {
+  const [status, setStatus] = useState<EventStatus | ''>('');
+  const [provider, setProvider] = useState(initialProvider);
+  const [eventType, setEventType] = useState('');
+  const events = useApiPages({
+    path: '/provider-events',
+    request: {
+      query: {
+        limit: 50,
+        ...(status ? { status } : {}),
+        ...(provider.trim() ? { provider: provider.trim() } : {}),
+        ...(eventType.trim() ? { eventType: eventType.trim() } : {}),
+      },
+    },
+  });
+  return (
+    <>
+      <p className="caption">
+        What the inbox received from providers, newest first. Payloads are never shown (§4.14). A
+        duplicate or reordered delivery of the same provider event is processed once.
+      </p>
+      <div className="rf-grid">
+        <SelectField
+          label="Processing state"
+          value={status}
+          placeholder="Every state"
+          onChange={(v) => setStatus(v as EventStatus | '')}
+          options={Object.entries(PROVIDER_EVENT_STATUS).map(([value, badge]) => ({
+            value,
+            label: badge.label,
+          }))}
+        />
+        <TextField label="Provider" value={provider} onChange={setProvider} />
+        <TextField label="Event type" value={eventType} onChange={setEventType} />
+      </div>
+      <QueryBoundary
+        query={events}
+        label="provider events"
+        isEmpty={(items) => items.length === 0}
+        empty={{ title: 'No provider events', description: 'No provider event matches.' }}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Provider events">
+            {items.map((event) => (
+              <li key={event.id} aria-labelledby={`event-${event.id}`}>
+                <div className="row-text">
+                  <span className="row-title" id={`event-${event.id}`}>
+                    {event.provider} · {event.eventType}
+                  </span>
+                  <span className="caption">
+                    Provider event {event.providerEventId} · received{' '}
+                    {formatInstant(event.receivedAt, 'UTC')} · processed{' '}
+                    {formatInstant(event.processedAt, 'UTC')} · {event.attempts} attempt(s)
+                  </span>
+                  {event.lastError ? (
+                    <span className="caption">Last error: {event.lastError}</span>
+                  ) : null}
+                  <span className="caption">Inbox record {shortRef(event.id)}</span>
+                </div>
+                <span>
+                  <StatusBadge
+                    tone={event.signatureVerified ? 'success' : 'danger'}
+                    label={
+                      event.signatureVerified ? 'Signature verified' : 'Signature not verified'
+                    }
+                  />{' '}
+                  <StatusBadge {...PROVIDER_EVENT_STATUS[event.status]} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={events} label="provider events" />
+    </>
+  );
+}
+
+const VIEWS = [
+  { id: 'exceptions', label: 'Unknown outcomes and exceptions' },
+  { id: 'attempts', label: 'Payment attempts' },
+  { id: 'events', label: 'Provider events' },
+] as const;
+type View = (typeof VIEWS)[number]['id'];
+
+export function PaymentExceptionsScreen() {
+  const [params, setParams] = useSearchParams();
+  const requested = params.get('view');
+  const view: View = VIEWS.some((v) => v.id === requested) ? (requested as View) : 'exceptions';
+  return (
+    <section aria-labelledby="payments-title">
+      <h2 id="payments-title">Payment attempts and unknown outcomes</h2>
+      <SectionNav label="Finance" links={FINANCE_LINKS} />
+      <p>
+        A timeout is not proof of failure. Reconcile an unknown outcome from the provider&apos;s
+        evidence before anything else risks charging the customer again (SPK-PAY-007).
+      </p>
+      <div className="rf-actions" role="group" aria-label="Show">
+        {VIEWS.map((v) => (
+          <Button
+            key={v.id}
+            variant={view === v.id ? 'primary' : 'secondary'}
+            aria-pressed={view === v.id}
+            onClick={() => setParams(v.id === 'exceptions' ? {} : { view: v.id })}
+          >
+            {v.label}
+          </Button>
+        ))}
+      </div>
+      {view === 'exceptions' ? <ExceptionsView /> : null}
+      {view === 'attempts' ? <AttemptsView /> : null}
+      {view === 'events' ? <EventsView initialProvider={params.get('provider') ?? ''} /> : null}
       <StateView
         variant="pending-decision"
         subject="The classification target for unresolved payment events"
