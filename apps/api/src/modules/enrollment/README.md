@@ -394,14 +394,25 @@ mirrored by a database transition guard.
   work done can still be completed (SPK-SCHED-007); a held booking whose basket is in checkout answers 409
   `CHECKOUT_IN_PROGRESS`, and one whose basket is already paid but not yet confirmed 409
   `BOOKING_CONFIRMATION_PENDING`, before anything is written (§4.11). A booking follows its
-  scheduling events (handler `enrollment.booking_follow_event` on `scheduling.event_changed`,
-  failure owner `scheduler`; the events are re-read, so a late or replayed change gives the same
-  answer): when none of its occurrences takes place any more (a closure, any cancellation) it is
-  `canceled`, a held basket is released, its staffing exceptions are settled and, when money was
-  taken or is moving, `enrollment.booking_canceled_by_schedule` (owner `finance_operator`) names
-  the enrollment and the order so the consequence is decided under DEC-009 instead of executed; a
-  lost occurrence of a continuing booking raises `enrollment.booking_occurrence_canceled` and is
-  left out of the staffing coverage; a moved occurrence moves the booking's times. A closure
+  scheduling events (handler `enrollment.booking_follow_event` on every `scheduling.event_changed`
+  but `created`, failure owner `scheduler`; the events are re-read, so a late or replayed change
+  gives the same answer whenever it is handled): when none of its occurrences takes place any more
+  (a closure, any cancellation) it is `canceled`, a held basket is released, its staffing
+  exceptions are settled and, when money was taken or is moving,
+  `enrollment.booking_canceled_by_schedule` (owner `finance_operator`) names the enrollment and the
+  order so the consequence is decided under DEC-009 instead of executed. Every lost occurrence of a
+  continuing booking, whether lost before or after its start, has its declared staffing withdrawn
+  (requirements retired, as when the booking itself cancels it) and raises
+  `enrollment.booking_occurrence_canceled` once (a resolved one is not raised again); the lifecycle
+  job does the same before it completes a booking whose change notice is still on its way. The
+  booking then lists only the occurrences that take place, each with its event and the resources
+  scheduling holds for it, so `firstStart`, `lastEnd` and `occurrences` agree: a move or resize
+  moves its times and a relocation (SPK-SCHED-009) names the new field on that occurrence and in
+  the booking's resources, audited as `enrollment.booking_follow_schedule`; a lost occurrence is
+  named in that audit and in its exception (marking it in the Booking response is a contract and
+  client change, not made). When the booking's enrollment is cancelled while still pending (hold
+  expiry, an abandoned checkout, a cancelled hold) nothing was paid, and both money exceptions are
+  settled. A closure
   preview names the booker (`via: booking`) and the order a paid booking went through, and the
   booker is in the event's notice audience (`SESSION_AUDIENCE_IMPL`). Job
   `enrollment.booking_lifecycle` (failure owner `scheduler`): undecided requests expire at their

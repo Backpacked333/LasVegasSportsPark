@@ -110,7 +110,13 @@ export interface BookingsTable {
   status: Generated<BookingStatusValue>;
   first_start: Timestamp;
   last_end: Timestamp;
-  occurrences: Json<Array<{ start: string; end: string }>>;
+  /**
+   * The occurrences that take place, in time order. Once the booking follows its scheduling events
+   * (ASYNC-01) each also names its event and the resources held for it (SPK-SCHED-009).
+   */
+  occurrences: Json<
+    Array<{ start: string; end: string; eventId?: string; resourceIds?: string[] }>
+  >;
   recurrence: Json<Record<string, unknown>> | null;
   scheduling_series_id: string | null;
   scheduling_event_ids: Generated<string[]>;

@@ -422,6 +422,7 @@ export class EnrollmentModule implements OnModuleInit {
             event.organizationId,
             event.payload.enrollmentId,
             event.payload.reason,
+            event.payload.previousStatus,
             event.correlationId,
           ),
         ),
