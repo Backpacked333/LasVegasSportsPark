@@ -1,10 +1,11 @@
-// Release-bundle check (§5.2, §4.14): the development sign-in must not ship in a production build.
+// Release-bundle check (§5.2, §4.14): the development sign-in and the development card methods of
+// the point of sale (fake provider tokens, DEC-019 pending) must not ship in a production build.
 // Run after `vite build`; fails when any emitted file contains a development-only marker.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const dir = path.resolve(process.argv[2] ?? 'dist');
-const MARKERS = ['Development sign-in', '/dev/tokens'];
+const MARKERS = ['Development sign-in', '/dev/tokens', 'pm_fake_'];
 
 function files(root) {
   return readdirSync(root).flatMap((name) => {
@@ -26,4 +27,6 @@ if (offending.length > 0) {
   console.error(`Development-only code found in the release bundle:\n  ${offending.join('\n  ')}`);
   process.exit(1);
 }
-console.log(`Release bundle clean: ${emitted.length} files checked, no development sign-in.`);
+console.log(
+  `Release bundle clean: ${emitted.length} files checked, no development sign-in or card methods.`,
+);
