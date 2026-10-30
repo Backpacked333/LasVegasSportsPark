@@ -707,6 +707,19 @@ export class AccountingExportService {
           .where('organization_id', '=', organizationId)
           .where('id', '=', id)
           .execute();
+        // COMMANDS-05 (§4.4 audit, SPK-PAY-011): the batch's audit trail shows when its answer was
+        // lost and why, the step a finance operator reconciles.
+        await this.audit.record(trx, {
+          organizationId,
+          actor,
+          action: 'finance.accounting_batch_unknown',
+          targetType: 'accounting_export_batch',
+          targetId: id,
+          beforeRevision: row.revision,
+          afterRevision: row.revision + 1,
+          correlationId,
+          details: { from: row.status, error: result.error },
+        });
         await this.exceptions.raise(trx, {
           organizationId,
           category: 'finance.accounting_export_unknown',

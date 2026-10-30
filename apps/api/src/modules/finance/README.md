@@ -412,7 +412,10 @@ outcome recording and reconciliation are never gated.
   `accounting_export_batches` (status machine guard, idempotency key unique per organization,
   `sha256:` checksum of the exported lines), `accounting_export_lines` (one side per line; a
   journal entry has at most one live export line; lines never change except leaving the live set
-  when their batch is rejected or canceled).
+  when their batch is rejected or canceled). Migration `0609_finance_export_line_guards.sql`
+  (INTEGRITY-03): a line is added only to a `prepared` batch and within its line count, copies its
+  journal entry's account, debit, credit and currency, and a batch commits holding exactly its
+  `line_count` lines, so the database keeps an exported batch as it was sent.
 - No default mapping exists: a batch is prepared only when every account of its entries has an
   approved mapping, else `ACCOUNTING_MAPPING_REQUIRED` naming the accounts (SPK-PAY-011, DEC-022).
   Corrections are later journals exported in a later batch; an exported batch never changes
@@ -423,7 +426,8 @@ outcome recording and reconciliation are never gated.
   finance operator) asks about `unknown` batches and `submitted` ones older than
   `FINANCE_ACCOUNTING_SUBMIT_STALE_SECONDS` (technical setting, default 300) and resubmits with
   the same key when the connection has no record. Exceptions:
-  `finance.accounting_export_unknown`, `_rejected`, `_conflict`.
+  `finance.accounting_export_unknown`, `_rejected`, `_conflict`. Every batch transition is
+  audited, the move to `unknown` included (`finance.accounting_batch_unknown` with the error).
 - `ACCOUNTING_EXPORT_PORT` has only `FakeAccountingProvider` (success, rejection, timeout/unknown,
   duplicate submission), refused in production; registered as integration
   `finance.accounting_export` (gate `accounting`). Events `finance.accounting_mapping_changed`,
