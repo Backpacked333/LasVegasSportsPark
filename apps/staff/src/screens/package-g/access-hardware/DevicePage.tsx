@@ -14,7 +14,13 @@
  *   (`POST /v1/access-policies/{id}/retire`, never gated) sends deny-all without a replacement.
  *   Schedule times are the facility's local time (SPK-SCHED-008);
  * - its command queue with delivery outcomes (`GET /v1/access-devices/{id}/commands`, paged):
- *   failed and unknown deliveries are retried by the API's job, never resent from here.
+ *   failed and unknown deliveries are retried by the API's job, never resent from here;
+ * - its audit history (`GET /v1/audit-records?targetType=access_device&targetId=`, read only when
+ *   asked because the read is itself audited, §4.14): registration, changes, retirement and the
+ *   health changes the API observed.
+ *
+ * A retirement refused as stale (STALE_REVISION, INVALID_TRANSITION) offers Reload: the device is
+ * read again and the next attempt sends the revision just read (§4.9).
  */
 import { formatAge, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -22,6 +28,7 @@ import { useState, type FormEvent } from 'react';
 import { useParams } from 'react-router';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiPages } from '../../../api/useApiPages';
+import { AuditTrail } from '../../../features/pos-access-accounting/AuditTrail';
 import { CommandError } from '../../../features/pos-access-accounting/CommandError';
 import { useFacilityDirectory } from '../../../features/pos-access-accounting/facilities';
 import { LinkNotAvailable } from '../../../features/pos-access-accounting/fields';
@@ -148,6 +155,12 @@ function DeviceBody({ device }: { device: Device }) {
       {active && offer.allowed(ACCESS_ACTIONS.retireDevice, device.facilityId) ? (
         <RetireDevice device={device} />
       ) : null}
+      <AuditTrail
+        targetType="access_device"
+        targetId={device.id}
+        subject={device.name}
+        zone={zone}
+      />
       <Policies device={device} zone={zone} />
       <Commands device={device} zone={zone} />
     </>
@@ -226,6 +239,7 @@ function EditDevice({ device }: { device: Device }) {
 
 function RetireDevice({ device }: { device: Device }) {
   const online = useOnline();
+  const queryClient = useQueryClient();
   const command = useApiCommand('post', '/access-devices/{id}/retire', {
     invalidate: [DEVICES_QUERY_PREFIX],
   });
@@ -250,7 +264,13 @@ function RetireDevice({ device }: { device: Device }) {
           }
         }}
       />
-      <CommandError error={command.error} />
+      <CommandError
+        error={command.error}
+        onReload={() => {
+          command.reset();
+          void queryClient.invalidateQueries({ queryKey: DEVICES_QUERY_PREFIX });
+        }}
+      />
     </div>
   );
 }

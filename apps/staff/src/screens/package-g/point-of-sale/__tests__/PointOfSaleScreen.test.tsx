@@ -240,28 +240,120 @@ describe('SCR-S-55 PointOfSaleScreen: registers, products and sessions', () => {
     expect(price).toHaveValue('3');
   });
 
-  it('retires a product with a reason, even while the switch is off (never gated)', async () => {
+  it('retires a product with a reason and its revision, even while the switch is off (never gated)', async () => {
     const user = userEvent.setup();
+    let retired = false;
     const app = createTestApp({
       routes: {
         ...routes(),
         'GET /me/permissions': permissions([], FINANCE),
-        'POST /pos-products/{id}/retire': ok(product({ status: 'retired' })),
+        'GET /pos-products': () =>
+          fakeResponse(200, {
+            items: [
+              retired
+                ? product({ status: 'retired', retireReason: 'Discontinued', revision: 4 })
+                : product(),
+            ],
+            nextCursor: null,
+          }),
+        'POST /pos-products/{id}/retire': () => {
+          retired = true;
+          return fakeResponse(200, product({ status: 'retired', retireReason: 'Discontinued' }));
+        },
       },
     });
     render(app.at(`${POS}/products`));
+    expect(await screen.findByTestId('state-turned-off')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Retire WATER' }));
     const form = screen.getByRole('form', { name: 'Retire WATER' });
     await user.click(within(form).getByRole('button', { name: 'Retire the product' }));
     expect(within(form).getByText('Enter a reason.')).toBeInTheDocument();
     await user.type(within(form).getByLabelText(/^Reason for retiring/), 'Discontinued');
     await user.click(within(form).getByRole('button', { name: 'Retire the product' }));
-    await waitFor(() =>
-      expect(app.fake.requests.some((r) => r.route === '/pos-products/{id}/retire')).toBe(true),
-    );
+    // The list is read again: the product is retired and offers nothing more.
+    const list = await screen.findByRole('list', { name: 'Products' });
+    expect(await within(list).findByText('Retired: Discontinued')).toBeInTheDocument();
+    expect(within(list).getByText('retired')).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: 'Retire WATER' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retire WATER' })).toBeNull();
     const call = app.fake.requests.find((r) => r.route === '/pos-products/{id}/retire');
-    expect(call?.body).toEqual({ reason: 'Discontinued' });
-    expect(screen.queryByRole('button', { name: 'Change WATER' })).toBeNull();
+    expect(call?.body).toEqual({ reason: 'Discontinued', expectedRevision: 3 });
+  });
+
+  it('§4.9: a stale product retirement offers Reload instead of applying it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes(),
+        'GET /me/permissions': permissions(ON, FINANCE),
+        'POST /pos-products/{id}/retire': apiError(409, 'STALE_REVISION', {
+          message: 'The product changed since it was read.',
+          nextAction: 'reload_current_state',
+        }),
+      },
+    });
+    render(app.at(`${POS}/products`));
+    await user.click(await screen.findByRole('button', { name: 'Retire WATER' }));
+    const form = screen.getByRole('form', { name: 'Retire WATER' });
+    await user.type(within(form).getByLabelText(/^Reason for retiring/), 'Discontinued');
+    await user.click(within(form).getByRole('button', { name: 'Retire the product' }));
+    const stale = await screen.findByTestId('state-stale');
+    expect(stale).toHaveTextContent('Error code: STALE_REVISION');
+    const reads = app.fake.requests.filter((r) => r.route === '/pos-products').length;
+    await user.click(within(stale).getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/pos-products').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId('state-stale')).toBeNull());
+  });
+
+  it('retires a register with a reason and its revision while the switch is off; an open session is refused with its code', async () => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    const app = createTestApp({
+      routes: {
+        ...routes(),
+        'GET /me/permissions': permissions([], FINANCE),
+        'POST /pos-registers/{id}/retire': () => {
+          attempts += 1;
+          return attempts === 1
+            ? fakeResponse(409, {
+                code: 'RESOURCE_CONFLICT',
+                message: 'Close the register session before retiring the register.',
+                correlationId: 'c-reg',
+                nextAction: 'resolve_conflict',
+                details: { code: 'REGISTER_SESSION_OPEN' },
+              })
+            : fakeResponse(200, register({ status: 'retired', retireReason: 'Moved' }));
+        },
+      },
+    });
+    render(app.at(POS));
+    expect(await screen.findByTestId('state-turned-off')).toBeInTheDocument();
+    const list = await screen.findByRole('list', { name: 'Registers' });
+    await user.click(within(list).getByRole('button', { name: 'Retire register FD1' }));
+    const form = within(list).getByRole('form', { name: 'Retire register FD1' });
+    expect(form).toHaveTextContent('A retired register opens no new session');
+    await user.type(within(form).getByLabelText(/^Reason for retiring/), 'Moved');
+    await user.click(within(form).getByRole('button', { name: 'Retire the register' }));
+    const refusal = await within(list).findByTestId('state-validation');
+    expect(refusal).toHaveTextContent('The register has an open session');
+    expect(refusal).toHaveTextContent('Close the open session with its counted cash first.');
+    expect(refusal).toHaveTextContent('Error code: RESOURCE_CONFLICT (REGISTER_SESSION_OPEN)');
+    // The form keeps the reason; once the session is closed elsewhere, the retirement goes through.
+    expect(within(form).getByLabelText(/^Reason for retiring/)).toHaveValue('Moved');
+    await user.click(within(form).getByRole('button', { name: 'Retire the register' }));
+    await waitFor(() =>
+      expect(within(list).queryByRole('form', { name: 'Retire register FD1' })).toBeNull(),
+    );
+    const calls = app.fake.requests.filter((r) => r.route === '/pos-registers/{id}/retire');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.params.id).toBe(REGISTER_ID);
+    expect(calls[0]?.body).toEqual({ reason: 'Moved', expectedRevision: 1 });
+    // A definitive refusal ends the intent: the second attempt is a new key.
+    expect(calls[1]?.headers['idempotency-key']).not.toBe(calls[0]?.headers['idempotency-key']);
   });
 
   it('POL-018: closes a session with the counted cash and its revision; a difference is raised for finance', async () => {

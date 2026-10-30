@@ -25,6 +25,7 @@ meanwhile with ACCESS_DENIED `details.code: 'CAPABILITY_DISABLED'` shows "turned
 | `CommandError.tsx`    | Every `details.code` refusal of these commands explained with the API's figures (remaining to pay, still refundable, unmapped accounts); four-eyes refusals say another person approves. The rest is Finance's `CommandError`. |
 | `intent.ts`           | One idempotency key per intent: while an outcome is unknown the form is locked and "Try again" resends the same request with the same key.                                                                                     |
 | `ReasonAction.tsx`    | Retire, withdraw, void and cancel ask for the reason in a labelled form; nothing happens on one click.                                                                                                                         |
+| `AuditTrail.tsx`      | The audit history of one record (`GET /v1/audit-records?targetType=&targetId=`), read only when asked because the read is itself audited (§4.14); offered unless core.view_audit is not held.                                  |
 | `labels.ts`           | Machine-state labels with glyph and text (`StatusBadge`), never colour alone.                                                                                                                                                  |
 | `dev/`                | Development builds only: the fake payment provider's card scenarios. Release builds take no card tender and show DEC-019 (checked by `scripts/check-release-bundle.mjs`, marker `pm_fake_`).                                   |
 | `me.ts`, `fields.tsx` | The signed-in person (four eyes), route ids (a malformed id is "Link not available"), money fields that name their currency, and opening a record by its reference.                                                            |
@@ -34,15 +35,17 @@ meanwhile with ACCESS_DENIED `details.code: 'CAPABILITY_DISABLED'` shows "turned
 **Verified** in jsdom (`point-of-sale/__tests__/PointOfSaleScreen.test.tsx`, `SalePage.test.tsx`):
 
 - Registers by facility (`GET /v1/pos-registers`, paged) with their open session; creating
-  (`POST /v1/pos-registers`) and retiring (`POST /v1/pos-registers/{id}/retire`, never gated) a
-  register; opening a session with its opening float (`POST /v1/pos-registers/{id}/sessions`). The
+  (`POST /v1/pos-registers`) and retiring (`POST /v1/pos-registers/{id}/retire`, never gated, with
+  the reason and `expectedRevision`; REGISTER_SESSION_OPEN explained with its code) a register;
+  opening a session with its opening float (`POST /v1/pos-registers/{id}/sessions`). The
   session currency is typed, or taken from the facility's products when they share one: never a
   client default.
 - Products (`GET /v1/pos-products`, paged): create with SKU, kind, price in minor units and currency,
   and the approved tax and fee keys the catalog lists
   (`GET /v1/policy-versions?kind=tax_fee&approvalStatus=approved`; none approved says products sell
   without charges, DEC-057); change name, price or charges with `expectedRevision`
-  (STALE_REVISION offers Reload); retire with a reason (never gated).
+  (STALE_REVISION offers Reload); retire with a reason and `expectedRevision` (never gated;
+  STALE_REVISION offers Reload; the list is read again and shows it retired).
 - A register session (`GET /v1/pos-register-sessions/{id}`): float, expected cash, times in the
   facility's zone; start a sale naming the customer or not (`POST /v1/pos-sales`); close with the
   counted cash and `expectedRevision` (`POST .../close`, never gated). A difference is shown and is
@@ -53,13 +56,22 @@ meanwhile with ACCESS_DENIED `details.code: 'CAPABILITY_DISABLED'` shows "turned
   the tax), totals, tenders and returns. Cash and external tenders (evidence reference required,
   SPK-PAY-012) and, in development builds, card tenders (`POST /v1/pos-sales/{id}/tenders`). A card
   tender with an unknown outcome leaves the sale open: "recovery required", do not take the card
-  again, link to the payment attempt to reconcile (SPK-PAY-007); processing is "not paid yet"; the
-  sale is "paid" only when the API says so. No answer locks the form and retries with the same key.
+  again, link to the payment attempt to reconcile (SPK-PAY-007); processing is "not paid yet" with
+  no void or receipt; a declined card says nothing was taken; the sale is "paid" only when the API
+  says so. No answer locks the form and retries with the same key. A tender refused with
+  PAYMENT_OUTCOME_UNKNOWN keeps the card intent locked and offers "Reload the sale": the sale then
+  shows the payment to reconcile and a cash or external tender for what remains is a new intent
+  (new key). A line or tender refused as stale (INVALID_TRANSITION, the sale paid or voided
+  elsewhere) offers Reload.
 - Void with a reason (`POST /v1/pos-sales/{id}/void`), not offered once a card was charged
   (SALE_HAS_CARD_TENDER); returns of paid units by a tender kind the sale was paid with
   (`POST /v1/pos-sales/{id}/returns`), the API computing the amount and refusing more than was paid
-  that way (RETURN_EXCEEDS_TENDER with what is still refundable); a card refund not final shows its
-  status and links to the refund (SPK-PAY-008).
+  that way (RETURN_EXCEEDS_TENDER with what is still refundable); a card return larger than one
+  card payment can refund (REFUND_EXCEEDS_REFUNDABLE with `availableMinor`) shows that payment's
+  available, captured and refunded amounts and advises fewer units, and without figures says no
+  card payment can be refunded. A card refund not final shows its status and links to the refund
+  (SPK-PAY-008): requested or processing is not final, unknown is recovery required (do not refund
+  again), failed or canceled says the customer was not refunded; never success unless it is.
 - The receipt (`GET /v1/pos-sales/{id}/receipt`); an unpaid sale has none (RECEIPT_NOT_AVAILABLE).
 
 **Pending decision**: card tenders at the register need the processor and its card-present flow
@@ -76,19 +88,32 @@ queued (§4.15: no new payments offline); commands are disabled and say so.
   the health is never judged (no default timeout). Registering a device
   (`POST /v1/access-devices`): it is sent deny-all until a policy is approved.
 - A device: rename it or set or clear its heartbeat timeout with `expectedRevision`
-  (`PATCH /v1/access-devices/{id}`); retire it with a reason (never gated).
+  (`PATCH /v1/access-devices/{id}`); retire it with a reason and `expectedRevision` (never gated); a
+  stale retirement offers Reload, the device is read again and the next attempt sends the revision
+  just read. Its audit history (`GET /v1/audit-records?targetType=access_device&targetId=`):
+  nothing is read until "Show audit history" is pressed, then one read by target; not offered
+  without core.view_audit, a refused read is "not available". Each policy has the same
+  (`targetType=access_policy`).
 - Policies (`GET /v1/access-devices/{id}/policies`): a draft with holder kinds and weekly windows
-  in the facility's local time (`POST /v1/access-devices/{id}/policies`); approval by another
+  in the facility's local time (`POST /v1/access-devices/{id}/policies`), each window problem on
+  the control that has it (days, from, to; SPK-UX-009); approval by another
   person with `expectedRevision` (`POST /v1/access-policies/{id}/approve`; the author is told
   another person approves it, and the API's author_cannot_approve is explained); withdrawing a draft
-  or retiring the active policy (`POST /v1/access-policies/{id}/retire`, never gated), which sends
-  deny-all without a replacement.
+  or retiring the active policy (`POST /v1/access-policies/{id}/retire`, never gated, Reload when
+  stale), which sends deny-all without a replacement.
 - The command queue with delivery outcomes (`GET /v1/access-devices/{id}/commands`, paged, status
   filter): delivered, failed, unknown (asked again by the API) and superseded; nothing is resent from
   the screen.
-- Recovery required: the facilities operator queue's open hardware exceptions at the facility
-  (`GET /v1/exceptions?queue=facilities_operator&facilityId=&status=open`, the entry categories
-  device offline, command undelivered and access outcome unknown), linked to their exception page.
+- Recovery required ("events not ingested with owner"): the unresolved hardware exceptions at the
+  facility (`GET /v1/exceptions?facilityId=`, open and acknowledged, every queue the viewer may
+  see), filtered on the page to the entry categories device offline, command not delivered,
+  unregistered device (events not ingested) and access outcome unknown, each with the owner queue
+  the exception records (the facilities operator queue, or the facility operations queue the API
+  files an unknown outcome to; no queue is assumed by the client) and linked to its exception page.
+- Event ingestion: the access events the inbox received (`GET /v1/provider-events`,
+  core.view_provider_events; event type and status filters), never their payloads; failed, dead
+  and ignored events are marked not ingested with the API's last error. Not read without the
+  permission, which is named; a refused read is "not available", another error shows its code.
 
 Hardware access is a facility arrival only, never attendance, a check-in or pickup authority
 (SPK-COND-004), and the page says so. **Pending decision**: the vendor and its protocols (DEC-023;
@@ -108,7 +133,8 @@ and the access hardware policy (POL-043).
   `expectedRevision` (`POST .../submit`); no answer locks it and retries with the same key; the
   API's unknown outcome is "recovery required" owned by the finance operator queue and reconciled by
   the API, never resent; rejected lists its lines as not exported, to be exported again; canceling
-  a prepared batch with a reason (`POST .../cancel`, never gated).
+  a prepared batch with a reason and `expectedRevision` (`POST .../cancel`, never gated;
+  STALE_REVISION offers Reload).
 - Mappings (`GET /v1/accounting-mappings`, paged, status and account filters) with the ledger
   accounts still without an approved mapping (shown once every approved mapping is loaded);
   proposing one (`POST /v1/accounting-mappings`); approval by another person with
@@ -126,6 +152,14 @@ and the access hardware policy (POL-043).
   from the page that started it or by its reference, and closing reports only the count of open
   sales (`apps/api/src/modules/finance/controllers/pos.controller.ts`).
 - `GET /v1/exceptions` cannot filter by category or affected record, so the hardware exceptions are
-  the facilities operator queue filtered on the page (listed in stage 3's "not doing").
+  the facility's unresolved exceptions filtered on the page; one may sit on a later page (the page
+  says "on the loaded pages"). An inbox dead letter (`reliability.inbox_dead_letter`) has no
+  facility, so a facility's list never shows a dead access event's exception.
+- `GET /v1/provider-events` filters `eventType` by exact value and has no facility or device
+  filter: the event ingestion list is organization-wide and filtered to hardware event types on the
+  page.
+- The entry module's facility operations queue (`front_desk`, an engineering proposal pending
+  DEC-015) cannot be set per facility (`entry.policy.ts`); the page shows whatever queue the
+  exception records.
 - A POS sale, tender, return and register session name people by id only (`openedByPersonId`,
   `recordedByPersonId`, ...); names come from the identity read per person.

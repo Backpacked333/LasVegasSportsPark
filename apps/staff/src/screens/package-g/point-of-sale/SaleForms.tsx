@@ -16,10 +16,16 @@
  *   refundable); a card refund whose outcome is not final keeps its reservation (SPK-PAY-008).
  *
  * While a command's outcome is unknown the form is locked and "Try again" resends the same request
- * with the same key, so no tender or return is recorded twice.
+ * with the same key, so no tender or return is recorded twice. A tender refused with
+ * PAYMENT_OUTCOME_UNKNOWN (an earlier card payment is live or unknown) keeps the card intent
+ * locked until the sale is reloaded: reloading shows that payment's recovery, and a cash or
+ * external tender for what remains is then a new intent (the API refuses a second card while one
+ * is live, SPK-PAY-007). A command refused as stale (the sale was paid, voided or changed
+ * elsewhere: STALE_REVISION, INVALID_TRANSITION) offers Reload.
  */
 import type { Schema } from '@sportspark/api-client';
 import { Suspense, useMemo, useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiPages } from '../../../api/useApiPages';
 import { CommandError } from '../../../features/pos-access-accounting/CommandError';
@@ -29,6 +35,7 @@ import { useIntentForm } from '../../../features/pos-access-accounting/intent';
 import {
   CARD_PAYMENT_STATUS,
   POS_TENDER_KIND,
+  RETURN_REFUND_STATUS,
 } from '../../../features/pos-access-accounting/labels';
 import { formatMoney, parseMoneyInput } from '../../../features/registration-finance/format';
 import { OfflineCaption, useOnline } from '../../../features/registration-finance/offline';
@@ -48,7 +55,7 @@ const SALE_COMMAND = { invalidate: [SALE_QUERY_PREFIX] } as const;
 // Lines
 // ---------------------------------------------------------------------------------------------
 
-export function AddLineForm({ sale }: { sale: Sale }) {
+export function AddLineForm({ sale, onReload }: { sale: Sale; onReload: () => void }) {
   const online = useOnline();
   const products = useApiPages({
     path: '/pos-products',
@@ -125,7 +132,15 @@ export function AddLineForm({ sale }: { sale: Sale }) {
         Add to the sale
       </Button>
       <OfflineCaption action="adding a line" />
-      <CommandError error={command.error} onRetry={intent.retry} currency={sale.currency} />
+      <CommandError
+        error={command.error}
+        onRetry={intent.retry}
+        onReload={() => {
+          intent.restart();
+          onReload();
+        }}
+        currency={sale.currency}
+      />
     </form>
   );
 }
@@ -171,7 +186,7 @@ function TenderOutcome({ sale }: { sale: Sale }) {
   );
 }
 
-export function TenderForm({ sale }: { sale: Sale }) {
+export function TenderForm({ sale, onReload }: { sale: Sale; onReload: () => void }) {
   const online = useOnline();
   const [kind, setKind] = useState<TenderKind | ''>('');
   const [amount, setAmount] = useState('');
@@ -219,6 +234,11 @@ export function TenderForm({ sale }: { sale: Sale }) {
     }
   };
   const locked = intent.locked;
+  // A new decision from the current sale: the earlier intent ends and the sale is read again.
+  const reload = () => {
+    intent.restart();
+    onReload();
+  };
   return (
     <form
       className="rf-panel"
@@ -293,7 +313,18 @@ export function TenderForm({ sale }: { sale: Sale }) {
       </Button>
       {command.data && !command.error ? <TenderOutcome sale={command.data} /> : null}
       <OfflineCaption action="taking a tender" />
-      <CommandError error={command.error} onRetry={intent.retry} currency={c} />
+      <CommandError error={command.error} onRetry={intent.retry} onReload={reload} currency={c} />
+      {command.error?.code === 'PAYMENT_OUTCOME_UNKNOWN' ? (
+        <p>
+          <Button variant="secondary" onClick={reload}>
+            Reload the sale
+          </Button>{' '}
+          <span className="caption">
+            Shows the card payment to reconcile; a cash or external tender for what remains can then
+            be taken. The API refuses another card payment while that one is in progress or unknown.
+          </span>
+        </p>
+      ) : null}
     </form>
   );
 }
@@ -301,6 +332,45 @@ export function TenderForm({ sale }: { sale: Sale }) {
 // ---------------------------------------------------------------------------------------------
 // Returns
 // ---------------------------------------------------------------------------------------------
+
+type RefundStatus = NonNullable<Schema<'PosReturn'>['refundStatus']>;
+
+/** What the card refund's status means for the customer (SPK-PAY-008); never success unless it is. */
+const REFUND_OUTCOME: Readonly<Record<RefundStatus, string>> = {
+  requested:
+    'The card refund is not final yet: its amount stays reserved until the provider confirms.',
+  processing:
+    'The card refund is not final yet: its amount stays reserved until the provider confirms.',
+  succeeded: 'The card refund succeeded.',
+  unknown:
+    'Recovery required: the card refund has no confirmed outcome. Do not refund again; open the refund to reconcile it.',
+  failed: 'The card refund failed: the customer was not refunded. Open the refund to resolve it.',
+  canceled:
+    'The card refund was canceled: the customer was not refunded. Open the refund to resolve it.',
+};
+
+function ReturnOutcome({ latest, currency }: { latest: Schema<'PosReturn'>; currency: string }) {
+  const status = latest.refundStatus;
+  return (
+    <div role="status">
+      <p>
+        Return of {formatMoney(latest.amountMinor, currency)} recorded
+        {status ? '.' : ': paid out at the register.'}
+      </p>
+      {status ? (
+        <p>
+          <StatusBadge {...RETURN_REFUND_STATUS[status]} /> {REFUND_OUTCOME[status]}
+          {status !== 'succeeded' && latest.refundAttemptId ? (
+            <>
+              {' '}
+              <Link to={`/finance/refunds/${latest.refundAttemptId}`}>Open the refund</Link>
+            </>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export function ReturnForm({ sale, onReload }: { sale: Sale; onReload: () => void }) {
   const online = useOnline();
@@ -424,14 +494,7 @@ export function ReturnForm({ sale, onReload }: { sale: Sale; onReload: () => voi
       <Button type="submit" busy={command.isProcessing} disabled={!online || locked}>
         Approve and record the return
       </Button>
-      {latest && !command.error ? (
-        <p role="status">
-          Return of {formatMoney(latest.amountMinor, sale.currency)} recorded
-          {latest.refundStatus && latest.refundStatus !== 'succeeded'
-            ? `; the card refund is ${latest.refundStatus} and its amount stays reserved until the provider confirms.`
-            : '.'}
-        </p>
-      ) : null}
+      {latest && !command.error ? <ReturnOutcome latest={latest} currency={sale.currency} /> : null}
       <OfflineCaption action="recording a return" />
       <CommandError
         error={command.error}

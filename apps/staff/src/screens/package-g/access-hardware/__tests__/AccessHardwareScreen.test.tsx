@@ -2,8 +2,10 @@
  * SCR-S-56 Access hardware (Package G; §3.16 Access hardware, SPK-COND-004, SPK-ENTRY-002,
  * DEC-016, DEC-080, DEC-023): turned off by default with devices readable, devices registered
  * deny-all with no heartbeat timeout assumed, outages shown with their age, renaming and retiring
- * with revisions, policies drafted by one person and approved by another, and the command queue
- * with delivery outcomes.
+ * with revisions (a stale retirement reloads and sends the revision just read), policies drafted
+ * by one person and approved by another with each window problem on its own control, the command
+ * queue with delivery outcomes, the hardware exceptions of every category with the owner queue the
+ * API recorded, event ingestion from the inbox, and the audit history read only when asked.
  */
 import { CAPABILITY_PRESENTATION } from '@sportspark/api-client';
 import {
@@ -23,13 +25,16 @@ import {
   POLICY_B_ID,
   POLICY_ID,
   apiError,
+  auditRecord,
   baseRoutes,
   device,
   deviceCommand,
+  hardwareException,
   ok,
   page,
   permissions,
   policy,
+  providerEvent,
 } from '../../../../features/pos-access-accounting/__tests__/fixtures';
 import { FACILITY_A, createTestApp } from '../../../../testing/test-app';
 
@@ -43,6 +48,8 @@ const HARDWARE = [
   'entry.approve_access_policy',
   'entry.retire_access_policy',
 ];
+const VIEW_EVENTS = 'core.view_provider_events';
+const VIEW_AUDIT = 'core.view_audit';
 
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
@@ -173,53 +180,192 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     );
   });
 
-  it('shows the facilities operator’s open hardware exceptions as recovery required, linked', async () => {
+  it('recovery required: lists every hardware exception category with the owner queue the API recorded', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
         'GET /exceptions': page([
-          {
+          hardwareException({
             id: EXCEPTION_ID,
-            facilityId: FACILITY_A,
             category: 'entry.device_command_undelivered',
-            severity: 'high',
             title: 'A device command was not delivered after repeated attempts',
             affected: { type: 'device_command', id: COMMAND_ID },
-            ownerQueue: 'facilities_operator',
-            status: 'open',
-            openedAt: '2026-10-24T11:00:00.000Z',
-            ageMinutes: 60,
-            deadlineAt: null,
-            acknowledgeBy: null,
-            overdue: false,
-            acknowledgedAt: null,
-            resolvedAt: null,
-            closedAt: null,
-            resolution: null,
-            details: {},
-            revision: 1,
-            history: [],
-            nextActions: [],
-            underlyingRecordUnchanged: true,
-          },
+          }),
+          hardwareException({
+            id: '0192f1a0-0000-7000-8000-00000000b302',
+            category: 'entry.device_offline',
+            title: 'An access device stopped sending heartbeats',
+            affected: { type: 'access_device', id: DEVICE_B_ID },
+            status: 'acknowledged',
+          }),
+          hardwareException({
+            id: '0192f1a0-0000-7000-8000-00000000b303',
+            category: 'entry.unregistered_access_device',
+            title: 'Access events arrive from a device that is not registered (or is retired) here',
+            affected: { type: 'access_device_ref', id: 'TS-0099' },
+          }),
+          hardwareException({
+            id: '0192f1a0-0000-7000-8000-00000000b304',
+            category: 'entry.access_outcome_unknown',
+            title: 'An access device reported an unknown outcome; arrivals may be missing',
+            affected: { type: 'access_device', id: 'TS-0001' },
+            ownerQueue: 'front_desk',
+          }),
+          hardwareException({
+            id: '0192f1a0-0000-7000-8000-00000000b305',
+            category: 'finance.payment_outcome_unknown',
+            title: 'A payment outcome is unknown',
+            ownerQueue: 'finance_operator',
+          }),
         ]),
       }),
     });
     render(app.at(BASE));
     await chooseFacility(user);
-    const list = await screen.findByRole('list', { name: 'Open hardware exceptions' });
-    expect(within(list).getByText('Recovery required: high')).toBeInTheDocument();
+    const list = await screen.findByRole('list', { name: 'Unresolved hardware exceptions' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(4);
+    expect(within(list).queryByText('A payment outcome is unknown')).toBeNull();
+    const [undelivered, offline, unregistered, unknown] = rows;
+    expect(undelivered).toHaveTextContent('Recovery required: high');
+    expect(undelivered).toHaveTextContent('Command not delivered');
+    expect(undelivered).toHaveTextContent('Owner: Facilities operator queue.');
     expect(
-      within(list).getByRole('link', {
+      within(undelivered!).getByRole('link', {
         name: 'A device command was not delivered after repeated attempts',
       }),
     ).toHaveAttribute('href', `/today/exceptions/${EXCEPTION_ID}`);
+    expect(offline).toHaveTextContent('Device offline');
+    expect(offline).toHaveTextContent('acknowledged');
+    // The inventory's "events not ingested with owner".
+    expect(unregistered).toHaveTextContent(
+      'Events not ingested: the device is not registered here',
+    );
+    expect(unregistered).toHaveTextContent('Owner: Facilities operator queue.');
+    // The API files an unknown access outcome to the facility operations queue, not a client default.
+    expect(unknown).toHaveTextContent('Access outcome unknown: arrivals may be missing');
+    expect(unknown).toHaveTextContent('Owner: Front desk queue.');
     const call = app.fake.requests.find((r) => r.route === '/exceptions');
-    expect(call?.query).toMatchObject({
-      queue: 'facilities_operator',
-      facilityId: FACILITY_A,
-      status: 'open',
+    expect(call?.query).toMatchObject({ facilityId: FACILITY_A });
+    expect(call?.query).not.toHaveProperty('queue');
+    expect(call?.query).not.toHaveProperty('status');
+  });
+
+  it('with no hardware exception on the loaded pages, says so instead of implying none exist', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /exceptions': page(
+          [hardwareException({ category: 'finance.payment_outcome_unknown' })],
+          'cursor-2',
+        ),
+      }),
     });
+    render(app.at(BASE));
+    await chooseFacility(user);
+    expect(
+      await screen.findByText('No unresolved hardware exception on the loaded pages.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Load more/ })).toBeInTheDocument();
+  });
+
+  it('event ingestion: lists the access events the inbox received; failed and dead ones were not ingested', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': permissions(['access_hardware'], [...HARDWARE, VIEW_EVENTS]),
+        'GET /provider-events': page([
+          providerEvent({ eventType: 'access.granted', status: 'processed' }),
+          providerEvent({
+            id: '0192f1a0-0000-7000-8000-00000000b502',
+            providerEventId: 'evt-2',
+            eventType: 'access.unknown',
+            status: 'dead',
+            attempts: 5,
+            lastError: 'handler entry.access_control failed',
+          }),
+          providerEvent({
+            id: '0192f1a0-0000-7000-8000-00000000b503',
+            provider: 'fake-payments',
+            providerEventId: 'pay-1',
+            eventType: 'payment.succeeded',
+          }),
+        ]),
+      }),
+    });
+    render(app.at(BASE));
+    await chooseFacility(user);
+    const list = await screen.findByRole('list', { name: 'Access events received' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('Access granted (access.granted)');
+    expect(rows[0]).toHaveTextContent('processed');
+    expect(rows[1]).toHaveTextContent('dead: retries exhausted');
+    expect(rows[1]).toHaveTextContent('Not ingested: retries are exhausted');
+    expect(rows[1]).toHaveTextContent('Last error: handler entry.access_control failed');
+    expect(within(list).queryByText(/payment\.succeeded/)).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Event type'), 'access.unknown');
+    await user.selectOptions(screen.getByLabelText('Event status'), 'dead');
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some(
+          (r) =>
+            r.route === '/provider-events' &&
+            r.query.eventType === 'access.unknown' &&
+            r.query.status === 'dead',
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('event ingestion is not read without core.view_provider_events and names the permission', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: routes() });
+    render(app.at(BASE));
+    await chooseFacility(user);
+    expect(
+      await screen.findByText(
+        'Reading the events devices send needs the permission core.view_provider_events.',
+      ),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/provider-events')).toBe(false);
+  });
+
+  it('a refused event read is "not available"; another read error shows its code', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': permissions(['access_hardware'], [...HARDWARE, VIEW_EVENTS]),
+        'GET /provider-events': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(503, {
+                code: 'INTEGRATION_UNAVAILABLE',
+                message: 'Unavailable.',
+                correlationId: 'c-evt',
+                nextAction: 'retry_later',
+              })
+            : fakeResponse(403, {
+                code: 'ACCESS_DENIED',
+                message: 'Not permitted.',
+                correlationId: 'c-evt2',
+                nextAction: 'contact_support_or_request_access',
+              });
+        },
+      }),
+    });
+    render(app.at(BASE));
+    await chooseFacility(user);
+    const panel = await screen.findByRole('region', { name: 'Event ingestion' });
+    expect(
+      await within(panel).findByText('Error code: INTEGRATION_UNAVAILABLE. Reference: c-evt'),
+    ).toBeInTheDocument();
+    await user.click(within(panel).getByRole('button', { name: 'Try again' }));
+    expect(await within(panel).findByTestId('state-unavailable')).toHaveTextContent(
+      'Not available',
+    );
+    expect(within(panel).queryByRole('list', { name: 'Access events received' })).toBeNull();
   });
 
   it('a device shows its outage with age; renaming sends the revision it was read at', async () => {
@@ -273,6 +419,134 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     );
     const call = app.fake.requests.find((r) => r.route === '/access-devices/{id}/retire');
     expect(call?.body).toEqual({ reason: 'Replaced', expectedRevision: 2 });
+  });
+
+  it('§4.9: a stale device retirement offers Reload; the next attempt sends the revision just read', async () => {
+    const user = userEvent.setup();
+    let changedElsewhere = false;
+    let attempts = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /access-devices': () =>
+          fakeResponse(200, {
+            items: [device(changedElsewhere ? { revision: 3, name: 'Main gate east' } : {})],
+            nextCursor: null,
+          }),
+        'POST /access-devices/{id}/retire': () => {
+          attempts += 1;
+          if (attempts === 1) {
+            changedElsewhere = true;
+            return fakeResponse(409, {
+              code: 'STALE_REVISION',
+              message: 'The device changed since it was read.',
+              correlationId: 'c-stale',
+              nextAction: 'reload_current_state',
+            });
+          }
+          return fakeResponse(200, device({ status: 'retired', revision: 4 }));
+        },
+      }),
+    });
+    render(app.at(DEVICE_PATH));
+    await user.click(await screen.findByRole('button', { name: 'Retire the device' }));
+    const form = screen.getByRole('form', { name: 'Retire the device' });
+    await user.type(within(form).getByLabelText(/^Reason for retiring/), 'Replaced');
+    await user.click(within(form).getByRole('button', { name: 'Retire the device' }));
+    const stale = await screen.findByTestId('state-stale');
+    expect(stale).toHaveTextContent('Error code: STALE_REVISION. Reference: c-stale');
+    const reads = app.fake.requests.filter((r) => r.route === '/access-devices').length;
+    await user.click(within(stale).getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(screen.queryByTestId('state-stale')).toBeNull());
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/access-devices').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    // The device was read again (renamed meanwhile, revision 3); the reason form keeps its text.
+    expect(await screen.findByRole('heading', { name: 'Main gate east' })).toBeVisible();
+    const again = screen.getByRole('form', { name: 'Retire the device' });
+    expect(within(again).getByLabelText(/^Reason for retiring/)).toHaveValue('Replaced');
+    await user.click(within(again).getByRole('button', { name: 'Retire the device' }));
+    await waitFor(() => expect(attempts).toBe(2));
+    const [first, second] = app.fake.requests.filter(
+      (r) => r.route === '/access-devices/{id}/retire',
+    );
+    expect(first?.body).toEqual({ reason: 'Replaced', expectedRevision: 2 });
+    expect(second?.body).toEqual({ reason: 'Replaced', expectedRevision: 3 });
+  });
+
+  it('§4.14: the device’s audit history is read only when asked, once, by target', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': permissions(['access_hardware'], [...HARDWARE, VIEW_AUDIT]),
+        'GET /audit-records': page([
+          auditRecord(),
+          auditRecord({
+            id: '0192f1a0-0000-7000-8000-00000000b602',
+            action: 'entry.access_device_health',
+            actor: {
+              kind: 'system',
+              accountId: null,
+              personId: null,
+              staffRoles: [],
+              sessionId: null,
+              actorLabel: 'entry.detect_device_outages',
+            },
+            beforeRevision: null,
+            afterRevision: null,
+            correlationId: null,
+            details: { health: 'offline' },
+          }),
+        ]),
+      }),
+    });
+    render(app.at(DEVICE_PATH));
+    const show = await screen.findByRole('button', {
+      name: 'Show audit history of Main gate turnstile',
+    });
+    expect(show).toHaveAttribute('aria-expanded', 'false');
+    expect(app.fake.requests.some((r) => r.route === '/audit-records')).toBe(false);
+    await user.click(show);
+    const list = await screen.findByRole('list', {
+      name: 'Audit history of Main gate turnstile',
+    });
+    const [change, health] = within(list).getAllByRole('listitem');
+    expect(change).toHaveTextContent('entry.update_access_device');
+    expect(change).toHaveTextContent('by Dana Cole · revision 1 to 2');
+    // SPK-SCHED-008: the facility's zone, once the facility directory answers.
+    await waitFor(() => expect(change).toHaveTextContent('03:00 AM PDT'));
+    expect(health).toHaveTextContent('entry.access_device_health');
+    expect(health).toHaveTextContent('by entry.detect_device_outages');
+    expect(screen.getByText(/Reading the audit is itself audited/)).toBeInTheDocument();
+    const calls = app.fake.requests.filter((r) => r.route === '/audit-records');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.query).toMatchObject({ targetType: 'access_device', targetId: DEVICE_ID });
+    expect(
+      screen.getByRole('button', { name: 'Hide audit history of Main gate turnstile' }),
+    ).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('the audit history is not offered without core.view_audit; a refused read is "not available"', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: routes() });
+    const view = render(app.at(DEVICE_PATH));
+    await screen.findByRole('form', { name: 'Change the device' });
+    expect(screen.queryByRole('button', { name: /audit history/ })).toBeNull();
+    view.unmount();
+    const allowed = createTestApp({
+      routes: routes({
+        'GET /me/permissions': permissions(['access_hardware'], [...HARDWARE, VIEW_AUDIT]),
+        'GET /audit-records': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+        }),
+      }),
+    });
+    render(allowed.at(DEVICE_PATH));
+    await user.click(
+      await screen.findByRole('button', { name: 'Show audit history of Main gate turnstile' }),
+    );
+    expect(await screen.findByTestId('state-unavailable')).toHaveTextContent('Not available');
   });
 
   it('four eyes: drafts a policy in facility time; its author is told another person approves it', async () => {
@@ -331,6 +605,30 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
       ),
     ).toBeInTheDocument();
     expect(within(policies).queryByRole('button', { name: /^Approve policy/ })).toBeNull();
+  });
+
+  it('SPK-UX-009: each window problem is reported on the control that has it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: routes() });
+    render(app.at(DEVICE_PATH));
+    const form = await screen.findByRole('form', { name: 'Draft an access policy' });
+    await user.click(within(form).getByLabelText('Personal passes'));
+    const window1 = within(form).getByRole('group', { name: 'Window 1' });
+    await user.type(within(window1).getByLabelText(/^Window 1 from/), '6am');
+    await user.type(within(window1).getByLabelText(/^Window 1 to/), '22:00');
+    await user.click(within(form).getByRole('button', { name: 'Save the draft' }));
+    const days = within(window1).getByRole('group', { name: 'Days of window 1' });
+    expect(days).toHaveAttribute('aria-invalid', 'true');
+    expect(days).toHaveAccessibleDescription('Choose at least one day.');
+    const from = within(window1).getByLabelText(/^Window 1 from/);
+    expect(from).toHaveAttribute('aria-invalid', 'true');
+    expect(from).toHaveAccessibleDescription(/Enter the start as HH:MM\./);
+    expect(within(window1).getByLabelText(/^Window 1 to/)).not.toHaveAttribute('aria-invalid');
+    expect(
+      app.fake.requests.some(
+        (r) => r.method === 'POST' && r.route === '/access-devices/{id}/policies',
+      ),
+    ).toBe(false);
   });
 
   it('approves another person’s draft with its revision; the API’s four-eyes refusal is explained', async () => {
@@ -453,7 +751,7 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     expect(await screen.findByText('Link not available')).toBeInTheDocument();
   });
 
-  it('a refused device list is "not available" and the read error shows its code', async () => {
+  it('a refused device list is "not available" and lists nothing', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
@@ -466,5 +764,34 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     await chooseFacility(user);
     expect(await screen.findByTestId('state-unavailable')).toHaveTextContent('Not available');
     expect(screen.queryByRole('list', { name: 'Access devices' })).toBeNull();
+  });
+
+  it('a failed device list read shows its code and "Try again", then the devices', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /access-devices': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(503, {
+                code: 'INTEGRATION_UNAVAILABLE',
+                message: 'Unavailable.',
+                correlationId: 'c-dev',
+                nextAction: 'retry_later',
+              })
+            : fakeResponse(200, { items: [device()], nextCursor: null });
+        },
+      }),
+    });
+    render(app.at(BASE));
+    await chooseFacility(user);
+    const devices = screen.getByRole('region', { name: 'Devices' });
+    const code = await within(devices).findByText(
+      'Error code: INTEGRATION_UNAVAILABLE. Reference: c-dev',
+    );
+    const state = code.closest('section');
+    await user.click(within(state!).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('list', { name: 'Access devices' })).toBeInTheDocument();
   });
 });

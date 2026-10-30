@@ -128,10 +128,37 @@ const EXPLAINED: Readonly<Record<string, (error: ApiError, ctx: Context) => Expl
     advice:
       "Cash is paid from an open register session at the sale's facility. Open one, then return again.",
   }),
-  REFUND_EXCEEDS_REFUNDABLE: () => ({
-    title: 'No card payment of this sale can be refunded',
-    advice: 'Nothing captured on a card is left to refund. Choose another tender kind.',
-  }),
+  // Two answers share this code (pos-sales.service, refunds.service): no card payment of the sale
+  // can be refunded at all, or the card payment chosen holds less than this return. A card refund
+  // goes back to one card payment, so the second states what that payment can still refund.
+  REFUND_EXCEEDS_REFUNDABLE: (e, ctx) => {
+    const available = detailNumber(e, 'availableMinor');
+    if (available === null) {
+      return {
+        title: 'No card payment of this sale can be refunded',
+        advice: 'Nothing captured on a card is left to refund. Choose another tender kind.',
+      };
+    }
+    const captured = detailNumber(e, 'capturedMinor');
+    const refunded = detailNumber(e, 'refundedMinor');
+    return {
+      title: 'The return exceeds what one card payment can refund',
+      advice: (
+        <>
+          <p>
+            Still refundable to the card payment: {formatMoney(available, ctx.currency)}
+            {captured !== null ? `. Captured: ${formatMoney(captured, ctx.currency)}` : ''}
+            {refunded !== null ? `. Already refunded: ${formatMoney(refunded, ctx.currency)}` : ''}.
+          </p>
+          <p>
+            {available > 0
+              ? 'A card refund goes back to one card payment: return fewer units in this return, then return the rest separately or by another tender kind.'
+              : 'Nothing is left to refund to that card payment. Choose another tender kind.'}
+          </p>
+        </>
+      ),
+    };
+  },
   RECEIPT_NOT_AVAILABLE: () => ({
     title: 'The sale is not paid',
     advice: 'A receipt exists once the sale is paid.',

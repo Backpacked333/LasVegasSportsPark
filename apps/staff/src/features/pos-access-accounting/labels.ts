@@ -121,6 +121,45 @@ export const COMMAND_STATUS: Labels<Schema<'DeviceCommandStatus'>> = {
   superseded: { tone: 'neutral', label: 'superseded' },
 };
 
+/** The exception categories the API raises for access hardware (entry module, ENT-05). */
+export const HARDWARE_EXCEPTION: Readonly<Record<string, string>> = {
+  'entry.device_offline': 'Device offline',
+  'entry.device_command_undelivered': 'Command not delivered',
+  'entry.unregistered_access_device': 'Events not ingested: the device is not registered here',
+  'entry.access_outcome_unknown': 'Access outcome unknown: arrivals may be missing',
+};
+
+export const EXCEPTION_STATUS: Labels<Schema<'ExceptionStatus'>> = {
+  open: { tone: 'warning', label: 'open' },
+  acknowledged: { tone: 'info', label: 'acknowledged' },
+  resolved: { tone: 'success', label: 'resolved' },
+  closed: { tone: 'neutral', label: 'closed' },
+};
+
+/** "front_desk" -> "Front desk queue": the owner queue the API names, in sentence case. */
+export function queueLabel(queue: string): string {
+  const words = queue.replace(/[._]/g, ' ').trim();
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)} queue`;
+}
+
+/** Event types an access device sends through the inbox (AccessControlEventBody, ENT-05). */
+export const HARDWARE_EVENT_TYPES: readonly { value: string; label: string }[] = [
+  { value: 'access.granted', label: 'Access granted' },
+  { value: 'access.denied', label: 'Access denied' },
+  { value: 'access.unknown', label: 'Access outcome unknown' },
+  { value: 'device.heartbeat', label: 'Device heartbeat' },
+  { value: 'device.command_receipt', label: 'Command receipt' },
+];
+
+/** Inbox status of a received provider event (§4.12): only `processed` was ingested. */
+export const PROVIDER_EVENT_STATUS: Labels<Schema<'ProviderEventStatus'>> = {
+  received: { tone: 'pending', label: 'received: waiting to be processed' },
+  processed: { tone: 'success', label: 'processed' },
+  failed: { tone: 'warning', label: 'failed: retried by the inbox' },
+  ignored: { tone: 'neutral', label: 'ignored: not applied' },
+  dead: { tone: 'danger', label: 'dead: retries exhausted' },
+};
+
 export const WEEKDAYS: readonly { value: Schema<'Weekday'>; label: string }[] = [
   { value: 'mon', label: 'Monday' },
   { value: 'tue', label: 'Tuesday' },

@@ -10,13 +10,17 @@
  * device deny-all when nothing replaces it.
  *
  * Only active passes are ever admitted; the schedule is weekly windows in the facility's local
- * time (SPK-SCHED-008), with no window assumed.
+ * time (SPK-SCHED-008), with no window assumed. A window's problems are reported on the control
+ * that has them (days, from, to; SPK-UX-009). A retirement refused as stale offers Reload, and the
+ * next attempt sends the revision just read (§4.9). Each policy's audit history is read when asked
+ * (`GET /v1/audit-records?targetType=access_policy&targetId=`, itself audited, §4.14).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiQuery } from '../../../api/useApiQuery';
+import { AuditTrail } from '../../../features/pos-access-accounting/AuditTrail';
 import { CommandError } from '../../../features/pos-access-accounting/CommandError';
 import { useIntentForm } from '../../../features/pos-access-accounting/intent';
 import {
@@ -216,9 +220,21 @@ function PolicyRow({
               }
             }}
           />
-          <CommandError error={retire.error} />
+          <CommandError
+            error={retire.error}
+            onReload={() => {
+              retire.reset();
+              void queryClient.invalidateQueries({ queryKey: POLICIES_PREFIX });
+            }}
+          />
         </div>
       ) : null}
+      <AuditTrail
+        targetType="access_policy"
+        targetId={policy.id}
+        subject={`policy ${shortRef(policy.id)}`}
+        zone={zone}
+      />
     </li>
   );
 }
@@ -229,6 +245,32 @@ interface WindowDraft {
   to: string;
 }
 
+interface WindowErrors {
+  days: string | null;
+  from: string | null;
+  to: string | null;
+}
+
+/** Each problem on the control that has it; the order of the times is reported on "to". */
+function windowErrors(w: WindowDraft): WindowErrors {
+  const fromValid = LOCAL_TIME.test(w.from);
+  const toValid = LOCAL_TIME.test(w.to);
+  return {
+    days: w.days.length === 0 ? 'Choose at least one day.' : null,
+    from: fromValid ? null : 'Enter the start as HH:MM.',
+    to: !toValid
+      ? 'Enter the end as HH:MM.'
+      : fromValid && w.from >= w.to
+        ? 'The window ends after it starts.'
+        : null,
+  };
+}
+
+function windowValid(w: WindowDraft): boolean {
+  const e = windowErrors(w);
+  return e.days === null && e.from === null && e.to === null;
+}
+
 function DraftPolicy({ device, zone }: { device: Device; zone: string | null }) {
   const online = useOnline();
   const now = useNow();
@@ -237,18 +279,12 @@ function DraftPolicy({ device, zone }: { device: Device; zone: string | null }) 
   const [touched, setTouched] = useState(false);
   const command = useApiCommand('post', '/access-devices/{id}/policies', POLICY_COMMAND);
   const intent = useIntentForm(command);
-  const windowError = (w: WindowDraft): string | null => {
-    if (w.days.length === 0) return 'Choose at least one day.';
-    if (!LOCAL_TIME.test(w.from) || !LOCAL_TIME.test(w.to)) return 'Enter times as HH:MM.';
-    if (w.from >= w.to) return 'The window ends after it starts.';
-    return null;
-  };
   const update = (index: number, change: Partial<WindowDraft>) =>
     setWindows((ws) => ws.map((w, i) => (i === index ? { ...w, ...change } : w)));
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setTouched(true);
-    if (holders.length === 0 || windows.some((w) => windowError(w) !== null)) return;
+    if (holders.length === 0 || !windows.every(windowValid)) return;
     const created = await intent.send({
       path: { id: device.id },
       body: {
@@ -287,7 +323,7 @@ function DraftPolicy({ device, zone }: { device: Device; zone: string | null }) 
         disabled={intent.locked}
       />
       {windows.map((w, i) => {
-        const error = touched ? windowError(w) : null;
+        const errors = touched ? windowErrors(w) : null;
         return (
           <fieldset key={i} className="fieldset" aria-label={`Window ${i + 1}`}>
             <legend>Window {i + 1}</legend>
@@ -296,6 +332,7 @@ function DraftPolicy({ device, zone }: { device: Device; zone: string | null }) 
               options={WEEKDAYS}
               value={w.days}
               onChange={(days) => update(i, { days })}
+              error={errors?.days ?? null}
               disabled={intent.locked}
             />
             <TextField
@@ -303,6 +340,7 @@ function DraftPolicy({ device, zone }: { device: Device; zone: string | null }) 
               hint="HH:MM, 24-hour, facility time."
               value={w.from}
               onChange={(from) => update(i, { from })}
+              error={errors?.from ?? null}
               disabled={intent.locked}
             />
             <TextField
@@ -310,7 +348,7 @@ function DraftPolicy({ device, zone }: { device: Device; zone: string | null }) 
               hint="HH:MM, 24-hour; 24:00 ends the day."
               value={w.to}
               onChange={(to) => update(i, { to })}
-              error={error}
+              error={errors?.to ?? null}
               disabled={intent.locked}
             />
             {windows.length > 1 ? (

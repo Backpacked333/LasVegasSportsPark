@@ -38,6 +38,12 @@ export const ACCESS_ACTIONS = {
   retirePolicy: 'entry.retire_access_policy',
 } as const;
 
+/** core-actions.ts (K-08) in apps/api: the audit and the inbox's provider events (SCR-S-56). */
+export const CORE_ACTIONS = {
+  viewAudit: 'core.view_audit',
+  viewProviderEvents: 'core.view_provider_events',
+} as const;
+
 export interface Offer {
   /** False only when the permission read says the action is not allowed (at the facility). */
   allowed(actionId: string, facilityId?: string | null): boolean;

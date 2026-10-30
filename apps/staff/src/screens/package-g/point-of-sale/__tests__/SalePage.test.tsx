@@ -1,9 +1,10 @@
 /**
  * SCR-S-55 Point of sale, one sale (Package G; §3.16 POS, SPK-PAY-001, SPK-PAY-002, SPK-PAY-007,
  * SPK-PAY-008, SPK-PAY-012, DEC-019, DEC-057): lines at the product's price with approved charges,
- * cash and external tenders, a card tender whose unknown outcome leaves the sale open and is never
- * shown as paid, the same key on retry after no answer, returns within what was paid, void, and
- * the receipt.
+ * cash and external tenders, card tenders that are unknown, processing or declined (never shown as
+ * paid), a tender refused while a card outcome is unknown (reload, then a new intent), the same key
+ * on retry after no answer, Reload after a stale refusal, returns within what was paid with card
+ * refunds that are not final, void, and the receipt.
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -14,6 +15,7 @@ import {
   CUSTOMER_ID,
   LINE_ID,
   PRODUCT_ID,
+  REFUND_ID,
   RETURN_ID,
   SALE_ID,
   apiError,
@@ -318,6 +320,354 @@ describe('SCR-S-55 SalePage', () => {
     // A definitive refusal ends the intent: the corrected return is a new key.
     expect(calls[1]?.headers['idempotency-key']).not.toBe(calls[0]?.headers['idempotency-key']);
     expect(screen.getByText('partially_returned')).toBeInTheDocument();
+  });
+
+  it('SPK-PAY-007: a card payment still processing is "not paid yet": no void, no receipt, never paid', async () => {
+    const user = userEvent.setup();
+    let current = saleWithLine({ customerPersonId: CUSTOMER_ID });
+    const app = createTestApp({
+      routes: saleRoutes(() => current, {
+        'POST /pos-sales/{id}/tenders': () => {
+          current = saleWithLine({
+            customerPersonId: CUSTOMER_ID,
+            pendingMinor: 542,
+            remainingMinor: 0,
+            tenders: [
+              tender({
+                kind: 'card',
+                status: 'pending',
+                paymentAttemptId: ATTEMPT_ID,
+                paymentStatus: 'processing',
+                settledAt: null,
+              }),
+            ],
+          });
+          return fakeResponse(201, current);
+        },
+      }),
+    });
+    render(app.at(SALE_PATH));
+    const form = await screen.findByRole('form', { name: 'Take a tender' });
+    await user.click(within(form).getByLabelText('Card'));
+    await user.selectOptions(
+      await within(form).findByLabelText(/^Development card method/),
+      'pm_fake_processing',
+    );
+    await user.type(within(form).getByLabelText(/^Amount \(USD\)/), '5.42');
+    await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
+    const processing = await screen.findByTestId('state-processing');
+    expect(processing).toHaveTextContent('Card payment in progress: not paid yet');
+    expect(processing).toHaveTextContent('do not take the card again');
+    expect(screen.getByText('open: not paid')).toBeInTheDocument();
+    expect(screen.queryByText('paid')).toBeNull();
+    expect(screen.queryByTestId('state-recovery')).toBeNull();
+    expect(screen.queryByRole('link', { name: /Open the receipt/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Void the sale' })).toBeNull();
+    const tenders = screen.getByRole('table', { name: 'Tenders' });
+    expect(within(tenders).getByText('card payment processing')).toBeInTheDocument();
+  });
+
+  it('SPK-PAY-007: a declined card says nothing was taken and the sale still has its amount to pay', async () => {
+    const user = userEvent.setup();
+    let current = saleWithLine({ customerPersonId: CUSTOMER_ID });
+    const app = createTestApp({
+      routes: saleRoutes(() => current, {
+        'POST /pos-sales/{id}/tenders': () => {
+          current = saleWithLine({
+            customerPersonId: CUSTOMER_ID,
+            tenders: [
+              tender({
+                kind: 'card',
+                status: 'failed',
+                paymentAttemptId: ATTEMPT_ID,
+                paymentStatus: 'failed',
+                failureReason: 'card_declined',
+                settledAt: null,
+              }),
+            ],
+          });
+          return fakeResponse(201, current);
+        },
+      }),
+    });
+    render(app.at(SALE_PATH));
+    const form = await screen.findByRole('form', { name: 'Take a tender' });
+    await user.click(within(form).getByLabelText('Card'));
+    await user.selectOptions(
+      await within(form).findByLabelText(/^Development card method/),
+      'pm_fake_decline',
+    );
+    await user.type(within(form).getByLabelText(/^Amount \(USD\)/), '5.42');
+    await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
+    const outcome = await within(form).findByRole('status');
+    expect(outcome).toHaveTextContent('card payment failed');
+    expect(outcome).toHaveTextContent('The card payment did not go through: nothing was taken.');
+    await waitFor(() =>
+      expect(screen.getByRole('table', { name: 'Tenders' })).toHaveTextContent('card_declined'),
+    );
+    expect(screen.getByText('open: not paid')).toBeInTheDocument();
+    expect(within(form).getByText('Remaining to pay: $5.42.')).toBeInTheDocument();
+  });
+
+  it('SPK-PAY-007: a tender refused because a card outcome is unknown can be reloaded; the rest is then paid as a new intent', async () => {
+    const user = userEvent.setup();
+    let reloaded = false;
+    let cash = false;
+    const unknownCard = tender({
+      kind: 'card',
+      amountMinor: 300,
+      status: 'pending',
+      paymentAttemptId: ATTEMPT_ID,
+      paymentStatus: 'unknown',
+      settledAt: null,
+    });
+    const app = createTestApp({
+      routes: saleRoutes(
+        () =>
+          cash
+            ? paidSale({ customerPersonId: CUSTOMER_ID })
+            : reloaded
+              ? saleWithLine({
+                  customerPersonId: CUSTOMER_ID,
+                  pendingMinor: 300,
+                  remainingMinor: 242,
+                  tenders: [unknownCard],
+                })
+              : saleWithLine({ customerPersonId: CUSTOMER_ID }),
+        {
+          'POST /pos-sales/{id}/tenders': (request) => {
+            if ((request.body as { kind: string }).kind === 'card') {
+              reloaded = true; // another terminal started a card payment meanwhile
+              return fakeResponse(409, {
+                code: 'PAYMENT_OUTCOME_UNKNOWN',
+                message: 'The payment outcome is not yet known.',
+                correlationId: 'c-unk',
+                nextAction: 'await_reconciliation',
+                details: { paymentAttemptId: ATTEMPT_ID },
+              });
+            }
+            cash = true;
+            return fakeResponse(201, paidSale({ customerPersonId: CUSTOMER_ID }));
+          },
+        },
+      ),
+    });
+    render(app.at(SALE_PATH));
+    const form = await screen.findByRole('form', { name: 'Take a tender' });
+    await user.click(within(form).getByLabelText('Card'));
+    await user.selectOptions(
+      await within(form).findByLabelText(/^Development card method/),
+      'pm_fake_visa',
+    );
+    await user.type(within(form).getByLabelText(/^Amount \(USD\)/), '5.42');
+    await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
+    const recovery = await within(form).findByTestId('state-recovery');
+    expect(recovery).toHaveTextContent('Recovery required: payment outcome unknown');
+    expect(recovery).toHaveTextContent('Error code: PAYMENT_OUTCOME_UNKNOWN. Reference: c-unk');
+    // The card intent stays locked: nothing can be changed and resent under another key.
+    expect(within(form).getByLabelText(/^Amount \(USD\)/)).toBeDisabled();
+    await user.click(within(form).getByRole('button', { name: 'Reload the sale' }));
+    // The sale read again shows the card payment to reconcile; the form takes a new intent.
+    const saleRecovery = await screen.findByRole('list', { name: 'Card payments to reconcile' });
+    expect(
+      within(saleRecovery).getByRole('link', {
+        name: 'Open the payment attempt of $3.00 to reconcile it',
+      }),
+    ).toHaveAttribute('href', `/finance/payments/${ATTEMPT_ID}`);
+    await waitFor(() => expect(form).toHaveTextContent('Remaining to pay: $2.42.'));
+    expect(within(form).queryByTestId('state-recovery')).toBeNull();
+    const amount = within(form).getByLabelText(/^Amount \(USD\)/);
+    expect(amount).toBeEnabled();
+    await user.click(within(form).getByLabelText('Cash'));
+    await user.clear(amount);
+    await user.type(amount, '2.42');
+    await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
+    expect(await screen.findByText('paid')).toBeInTheDocument();
+    const [card, second] = app.fake.requests.filter((r) => r.route === '/pos-sales/{id}/tenders');
+    expect(second?.body).toEqual({ kind: 'cash', amountMinor: 242 });
+    expect(second?.headers['idempotency-key']).not.toBe(card?.headers['idempotency-key']);
+  });
+
+  it('a line refused because the sale was paid elsewhere offers Reload, which reads the sale again', async () => {
+    const user = userEvent.setup();
+    let paid = false;
+    const app = createTestApp({
+      routes: saleRoutes(() => (paid ? paidSale() : saleWithLine()), {
+        'POST /pos-sales/{id}/lines': () => {
+          paid = true;
+          return fakeResponse(409, {
+            code: 'INVALID_TRANSITION',
+            message: 'PosSale cannot add_line from paid.',
+            correlationId: 'c-line',
+            nextAction: 'reload_current_state',
+          });
+        },
+      }),
+    });
+    render(app.at(SALE_PATH));
+    const form = await screen.findByRole('form', { name: 'Add a line' });
+    await within(form).findByRole('option', { name: 'Water bottle (WATER) · $2.50' });
+    await user.selectOptions(within(form).getByLabelText(/^Product/), PRODUCT_ID);
+    await user.click(within(form).getByRole('button', { name: 'Add to the sale' }));
+    const stale = await within(form).findByTestId('state-stale');
+    expect(stale).toHaveTextContent('Error code: INVALID_TRANSITION. Reference: c-line');
+    await user.click(within(stale).getByRole('button', { name: 'Reload' }));
+    expect(await screen.findByText('paid')).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: 'Add a line' })).toBeNull();
+  });
+
+  it.each([
+    [
+      'processing',
+      'card refund processing',
+      'The card refund is not final yet: its amount stays reserved until the provider confirms.',
+    ],
+    [
+      'unknown',
+      'card refund outcome unknown',
+      'Recovery required: the card refund has no confirmed outcome. Do not refund again',
+    ],
+    ['failed', 'card refund failed', 'The card refund failed: the customer was not refunded.'],
+  ] as const)(
+    'SPK-PAY-008: a card return whose refund is %s shows its status and the refund link, never success',
+    async (refundStatus, badge, text) => {
+      const user = userEvent.setup();
+      const cardPaid = paidSale({
+        tenders: [
+          tender({
+            kind: 'card',
+            paymentAttemptId: ATTEMPT_ID,
+            paymentStatus: 'succeeded',
+          }),
+        ],
+      });
+      let current = cardPaid;
+      const app = createTestApp({
+        routes: saleRoutes(() => current, {
+          'POST /pos-sales/{id}/returns': () => {
+            current = paidSale({
+              ...cardPaid,
+              status: 'partially_returned',
+              returnedMinor: 271,
+              lines: [line({ returnedQuantity: 1 })],
+              returns: [
+                {
+                  id: RETURN_ID,
+                  amountMinor: 271,
+                  tenderKind: 'card',
+                  lines: [
+                    {
+                      saleLineId: LINE_ID,
+                      quantity: 1,
+                      amountMinor: 271,
+                      baseMinor: 250,
+                      charges: [{ code: 'TAX', kind: 'tax', amountMinor: 21 }],
+                    },
+                  ],
+                  refundAttemptId: REFUND_ID,
+                  refundStatus,
+                  registerSessionId: null,
+                  reason: 'Damaged',
+                  approvedByPersonId: '0192f1a0-0000-7000-8000-0000000000dd',
+                  returnedAt: '2026-10-24T12:00:00.000Z',
+                },
+              ],
+            });
+            return fakeResponse(201, current);
+          },
+        }),
+      });
+      render(app.at(SALE_PATH));
+      const form = await screen.findByRole('form', { name: 'Return lines' });
+      await user.type(within(form).getByLabelText(/^Units of Water bottle to return/), '1');
+      await user.selectOptions(within(form).getByLabelText(/^Refund by/), 'card');
+      await user.type(within(form).getByLabelText(/^Reason for the return/), 'Damaged');
+      await user.click(within(form).getByRole('button', { name: 'Approve and record the return' }));
+      const outcome = await within(form).findByRole('status');
+      expect(outcome).toHaveTextContent('Return of $2.71 recorded.');
+      expect(outcome).toHaveTextContent(badge);
+      expect(outcome).toHaveTextContent(text);
+      expect(outcome).not.toHaveTextContent('succeeded');
+      expect(within(outcome).getByRole('link', { name: 'Open the refund' })).toHaveAttribute(
+        'href',
+        `/finance/refunds/${REFUND_ID}`,
+      );
+      const returns = await screen.findByRole('table', { name: 'Returns' });
+      expect(within(returns).getByText(badge)).toBeInTheDocument();
+      expect(within(returns).getByRole('link', { name: 'Open the refund' })).toHaveAttribute(
+        'href',
+        `/finance/refunds/${REFUND_ID}`,
+      );
+    },
+  );
+
+  it('SPK-PAY-008: a card return larger than one card payment can refund shows what it can still refund', async () => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    const cardPaid = paidSale({
+      tenders: [
+        tender({
+          kind: 'card',
+          amountMinor: 300,
+          paymentAttemptId: ATTEMPT_ID,
+          paymentStatus: 'succeeded',
+        }),
+        tender({
+          id: '0192f1a0-0000-7000-8000-00000000a306',
+          kind: 'card',
+          amountMinor: 242,
+          paymentAttemptId: '0192f1a0-0000-7000-8000-00000000a307',
+          paymentStatus: 'succeeded',
+        }),
+      ],
+    });
+    const app = createTestApp({
+      routes: saleRoutes(() => cardPaid, {
+        'POST /pos-sales/{id}/returns': () => {
+          attempts += 1;
+          return attempts === 1
+            ? fakeResponse(409, {
+                code: 'RESOURCE_CONFLICT',
+                message: 'The refund exceeds the refundable amount.',
+                correlationId: 'c-ref',
+                nextAction: 'resolve_conflict',
+                details: {
+                  code: 'REFUND_EXCEEDS_REFUNDABLE',
+                  availableMinor: 300,
+                  capturedMinor: 300,
+                  refundedMinor: 0,
+                },
+              })
+            : fakeResponse(409, {
+                code: 'RESOURCE_CONFLICT',
+                message: 'No captured card payment of this sale can be refunded.',
+                correlationId: 'c-ref2',
+                nextAction: 'resolve_conflict',
+                details: { code: 'REFUND_EXCEEDS_REFUNDABLE' },
+              });
+        },
+      }),
+    });
+    render(app.at(SALE_PATH));
+    const form = await screen.findByRole('form', { name: 'Return lines' });
+    await user.type(within(form).getByLabelText(/^Units of Water bottle to return/), '2');
+    await user.selectOptions(within(form).getByLabelText(/^Refund by/), 'card');
+    await user.type(within(form).getByLabelText(/^Reason for the return/), 'Damaged');
+    await user.click(within(form).getByRole('button', { name: 'Approve and record the return' }));
+    const refusal = await within(form).findByTestId('state-validation');
+    expect(refusal).toHaveTextContent('The return exceeds what one card payment can refund');
+    expect(refusal).toHaveTextContent(
+      'Still refundable to the card payment: $3.00. Captured: $3.00. Already refunded: $0.00.',
+    );
+    expect(refusal).toHaveTextContent('return fewer units in this return');
+    expect(refusal).not.toHaveTextContent('No card payment of this sale can be refunded');
+    expect(refusal).toHaveTextContent('Error code: RESOURCE_CONFLICT (REFUND_EXCEEDS_REFUNDABLE)');
+    await user.click(within(form).getByRole('button', { name: 'Approve and record the return' }));
+    await waitFor(() =>
+      expect(within(form).getByTestId('state-validation')).toHaveTextContent(
+        'No card payment of this sale can be refunded',
+      ),
+    );
   });
 
   it('voids an open sale with a reason', async () => {

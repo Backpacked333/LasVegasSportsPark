@@ -3,8 +3,9 @@
  * correction handling"; SPK-PAY-010, SPK-PAY-011, §4.11): the batch and its lines
  * (`GET /v1/accounting-export-batches/{id}`), and while it is prepared, submitting it with the
  * revision it was read at (`POST .../submit`, finance.export_accounting; the API calls the
- * connection outside any transaction) or canceling it with a reason (`POST .../cancel`, never
- * gated; its entries can then be exported again).
+ * connection outside any transaction) or canceling it with a reason and the same revision
+ * (`POST .../cancel`, never gated; its entries can then be exported again; STALE_REVISION answers
+ * "Reload").
  *
  * Outcomes are the API's: accepted (with the connection's reference), rejected (the entries can be
  * exported again in a new batch; every line shows whether it is still live), and unknown: recovery
@@ -188,6 +189,7 @@ function SubmitBatch({ batch }: { batch: Batch }) {
 
 function CancelBatch({ batch }: { batch: Batch }) {
   const online = useOnline();
+  const queryClient = useQueryClient();
   const command = useApiCommand('post', '/accounting-export-batches/{id}/cancel', BATCH_COMMAND);
   return (
     <div>
@@ -200,14 +202,23 @@ function CancelBatch({ batch }: { batch: Batch }) {
         disabled={!online}
         onConfirm={async (reason) => {
           try {
-            await command.submit({ path: { id: batch.id }, body: { reason } });
+            await command.submit({
+              path: { id: batch.id },
+              body: { reason, expectedRevision: batch.revision },
+            });
             return true;
           } catch {
             return false;
           }
         }}
       />
-      <CommandError error={command.error} />
+      <CommandError
+        error={command.error}
+        onReload={() => {
+          command.reset();
+          void queryClient.invalidateQueries({ queryKey: BATCH_PREFIX });
+        }}
+      />
     </div>
   );
 }

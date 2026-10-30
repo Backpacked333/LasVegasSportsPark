@@ -6,9 +6,15 @@
  * (`POST /v1/access-devices`, entry.register_access_device): a new device is sent deny-all until a
  * policy is approved, and no heartbeat timeout is assumed.
  *
- * Recovery required: the facilities operator's open hardware exceptions at the facility (device
- * offline, a command not delivered, an access outcome unknown) from `GET /v1/exceptions`, each
- * linked to its exception page. Offline, commands are disabled and say so.
+ * Recovery required (inventory: "events not ingested with owner"): the unresolved hardware
+ * exceptions at the facility from `GET /v1/exceptions?facilityId=` (open or acknowledged, every
+ * queue the viewer may see): a device offline or a command not delivered (facilities operator
+ * queue), events from a device that is not registered here, so not ingested, and an access outcome
+ * unknown (the queue the API names, the facility operations queue). Each shows the owner queue the
+ * API recorded and links to its exception page; the API cannot filter by category, so the page
+ * filters the loaded pages. Event ingestion: the access events the inbox received
+ * (`GET /v1/provider-events`, core.view_provider_events), with their status; failed, dead and
+ * ignored ones were not ingested. Offline, commands are disabled and say so.
  */
 import { formatAge, presentationForError, type Schema } from '@sportspark/api-client';
 import { useState, type FormEvent } from 'react';
@@ -27,8 +33,17 @@ import {
   DEVICE_HEALTH,
   DEVICE_KIND,
   DEVICE_STATUS,
+  EXCEPTION_STATUS,
+  HARDWARE_EVENT_TYPES,
+  HARDWARE_EXCEPTION,
+  PROVIDER_EVENT_STATUS,
+  queueLabel,
 } from '../../../features/pos-access-accounting/labels';
-import { ACCESS_ACTIONS, useOffer } from '../../../features/pos-access-accounting/permission';
+import {
+  ACCESS_ACTIONS,
+  CORE_ACTIONS,
+  useOffer,
+} from '../../../features/pos-access-accounting/permission';
 import { formatInstant } from '../../../features/registration-finance/format';
 import { OfflineCaption, useOnline } from '../../../features/registration-finance/offline';
 import { useNow } from '../../../providers/AppProviders';
@@ -52,12 +67,18 @@ const STATUS_FILTERS = [
   { value: 'retired', label: 'Retired devices' },
 ] as const;
 
-/** Exceptions the API raises for access hardware (entry module, facilities operator queue). */
-const HARDWARE_CATEGORIES = new Set([
-  'entry.device_offline',
-  'entry.device_command_undelivered',
-  'entry.access_outcome_unknown',
-]);
+/**
+ * Exceptions the API raises for access hardware (entry module): device offline, command not
+ * delivered and unregistered device go to the facilities operator queue, an access outcome unknown
+ * to the facility operations queue; the owner shown is always the one the exception records.
+ */
+const HARDWARE_CATEGORIES = new Set(Object.keys(HARDWARE_EXCEPTION));
+
+const HARDWARE_EVENT_TYPE = new Map(HARDWARE_EVENT_TYPES.map((t) => [t.value, t.label]));
+
+const EVENT_STATUS_FILTERS = (
+  Object.keys(PROVIDER_EVENT_STATUS) as Schema<'ProviderEventStatus'>[]
+).map((s) => ({ value: s, label: PROVIDER_EVENT_STATUS[s].label }));
 
 export function DevicesPage() {
   const directory = useFacilityDirectory();
@@ -85,6 +106,7 @@ export function DevicesPage() {
         <>
           <DeviceList facilityId={facilityId} status={status} directory={directory} />
           <HardwareExceptions facilityId={facilityId} />
+          <EventIngestion zone={directory.timeZoneOf(facilityId)} />
           <RegisterDevice facilityId={facilityId} directory={directory} />
         </>
       ) : (
@@ -172,14 +194,15 @@ function DeviceList({
 }
 
 function HardwareExceptions({ facilityId }: { facilityId: string }) {
+  // No queue filter: the owner queue is the API's (the facility operations queue of an unknown
+  // access outcome is not the facilities operator's), and rows of queues the viewer may not see
+  // are left out by the API. No status filter: open and acknowledged ones are still unresolved.
   const exceptions = useApiPages({
     path: '/exceptions',
-    request: {
-      query: { queue: 'facilities_operator', facilityId, status: 'open', limit: 50 },
-    },
+    request: { query: { facilityId, limit: 50 } },
   });
   if (exceptions.data === undefined) {
-    // Not offered to a viewer who may not read the queue; a failure is shown with its code.
+    // Not offered to a viewer who may not read exceptions; a failure is shown with its code.
     if (exceptions.error && presentationForError(exceptions.error) !== 'unavailable') {
       return (
         <StateView
@@ -194,21 +217,23 @@ function HardwareExceptions({ facilityId }: { facilityId: string }) {
   const hardware = exceptions.data.filter((e) => HARDWARE_CATEGORIES.has(e.category));
   return (
     <section aria-labelledby="access-exceptions-title" className="rf-panel">
-      <h4 id="access-exceptions-title">Hardware exceptions waiting for the facilities operator</h4>
+      <h4 id="access-exceptions-title">Hardware exceptions waiting for their owner</h4>
       {hardware.length === 0 ? (
         <p className="caption">
-          No open hardware exception
-          {exceptions.hasNextPage ? ' on the loaded pages of the queue' : ''}.
+          No unresolved hardware exception
+          {exceptions.hasNextPage ? ' on the loaded pages' : ''}.
         </p>
       ) : (
-        <ul className="list" aria-label="Open hardware exceptions">
+        <ul className="list" aria-label="Unresolved hardware exceptions">
           {hardware.map((e) => (
             <li key={e.id}>
               <div className="row-text">
-                <StatusBadge tone="warning" label={`Recovery required: ${e.severity}`} />
+                <StatusBadge tone="warning" label={`Recovery required: ${e.severity}`} />{' '}
+                <StatusBadge {...EXCEPTION_STATUS[e.status]} />
                 <Link to={`/today/exceptions/${e.id}`}>{e.title}</Link>
+                <span>{HARDWARE_EXCEPTION[e.category] ?? e.category}</span>
                 <span className="caption">
-                  Open for {e.ageMinutes} minutes. Owner: facilities operator queue.
+                  Open for {e.ageMinutes} minutes. Owner: {queueLabel(e.ownerQueue)}.
                 </span>
               </div>
             </li>
@@ -216,6 +241,120 @@ function HardwareExceptions({ facilityId }: { facilityId: string }) {
         </ul>
       )}
       <LoadMore pages={exceptions} label="exceptions" />
+    </section>
+  );
+}
+
+/** What a provider event's inbox status means for ingestion. */
+function ingestionText(status: Schema<'ProviderEventStatus'>): string | null {
+  switch (status) {
+    case 'failed':
+      return 'Not ingested yet: the inbox retries it.';
+    case 'dead':
+      return 'Not ingested: retries are exhausted and the API opened an exception for its owner.';
+    case 'ignored':
+      return 'Not ingested: the API did not apply it.';
+    case 'received':
+      return 'Not processed yet.';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Access events the inbox received (§3.16 "event ingestion", §4.12): the event type, the
+ * provider's reference, when it arrived and its status, never the payload (§4.14). The inbox is
+ * organization-wide and cannot be filtered by facility or device, so events of every facility are
+ * listed; with no event type chosen, the loaded pages are filtered to access hardware events.
+ */
+function EventIngestion({ zone }: { zone: string | null }) {
+  const offer = useOffer();
+  const [eventType, setEventType] = useState('');
+  const [status, setStatus] = useState('');
+  const allowed = offer.allowed(CORE_ACTIONS.viewProviderEvents);
+  const events = useApiPages({
+    path: '/provider-events',
+    request: {
+      query: {
+        ...(eventType ? { eventType } : {}),
+        ...(status ? { status: status as Schema<'ProviderEventStatus'> } : {}),
+        limit: 50,
+      },
+    },
+    enabled: allowed,
+  });
+  if (!allowed) {
+    return (
+      <p className="caption">
+        Reading the events devices send needs the permission {CORE_ACTIONS.viewProviderEvents}.
+      </p>
+    );
+  }
+  return (
+    <section aria-labelledby="access-events-title" className="rf-panel">
+      <h4 id="access-events-title">Event ingestion</h4>
+      <p className="caption">
+        Events every access device of the organization sent, as the inbox received them; payloads
+        are never shown. Failed, dead and ignored events were not ingested.
+      </p>
+      <div className="rf-grid">
+        <SelectField
+          label="Event type"
+          value={eventType}
+          onChange={setEventType}
+          options={HARDWARE_EVENT_TYPES}
+          placeholder="Every access hardware event"
+        />
+        <SelectField
+          label="Event status"
+          value={status}
+          onChange={setStatus}
+          options={EVENT_STATUS_FILTERS}
+          placeholder="Every status"
+        />
+      </div>
+      <QueryBoundary
+        query={events}
+        label="access events"
+        isEmpty={(items) => !items.some((e) => HARDWARE_EVENT_TYPE.has(e.eventType))}
+        empty={{
+          title: 'No access events',
+          description: events.hasNextPage
+            ? 'No access hardware event matches on the loaded pages.'
+            : 'No access hardware event matches.',
+        }}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Access events received">
+            {items
+              .filter((e) => HARDWARE_EVENT_TYPE.has(e.eventType))
+              .map((e) => {
+                const ingestion = ingestionText(e.status);
+                return (
+                  <li key={e.id}>
+                    <div className="row-text">
+                      <span className="row-title">
+                        {HARDWARE_EVENT_TYPE.get(e.eventType)} ({e.eventType})
+                      </span>
+                      <StatusBadge {...PROVIDER_EVENT_STATUS[e.status]} />
+                      <span className="caption">
+                        {e.provider} event {e.providerEventId} received{' '}
+                        {formatInstant(e.receivedAt, zone)}
+                        {e.signatureVerified ? '' : ' (signature not verified)'} · attempts{' '}
+                        {e.attempts}
+                      </span>
+                      {ingestion ? <span>{ingestion}</span> : null}
+                      {e.lastError ? (
+                        <span className="caption">Last error: {e.lastError}</span>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={events} label="events" />
     </section>
   );
 }

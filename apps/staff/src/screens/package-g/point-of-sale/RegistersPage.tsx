@@ -2,12 +2,14 @@
  * SCR-S-55 registers and their sessions (§3.16 POS, POL-018): the registers of a facility
  * (`GET /v1/pos-registers`, paged), each with its open session; creating a register
  * (`POST /v1/pos-registers`, finance.manage_pos_registers), retiring one without an open session
- * (`POST /v1/pos-registers/{id}/retire`, never gated) and opening a session with its opening float
+ * with the revision it was read at (`POST /v1/pos-registers/{id}/retire`, never gated;
+ * REGISTER_SESSION_OPEN is explained, STALE_REVISION answers "Reload") and opening a session with its opening float
  * (`POST /v1/pos-registers/{id}/sessions`, finance.operate_register). The opening currency is
  * never assumed: it is typed, or taken from the facility's products when they share one.
  * Offline, commands are disabled and say so; nothing is queued (§4.15: no new payments offline).
  */
 import type { Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useApiCommand } from '../../../api/useApiCommand';
@@ -118,6 +120,7 @@ function RegisterRow({
 }) {
   const offer = useOffer();
   const online = useOnline();
+  const queryClient = useQueryClient();
   const retire = useApiCommand('post', '/pos-registers/{id}/retire', {
     invalidate: [['api', '/pos-registers']],
   });
@@ -161,14 +164,23 @@ function RegisterRow({
             disabled={!online}
             onConfirm={async (reason) => {
               try {
-                await retire.submit({ path: { id: register.id }, body: { reason } });
+                await retire.submit({
+                  path: { id: register.id },
+                  body: { reason, expectedRevision: register.revision },
+                });
                 return true;
               } catch {
                 return false;
               }
             }}
           />
-          <CommandError error={retire.error} />
+          <CommandError
+            error={retire.error}
+            onReload={() => {
+              retire.reset();
+              void queryClient.invalidateQueries({ queryKey: ['api', '/pos-registers'] });
+            }}
+          />
         </div>
       ) : null}
     </li>

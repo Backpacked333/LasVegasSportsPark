@@ -152,8 +152,10 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
       <Returns sale={sale} zone={zone} />
       {selling ? (
         <>
-          <AddLineForm sale={sale} />
-          {sale.lines.length > 0 && sale.remainingMinor > 0 ? <TenderForm sale={sale} /> : null}
+          <AddLineForm sale={sale} onReload={onReload} />
+          {sale.lines.length > 0 && sale.remainingMinor > 0 ? (
+            <TenderForm sale={sale} onReload={onReload} />
+          ) : null}
         </>
       ) : null}
       {sale.status === 'open' && operate ? (

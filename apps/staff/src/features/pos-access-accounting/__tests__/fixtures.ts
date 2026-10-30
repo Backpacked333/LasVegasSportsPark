@@ -25,6 +25,7 @@ export const LINE_ID = '0192f1a0-0000-7000-8000-00000000a302';
 export const TENDER_ID = '0192f1a0-0000-7000-8000-00000000a303';
 export const ATTEMPT_ID = '0192f1a0-0000-7000-8000-00000000a304';
 export const RETURN_ID = '0192f1a0-0000-7000-8000-00000000a305';
+export const REFUND_ID = '0192f1a0-0000-7000-8000-00000000a308';
 export const TAX_VERSION_ID = '0192f1a0-0000-7000-8000-00000000a401';
 
 export const DEVICE_ID = '0192f1a0-0000-7000-8000-00000000b001';
@@ -396,6 +397,81 @@ export function deviceCommand(
     deliveredAt: NOW,
     createdAt: NOW,
     revision: 2,
+    ...overrides,
+  };
+}
+
+/** An unresolved exception at facility A, by default a hardware one of the facilities operator. */
+export function hardwareException(
+  overrides: Partial<Model<'OperationalException'>> = {},
+): Model<'OperationalException'> {
+  return {
+    id: EXCEPTION_ID,
+    facilityId: FACILITY_A,
+    category: 'entry.device_command_undelivered',
+    severity: 'high',
+    title: 'A device command was not delivered after repeated attempts',
+    affected: { type: 'device_command', id: COMMAND_ID },
+    ownerQueue: 'facilities_operator',
+    status: 'open',
+    openedAt: '2026-10-24T11:00:00.000Z',
+    ageMinutes: 60,
+    deadlineAt: null,
+    acknowledgeBy: null,
+    overdue: false,
+    acknowledgedAt: null,
+    resolvedAt: null,
+    closedAt: null,
+    resolution: null,
+    details: {},
+    revision: 1,
+    history: [],
+    nextActions: [],
+    underlyingRecordUnchanged: true,
+    ...overrides,
+  };
+}
+
+/** A provider event as the inbox lists it (never its payload). */
+export function providerEvent(
+  overrides: Partial<Model<'ProviderEvent'>> = {},
+): Model<'ProviderEvent'> {
+  return {
+    id: '0192f1a0-0000-7000-8000-00000000b501',
+    provider: 'fake-access-control',
+    providerEventId: 'evt-1',
+    eventType: 'access.granted',
+    signatureVerified: true,
+    status: 'processed',
+    attempts: 1,
+    lastError: null,
+    receivedAt: '2026-10-24T11:30:00.000Z',
+    processedAt: '2026-10-24T11:30:01.000Z',
+    ...overrides,
+  };
+}
+
+export function auditRecord(overrides: Partial<Model<'AuditRecord'>> = {}): Model<'AuditRecord'> {
+  return {
+    id: '0192f1a0-0000-7000-8000-00000000b601',
+    occurredAt: '2026-10-24T10:00:00.000Z',
+    actor: {
+      kind: 'staff',
+      accountId: null,
+      personId: ME_PERSON,
+      staffRoles: ['system_administrator'],
+      sessionId: null,
+      actorLabel: 'Dana Cole',
+    },
+    action: 'entry.update_access_device',
+    targetType: 'access_device',
+    targetId: DEVICE_ID,
+    beforeRevision: 1,
+    afterRevision: 2,
+    reason: null,
+    correlationId: 'corr-audit-1',
+    operationId: null,
+    details: { name: 'Main gate turnstile' },
     ...overrides,
   };
 }

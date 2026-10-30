@@ -3,8 +3,8 @@
  * SPK-PAY-012): the products of a facility or of every facility (`GET /v1/pos-products`, paged),
  * creating one (`POST /v1/pos-products`), changing its name, price or charges for later sales with
  * the revision it was read at (`PATCH /v1/pos-products/{id}`, STALE_REVISION answers "Reload"),
- * and retiring it (`POST /v1/pos-products/{id}/retire`, never gated; past sales keep their
- * snapshot). Prices are integer minor units with their currency, typed by staff and never derived.
+ * and retiring it with the revision it was read at (`POST /v1/pos-products/{id}/retire`, never
+ * gated; past sales keep their snapshot; STALE_REVISION answers "Reload"). Prices are integer minor units with their currency, typed by staff and never derived.
  *
  * Taxes and fees are keys of catalog `tax_fee` policies; only approved versions apply, at sale time
  * (DEC-057). The keys offered are the approved ones the API lists
@@ -188,6 +188,7 @@ export function ProductsPage() {
 function ProductRow({ product, directory }: { product: Product; directory: FacilityDirectory }) {
   const offer = useOffer();
   const online = useOnline();
+  const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const retire = useApiCommand('post', '/pos-products/{id}/retire', {
     invalidate: [['api', '/pos-products']],
@@ -234,14 +235,23 @@ function ProductRow({ product, directory }: { product: Product; directory: Facil
             disabled={!online}
             onConfirm={async (reason) => {
               try {
-                await retire.submit({ path: { id: product.id }, body: { reason } });
+                await retire.submit({
+                  path: { id: product.id },
+                  body: { reason, expectedRevision: product.revision },
+                });
                 return true;
               } catch {
                 return false;
               }
             }}
           />
-          <CommandError error={retire.error} />
+          <CommandError
+            error={retire.error}
+            onReload={() => {
+              retire.reset();
+              void queryClient.invalidateQueries({ queryKey: ['api', '/pos-products'] });
+            }}
+          />
         </div>
       ) : null}
     </li>

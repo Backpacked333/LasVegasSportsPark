@@ -283,7 +283,7 @@ describe('SCR-S-57 AccountingExportsScreen', () => {
     expect(screen.getByText('not exported: can be exported again')).toBeInTheDocument();
   });
 
-  it('cancels a prepared batch with a reason, even while the switch is off (never gated)', async () => {
+  it('cancels a prepared batch with a reason and its revision, even while the switch is off (never gated)', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
@@ -292,6 +292,10 @@ describe('SCR-S-57 AccountingExportsScreen', () => {
       }),
     });
     render(app.at(BATCH_PATH));
+    // Wait for the permissions read: until it answers, nothing is hidden.
+    expect(await screen.findByTestId('state-turned-off')).toHaveTextContent(
+      'Accounting export turned off',
+    );
     await user.click(await screen.findByRole('button', { name: 'Cancel the batch' }));
     expect(screen.queryByRole('button', { name: 'Submit the batch' })).toBeNull();
     const form = screen.getByRole('form', { name: 'Cancel the batch' });
@@ -305,7 +309,36 @@ describe('SCR-S-57 AccountingExportsScreen', () => {
     const call = app.fake.requests.find(
       (r) => r.route === '/accounting-export-batches/{id}/cancel',
     );
-    expect(call?.body).toEqual({ reason: 'Wrong period' });
+    expect(call?.body).toEqual({ reason: 'Wrong period', expectedRevision: 1 });
+  });
+
+  it('§4.9: a stale cancellation offers Reload instead of canceling', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /accounting-export-batches/{id}/cancel': apiError(409, 'STALE_REVISION', {
+          message: 'The batch changed since it was read.',
+          nextAction: 'reload_current_state',
+        }),
+      }),
+    });
+    render(app.at(BATCH_PATH));
+    await user.click(await screen.findByRole('button', { name: 'Cancel the batch' }));
+    const form = screen.getByRole('form', { name: 'Cancel the batch' });
+    await user.type(within(form).getByLabelText(/^Reason for canceling/), 'Wrong period');
+    await user.click(within(form).getByRole('button', { name: 'Cancel the batch' }));
+    const stale = await screen.findByTestId('state-stale');
+    expect(stale).toHaveTextContent('Error code: STALE_REVISION');
+    const reads = app.fake.requests.filter(
+      (r) => r.route === '/accounting-export-batches/{id}',
+    ).length;
+    await user.click(within(stale).getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/accounting-export-batches/{id}').length,
+      ).toBeGreaterThan(reads),
+    );
+    await waitFor(() => expect(screen.queryByTestId('state-stale')).toBeNull());
   });
 
   it('a submission refused because the switch was turned off meanwhile shows "turned off"', async () => {
