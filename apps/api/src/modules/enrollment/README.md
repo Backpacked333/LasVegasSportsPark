@@ -16,7 +16,7 @@ Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 
 SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
 **Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
-`0500` to `0512`; `0503` came from the review stage, `0510` to `0512` from the stage-5 review)
+`0500` to `0513`; `0503` came from the review stage, `0510` to `0513` from the stage-5 review)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
@@ -329,14 +329,14 @@ A disabled capability refuses new commitments with 403 `ACCESS_DENIED`, `details
 follow-ups and payment outcomes never check it. Policy values (prices, expiry, credit return,
 benefits, terms, deposits) are configuration in the catalog; nothing here supplies a default.
 
-| Capability          | Decision                            | Gated here                                                                               | Migration  | Tests                                                       |
-| ------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------- |
-| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`)                                       | —          | `package-g-foundation.spec.ts`                              |
-| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal                                           | 0505, 0507 | `package-g-foundation.spec.ts`, `memberships.spec.ts`       |
-| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506 | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
-| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508, 0512 | `bookings.spec.ts`                                          |
-| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508, 0512 | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
-| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511  | `youth-progression.spec.ts`                                 |
+| Capability          | Decision                            | Gated here                                                                               | Migration        | Tests                                                       |
+| ------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------- |
+| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`)                                       | —                | `package-g-foundation.spec.ts`                              |
+| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal                                           | 0505, 0507, 0513 | `package-g-foundation.spec.ts`, `memberships.spec.ts`       |
+| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506       | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
+| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508, 0512       | `bookings.spec.ts`                                          |
+| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508, 0512       | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
+| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511        | `youth-progression.spec.ts`                                 |
 
 Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
 `startCheckout`) re-checks every live line's capability before any payment attempt ("DEC-016:
@@ -373,7 +373,10 @@ mirrored by a database transition guard.
   periods never overlap: exclusion constraint), renewal (`POST /v1/enrollments/{id}/renew` adds a
   linked membership line; nothing is charged until checkout), job `enrollment.membership_lifecycle`
   (completes ended terms, ends elapsed suspensions, one `renewal_opportunity` notice when the
-  definition sets `renewal.noticeLeadDays`), `GET /v1/me/memberships`.
+  definition sets `renewal.noticeLeadDays`; a membership not due yet records when it becomes due,
+  `renewal_notice_due_at` (0513), and is not re-read before then, so memberships that are never
+  due cannot keep a due one out of the batch; a lead changed on the definition later applies from
+  that recorded instant), `GET /v1/me/memberships`.
 - **Rentals and parties (ENR-13, SPK-COND-003).** `POST /v1/bookings` validates the offering's
   approved booking terms (`BOOKING_TERMS_REQUIRED`), its resources (exact count from the allowed
   set), guests (party) and equipment (`EQUIPMENT_UNAVAILABLE` through `ASSET_DIRECTORY_PORT`).

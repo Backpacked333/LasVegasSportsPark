@@ -20,7 +20,7 @@ import {
   type Db,
   type MembershipSuspensionsTable,
 } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -811,7 +811,12 @@ export class MembershipsService {
     return true;
   }
 
-  /** Confirmed memberships that may be due a renewal notice (no notice composed yet). */
+  /**
+   * Confirmed memberships whose renewal notice may be due (no notice composed yet): the ones the
+   * job never evaluated, then those whose recorded due instant has come (ASYNC-03, 0513). A
+   * membership that is not due yet is not re-read until its due instant, so it never occupies
+   * the batch ahead of one that is.
+   */
   async renewalCandidates(now: Date, limit: number) {
     return (
       this.db
@@ -823,6 +828,10 @@ export class MembershipsService {
         .where('membership_ends_at', '>', now)
         // The longest permitted lead is 365 days; the definition decides the actual one.
         .where('membership_ends_at', '<=', new Date(now.getTime() + 366 * DAY_MS))
+        .where((eb) =>
+          eb.or([eb('renewal_notice_due_at', 'is', null), eb('renewal_notice_due_at', '<=', now)]),
+        )
+        .orderBy(sql`renewal_notice_due_at asc nulls first`)
         .orderBy('membership_ends_at')
         .orderBy('id')
         .limit(limit)
@@ -834,9 +843,16 @@ export class MembershipsService {
    * Composes the one renewal_opportunity notice (IF-22) of a membership when its definition sets
    * `renewal.noticeLeadDays`, the term ends within that lead and no renewal exists yet. The
    * notice's source id is stable (`renewal:<enrollmentId>`), so a replay composes nothing new.
-   * Returns whether the membership is settled (notice sent or never due again).
+   * Otherwise it records when the membership is next worth checking (`renewal_notice_due_at`):
+   * the instant the lead is reached, the term end when the definition asks for no notice (never
+   * due), or a day later while the definition cannot be read or a renewal is pending.
+   * Returns `sent`, `deferred` (the due instant was recorded) or `skipped` (nothing to do).
    */
-  async renewalNoticeIfDue(trx: Trx, organizationId: string, id: string): Promise<boolean> {
+  async renewalNoticeIfDue(
+    trx: Trx,
+    organizationId: string,
+    id: string,
+  ): Promise<'sent' | 'deferred' | 'skipped'> {
     const row = await this.enrollments.load(trx, organizationId, id, true);
     const now = this.clock.now();
     if (
@@ -846,14 +862,27 @@ export class MembershipsService {
       !row.membership_ends_at ||
       new Date(row.membership_ends_at) <= now
     ) {
-      return false;
+      return 'skipped';
     }
-    const snapshot = await this.offerings.getOffering(organizationId, row.offering_id, now, trx);
-    const scope = snapshot ? typedScope(snapshot, 'membership_benefit') : null;
-    const lead = scope?.renewal.noticeLeadDays ?? null;
-    if (!snapshot || lead === null) return false;
     const endsAt = new Date(row.membership_ends_at);
-    if (endsAt.getTime() - now.getTime() > lead * DAY_MS) return false;
+    const defer = async (until: Date): Promise<'deferred'> => {
+      await trx
+        .updateTable('enrollments')
+        .set({ renewal_notice_due_at: until })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.id)
+        .execute();
+      return 'deferred';
+    };
+    const recheck = new Date(Math.min(endsAt.getTime(), now.getTime() + DAY_MS));
+    const snapshot = await this.offerings.getOffering(organizationId, row.offering_id, now, trx);
+    if (!snapshot) return defer(recheck);
+    const scope = typedScope(snapshot, 'membership_benefit');
+    const lead = scope?.renewal.noticeLeadDays ?? null;
+    // No notice asked for: never due during this term.
+    if (lead === null) return defer(endsAt);
+    const dueAt = new Date(endsAt.getTime() - lead * DAY_MS);
+    if (dueAt > now) return defer(dueAt);
     const renewal = await trx
       .selectFrom('enrollments')
       .select('id')
@@ -868,7 +897,8 @@ export class MembershipsService {
       .where('renewed_from_enrollment_id', '=', id)
       .where('outcome', 'in', ['pending', 'held'])
       .executeTakeFirst();
-    if (renewal || pendingLine) return false;
+    // A renewal is under way; if it is released or cancelled the notice is still due.
+    if (renewal || pendingLine) return defer(recheck);
     const zone = await this.zoneOf(organizationId, snapshot.offering.facilityId, trx);
     const system = enrollmentSystem(organizationId, 'enrollment.membership_lifecycle');
     await this.notifications.composeAndQueueIn(trx, system, {
@@ -899,7 +929,7 @@ export class MembershipsService {
       targetId: row.id,
       details: { noticeLeadDays: lead, termEndsAt: endsAt.toISOString() },
     });
-    return true;
+    return 'sent';
   }
 
   // -------------------------------------------------------------------------------------------
