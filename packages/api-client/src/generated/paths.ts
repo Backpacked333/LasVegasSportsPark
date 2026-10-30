@@ -3242,7 +3242,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Review, grant, deny or withdraw an appeal */
+        /** Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason) */
         post: {
             parameters: {
                 query?: never;

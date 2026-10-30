@@ -1226,9 +1226,17 @@ export type CreateAppealInput = z.infer<typeof CreateAppealBody>;
 export const DecideAppealBody = withCommandMeta({
   action: z.enum(['review', 'grant', 'deny', 'withdraw']),
 })
-  .extend({ expectedRevision: Revision })
+  // the reason is trimmed, so a blank one is no reason
+  .extend({ expectedRevision: Revision, reason: Reason.optional() })
   .refine((b) => !(b.action === 'grant' || b.action === 'deny') || !!b.reason, {
     message: 'an appeal decision requires a reason',
+    path: ['reason'],
+  })
+  // §4.9 (SPK-DISC-001/002): appeals have no submitter withdraw path, so a withdrawal is always
+  // league management ending the subject's appeal and resetting the appeal status it set; like
+  // a dispute withdrawal on POST /disputes/{id}/decide it names its reason.
+  .refine((b) => b.action !== 'withdraw' || !!b.reason, {
+    message: 'a withdrawal recorded by league management requires a reason',
     path: ['reason'],
   })
   .openapi('DecideAppealRequest');
@@ -1643,7 +1651,7 @@ query('/appeals/{id}', 'Read an appeal', null, AppealSchema);
 command(
   'post',
   '/appeals/{id}/decide',
-  'Review, grant, deny or withdraw an appeal',
+  'Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason)',
   DecideAppealBody,
   AppealSchema,
   200,

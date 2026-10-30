@@ -69968,7 +69968,7 @@
     },
     "/appeals/{id}/decide": {
       "post": {
-        "summary": "Review, grant, deny or withdraw an appeal",
+        "summary": "Review, grant, deny or withdraw an appeal (a decision or a withdrawal names its reason)",
         "tags": [
           "Competition"
         ],
