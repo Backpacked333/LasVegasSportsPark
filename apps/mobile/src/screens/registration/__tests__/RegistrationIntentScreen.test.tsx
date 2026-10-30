@@ -8,6 +8,7 @@
  */
 import {
   apiErrorBody,
+  capabilityDisabledBody,
   fakeResponse,
   type FakeHandler,
   type FakeRequest,
@@ -16,6 +17,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import {
   IDS,
   basket,
+  eligible,
   familyRoutes,
   ineligible,
   line,
@@ -23,6 +25,7 @@ import {
   offering,
   optionsHandler,
   page,
+  personName,
   registrationOptions,
 } from '../../../features/registration/testing/fixtures';
 import { mePermissions } from '../../../testing/test-app';
@@ -84,6 +87,39 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     const read = app.fake.requests.find((r) => r.route === '/offerings/{id}/registration-options');
     expect(read?.query.participantPersonIds?.split(',').sort()).toEqual(
       [IDS.parent, IDS.childA, IDS.childB, IDS.viewOnlyChild].sort(),
+    );
+  });
+
+  it('§4.14: names come from the names-only GET /person-names (no person records); someone it omits is not listed', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /person-names': {
+          status: 200,
+          body: { items: [personName(IDS.childA, 'Ada'), personName(IDS.viewOnlyChild, 'Cy')] },
+        },
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('checkbox', { name: 'Ada. Eligible' })).toBeOnTheScreen();
+    // Ben's name was not given: he is not listed, and nothing says he exists.
+    expect(screen.queryByRole('checkbox', { name: /^Ben/ })).toBeNull();
+    expect(app.fake.requests.some((r) => r.path.startsWith('/people/'))).toBe(false);
+    expect(app.fake.requests.filter((r) => r.route === '/person-names')).toHaveLength(1);
+  });
+
+  it('SPK-UX-008: names that cannot be read show the code and a retry; nobody is registered meanwhile', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /person-names': () =>
+          fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/offerings/{id}/registration-options')).toBe(
+      false,
     );
   });
 
@@ -187,18 +223,9 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
           }),
         },
         'GET /me/permissions': mePermissions({ enabled: ['session_packages'] }),
+        // The body the kernel sends (ACCESS_DENIED, contact_support_or_request_access).
         'POST /baskets/{id}/lines': () =>
-          fakeResponse(
-            403,
-            apiErrorBody('ACCESS_DENIED', {
-              nextAction: 'contact_support',
-              details: {
-                code: 'CAPABILITY_DISABLED',
-                capability: 'session_packages',
-                applicabilityReferences: ['DEC-016', 'DEC-074'],
-              },
-            }),
-          ),
+          fakeResponse(403, capabilityDisabledBody('session_packages', ['DEC-016', 'DEC-074'])),
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
@@ -221,6 +248,10 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
     });
+    // The hand-over follows both lines and their invalidations (timer-batched): wait for it.
+    await waitFor(() =>
+      expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`),
+    );
 
     const lines = app.fake.requests.filter((r) => r.route === '/baskets/{id}/lines');
     expect(app.fake.requests.filter((r) => r.route === '/baskets')[0]?.body).toEqual({
@@ -279,6 +310,9 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     });
+    await waitFor(() =>
+      expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`),
+    );
     const lines = app.fake.requests.filter((r) => r.route === '/baskets/{id}/lines');
     expect(
       lines.map((r) => (r.body as { participantPersonId: string }).participantPersonId),
@@ -422,6 +456,147 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     const added = app.fake.requests.find((r) => r.route === '/baskets/{id}/lines');
     expect(added?.params.id).toBe(IDS.basket);
     expect((added?.body as { expectedRevision: number }).expectedRevision).toBe(7);
+  });
+
+  it('SPK-REG-002: choosing another intent starts from nobody, so a person blocked there is never sent', async () => {
+    const adultOnly = ineligible('Youth enrollment is for children.');
+    const childOnly = ineligible('Individual league entry is for adults.');
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': { status: 200, body: offering({ kind: 'season' }) },
+        'GET /offerings/{id}/registration-options': optionsHandler({
+          availableIntents: ['individual_league', 'youth'],
+          participants: [
+            {
+              personId: IDS.parent,
+              intents: [
+                { intent: 'individual_league', eligibility: eligible() },
+                { intent: 'youth', eligibility: adultOnly },
+              ],
+            },
+            {
+              personId: IDS.childA,
+              intents: [
+                { intent: 'individual_league', eligibility: childOnly },
+                { intent: 'youth', eligibility: eligible() },
+              ],
+            },
+          ],
+        }),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const league = await screen.findByRole('radio', { name: /^Individual league entry/ });
+    await waitFor(() => expect(league).toBeChecked());
+    fireEvent.press(await screen.findByRole('checkbox', { name: 'You (Robin). Eligible' }));
+    expect(screen.getByRole('checkbox', { name: 'You (Robin). Eligible' })).toBeChecked();
+
+    fireEvent.press(screen.getByRole('radio', { name: /^Youth enrollment/ }));
+    const self = await screen.findByRole('checkbox', {
+      name: 'You (Robin). Not eligible. Youth enrollment is for children.. Choose an activity for this age.',
+    });
+    // Blocked under youth: not ticked, cannot be ticked, and nothing to add yet.
+    expect(self).toBeDisabled();
+    expect(self).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Add to your basket' })).toBeDisabled();
+
+    fireEvent.press(screen.getByRole('checkbox', { name: 'Ada. Eligible' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+    });
+    await waitFor(() =>
+      expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`),
+    );
+    const lines = app.fake.requests.filter((r) => r.route === '/baskets/{id}/lines');
+    expect(lines.map((r) => r.body)).toEqual([
+      expect.objectContaining({ participantPersonId: IDS.childA, intent: 'youth' }),
+    ]);
+  });
+
+  it('DEC-016: while GET /me/permissions cannot be read a gated intent is not usable, with the code and a retry', async () => {
+    let failing = true;
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': {
+          status: 200,
+          body: offering({ kind: 'membership', name: 'Family membership' }),
+        },
+        'GET /offerings/{id}/registration-options': optionsHandler({
+          availableIntents: ['membership'],
+          participants: [
+            { personId: IDS.childA, intents: [{ intent: 'membership', eligibility: eligible() }] },
+          ],
+        }),
+        'GET /me/permissions': () =>
+          failing
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(200, mePermissions({ enabled: ['memberships'] }).body),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const membership = await screen.findByRole('radio', {
+      name: 'Membership. Join this membership. Checking whether memberships is turned on.',
+    });
+    expect(membership).toBeDisabled();
+    expect(membership).not.toBeChecked();
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Add to your basket' })).toBeNull();
+
+    failing = false;
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    });
+    const ready = await screen.findByRole('radio', { name: 'Membership. Join this membership.' });
+    await waitFor(() => expect(ready).toBeChecked());
+    expect(await screen.findByRole('checkbox', { name: 'Ada. Eligible' })).not.toBeDisabled();
+    expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
+  });
+
+  it('RegistrationOptionsQuery: a household of more than 20 is read in groups of 20; nobody reads "not available" for being left unasked', async () => {
+    const children = Array.from(
+      { length: 21 },
+      (_, i) => `0192f1a0-0000-7000-8000-${String(900 + i).padStart(12, '0')}`,
+    );
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /me': {
+          status: 200,
+          body: me({
+            authorities: children.map((id) => ({
+              subjectPersonId: id,
+              permissions: ['view', 'register', 'pay', 'complete_forms', 'receive_messages'],
+            })),
+          }),
+        },
+        'GET /person-names': {
+          status: 200,
+          body: { items: children.map((id, i) => personName(id, `Child ${i + 1}`)) },
+        },
+        'GET /offerings/{id}/registration-options': (req: FakeRequest) => {
+          const named = (req.query.participantPersonIds ?? '').split(',').filter(Boolean);
+          return fakeResponse(200, {
+            ...registrationOptions({ availableIntents: ['youth'] }),
+            participants: named.map((personId) => ({
+              personId,
+              intents: [{ intent: 'youth', eligibility: eligible() }],
+            })),
+          });
+        },
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    // The last of the 22 people (sorted ids) is in the second request, and reads eligible.
+    expect(await screen.findByRole('checkbox', { name: 'Child 21. Eligible' })).not.toBeDisabled();
+    expect(screen.queryByText(/can view this person but not register them/)).toBeNull();
+    const reads = app.fake.requests.filter(
+      (r) => r.route === '/offerings/{id}/registration-options',
+    );
+    const asked = reads.map((r) => (r.query.participantPersonIds ?? '').split(','));
+    expect(asked.map((ids) => ids.length)).toEqual([20, 2]);
+    expect(asked.flat().sort()).toEqual([IDS.parent, ...children].sort());
   });
 
   it('empty: explains family setup when there is no one to register', async () => {

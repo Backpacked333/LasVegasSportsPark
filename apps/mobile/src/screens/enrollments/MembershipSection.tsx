@@ -15,7 +15,8 @@
  *   refuse. Membership terms and member pricing stay pending (POL-038, DEC-007).
  *
  * States: loading; the membership not among the API's first page reads "details under
- * Memberships"; error with code and "Try again"; offline (renewal needs a connection);
+ * Memberships"; error with code and "Try again" (the membership read, the renewal targets and the
+ * open baskets the renewal goes into); offline (renewal needs a connection);
  * processing (adding the renewal); success (the basket); turned off.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
@@ -143,6 +144,13 @@ function Renewal({ enrollment }: { enrollment: Enrollment }) {
           ))}
         </View>
       )}
+      {baskets.data === undefined && baskets.error ? (
+        // Without the list of open baskets the renewal cannot know where to go (it never opens a
+        // second basket next to an open one): the read's code and "Try again".
+        <View testID="renewal-baskets-error">
+          <QueryErrorView error={baskets.error} onRetry={() => void baskets.refetch()} />
+        </View>
+      ) : null}
       {failure ? (
         <CommandFailure
           error={failure}

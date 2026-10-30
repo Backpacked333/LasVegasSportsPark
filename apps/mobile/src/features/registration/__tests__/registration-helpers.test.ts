@@ -16,7 +16,13 @@ import {
 } from '../format';
 import { basketInProgress, checkoutNeedsAttention, checkoutOf, openBasketOf } from '../in-progress';
 import { INTENT_CAPABILITY, INTENT_HANDLING } from '../intents';
-import { blockingEligibilityReasons, eligibilityMessages, eligibilityStatus } from '../options';
+import { owesNothing, sessionBookingStatus, usablePackage } from '../SessionBooking';
+import {
+  blockingEligibilityReasons,
+  eligibilityMessages,
+  eligibilityStatus,
+  optionsChunks,
+} from '../options';
 import { memoryProgressBackend, parseProgress, RegistrationProgressStore } from '../progress';
 import {
   basketStatus,
@@ -38,6 +44,7 @@ import {
   ineligible,
   inMinutes,
   offer,
+  packageEntitlement,
   payment,
   quote,
   waitlistEntry,
@@ -153,10 +160,52 @@ describe('registration intents (SPK-REG-001, ENR-05)', () => {
     expect(INTENT_HANDLING.party_request).toBe('booking');
     expect(INTENT_HANDLING.makeup).toBe('makeup');
     expect(INTENT_HANDLING.join_team).toBe('team_invitation');
-    expect(INTENT_HANDLING.pickup).toBe('not_in_app');
+    expect(INTENT_HANDLING.pickup).toBe('session');
+    expect(INTENT_HANDLING.trial).toBe('session');
     expect(INTENT_CAPABILITY.rental_request).toBe('rentals');
     expect(INTENT_CAPABILITY.pickup).toBe('pickup_sessions');
     expect(INTENT_CAPABILITY.youth).toBeUndefined();
+  });
+});
+
+describe('session bookings (SPK-PLACE-004, SPK-YOUTH-003, ENR-11)', () => {
+  it('offers a booking only when nothing is owed, reads "booked" only when the API confirmed it', () => {
+    expect(owesNothing(null)).toBe(true);
+    const base = {
+      priceRuleId: IDS.priceRule,
+      basePriceMinor: 0,
+      currency: 'USD',
+      chargeLines: [],
+    };
+    expect(owesNothing(base)).toBe(true);
+    expect(owesNothing({ ...base, basePriceMinor: 1 })).toBe(false);
+    const fee = {
+      code: 'f',
+      label: 'Fee',
+      kind: 'fee' as const,
+      amountMinor: 200,
+      inclusive: false,
+    };
+    expect(owesNothing({ ...base, chargeLines: [fee] })).toBe(false);
+    expect(owesNothing({ ...base, chargeLines: [{ ...fee, inclusive: true }] })).toBe(true);
+
+    expect(sessionBookingStatus({ status: 'confirmed', expiresAt: null }, 'session')).toEqual({
+      tone: 'success',
+      label: 'Session booked',
+    });
+    const pending = sessionBookingStatus({ status: 'pending', expiresAt: null }, 'trial');
+    expect(pending.label).toBe('Booking pending: a payment is needed.');
+    expect(pending.label).not.toMatch(/booked/);
+
+    const entitlement = packageEntitlement({
+      remainingCredits: 2,
+      appliesTo: { offeringIds: [], programIds: [IDS.program] },
+    });
+    const target = { id: IDS.offering, programId: IDS.program };
+    expect(usablePackage(entitlement, target, IDS.childA)).toBe(true);
+    expect(usablePackage(entitlement, target, IDS.childB)).toBe(false);
+    expect(usablePackage({ ...entitlement, remainingCredits: 0 }, target, IDS.childA)).toBe(false);
+    expect(usablePackage({ ...entitlement, status: 'expired' }, target, IDS.childA)).toBe(false);
   });
 });
 
@@ -178,12 +227,54 @@ describe('eligibility preview (SPK-REG-002)', () => {
       label: 'Eligibility not known yet',
     });
     expect(blockingEligibilityReasons(unknown)).toEqual([]);
+    // As the evaluator sends it: an outstanding form is a `warning` and the result passes
+    // (registration-eligibility.ts), with the "complete the acknowledgments" alternative.
     const forms = {
-      ...blocked,
-      reasons: [{ ...blocked.reasons[0]!, code: 'acknowledgment_missing', message: 'Sign it.' }],
+      ...eligible(),
+      eligible: true,
+      reasons: [
+        {
+          code: 'acknowledgment_missing',
+          severity: 'warning' as const,
+          message: '"Medical form" must be acknowledged by the participant or a guardian.',
+          source: { type: 'policy_version', id: IDS.formPolicy },
+          requiredAction: 'complete_acknowledgment',
+        },
+      ],
+      alternatives: [
+        {
+          kind: 'complete_acknowledgment' as const,
+          message: 'Complete the required acknowledgments.',
+          offeringId: null,
+        },
+      ],
     };
-    expect(eligibilityStatus(forms).label).toBe('Eligible once the required forms are signed');
+    expect(eligibilityStatus(forms)).toEqual({
+      tone: 'pending',
+      label: 'Eligible once the required forms are signed',
+    });
     expect(blockingEligibilityReasons(forms)).toEqual([]);
+    expect(eligibilityMessages(forms).alternatives).toEqual([
+      'Complete the required acknowledgments.',
+    ]);
+    // A passing result never lists the alternatives to a refusal.
+    expect(
+      eligibilityMessages({
+        ...eligible(),
+        alternatives: [{ kind: 'other_offering', message: 'Another activity.', offeringId: null }],
+      }).alternatives,
+    ).toEqual([]);
+  });
+
+  it('reads more than 20 people in groups of 20 (RegistrationOptionsQuery), nobody left unasked', () => {
+    const ids = Array.from(
+      { length: 45 },
+      (_, i) => `0192f1a0-0000-7000-8000-${String(i).padStart(12, '0')}`,
+    );
+    const groups = optionsChunks([...ids].reverse());
+    expect(groups.map((g) => g.length)).toEqual([20, 20, 5]);
+    expect(groups.flat()).toEqual(ids);
+    expect(optionsChunks([])).toEqual([[]]);
   });
 
   it('names a pending enrollment by what it waits for (journeys.md "Registration pending: <reason>")', () => {

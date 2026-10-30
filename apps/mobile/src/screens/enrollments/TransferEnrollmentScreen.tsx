@@ -211,7 +211,13 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
   const [changed, setChanged] = useState(false);
   /** The consequence the API answered with a conflict, until the preview read catches up. */
   const [conflicted, setConflicted] = useState<FinancialConsequence | null>(null);
-  const [failure, setFailure] = useState<ApiError | null>(null);
+  /**
+   * What failed: the confirm-time re-read of the preview (a GET: nothing was sent to change) or
+   * the commit itself. They are worded and retried apart.
+   */
+  const [failure, setFailure] = useState<{ error: ApiError; step: 'preview' | 'commit' } | null>(
+    null,
+  );
   const [checking, setChecking] = useState(false);
   const [done, setDone] = useState<TransferPreview | null>(null);
 
@@ -256,7 +262,7 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
         void previewQuery.refetch();
         return;
       }
-      setFailure(apiError);
+      setFailure({ error: apiError, step: 'commit' });
     }
   };
 
@@ -273,7 +279,8 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
     const result = await previewQuery.refetch();
     setChecking(false);
     if (result.error) {
-      setFailure(result.error);
+      // Only the preview read failed: nothing was committed. Its retry repeats the whole check.
+      setFailure({ error: result.error, step: 'preview' });
       return;
     }
     const fresh = result.data?.data as TransferPreview | undefined;
@@ -303,7 +310,7 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
   const blockers = preview ? transferBlockers(preview) : [];
   const needsAck = preview ? preview.financialConsequence.kind !== 'none' : false;
   const summary = preview ? consequenceSummary(preview.financialConsequence) : null;
-  const approvalRefused = conflictCode(failure) === 'APPROVAL_REQUIRED';
+  const approvalRefused = conflictCode(failure?.error ?? null) === 'APPROVAL_REQUIRED';
   const previewFailed =
     previewTarget === targetId && preview === undefined ? previewQuery.error : null;
 
@@ -446,11 +453,23 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
           title="Staff approval needed"
           description="This transfer needs staff approval, so it cannot be made in the app. Ask the front desk to make it; nothing has changed."
         />
+      ) : failure?.step === 'preview' ? (
+        // The confirm-time re-read of the preview failed: a read, so nothing was sent to change
+        // and nothing "may already have been made". "Try again" repeats the whole check (re-read,
+        // compare the consequence, blockers) before anything is committed.
+        <View testID="transfer-recheck-failed">
+          <QueryErrorView
+            error={failure.error}
+            onRetry={() => void confirm()}
+            unavailableOffline={['transferring']}
+          />
+        </View>
       ) : failure ? (
         <CommandFailure
-          error={failure}
+          error={failure.error}
           what="the transfer"
           onRetry={() => {
+            // A commit with no answer repeats the same intent with the same idempotency key.
             if (targetId && acknowledged) void commit(targetId, acknowledged);
             else if (targetId && preview && preview.financialConsequence.kind === 'none')
               void commit(targetId, preview.financialConsequence);

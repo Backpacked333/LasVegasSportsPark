@@ -6,7 +6,12 @@
  * front desk's (no customer command); plus the enrollment's own offering and a recovery that the
  * checkout list reports.
  */
-import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import {
+  apiErrorBody,
+  capabilityDisabledBody,
+  fakeResponse,
+  type FakeHandler,
+} from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
@@ -119,11 +124,15 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     await act(async () => {
       fireEvent.press(add);
     });
+    // The push follows the renewal's invalidations (timer-batched): wait for it, then read.
+    await waitFor(() =>
+      expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${PIDS.basket}`),
+    );
     const [sent] = renewals(app);
     expect(sent?.params.id).toBe(IDS.enrollment);
     expect(sent?.body).toEqual({ targetOfferingId: IDS.offeringB, basketId: PIDS.basket });
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
-    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${PIDS.basket}`);
+    expect(renewals(app)).toHaveLength(1);
     expect(app.fake.requests.find((r) => r.route === '/offerings')?.query).toEqual({
       kind: 'membership',
       limit: '20',
@@ -133,18 +142,9 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
   it('DEC-016: a renewal refused with CAPABILITY_DISABLED shows the turned-off state, not a failure', async () => {
     renderMembership({
       'GET /me/permissions': mePermissions({ enabled: ['memberships'] }),
+      // The body the kernel sends (ACCESS_DENIED, contact_support_or_request_access).
       'POST /enrollments/{id}/renew': () =>
-        fakeResponse(
-          403,
-          apiErrorBody('ACCESS_DENIED', {
-            nextAction: 'contact_support',
-            details: {
-              code: 'CAPABILITY_DISABLED',
-              capability: 'memberships',
-              applicabilityReferences: ['DEC-016', 'DEC-072'],
-            },
-          }),
-        ),
+        fakeResponse(403, capabilityDisabledBody('memberships', ['DEC-016', 'DEC-072'])),
     });
     fireEvent.press(await screen.findByRole('radio', { name: /^Family membership 2027/ }));
     await act(async () => {
@@ -152,6 +152,37 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     });
     expect(await screen.findByLabelText('Memberships turned off')).toBeOnTheScreen();
     expect(screen.queryByText('Something went wrong')).toBeNull();
+  });
+
+  it('SPK-UX-008: open baskets that cannot be read show their code and a retry; the renewal waits for them', async () => {
+    let failing = true;
+    const app = renderMembership({
+      'GET /me/permissions': mePermissions({ enabled: ['memberships'] }),
+      'GET /me/baskets': () =>
+        failing
+          ? fakeResponse(
+              503,
+              apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+            )
+          : fakeResponse(200, { items: [OPEN_BASKET], nextCursor: null }),
+      'POST /enrollments/{id}/renew': { status: 201, body: { ...OPEN_BASKET, revision: 3 } },
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: /^Family membership 2027/ }));
+    const failed = await screen.findByTestId('renewal-baskets-error');
+    expect(within(failed).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Add the renewal to your basket' })).toBeDisabled();
+    expect(renewals(app)).toHaveLength(0);
+
+    failing = false;
+    await act(async () => {
+      fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
+    });
+    await waitFor(() => expect(screen.queryByTestId('renewal-baskets-error')).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Add the renewal to your basket' }),
+      ).not.toBeDisabled(),
+    );
   });
 
   it('SPK-UX-008: a membership read that fails shows its code and retry; one not in the first page points to Memberships', async () => {

@@ -7,7 +7,8 @@
  *
  * Filters (CAT-01): kind, exact format and a date range (`format`, `from`, `to`), applied by the
  * API; a malformed date or a range that ends before it starts is a field message (validation
- * failure), and the list stays on screen while a filter applies. Filtering by age band waits on
+ * failure) and nothing is sent. Each applied filter is a new read of the list (its loading state
+ * while it answers), and the fields always show the filter that is applied. Filtering by age band waits on
  * DEC-003 (Product and operations): the API has no age filter, and age bands are shown on every
  * item. Pickup sessions, rentals, parties, packages and memberships are conditional capabilities
  * (DEC-016, DEC-072 to DEC-082, Product owner): a signed-in customer gets their filter only while
@@ -271,7 +272,9 @@ export function DiscoverScreen() {
     <Screen>
       {signedIn ? <InProgressCard /> : null}
       <KindFilter kinds={kinds} value={kind} onChange={setKind} />
-      <MoreFilters applied={filter} onApply={setFilter} />
+      {/* Keyed by the applied filter: whenever it changes (applied, cleared, or "Show all
+          activities"), the fields show exactly what is applied, never stale text. */}
+      <MoreFilters key={JSON.stringify(filter)} applied={filter} onApply={setFilter} />
       <QueryBoundary
         query={pages}
         label="activities"

@@ -4,7 +4,9 @@
  * (newest first, keyset pages with "Load more"), wherever it was joined: this device, another
  * one or the front desk. Each entry shows its participant, the offering's name as the API gives
  * it (also for an offering no longer listed), its status and any open offer with the server's
- * deadline ("Place offered. Accept by <server time>."). Open offers come first, then the other
+ * deadline ("Place offered. Accept by <server time>.", in the facility zone of the entry's
+ * offering from `GET /v1/offerings/{id}`, SPK-SCHED-008; the device zone, named, while that
+ * offering is not readable). Open offers come first, then the other
  * active entries, then history. A child the account may not view is never listed (the API leaves
  * them out). Offer notices arrive in the inbox (ENR-09).
  *
@@ -16,6 +18,7 @@ import { Stack, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
 import { useParticipantNames } from '../../features/registration/participants';
+import { useOfferingTimeZones } from '../../features/registration/queries';
 import { registrationRoutes } from '../../features/registration/routes';
 import { offerDeadlineStatus, waitlistEntryStatus } from '../../features/registration/status';
 import { Section } from '../../features/registration/ui';
@@ -35,10 +38,13 @@ const ACTIVE: readonly MyWaitlistEntry['status'][] = ['waiting', 'offered'];
 function EntryRows({
   entries,
   names,
+  zoneOf,
   now,
 }: {
   entries: readonly MyWaitlistEntry[];
   names: (personId: string) => string;
+  /** The facility zone of an entry's offering (SPK-SCHED-008), when its offering is readable. */
+  zoneOf: (offeringId: string) => string | undefined;
   now: Date;
 }) {
   const router = useRouter();
@@ -48,8 +54,8 @@ function EntryRows({
         const offeringName = entry.offeringName ?? 'An activity no longer listed';
         const status =
           entry.openOffer?.status === 'offered'
-            ? offerDeadlineStatus(entry.openOffer.expiresAt, now)
-            : waitlistEntryStatus(entry, offeringName, now);
+            ? offerDeadlineStatus(entry.openOffer.expiresAt, now, zoneOf(entry.offeringId))
+            : waitlistEntryStatus(entry, offeringName, now, zoneOf(entry.offeringId));
         return (
           <ListRow
             key={entry.id}
@@ -74,6 +80,10 @@ function WaitlistList() {
   });
   const items = pages.data ?? [];
   const names = useParticipantNames(items.map((e) => e.participantPersonId));
+  // Only an open offer shows an instant (its deadline): read those offerings for their zone.
+  const zoneOf = useOfferingTimeZones(
+    items.filter((e) => e.openOffer?.status === 'offered').map((e) => e.offeringId),
+  );
   return (
     <View>
       <QueryBoundary
@@ -101,17 +111,17 @@ function WaitlistList() {
             <View>
               {offered.length > 0 ? (
                 <Section title="Places offered" testID="waitlists-offered">
-                  <EntryRows entries={offered} names={names} now={now} />
+                  <EntryRows entries={offered} names={names} zoneOf={zoneOf} now={now} />
                 </Section>
               ) : null}
               {waiting.length > 0 ? (
                 <Section title="Waiting" testID="waitlists-waiting">
-                  <EntryRows entries={waiting} names={names} now={now} />
+                  <EntryRows entries={waiting} names={names} zoneOf={zoneOf} now={now} />
                 </Section>
               ) : null}
               {history.length > 0 ? (
                 <Section title="Earlier waitlists" testID="waitlists-history">
-                  <EntryRows entries={history} names={names} now={now} />
+                  <EntryRows entries={history} names={names} zoneOf={zoneOf} now={now} />
                 </Section>
               ) : null}
             </View>

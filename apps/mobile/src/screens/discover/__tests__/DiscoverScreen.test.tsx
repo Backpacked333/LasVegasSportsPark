@@ -299,6 +299,28 @@ describe('SCR-C-07 DiscoverScreen', () => {
     ).toBeOnTheScreen();
   });
 
+  it('"Show all activities" from an empty filtered list also empties the filter fields', async () => {
+    const app = createRegistrationTestApp({
+      routes: {
+        'GET /offerings': (req) =>
+          fakeResponse(200, { items: req.query.format ? [] : [offering()], nextCursor: null }),
+      },
+    });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
+    fireEvent.changeText(screen.getByLabelText('Format'), '11v11');
+    fireEvent.changeText(screen.getByLabelText('Ending on or after (YYYY-MM-DD)'), '2026-12-01');
+    fireEvent.press(screen.getByRole('button', { name: 'Apply filters' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Show all activities' }));
+    const sent = () => app.fake.requests.filter((r) => r.route === '/offerings');
+    await waitFor(() => expect(sent().at(-1)?.query).toEqual({ limit: '50' }));
+    expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
+    // The fields show the filter that is applied (none), not the old text.
+    expect(screen.getByLabelText('Format').props.value).toBe('');
+    expect(screen.getByLabelText('Ending on or after (YYYY-MM-DD)').props.value).toBe('');
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
+  });
+
   it('a filter date that is not a real date is a field message', () => {
     expect(filterProblems({ format: '', from: '2026-02-30', to: '' }).from).toMatch(/YYYY-MM-DD/);
     expect(filterProblems({ format: '', from: '2026-02-28', to: '2026-03-01' })).toEqual({});

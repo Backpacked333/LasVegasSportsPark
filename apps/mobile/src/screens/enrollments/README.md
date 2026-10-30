@@ -40,13 +40,16 @@ operator approval. **Pending decision** = waits on an operator answer
 - **Memberships** (ENR-12): term, included sessions, usage and suspensions from
   `GET /v1/me/memberships`. A confirmed membership can be renewed into a membership offering open
   for registration (`POST /v1/enrollments/{id}/renew`, added to the open basket the API lists, or
-  a new one); nothing is charged until checkout. While the `memberships` switch is off the
+  a new one); nothing is charged until checkout; while the open baskets cannot be read the renewal
+  waits and shows that read's code and "Try again". While the `memberships` switch is off the
   renewal reads "Membership renewal turned off"; a CAPABILITY_DISABLED answer shows the same
   state. Suspending is a staff command in the API: the screen says the front desk arranges it.
 - **Previews are reads** (SPK-REG-010, ENR-03): the transfer preview is the read-only
   `GET /v1/enrollments/{id}/transfer-preview` (no command is sent to preview); the cancellation
   preview is `GET /v1/enrollments/{id}/cancellation-preview`. Both are read again at confirm
-  time; a changed consequence is never committed unseen.
+  time; a changed consequence is never committed unseen. A transfer re-read that fails is a
+  failure of the preview (a read: nothing "may already have been made"), and its "Try again"
+  repeats the whole check before anything is committed.
 - **The acceptance is bound** (ENR-03): cancel and transfer send `acceptedConsequence` (kind,
   amount, currency, as previewed). If the API answers RESOURCE_CONFLICT `CONSEQUENCE_CHANGED` or
   `CONSEQUENCE_ACCEPTANCE_REQUIRED`, nothing changed: the screen shows the current consequence

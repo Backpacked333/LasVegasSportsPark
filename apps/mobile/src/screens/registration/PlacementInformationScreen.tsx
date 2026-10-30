@@ -7,8 +7,10 @@
  * Which fields are approved is pending DEC-051 (with DEC-031; Product and operations;
  * Operator/privacy owner): the list comes from configuration (`placementFields`), and while it is
  * unset the screen shows the pending state instead of inventing a field list. Requested teammates
- * would need other people's identities, which the app never exposes (SPK-PLACE-005), and the
- * preferred competition needs a list the customer cannot read: both read as not available.
+ * would need other people's identities, which the app never exposes (SPK-PLACE-005): they read as
+ * not available. A configured preferred competition is chosen from the organization's active
+ * competitions (`GET /v1/competitions?status=active`, which a customer may read) and sent as
+ * `preferredCompetitionId`; "No preference" sends nothing.
  *
  * The competition season the placement request names comes from the API:
  * `GET /v1/offerings/{id}/registration-options` `seasonId` (ENR-05, SPK-PLACE-001). An offering
@@ -30,7 +32,7 @@ import { fieldMessages } from '../../features/registration/format';
 import { useRegistrationOptions } from '../../features/registration/options';
 import { useParticipantNames } from '../../features/registration/participants';
 import { param, registrationRoutes } from '../../features/registration/routes';
-import { Body, ButtonRow, Section, TextField } from '../../features/registration/ui';
+import { Body, ButtonRow, ChoiceRow, Section, TextField } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -46,15 +48,76 @@ type AvailabilityWindow = Schema<'AvailabilityWindow'>;
 /** Fields this screen can collect, by their configuration name. */
 export const COLLECTABLE_FIELDS = [
   'availability',
+  'preferredCompetition',
   'declaredLevel',
   'positionPreferences',
   'notes',
 ] as const;
 export type CollectableField = (typeof COLLECTABLE_FIELDS)[number];
 const NOT_IN_APP: Record<string, string> = {
-  preferredCompetition: 'Preferred competition',
   requestedTeammates: 'Requested teammates',
 };
+
+/**
+ * SPK-PLACE-001 preferred competition: one of the organization's active competitions, or no
+ * preference. The list is the API's; staff weigh the preference when placing (SPK-PLACE-002).
+ */
+function CompetitionChoice({
+  value,
+  onChange,
+  error,
+}: {
+  value: string | null;
+  onChange: (competitionId: string | null) => void;
+  error?: string;
+}) {
+  const competitions = useApiQuery({
+    path: '/competitions',
+    request: { query: { status: 'active' } },
+  });
+  return (
+    <View style={styles.editor} testID="preferred-competition">
+      <Text style={styles.label}>Preferred competition</Text>
+      {competitions.data === undefined ? (
+        competitions.error ? (
+          <QueryErrorView
+            error={competitions.error}
+            onRetry={() => void competitions.refetch()}
+            unavailable={{
+              title: 'Competitions not available',
+              description: 'You can still save the other answers; staff place players.',
+            }}
+          />
+        ) : (
+          <StateView variant="loading" label="the competitions" />
+        )
+      ) : (
+        <View accessibilityRole="radiogroup" accessibilityLabel="Preferred competition">
+          <ChoiceRow
+            mode="radio"
+            label="No preference"
+            checked={value === null}
+            onToggle={() => onChange(null)}
+          />
+          {competitions.data.map((c) => (
+            <ChoiceRow
+              key={c.id}
+              mode="radio"
+              label={c.name}
+              detail={c.description ?? undefined}
+              checked={value === c.id}
+              onToggle={() => onChange(c.id)}
+            />
+          ))}
+          {competitions.data.length === 0 ? (
+            <Body muted>No competition is open to choose from right now.</Body>
+          ) : null}
+        </View>
+      )}
+      {error ? <Text style={styles.error}>{`✕ ${error}`}</Text> : null}
+    </View>
+  );
+}
 
 export const WEEKDAYS = [
   'Sunday',
@@ -164,6 +227,7 @@ function PlacementForm({
   const [declaredLevel, setDeclaredLevel] = useState('');
   const [positions, setPositions] = useState('');
   const [notes, setNotes] = useState('');
+  const [preferredCompetitionId, setPreferredCompetitionId] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const save = useApiCommand('post', '/placement-requests');
 
@@ -225,6 +289,9 @@ function PlacementForm({
           offeringId: line.offeringId,
           ...(line.applicationId ? { applicationId: line.applicationId } : {}),
           availability: collect.includes('availability') ? availability : [],
+          ...(collect.includes('preferredCompetition') && preferredCompetitionId
+            ? { preferredCompetitionId }
+            : {}),
           ...(collect.includes('declaredLevel') && declaredLevel.trim()
             ? { declaredLevel: declaredLevel.trim() }
             : {}),
@@ -251,6 +318,13 @@ function PlacementForm({
             windows={availability}
             onChange={setAvailability}
             error={errorFor('availability')}
+          />
+        ) : null}
+        {collect.includes('preferredCompetition') ? (
+          <CompetitionChoice
+            value={preferredCompetitionId}
+            onChange={setPreferredCompetitionId}
+            error={errorFor('preferredCompetitionId')}
           />
         ) : null}
         {collect.includes('declaredLevel') ? (
@@ -372,4 +446,5 @@ const styles = StyleSheet.create({
   dayText: { ...type.caption, color: colors.primary, fontWeight: '600' },
   dayTextOn: { color: colors.primaryText },
   window: { gap: spacing.xs },
+  error: { ...type.caption, color: colors.danger },
 });

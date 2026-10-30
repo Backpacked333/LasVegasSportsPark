@@ -173,9 +173,13 @@ function PoliciesSection({ offering, signedIn }: { offering: Offering; signedIn:
  * the API evaluates again when a line is added.
  */
 function EligibilitySection({ offering }: { offering: Offering }) {
-  const { participants, me, namesLoading } = useParticipants();
+  const { participants, me, namesLoading, namesError, retryNames } = useParticipants();
   const ids = participants.map((p) => p.personId);
-  const options = useRegistrationOptions(offering.id, ids, me.data !== undefined && !namesLoading);
+  const options = useRegistrationOptions(
+    offering.id,
+    ids,
+    me.data !== undefined && !namesLoading && namesError === null,
+  );
   return (
     <Section title="Who can take part">
       <Detail label="Age" value={ageBandLabel(offering.ageBand) ?? 'No age limits'} />
@@ -185,6 +189,8 @@ function EligibilitySection({ offering }: { offering: Offering }) {
         <StateView variant="loading" label="eligibility for your family" />
       ) : me.error ? (
         <QueryErrorView error={me.error} onRetry={() => void me.refetch()} />
+      ) : namesError ? (
+        <QueryErrorView error={namesError} onRetry={() => retryNames?.()} />
       ) : options.data === undefined && options.error ? (
         <QueryErrorView
           error={options.error}

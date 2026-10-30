@@ -11,7 +11,8 @@ import {
   type FakeHandler,
   type FakeRequest,
 } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { formatInstant } from '../../../features/registration/format';
 import {
   IDS,
   basket,
@@ -21,6 +22,7 @@ import {
   offer,
   offering,
   page,
+  personName,
   waitlistEntry,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
@@ -236,11 +238,15 @@ describe('SCR-C-16 WaitlistsScreen', () => {
     });
     render(<WaitlistsScreen />, { wrapper: app.wrapper });
     const offered = await screen.findByTestId('waitlists-offered');
+    // SPK-SCHED-008: the deadline in the facility zone of the entry's offering (read for it).
     expect(
       await within(offered).findByRole('button', {
-        name: /^Ben: Autumn Youth Program, Place offered\. Accept by .+\.$/,
+        name: 'Ben: Autumn Youth Program, Place offered. Accept by Sat, Oct 24, 7:00 AM PDT.',
       }),
     ).toBeOnTheScreen();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/offerings/{id}').map((r) => r.params.id),
+    ).toEqual([IDS.offering]);
     const waiting = screen.getByTestId('waitlists-waiting');
     const row = within(waiting).getByRole('button', {
       name: 'Ada: Autumn Youth Program, Waitlisted for Autumn Youth Program. Position 3.',
@@ -255,6 +261,58 @@ describe('SCR-C-16 WaitlistsScreen', () => {
     expect(app.fake.requests.find((r) => r.route === '/me/waitlist-entries')?.query).toEqual({
       limit: '20',
     });
+  });
+
+  it('SPK-SCHED-008: an offer whose offering cannot be read shows its deadline in the device zone, named', async () => {
+    const offeredEntry = myWaitlistEntry({
+      status: 'offered',
+      position: null,
+      offers: [offer()],
+      openOffer: { id: IDS.offer, status: 'offered', expiresAt: inMinutes(120) },
+    });
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /me/waitlist-entries': page([offeredEntry]),
+        'GET /offerings/{id}': () =>
+          fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' })),
+      }),
+    });
+    render(<WaitlistsScreen />, { wrapper: app.wrapper });
+    const offered = await screen.findByTestId('waitlists-offered');
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/offerings/{id}')).toBe(true),
+    );
+    // No zone given: the device zone, which formatInstant names (timeZoneName 'short').
+    const expected = `Place offered. Accept by ${formatInstant(inMinutes(120))}.`;
+    expect(
+      await within(offered).findByRole('button', {
+        name: `Ada: Autumn Youth Program, ${expected}`,
+      }),
+    ).toBeOnTheScreen();
+  });
+
+  it('§4.14: participant names come from GET /person-names; a person it omits reads "Name not available"', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /me/waitlist-entries': page([
+          myWaitlistEntry(),
+          myWaitlistEntry({ id: IDS.pool, participantPersonId: IDS.childB }),
+        ]),
+        'GET /person-names': { status: 200, body: { items: [personName(IDS.childA, 'Ada')] } },
+      }),
+    });
+    render(<WaitlistsScreen />, { wrapper: app.wrapper });
+    expect(
+      await screen.findByRole('button', {
+        name: 'Ada: Autumn Youth Program, Waitlisted for Autumn Youth Program. Position 3.',
+      }),
+    ).toBeOnTheScreen();
+    expect(
+      await screen.findByRole('button', {
+        name: 'Name not available: Autumn Youth Program, Waitlisted for Autumn Youth Program. Position 3.',
+      }),
+    ).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.path.startsWith('/people/'))).toBe(false);
   });
 
   it('loads older entries with the cursor ("Load more waitlist entries")', async () => {

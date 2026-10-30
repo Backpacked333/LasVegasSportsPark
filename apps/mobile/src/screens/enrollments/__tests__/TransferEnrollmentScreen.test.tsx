@@ -7,7 +7,7 @@
  * per intent.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   accountRoutes,
@@ -293,6 +293,68 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.queryByTestId('transfer-preview')).toBeNull();
+    expect(transfers(app)).toHaveLength(0);
+  });
+
+  it('SPK-UX-008: a confirm-time re-read that fails is a preview failure (nothing committed), and its retry checks again before committing', async () => {
+    let reads = 0;
+    const app = renderTransfer({
+      'GET /enrollments/{id}/transfer-preview': () => {
+        reads += 1;
+        if (reads === 2) {
+          return fakeResponse(
+            503,
+            apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+          );
+        }
+        return fakeResponse(200, transferPreview());
+      },
+    });
+    await chooseAndPreview();
+    fireEvent.press(
+      screen.getByRole('checkbox', { name: 'I accept: Additional charge of $15.00' }),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Transfer' }));
+    });
+    const failed = await screen.findByTestId('transfer-recheck-failed');
+    expect(within(failed).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    // Only a GET failed: nothing claims the transfer may already have been made.
+    expect(screen.queryByText(/may already have been made/)).toBeNull();
+    expect(screen.queryByLabelText('No answer yet')).toBeNull();
+    expect(transfers(app)).toHaveLength(0);
+
+    await act(async () => {
+      fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
+    });
+    expect(await screen.findByTestId('transfer-success')).toBeOnTheScreen();
+    // The retry read the preview again (third GET) before the single commit.
+    expect(previews(app)).toHaveLength(3);
+    expect(transfers(app)).toHaveLength(1);
+    expect(transfers(app)[0]?.body).toMatchObject({
+      acceptedConsequence: { kind: 'charge', amountMinor: 1500, currency: 'USD' },
+    });
+  });
+
+  it('a confirm-time re-read with no answer reads offline, never "may already have been made"', async () => {
+    let reads = 0;
+    const app = renderTransfer({
+      'GET /enrollments/{id}/transfer-preview': () => {
+        reads += 1;
+        if (reads === 2) throw new TypeError('Network request failed');
+        return fakeResponse(200, transferPreview());
+      },
+    });
+    await chooseAndPreview();
+    fireEvent.press(
+      screen.getByRole('checkbox', { name: 'I accept: Additional charge of $15.00' }),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Transfer' }));
+    });
+    expect(await screen.findByTestId('transfer-recheck-failed')).toBeOnTheScreen();
+    expect(screen.queryByText(/may already have been made/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
     expect(transfers(app)).toHaveLength(0);
   });
 

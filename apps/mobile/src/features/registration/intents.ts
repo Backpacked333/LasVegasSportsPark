@@ -18,10 +18,10 @@ import type { RegistrationIntent } from './format';
  *   SPK-COND-003); the chooser hands over to the Package G booking route.
  * - `makeup`: a makeup is redeemed from the participant's makeup entitlement (SCR-C-35).
  * - `team_invitation`: joining a known team needs the team's invitation (SCR-C-17).
- * - `not_in_app`: trials and pickup sessions have their own commands (`/trial-participations`,
- *   `/session-bookings`), which the app does not build yet (see the README).
+ * - `session`: a trial or a pickup session is one participant in one session, with its own
+ *   command (`POST /v1/trial-participations`, `POST /v1/session-bookings`; `SessionBooking.tsx`).
  */
-export type IntentHandling = 'basket' | 'booking' | 'makeup' | 'team_invitation' | 'not_in_app';
+export type IntentHandling = 'basket' | 'booking' | 'makeup' | 'team_invitation' | 'session';
 
 export const INTENT_HANDLING: Record<RegistrationIntent, IntentHandling> = {
   individual_league: 'basket',
@@ -33,8 +33,8 @@ export const INTENT_HANDLING: Record<RegistrationIntent, IntentHandling> = {
   party_request: 'booking',
   makeup: 'makeup',
   join_team: 'team_invitation',
-  trial: 'not_in_app',
-  pickup: 'not_in_app',
+  trial: 'session',
+  pickup: 'session',
 };
 
 /**
@@ -80,5 +80,5 @@ export const HANDLING_NOTE: Record<Exclude<IntentHandling, 'basket'>, string> = 
   booking: 'Choose a time and what you need on the next screen.',
   makeup: 'A makeup is booked from the makeup sessions you have (Account, credits and makeups).',
   team_invitation: 'Joining a team uses the invitation the team sends you (Account, invitations).',
-  not_in_app: 'Booking a single session is not available in the app yet.',
+  session: 'Choose the participant and the session on this screen.',
 };

@@ -6,7 +6,8 @@
  * Order: a checkout request whose answer never arrived (the only thing the device remembers),
  * then checkouts that need attention ("Payment received. We are completing your registration.",
  * "Payment outcome being confirmed. Do not pay again.", "Payment processing"), baskets still open
- * or held, and waitlist offers with the server's deadline. Each read has its own error state
+ * or held, and waitlist offers with the server's deadline (in the facility zone of the entry's
+ * offering, SPK-SCHED-008). Each read has its own error state
  * (code and "Try again"); a list the API does not show this account is simply absent.
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
@@ -27,6 +28,7 @@ import {
 } from './in-progress';
 import { useParticipantNames } from './participants';
 import { useRegistrationProgress } from './progress';
+import { useOfferingTimeZones } from './queries';
 import { registrationRoutes } from './routes';
 import { basketStatus, checkoutStatus, offerDeadlineStatus } from './status';
 import { Body, Section } from './ui';
@@ -60,6 +62,8 @@ export function InProgressCard() {
   );
   const offered = (offers.data?.items ?? []).filter((e) => e.openOffer?.status === 'offered');
   const names = useParticipantNames(offered.map((e) => e.participantPersonId));
+  /** SPK-SCHED-008: offer deadlines in the facility zone of the entry's offering. */
+  const zoneOf = useOfferingTimeZones(offered.map((e) => e.offeringId));
   const pendingQuote = progress.pendingCheckoutQuoteId;
   // The API now lists that checkout: its own row says what is known about it.
   const pendingListed =
@@ -118,7 +122,11 @@ export function InProgressCard() {
           <ListRow
             key={entry.id}
             title={`${names(entry.participantPersonId)}: ${entry.offeringName ?? 'Activity'}`}
-            status={offerDeadlineStatus((entry.openOffer as { expiresAt: string }).expiresAt, now)}
+            status={offerDeadlineStatus(
+              (entry.openOffer as { expiresAt: string }).expiresAt,
+              now,
+              zoneOf(entry.offeringId),
+            )}
             onPress={() => router.push(registrationRoutes.waitlist(entry.id))}
             accessibilityHint="Opens the offer so you can accept or decline it"
             testID={`resume-offer-${entry.id}`}
