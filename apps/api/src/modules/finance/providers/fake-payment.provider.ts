@@ -311,6 +311,9 @@ export class FakePaymentProvider implements PaymentProviderPort {
       type?: 'refund.succeeded' | 'refund.failed';
       sequence?: number;
       eventId?: string;
+      /** A contradicting report (MONEY-09): the provider names another amount or currency. */
+      amountMinor?: number;
+      currency?: string;
     } = {},
   ): { body: PaymentWebhookInput; signature: string } {
     const refund = this.refunds.get(refundAttemptId);
@@ -326,8 +329,8 @@ export class FakePaymentProvider implements PaymentProviderPort {
         organizationId: refund.metadata.organizationId,
         providerReference: refund.reference,
         refundAttemptId: refund.metadata.refundAttemptId,
-        amountMinor: refund.amountMinor,
-        currency: refund.currency,
+        amountMinor: options.amountMinor ?? refund.amountMinor,
+        currency: options.currency ?? refund.currency,
         ...(type === 'refund.failed'
           ? { failureReason: refund.failureReason ?? 'refund_rejected' }
           : {}),

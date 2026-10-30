@@ -229,7 +229,9 @@ contribution's amount and status, never a player's payment or method.
   concurrent 60% refunds exactly one reserves (also under PostgreSQL); an unknown or in-flight
   result keeps the reservation (REFUND_PENDING) until evidence settles or releases it; "no provider
   record" releases it only once the refund was submitted at least the reconciliation threshold
-  ago.
+  ago. Refund evidence (synchronous answer, webhook, reconciliation) is compared with the refund
+  attempt: another amount, currency or provider reference changes nothing and raises the critical
+  exception `finance.refund_evidence_conflict` (MONEY-09).
 - **Team billing (SPK-PAY-004/005, SPK-AT-022):** contribution payments that together exceed the
   remaining balance allocate exactly the remaining amount; the excess stays visible on the receipt
   and the obligation (`excessMinor`), sits in `overpayment_liability`, and is held as a credit

@@ -61,6 +61,9 @@ export interface ReserveRefundInput {
 export interface RefundEvidence {
   status: 'succeeded' | 'failed' | 'processing';
   providerReference: string | null;
+  /** What the provider says it refunded (MONEY-09): compared with the refund attempt. */
+  amountMinor?: number | null;
+  currency?: string | null;
   failureReason?: string | null;
   source: EvidenceSource;
   inboxEventId?: string | null;
@@ -404,6 +407,8 @@ export class RefundsService {
         {
           status: result.status,
           providerReference: result.providerReference,
+          amountMinor: result.amountMinor,
+          currency: result.currency,
           failureReason: result.failureReason,
           source: 'sync_response',
         },
@@ -460,6 +465,45 @@ export class RefundsService {
   ): Promise<RefundRow> {
     const row = await this.load(trx, organizationId, refundId, true);
     if (!row) throw errors.notFound('refund', refundId);
+    // §4.11 step 6, SPK-PAY-001 (MONEY-09): evidence about another refund, amount or currency than
+    // the one recorded is a contradiction for the finance operator; nothing is booked from it.
+    const mismatch =
+      evidence.providerReference &&
+      row.provider_reference &&
+      evidence.providerReference !== row.provider_reference
+        ? 'provider reference mismatch'
+        : (evidence.amountMinor !== undefined &&
+              evidence.amountMinor !== null &&
+              evidence.amountMinor !== row.amount_minor) ||
+            (evidence.currency && evidence.currency !== row.currency)
+          ? 'amount or currency mismatch'
+          : null;
+    if (mismatch) {
+      await this.exceptions.raise(trx, {
+        organizationId,
+        category: 'finance.refund_evidence_conflict',
+        severity: 'critical',
+        title: `Conflicting refund evidence (${mismatch}); nothing was changed`,
+        affectedType: 'refund_attempt',
+        affectedId: refundId,
+        ownerQueue: 'finance_operator',
+        dedupeKey: `refund-conflict:${refundId}:${mismatch}`,
+        details: {
+          reason: mismatch,
+          recordedStatus: row.status,
+          reportedStatus: evidence.status,
+          recordedAmountMinor: row.amount_minor,
+          reportedAmountMinor: evidence.amountMinor ?? null,
+          recordedCurrency: row.currency,
+          reportedCurrency: evidence.currency ?? null,
+          providerReference: evidence.providerReference,
+          source: evidence.source,
+          inboxEventId: evidence.inboxEventId ?? null,
+          correlationId,
+        },
+      });
+      return row;
+    }
     if (evidence.status === 'processing') return row; // still pending: nothing changes
     const event: RefundEvent = evidence.status === 'succeeded' ? 'succeed' : 'fail';
     const target: RefundState = evidence.status;
@@ -657,6 +701,8 @@ export class RefundsService {
         {
           status: found.status,
           providerReference: found.providerReference,
+          amountMinor: found.amountMinor,
+          currency: found.currency,
           failureReason: found.failureReason,
           source: 'reconciliation',
         },

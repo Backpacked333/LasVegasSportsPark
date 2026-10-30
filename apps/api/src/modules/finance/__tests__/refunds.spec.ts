@@ -165,6 +165,52 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
     expect(postings).toHaveLength(1);
   });
 
+  it('§4.11 step 6, SPK-PAY-001 (MONEY-09): refund evidence naming another amount or currency changes nothing and is put in front of finance', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 10_000,
+    });
+    provider(t).scriptRefunds('processing');
+    const pending = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'Refund in processing',
+    });
+    expect(pending.body).toMatchObject({ status: 'processing', reservationStatus: 'reserved' });
+    const refundId = pending.body.id as string;
+    const refundsBefore = await balanceOf(t, 'refunds');
+    provider(t).settleRefund(refundId, 'succeeded');
+    // The provider reports 6.00 instead of 60.00, then the right amount in another currency.
+    await deliver(t, provider(t).refundWebhook(refundId, { amountMinor: 600 }));
+    await deliver(t, provider(t).refundWebhook(refundId, { currency: 'EUR' }));
+    await processInbox(t);
+    const still = await t.http.get(`/v1/refunds/${refundId}`).set(finance.header);
+    expect(still.body).toMatchObject({
+      status: 'processing',
+      reservationStatus: 'reserved',
+      refundable: { refundedMinor: 0, reservedMinor: 6_000 },
+    });
+    expect(await balanceOf(t, 'refunds')).toBe(refundsBefore);
+    const conflicts = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['severity', 'owner_queue', 'details'])
+      .where('category', '=', 'finance.refund_evidence_conflict')
+      .where('affected_id', '=', refundId)
+      .execute();
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({ severity: 'critical', owner_queue: 'finance_operator' });
+    expect(conflicts[0]?.details).toMatchObject({
+      reason: 'amount or currency mismatch',
+      recordedAmountMinor: 6_000,
+      reportedAmountMinor: 600,
+    });
+    // The provider's consistent report settles it as requested.
+    await deliver(t, provider(t).refundWebhook(refundId));
+    await processInbox(t);
+    const settled = await t.http.get(`/v1/refunds/${refundId}`).set(finance.header);
+    expect(settled.body).toMatchObject({ status: 'succeeded', reservationStatus: 'settled' });
+    expect((await balanceOf(t, 'refunds')) - refundsBefore).toBe(6_000);
+  });
+
   it('SPK-PAY-008: a failed refund releases its reservation; a refund without a provider record is reconciled as failed', async () => {
     const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
       payerPersonId: payer.personId,
