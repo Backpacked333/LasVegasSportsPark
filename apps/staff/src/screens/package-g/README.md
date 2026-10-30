@@ -7,10 +7,10 @@ changes one (K-12). Status legend as in `apps/staff/README.md`.
 
 | Screen                             | Directory             | Route (owns `/*` below it)    | Area           | Capability         | State                                         |
 | ---------------------------------- | --------------------- | ----------------------------- | -------------- | ------------------ | --------------------------------------------- |
-| SCR-S-51 Rentals                   | `rentals/`            | `/schedule/rentals`           | Schedule       | `rentals`          | Placeholder, **Verified** in jsdom; not built |
-| SCR-S-52 Parties                   | `parties/`            | `/schedule/parties`           | Schedule       | `parties`          | Placeholder, **Verified** in jsdom; not built |
-| SCR-S-53 Memberships               | `memberships/`        | `/finance/memberships`        | Finance        | `memberships`      | Placeholder, **Verified** in jsdom; not built |
-| SCR-S-54 Session packages          | `session-packages/`   | `/finance/session-packages`   | Finance        | `session_packages` | Placeholder, **Verified** in jsdom; not built |
+| SCR-S-51 Rentals                   | `rentals/`            | `/schedule/rentals`           | Schedule       | `rentals`          | Built, **Verified**; see `participation/`     |
+| SCR-S-52 Parties                   | `parties/`            | `/schedule/parties`           | Schedule       | `parties`          | Built, **Verified**; see `participation/`     |
+| SCR-S-53 Memberships               | `memberships/`        | `/finance/memberships`        | Finance        | `memberships`      | Built, **Verified**; see `participation/`     |
+| SCR-S-54 Session packages          | `session-packages/`   | `/finance/session-packages`   | Finance        | `session_packages` | Built, **Verified**; see `participation/`     |
 | SCR-S-55 Point of sale             | `point-of-sale/`      | `/finance/point-of-sale`      | Finance        | `point_of_sale`    | Placeholder, **Verified** in jsdom; not built |
 | SCR-S-56 Access hardware           | `access-hardware/`    | `/admin/access-hardware`      | Administration | `access_hardware`  | Placeholder, **Verified** in jsdom; not built |
 | SCR-S-57 Accounting export batches | `accounting-exports/` | `/finance/accounting-exports` | Finance        | `accounting`       | Placeholder, **Verified** in jsdom; not built |

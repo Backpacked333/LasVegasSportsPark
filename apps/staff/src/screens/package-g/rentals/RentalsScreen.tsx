@@ -1,15 +1,14 @@
 /**
- * SCR-S-51 Rentals (Package G, conditional; SPK-COND-003, §3.16), inside the Schedule area (its
- * sub-navigation and heading come from ScheduleArea). Route: `/schedule/rentals/*`.
- *
- * Placeholder until the rentals screen group builds it: behind `CapabilityGate` for the `rentals`
- * switch (DEC-016, DEC-076; off until a system administrator turns it on), it marks the screen as
- * not built and names what stays pending. Replace this file (and `meta.ts`, `__tests__/`) with the
- * screen; nested pages go under this route with their own `<Routes>`.
+ * SCR-S-51 Rentals (Package G, conditional; SPK-COND-003, SPK-REG-001 rental request, ENR-13,
+ * §3.16 Rentals), inside the Schedule area (its sub-navigation and heading come from ScheduleArea).
+ * Route: `/schedule/rentals/*`. Bookings list and detail, request-mode approval and decline,
+ * cancellation with its bound consequence, booking for a customer with free times, and the rental
+ * offerings' booking terms and definitions, behind `CapabilityGate` for `rentals` (DEC-016,
+ * DEC-076). See `../bookings/BookingsArea.tsx`.
  */
-import { PackageGPlaceholder } from '../PackageGPlaceholder';
+import { BookingsArea } from '../bookings/BookingsArea';
 import { RENTALS } from './meta';
 
 export function RentalsScreen() {
-  return <PackageGPlaceholder screen={RENTALS} headingLevel={3} />;
+  return <BookingsArea kind="rental" meta={RENTALS} />;
 }
