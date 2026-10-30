@@ -423,6 +423,14 @@ export function toSettlement(row: SettlementRow): SettlementReconciliation {
 
 export const LIVE_ATTEMPT_STATES = ['created', 'action_required', 'processing', 'unknown'] as const;
 
+/**
+ * MONEY-05 (§4.11, SPK-PAY-010/011): the journal purpose of a point-of-sale card capture the
+ * provider reported after its tender was recorded as failed (source `payment_attempt`, keyed by the
+ * attempt): the money sits in the processor against `overpayment_liability` until it is refunded
+ * or applied, and its refund settles against that liability.
+ */
+export const POS_LATE_CAPTURE_PURPOSE = 'pos_capture_after_failure';
+
 export function toLiveAttempt(row: PaymentAttemptRow): LiveAttempt {
   return {
     id: row.id,

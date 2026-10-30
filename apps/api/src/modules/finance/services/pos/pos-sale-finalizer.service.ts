@@ -11,7 +11,11 @@ import {
   type Trx,
 } from '../../../../kernel';
 import { FinanceEvents } from '../../finance.events';
-import { financeSystem, type PaymentAttemptRow } from '../../finance.shared';
+import {
+  POS_LATE_CAPTURE_PURPOSE,
+  financeSystem,
+  type PaymentAttemptRow,
+} from '../../finance.shared';
 import { PosSaleMachine, PosTenderMachine } from '../../finance.state-machines';
 import { LedgerService, type PostingLine } from '../../ledger/ledger.service';
 
@@ -89,6 +93,43 @@ export class PosSaleFinalizer {
     if (tender.status === 'failed') {
       // §4.11: money captured after the tender was recorded as failed is still received money;
       // it is refundable (above) and put in front of the finance operator, never silently kept.
+      // MONEY-05 (SPK-PAY-010/011): it is also booked, once per attempt (one journal per source
+      // and purpose): the processor holds it, less its fee, against overpayment liability until a
+      // refund (which then settles against the liability) or another decision. The fee is kept on
+      // the attempt so the processor settlement expects the net.
+      const feeMinor = Number(attempt.processor_fee_minor ?? 0);
+      await trx
+        .updateTable('payment_attempts')
+        .set({ processor_fee_minor: feeMinor })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', attempt.id)
+        .where('processor_fee_minor', 'is', null)
+        .execute();
+      await this.ledger.post(trx, {
+        organizationId,
+        sourceType: 'payment_attempt',
+        sourceId: attempt.id,
+        purpose: POS_LATE_CAPTURE_PURPOSE,
+        description: 'Card capture reported after its point-of-sale tender failed',
+        currency: attempt.currency,
+        actor,
+        correlationId,
+        lines: [
+          {
+            account: 'cash_processor',
+            debitMinor: attempt.amount_minor,
+            memo: 'late card capture',
+          },
+          {
+            account: 'overpayment_liability',
+            creditMinor: attempt.amount_minor,
+            personId: attempt.payer_person_id,
+            memo: 'late card capture held for refund or application',
+          },
+          { account: 'processor_fees', debitMinor: feeMinor, memo: 'card processing fees' },
+          { account: 'cash_processor', creditMinor: feeMinor, memo: 'card processing fees' },
+        ],
+      });
       await this.exceptions.raise(trx, {
         organizationId,
         category: 'finance.pos_capture_after_failure',

@@ -25,15 +25,21 @@ import {
 } from '../../../kernel';
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
-import { organizationOf, toSettlement, type Reader } from '../finance.shared';
+import {
+  POS_LATE_CAPTURE_PURPOSE,
+  organizationOf,
+  toSettlement,
+  type Reader,
+} from '../finance.shared';
 import { LedgerService } from '../ledger/ledger.service';
 
 const zero = sql<number>`0`;
 
 /**
  * Reconciliation (SPK-PAY-010/011, §4.11 step 10). A settlement reconciliation compares what the
- * subledger expects — provider receipts minus processor fees minus settled refunds, or the cash
- * tenders a drawer holds — with what the processor or the counted drawer reports; any difference
+ * subledger expects — provider receipts and point-of-sale card captures minus processor fees minus
+ * settled refunds, or the cash tenders a drawer holds — with what the processor or the counted
+ * drawer reports; any difference
  * is a discrepancy with an owned exception. The report keeps orders, obligations, receipts,
  * refunds, credits, processor fees, disputes, settlements and cash apart: payment volume is not
  * revenue, and balances are always computed from the append-only journal.
@@ -238,17 +244,83 @@ export class ReconciliationService {
       .where('resolved_at', '>=', from)
       .where('resolved_at', '<', to)
       .executeTakeFirst();
-    const gross = Number(receipts?.gross ?? 0);
-    const fees = Number(receipts?.fees ?? 0);
+    // MONEY-03: point-of-sale card captures go to the processor without a receipt.
+    const pos = await this.posCardMoney(db, organizationId, currency, from, to, provider);
+    const receiptGross = Number(receipts?.gross ?? 0);
+    const receiptFees = Number(receipts?.fees ?? 0);
+    const gross = receiptGross + pos.grossMinor;
+    const fees = receiptFees + pos.feesMinor;
     const refunded = Number(refunds?.refunded ?? 0);
     return {
       expected: gross - fees - refunded,
       breakdown: {
-        receiptsMinor: gross,
+        receiptsMinor: receiptGross,
         receiptCount: Number(receipts?.count ?? 0),
+        posCardMinor: pos.grossMinor,
+        posCardCount: pos.count,
         processorFeesMinor: fees,
         refundsMinor: refunded,
       },
+    };
+  }
+
+  /**
+   * MONEY-03 (SPK-PAY-011): point-of-sale card money the processor captured in a period, which no
+   * receipt records: settled card tenders (by when they settled) and captures reported after their
+   * tender failed (by when their journal was posted, MONEY-05), with their processor fees; for one
+   * provider, or every provider when none is named.
+   */
+  private async posCardMoney(
+    db: Reader | Trx,
+    organizationId: string,
+    currency: string,
+    from: Date,
+    to: Date,
+    provider?: string,
+  ): Promise<{ grossMinor: number; feesMinor: number; count: number }> {
+    let settled = db
+      .selectFrom('pos_tenders')
+      .innerJoin('payment_attempts', (join) =>
+        join
+          .onRef('payment_attempts.id', '=', 'pos_tenders.payment_attempt_id')
+          .onRef('payment_attempts.organization_id', '=', 'pos_tenders.organization_id'),
+      )
+      .select((eb) => [
+        eb.fn.coalesce(eb.fn.sum<number>('pos_tenders.amount_minor'), zero).as('gross'),
+        eb.fn.coalesce(eb.fn.sum<number>('payment_attempts.processor_fee_minor'), zero).as('fees'),
+        eb.fn.countAll<number>().as('count'),
+      ])
+      .where('pos_tenders.organization_id', '=', organizationId)
+      .where('pos_tenders.kind', '=', 'card')
+      .where('pos_tenders.status', '=', 'settled')
+      .where('pos_tenders.currency', '=', currency)
+      .where('pos_tenders.settled_at', '>=', from)
+      .where('pos_tenders.settled_at', '<', to);
+    if (provider) settled = settled.where('payment_attempts.provider', '=', provider);
+    let late = db
+      .selectFrom('journals')
+      .innerJoin('payment_attempts', (join) =>
+        join
+          .onRef('payment_attempts.id', '=', 'journals.source_id')
+          .onRef('payment_attempts.organization_id', '=', 'journals.organization_id'),
+      )
+      .select((eb) => [
+        eb.fn.coalesce(eb.fn.sum<number>('payment_attempts.amount_minor'), zero).as('gross'),
+        eb.fn.coalesce(eb.fn.sum<number>('payment_attempts.processor_fee_minor'), zero).as('fees'),
+        eb.fn.countAll<number>().as('count'),
+      ])
+      .where('journals.organization_id', '=', organizationId)
+      .where('journals.source_type', '=', 'payment_attempt')
+      .where('journals.purpose', '=', POS_LATE_CAPTURE_PURPOSE)
+      .where('journals.currency', '=', currency)
+      .where('journals.posted_at', '>=', from)
+      .where('journals.posted_at', '<', to);
+    if (provider) late = late.where('payment_attempts.provider', '=', provider);
+    const [a, b] = [await settled.executeTakeFirst(), await late.executeTakeFirst()];
+    return {
+      grossMinor: Number(a?.gross ?? 0) + Number(b?.gross ?? 0),
+      feesMinor: Number(a?.fees ?? 0) + Number(b?.fees ?? 0),
+      count: Number(a?.count ?? 0) + Number(b?.count ?? 0),
     };
   }
 
@@ -427,6 +499,26 @@ export class ReconciliationService {
       .where('organization_id', '=', organizationId)
       .where('status', '=', 'recovery_required')
       .executeTakeFirst();
+    // MONEY-03: point-of-sale money is no receipt and no cash tender; it is reported beside them.
+    const posCard = await this.posCardMoney(db, organizationId, currency, from, to);
+    const posDrawer = await db
+      .selectFrom('pos_tenders')
+      .select((eb) => eb.fn.coalesce(eb.fn.sum<number>('amount_minor'), zero).as('total'))
+      .where('organization_id', '=', organizationId)
+      .where('currency', '=', currency)
+      .where('kind', 'in', ['cash', 'external'])
+      .where('status', '=', 'settled')
+      .where('settled_at', '>=', from)
+      .where('settled_at', '<', to)
+      .executeTakeFirst();
+    const posReturned = await db
+      .selectFrom('pos_returns')
+      .select((eb) => eb.fn.coalesce(eb.fn.sum<number>('amount_minor'), zero).as('total'))
+      .where('organization_id', '=', organizationId)
+      .where('currency', '=', currency)
+      .where('returned_at', '>=', from)
+      .where('returned_at', '<', to)
+      .executeTakeFirst();
     return {
       from: from.toISOString(),
       to: to.toISOString(),
@@ -457,7 +549,7 @@ export class ReconciliationService {
         redeemedMinor: Number(credits?.redeemed ?? 0),
         pendingApprovalMinor: Number(credits?.pending ?? 0),
       },
-      processorFeesMinor: Number(receipts?.fees ?? 0),
+      processorFeesMinor: Number(receipts?.fees ?? 0) + posCard.feesMinor,
       disputes: {
         count: 0,
         note: 'Disputes (chargebacks) are not reported by the fake provider; the dispute flow awaits the processor decision (DEC-019).',
@@ -466,6 +558,12 @@ export class ReconciliationService {
       cash: {
         recordedMinor: Number(cash?.recorded ?? 0),
         unreconciledMinor: Number(cash?.unreconciled ?? 0),
+      },
+      pointOfSale: {
+        cardMinor: posCard.grossMinor,
+        drawerMinor: Number(posDrawer?.total ?? 0),
+        processorFeesMinor: posCard.feesMinor,
+        returnedMinor: Number(posReturned?.total ?? 0),
       },
       exceptions: {
         unknownPayments: Number(unknownPayments?.count ?? 0),

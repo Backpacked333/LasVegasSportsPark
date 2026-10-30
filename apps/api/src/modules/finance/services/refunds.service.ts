@@ -34,6 +34,7 @@ import {
   type RecordAuthorityPort,
 } from '../finance.ports';
 import {
+  POS_LATE_CAPTURE_PURPOSE,
   financeSystem,
   minutesFrom,
   organizationOf,
@@ -490,6 +491,16 @@ export class RefundsService {
         .where('organization_id', '=', organizationId)
         .where('payment_attempt_id', '=', row.payment_attempt_id)
         .execute();
+      // MONEY-05: a late point-of-sale capture was booked to overpayment liability; giving it
+      // back settles that liability rather than booking a refund expense.
+      const lateCapture = await trx
+        .selectFrom('journals')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('source_type', '=', 'payment_attempt')
+        .where('source_id', '=', row.payment_attempt_id)
+        .where('purpose', '=', POS_LATE_CAPTURE_PURPOSE)
+        .executeTakeFirst();
       await this.ledger.post(trx, {
         organizationId,
         sourceType: 'refund',
@@ -500,7 +511,10 @@ export class RefundsService {
         actor,
         correlationId,
         lines: [
-          { account: 'refunds', debitMinor: row.amount_minor },
+          {
+            account: lateCapture ? 'overpayment_liability' : 'refunds',
+            debitMinor: row.amount_minor,
+          },
           { account: 'cash_processor', creditMinor: row.amount_minor },
         ],
       });

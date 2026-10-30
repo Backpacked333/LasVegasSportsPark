@@ -1001,10 +1001,25 @@ export const ReconciliationReportSchema = z
       redeemedMinor: z.number().int(),
       pendingApprovalMinor: z.number().int(),
     }),
+    /** Every processor fee of the period: receipts' and point-of-sale card tenders'. */
     processorFeesMinor: z.number().int(),
     disputes: z.object({ count: z.number().int(), note: z.string() }),
     settlements: z.array(SettlementReconciliationSchema),
     cash: z.object({ recordedMinor: z.number().int(), unreconciledMinor: z.number().int() }),
+    /**
+     * Point-of-sale money of the period (FIN-06, SPK-PAY-011), kept apart from receipts and cash
+     * tenders: card tenders the processor captured (a capture reported after its tender failed
+     * included), cash and external tenders taken into drawers, the processor fees of those card
+     * tenders (also within `processorFeesMinor`) and what returns gave back.
+     */
+    pointOfSale: z
+      .object({
+        cardMinor: z.number().int(),
+        drawerMinor: z.number().int(),
+        processorFeesMinor: z.number().int(),
+        returnedMinor: z.number().int(),
+      })
+      .optional(),
     exceptions: z.object({
       unknownPayments: z.number().int(),
       recoveryRequiredCheckouts: z.number().int(),

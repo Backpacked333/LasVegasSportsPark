@@ -253,7 +253,12 @@ contribution's amount and status, never a player's payment or method.
   obligation or through the checkout (holds and capacity apply); reconciled per cash drawer.
 - **Reconciliation (SPK-PAY-010/011):** balances are computed from journal entries; the report
   keeps orders, obligations, receipts, refunds, credits, processor fees, disputes, settlements and
-  cash apart; revenue stays deferred (payment volume is not revenue).
+  cash apart; revenue stays deferred (payment volume is not revenue). A processor settlement
+  expects the provider's receipts and point-of-sale card captures (settled card tenders and late
+  captures, which have no receipt) less their processor fees less settled refunds; the report's
+  `processorFeesMinor` counts every processor fee and its `pointOfSale` section shows card,
+  drawer (cash and external tenders), fees and returns beside receipts and cash tenders
+  (MONEY-03).
 
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
@@ -404,6 +409,11 @@ register closed.
   `cash_on_hand` (cash and external tenders) and `cash_processor` (card tenders, less processor
   fees) against `pos_revenue`, `taxes_payable` and `fees_payable`. A void
   is only for an open sale without card tenders (`SALE_HAS_CARD_TENDER`).
+- A card capture the provider reports after its tender was recorded as failed is received money:
+  besides its refundable funds and the critical exception `finance.pos_capture_after_failure`, it
+  is booked once per attempt (`pos_capture_after_failure`: processor less fee against
+  `overpayment_liability`, the fee kept on the attempt), and its refund settles that liability
+  instead of booking a refund expense (MONEY-05).
 - Returns post a reversing journal; returned amounts are split per unit by largest remainder, so
   returning every unit returns exactly what was paid (SPK-PAY-010); a card return reserves and
   executes a provider refund against the card tender (SPK-PAY-008); a cash return pays out of an

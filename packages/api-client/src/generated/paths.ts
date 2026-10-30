@@ -56747,6 +56747,12 @@ export type components = {
                 paidCount: number;
                 totalMinor: number;
             };
+            pointOfSale?: {
+                cardMinor: number;
+                drawerMinor: number;
+                processorFeesMinor: number;
+                returnedMinor: number;
+            };
             processorFeesMinor: number;
             receipts: {
                 cashMinor: number;

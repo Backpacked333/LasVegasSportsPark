@@ -35393,6 +35393,29 @@
               "unreconciledMinor"
             ]
           },
+          "pointOfSale": {
+            "type": "object",
+            "properties": {
+              "cardMinor": {
+                "type": "integer"
+              },
+              "drawerMinor": {
+                "type": "integer"
+              },
+              "processorFeesMinor": {
+                "type": "integer"
+              },
+              "returnedMinor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cardMinor",
+              "drawerMinor",
+              "processorFeesMinor",
+              "returnedMinor"
+            ]
+          },
           "exceptions": {
             "type": "object",
             "properties": {
