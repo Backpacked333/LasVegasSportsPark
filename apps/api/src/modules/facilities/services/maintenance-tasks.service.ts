@@ -4,6 +4,7 @@ import {
   encodeCursor,
   errors,
   newId,
+  systemPrincipal,
   z,
   type EvidenceReference,
   type Inspection,
@@ -48,6 +49,10 @@ import { FacilitiesReader, organizationOf, type TaskRow } from './facilities-rea
 
 const Cursor = z.object({ reportedAt: z.string(), id: z.string() });
 const TERMINAL_OR_RESOLVED = ['resolved', 'closed'] as const;
+/** SPK-UX-006: one open exception per overdue escalating task (`maintenance_task:<id>:overdue`). */
+const MAINTENANCE_TASK_OVERDUE = 'facilities.maintenance_task_overdue';
+/** The actor label of the settlement that resolves an overdue exception the task no longer has. */
+const SETTLE_OVERDUE_ACTOR = 'facilities.maintenance_task_overdue_settled';
 
 export interface NewTaskData {
   organizationId: string;
@@ -433,6 +438,8 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
         current.severity !== severity ||
         changes.includes('reopened');
       if (dueChanged) await this.scheduleDueCheck(trx, updated, correlationId ?? null);
+      // ASYNC-09: resolved, closed, re-dated or no longer escalating ends the overdue exception.
+      await this.settleOverdue(trx, updated, now, correlationId ?? null);
       return this.reader.taskView(trx, updated);
     });
   }
@@ -647,14 +654,25 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
     };
   }
 
-  /** Outbox handler target: escalates one task if it is still open, escalating and overdue (idempotent via dedupe key). */
+  /**
+   * Outbox handler target: escalates one task if it is still open, escalating and overdue
+   * (idempotent via dedupe key). ASYNC-09 (§4.12): the task row is locked, so a task command in
+   * flight commits first and this handler reads its outcome; a task resolved meanwhile is never
+   * escalated.
+   */
   async escalateIfOverdue(trx: Trx, organizationId: string, taskId: string): Promise<boolean> {
-    const task = await this.reader.loadTask(trx, organizationId, taskId);
+    const task = await this.reader.loadTask(trx, organizationId, taskId, true);
     if (!task) return false;
     return this.raiseOverdue(trx, task, this.clock.now());
   }
 
-  /** Sweep for automation (SPK-UX-006): every overdue escalating task gets at most one open exception. */
+  /**
+   * Sweep for automation (SPK-UX-006): every overdue escalating task gets at most one open
+   * exception. ASYNC-09 (§4.12, a sweep racing a user command yields one outcome): the tasks are
+   * locked FOR UPDATE SKIP LOCKED. A task a command holds is left to that command (and to the next
+   * run if it is still overdue then); a command reaching a task the sweep holds waits for the sweep
+   * to commit and then settles the exception the sweep raised (`settleOverdue`).
+   */
   async raiseOverdueExceptions(trx: Trx, organizationId: string, now: Date): Promise<number> {
     const severities = [...this.policy.overdueExceptionSeverities];
     if (severities.length === 0) return 0;
@@ -666,20 +684,79 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
       .where('severity', 'in', severities)
       .where('due_at', '<=', now)
       .orderBy('due_at')
+      .orderBy('id')
+      .forUpdate()
+      .skipLocked()
       .execute();
     let raised = 0;
     for (const row of rows) if (await this.raiseOverdue(trx, row, now)) raised += 1;
     return raised;
   }
 
-  private async raiseOverdue(trx: Trx, task: TaskRow, now: Date): Promise<boolean> {
+  /** SPK-UX-006: the task is open, of an escalating severity, and its due instant has passed. */
+  private isOverdueEscalating(task: TaskRow, now: Date): boolean {
     if (!task.due_at || task.due_at.getTime() > now.getTime()) return false;
     if ((TERMINAL_OR_RESOLVED as readonly string[]).includes(task.status)) return false;
-    if (!this.policy.overdueExceptionSeverities.includes(task.severity)) return false;
+    return this.policy.overdueExceptionSeverities.includes(task.severity);
+  }
+
+  /**
+   * ASYNC-09 (SPK-UX-006, §4.12): the overdue exception is settled by the fact that ends it, in the
+   * task command's own unit of work, as other modules settle theirs. A task that was resolved or
+   * closed, re-dated to a later due time (or left without one) or moved to a severity that does
+   * not escalate no longer earns a "maintenance task is overdue" item on Today, so its open or
+   * acknowledged exception is resolved under the system actor `SETTLE_OVERDUE_ACTOR` (the task
+   * command's own audit names the person). A task that is overdue again later is raised anew by
+   * its due timer or the sweep.
+   */
+  private async settleOverdue(
+    trx: Trx,
+    task: TaskRow,
+    now: Date,
+    correlationId: string | null,
+  ): Promise<number> {
+    if (this.isOverdueEscalating(task, now)) return 0;
+    const open = await this.exceptions.list(
+      task.organization_id,
+      {
+        statuses: ['open', 'acknowledged'],
+        category: MAINTENANCE_TASK_OVERDUE,
+        affectedType: 'maintenance_task',
+        affectedId: task.id,
+      },
+      trx,
+    );
+    if (open.items.length === 0) return 0;
+    const reason = (TERMINAL_OR_RESOLVED as readonly string[]).includes(task.status)
+      ? `The maintenance task was ${task.status}.`
+      : !this.policy.overdueExceptionSeverities.includes(task.severity)
+        ? `The maintenance task's severity (${task.severity}) does not escalate.`
+        : task.due_at
+          ? 'The maintenance task was re-dated to a later due time.'
+          : 'The maintenance task no longer has a due time.';
+    const system = systemPrincipal(task.organization_id, SETTLE_OVERDUE_ACTOR);
+    for (const exception of open.items) {
+      await this.exceptions.transition(trx, system, exception.id, 'resolved', {
+        reason,
+        resolution: {
+          taskId: task.id,
+          taskStatus: task.status,
+          severity: task.severity,
+          dueAt: task.due_at ? task.due_at.toISOString() : null,
+          taskRevision: task.revision,
+        },
+        correlationId: correlationId ?? undefined,
+      });
+    }
+    return open.items.length;
+  }
+
+  private async raiseOverdue(trx: Trx, task: TaskRow, now: Date): Promise<boolean> {
+    if (!this.isOverdueEscalating(task, now) || !task.due_at) return false;
     await this.exceptions.raise(trx, {
       organizationId: task.organization_id,
       facilityId: task.facility_id,
-      category: 'facilities.maintenance_task_overdue',
+      category: MAINTENANCE_TASK_OVERDUE,
       severity: task.severity === 'critical' ? 'critical' : 'high',
       title: `${task.severity} maintenance task is overdue: ${task.issue.slice(0, 120)}`,
       affectedType: 'maintenance_task',
