@@ -307,6 +307,93 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     },
   );
 
+  it("SPK-SCHED-007 / SPK-STAFF-002: cancelling a recurring rental after its first week withdraws only the future weeks' staffing; work already done stays accepted and can be completed", async () => {
+    const setup = await rental({
+      price: 4_000,
+      staffing: [{ kind: 'supervisor', role: 'field_supervisor', count: 1, qualifications: [] }],
+    });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(40).toISOString(),
+      end: new Date(start(40).getTime() + HOUR).toISOString(),
+      recurrence: { interval: 1, count: 4 },
+      resourceIds: [fields[1]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    expect(row.scheduling_series_id).not.toBeNull();
+    await pay(row.basket_id!, row.enrollment_id!);
+    const events = await t.db
+      .selectFrom('events')
+      .select(['id', 'scheduled_start'])
+      .where('id', 'in', row.scheduling_event_ids)
+      .orderBy('scheduled_start')
+      .execute();
+    expect(events).toHaveLength(4);
+    for (const event of events) await accept(event.id, 'field_supervisor', 'supervisor');
+    const staffed = await t.http
+      .get(`/v1/bookings/${booked.body.id as string}`)
+      .set(customer.header);
+    expect(staffed.body.status).toBe('confirmed');
+    const assignmentOf = async (eventId: string) =>
+      t.db
+        .selectFrom('assignments')
+        .select(['id', 'status'])
+        .where('target_type', '=', 'event')
+        .where('target_id', '=', eventId)
+        .executeTakeFirstOrThrow();
+
+    // Week 1 has taken place; weeks 2 to 4 are still ahead.
+    const manager = await staff(t, ['program_manager']);
+    t.clock.set(new Date(events[0]!.scheduled_start.getTime() + 2 * HOUR));
+    try {
+      const canceled = await post(
+        t,
+        `/v1/bookings/${booked.body.id as string}/cancel`,
+        manager.header,
+        { reason: 'Team folded', expectedRevision: staffed.body.revision },
+      );
+      expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+      expect(canceled.body.status).toBe('canceled');
+      await drain(t);
+      const statuses = await t.db
+        .selectFrom('events')
+        .select(['id', 'status'])
+        .where('id', 'in', row.scheduling_event_ids)
+        .execute();
+      const statusOf = new Map(statuses.map((e) => [e.id, e.status]));
+      expect(statusOf.get(events[0]!.id)).not.toBe('canceled');
+      for (const later of events.slice(1)) expect(statusOf.get(later.id)).toBe('canceled');
+      // The past week's staffing is untouched; the cancelled weeks' assignments are withdrawn.
+      const past = await assignmentOf(events[0]!.id);
+      expect(past.status).toBe('accepted');
+      for (const later of events.slice(1)) {
+        expect((await assignmentOf(later.id)).status).toBe('withdrawn');
+      }
+      const retired = await t.db
+        .selectFrom('assignment_requirements')
+        .select(['target_id', 'retired_at'])
+        .where('target_type', '=', 'event')
+        .where('target_id', 'in', row.scheduling_event_ids)
+        .execute();
+      for (const requirement of retired) {
+        if (requirement.target_id === events[0]!.id) expect(requirement.retired_at).toBeNull();
+        else expect(requirement.retired_at).not.toBeNull();
+      }
+      // The work done can still be completed (and so paid).
+      const completed = await post(t, `/v1/assignments/${past.id}/complete`, manager.header, {});
+      expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+      expect((await assignmentOf(events[0]!.id)).status).toBe('completed');
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+  });
+
   it('SPK-COND-003: an instant booking whose field is taken writes nothing (no event, hold, basket line, requirement or booking)', async () => {
     const setup = await rental({
       staffing: [{ kind: 'supervisor', role: 'field_supervisor', count: 1, qualifications: [] }],

@@ -933,7 +933,11 @@ export class BookingsService implements BookingQueryPort {
     });
   }
 
-  /** Cancels the booking's future events and withdraws their staffing requirements. */
+  /**
+   * Cancels the booking's future events and withdraws the staffing of exactly those occurrences.
+   * An occurrence that already started keeps its identity and its staffing facts (SPK-SCHED-007,
+   * §4.6): its accepted assignments stay accepted so the work done can still be completed and paid.
+   */
   private async releaseReservations(
     organizationId: string,
     row: BookingRow,
@@ -943,22 +947,29 @@ export class BookingsService implements BookingQueryPort {
     if (row.scheduling_event_ids.length === 0) return;
     const system = this.system(organizationId);
     const now = this.clock.now();
+    const canceled = new Set<string>();
     if (row.scheduling_series_id) {
-      await this.events.cancelEventSeries(system, row.scheduling_series_id, {
+      const result = await this.events.cancelEventSeries(system, row.scheduling_series_id, {
         reason,
         fromInstant: now.toISOString(),
         correlationId,
       });
-    } else {
-      for (const eventId of row.scheduling_event_ids) {
-        const event = await this.events.getEvent(system, eventId);
-        if (event.status === 'canceled' || new Date(event.scheduledStart) <= now) continue;
+      for (const eventId of result.canceledEventIds) canceled.add(eventId);
+    }
+    for (const eventId of row.scheduling_event_ids) {
+      if (canceled.has(eventId)) continue;
+      const event = await this.events.getEvent(system, eventId);
+      if (new Date(event.scheduledStart) <= now) continue;
+      if (event.status !== 'canceled') {
         await this.events.cancelEvent(system, eventId, { reason, correlationId });
       }
+      // A future occurrence cancelled now, or earlier (a closure): its staffing goes with it.
+      canceled.add(eventId);
     }
     const staffing = row.staffing as unknown as StaffingRequirement[];
     if (staffing.length > 0) {
       for (const eventId of row.scheduling_event_ids) {
+        if (!canceled.has(eventId)) continue;
         await this.staffing.withdrawRequirements(system, {
           targetType: 'event',
           targetId: eventId,
