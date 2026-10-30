@@ -1,9 +1,10 @@
 /**
  * SCR-S-41 Assets and maintenance tasks (SPK-FAC-001, SPK-FAC-002, SPK-FAC-005). Per facility:
  *
- * - Maintenance tasks (`GET /v1/maintenance-tasks`): asset or space, issue, severity, reporter,
- *   evidence, owner, due date, open operating restrictions, resolution and latest inspection;
- *   overdue tasks are marked in text. Each opens the task screen.
+ * - Maintenance tasks (`GET /v1/maintenance-tasks`, cursor pages with "Load more tasks"): asset or
+ *   space, issue, severity, reporter, evidence, owner (named through `GET /v1/person-names`), due
+ *   date, open operating restrictions, resolution and latest inspection; overdue tasks are marked
+ *   in text. Each opens the task screen, where an owner is chosen from the staff directory.
  * - Report an issue (`POST /v1/maintenance-tasks`, any staff): asset or space and severity are
  *   required (validation failure "severity or owner missing" is caught before sending); an empty due
  *   date leaves the configured default for the severity to the API (pending operations decision).
@@ -19,14 +20,22 @@ import type { Schema } from '@sportspark/api-client';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
 import { useCommandReload } from '../../features/schedule-facilities/reload';
+import {
+  ActionGate,
+  NotAvailableToYou,
+  useActionAllowed,
+} from '../../features/schedule-facilities/permission';
+import { ownerLabel, useOwnerNames } from '../../features/schedule-facilities/staff-owner';
 import {
   FacilityGate,
   ZoneCaption,
@@ -67,7 +76,6 @@ type AssetKind = Asset['kind'];
 const SEVERITIES: Severity[] = ['low', 'medium', 'high', 'critical'];
 const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 const PAGE = 50;
-const MAX_LIMIT = 200;
 
 export function isOverdue(task: Task, now: Date): boolean {
   return (
@@ -85,13 +93,12 @@ function TaskList({ facility }: { facility: FacilityContext }) {
   const [status, setStatus] = useState<'' | TaskStatus>('');
   const [severity, setSeverity] = useState<'' | Severity>('');
   const [overdueOnly, setOverdueOnly] = useState(false);
-  const [limit, setLimit] = useState(PAGE);
-  const tasks = useApiQuery({
+  const tasks = useApiPages({
     path: '/maintenance-tasks',
     request: {
       query: {
         facilityId: facility.id,
-        limit,
+        limit: PAGE,
         ...(status ? { status } : {}),
         ...(severity ? { severity } : {}),
         // The flag is the string 'true' or 'false' (QueryBoolean, FAC-01); only 'true' is sent.
@@ -99,6 +106,10 @@ function TaskList({ facility }: { facility: FacilityContext }) {
       },
     },
   });
+  const ownerNames = useOwnerNames(
+    (tasks.data ?? []).map((t) => t.assignedOwnerPersonId),
+    me,
+  );
   return (
     <section aria-labelledby="tasks-title">
       <h4 id="tasks-title">Maintenance tasks</h4>
@@ -137,7 +148,7 @@ function TaskList({ facility }: { facility: FacilityContext }) {
       <QueryBoundary
         query={tasks}
         label="maintenance tasks"
-        isEmpty={(page) => page.items.length === 0}
+        isEmpty={(items) => items.length === 0}
         empty={{
           title: status || severity || overdueOnly ? 'No tasks match' : 'No maintenance tasks',
           description:
@@ -145,10 +156,10 @@ function TaskList({ facility }: { facility: FacilityContext }) {
         }}
         unavailableOffline={['reporting issues, assigning, resolving or closing tasks']}
       >
-        {(page) => (
+        {(items) => (
           <>
             <ul className="list" aria-label="Maintenance tasks">
-              {[...page.items]
+              {[...items]
                 .sort(
                   (a, b) =>
                     Number(a.status === 'closed') - Number(b.status === 'closed') ||
@@ -168,11 +179,7 @@ function TaskList({ facility }: { facility: FacilityContext }) {
                           {whereLabel(t, assetNames, resourceNames)} · Reported by{' '}
                           {t.reporter.actorLabel || 'staff'}{' '}
                           {formatInstant(t.reportedAt, facility.timezone)} · Owner:{' '}
-                          {t.assignedOwnerPersonId === null
-                            ? 'unassigned'
-                            : t.assignedOwnerPersonId === me
-                              ? 'you'
-                              : 'assigned'}
+                          {ownerLabel(t.assignedOwnerPersonId, me, ownerNames)}
                           {t.dueAt ? ` · Due ${formatInstant(t.dueAt, facility.timezone)}` : ''}
                           {t.requiresInspection ? ' · Inspection required' : ''}
                           {t.latestInspection
@@ -197,18 +204,7 @@ function TaskList({ facility }: { facility: FacilityContext }) {
                   );
                 })}
             </ul>
-            {page.nextCursor ? (
-              limit < MAX_LIMIT ? (
-                <Button
-                  variant="secondary"
-                  onClick={() => setLimit((l) => Math.min(MAX_LIMIT, l + PAGE))}
-                >
-                  Show more tasks
-                </Button>
-              ) : (
-                <p className="caption">More tasks exist; narrow the filters to see them.</p>
-              )
-            ) : null}
+            <LoadMore pages={tasks} label="tasks" />
           </>
         )}
       </QueryBoundary>
@@ -520,6 +516,7 @@ function AssetRow({ asset, facility }: { asset: Asset; facility: FacilityContext
 
 function Assets({ facility }: { facility: FacilityContext }) {
   const { online } = useApp();
+  const canManageAssets = useActionAllowed('facilities.manage_asset', facility.id);
   const [includeRetired, setIncludeRetired] = useState(false);
   const assets = useApiQuery({
     path: '/assets',
@@ -590,61 +587,69 @@ function Assets({ facility }: { facility: FacilityContext }) {
           </ul>
         )}
       </QueryBoundary>
-      <form className="form" onSubmit={submit} aria-labelledby="new-asset-title" noValidate>
-        <h5 id="new-asset-title">Register an asset</h5>
-        <label htmlFor="new-asset-kind">Kind</label>
-        <select
-          id="new-asset-kind"
-          value={kind}
-          onChange={(e) => setKind(e.target.value as '' | AssetKind)}
-        >
-          <option value="">Choose…</option>
-          {(Object.keys(ASSET_KIND_LABEL) as AssetKind[]).map((k) => (
-            <option key={k} value={k}>
-              {ASSET_KIND_LABEL[k]}
-            </option>
-          ))}
-        </select>
-        {attempted && !kind ? <span className="error-text">Choose the kind of asset.</span> : null}
-        <label htmlFor="new-asset-name">Name</label>
-        <input
-          id="new-asset-name"
-          value={name}
-          maxLength={200}
-          onChange={(e) => setName(e.target.value)}
-        />
-        {attempted && !name.trim() ? <span className="error-text">Enter a name.</span> : null}
-        <label htmlFor="new-asset-identifier">Identifier (optional, unique in the facility)</label>
-        <input
-          id="new-asset-identifier"
-          value={identifier}
-          maxLength={100}
-          onChange={(e) => setIdentifier(e.target.value)}
-        />
-        <label htmlFor="new-asset-space">Space (optional)</label>
-        <select
-          id="new-asset-space"
-          value={resourceId}
-          onChange={(e) => setResourceId(e.target.value)}
-        >
-          <option value="">Not attached to a space</option>
-          {(resources.data ?? []).map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))}
-        </select>
-        <Button type="submit" busy={create.isProcessing} disabled={!online}>
-          Register asset
-        </Button>
-        {create.error ? (
-          <CommandError
-            error={create.error}
-            onRetry={() => submit()}
-            action="Registering an asset"
+      {canManageAssets ? (
+        <form className="form" onSubmit={submit} aria-labelledby="new-asset-title" noValidate>
+          <h5 id="new-asset-title">Register an asset</h5>
+          <label htmlFor="new-asset-kind">Kind</label>
+          <select
+            id="new-asset-kind"
+            value={kind}
+            onChange={(e) => setKind(e.target.value as '' | AssetKind)}
+          >
+            <option value="">Choose…</option>
+            {(Object.keys(ASSET_KIND_LABEL) as AssetKind[]).map((k) => (
+              <option key={k} value={k}>
+                {ASSET_KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+          {attempted && !kind ? (
+            <span className="error-text">Choose the kind of asset.</span>
+          ) : null}
+          <label htmlFor="new-asset-name">Name</label>
+          <input
+            id="new-asset-name"
+            value={name}
+            maxLength={200}
+            onChange={(e) => setName(e.target.value)}
           />
-        ) : null}
-      </form>
+          {attempted && !name.trim() ? <span className="error-text">Enter a name.</span> : null}
+          <label htmlFor="new-asset-identifier">
+            Identifier (optional, unique in the facility)
+          </label>
+          <input
+            id="new-asset-identifier"
+            value={identifier}
+            maxLength={100}
+            onChange={(e) => setIdentifier(e.target.value)}
+          />
+          <label htmlFor="new-asset-space">Space (optional)</label>
+          <select
+            id="new-asset-space"
+            value={resourceId}
+            onChange={(e) => setResourceId(e.target.value)}
+          >
+            <option value="">Not attached to a space</option>
+            {(resources.data ?? []).map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          <Button type="submit" busy={create.isProcessing} disabled={!online}>
+            Register asset
+          </Button>
+          {create.error ? (
+            <CommandError
+              error={create.error}
+              onRetry={() => submit()}
+              action="Registering an asset"
+            />
+          ) : null}
+        </form>
+      ) : (
+        <NotAvailableToYou what="Registering assets" action="facilities.manage_asset" />
+      )}
     </section>
   );
 }
@@ -1087,7 +1092,13 @@ function Preventive({ facility }: { facility: FacilityContext }) {
           </ul>
         )}
       </QueryBoundary>
-      <PreventiveForm facility={facility} />
+      <ActionGate
+        action="facilities.schedule_preventive_maintenance"
+        facilityId={facility.id}
+        what="Scheduling preventive maintenance"
+      >
+        <PreventiveForm facility={facility} />
+      </ActionGate>
     </section>
   );
 }
@@ -1101,7 +1112,13 @@ export function MaintenanceScreen() {
           <>
             <ZoneCaption facility={facility} />
             <TaskList facility={facility} />
-            <ReportIssueForm facility={facility} />
+            <ActionGate
+              action="facilities.report_issue"
+              facilityId={facility.id}
+              what="Reporting maintenance issues"
+            >
+              <ReportIssueForm facility={facility} />
+            </ActionGate>
             <Assets facility={facility} />
             <Preventive facility={facility} />
           </>

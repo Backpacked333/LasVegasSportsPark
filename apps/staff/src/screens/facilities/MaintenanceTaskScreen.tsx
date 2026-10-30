@@ -4,13 +4,14 @@
  * (`GET /v1/maintenance-tasks/{id}`, `/inspections`, `GET /v1/maintenance-restrictions?taskId=`).
  *
  * Commands, each with the task's `expectedRevision` and an idempotency key per intent:
- * assign to me or unassign, start work, resolve or close (a resolution summary is required), reopen,
+ * assign to me, to a staff member chosen from the staff directory (`GET /v1/staff-directory`), or
+ * unassign, start work, resolve or close (a resolution summary is required), reopen,
  * edit severity, due date, inspection requirement and evidence (`PATCH /v1/maintenance-tasks/{id}`),
  * and record an inspection (`POST .../inspections`). The lifecycle offered follows the task's state
  * (open → assigned → in_progress → resolved → closed); whether the viewer may do it is the API's
  * answer (ACCESS_DENIED names the missing permission). Closing a task never returns its area to
  * service: unreleased restrictions are listed with the release they still need (SPK-FAC-004).
- * Another owner cannot be chosen here: the API has no staff directory.
+ * The owner's name comes from `GET /v1/person-names` (names only).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -25,6 +26,11 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
 import { useCommandReload } from '../../features/schedule-facilities/reload';
+import {
+  ActionGate,
+  NotAvailableToYou,
+  useActionAllowed,
+} from '../../features/schedule-facilities/permission';
 import {
   useFacilityById,
   type FacilityContext,
@@ -41,6 +47,11 @@ import {
   toInstant,
   type LocalDateTime,
 } from '../../features/schedule-facilities/LocalDateTimeField';
+import {
+  OwnerPicker,
+  ownerLabel,
+  useOwnerNames,
+} from '../../features/schedule-facilities/staff-owner';
 import { formatInstant, formatRange } from '../../features/schedule-facilities/time';
 import {
   EvidenceEditor,
@@ -71,6 +82,8 @@ function Lifecycle({ task, me }: { task: Task; me: string | null }) {
     invalidate: [TASKS_KEY, TASK_KEY, RESTRICTIONS_KEY],
   });
   const [last, setLast] = useState<Omit<UpdateBody, 'expectedRevision'> | null>(null);
+  const [owner, setOwner] = useState('');
+  const [ownerAttempted, setOwnerAttempted] = useState(false);
   const send = (body: Omit<UpdateBody, 'expectedRevision'>) => {
     setLast(body);
     void update
@@ -145,6 +158,28 @@ function Lifecycle({ task, me }: { task: Task; me: string | null }) {
           </Button>
         ) : null}
       </div>
+      <OwnerPicker
+        facilityId={task.facilityId}
+        value={owner}
+        onChange={setOwner}
+        disabled={disabled}
+        label="Assign to"
+      />
+      <Button
+        variant="secondary"
+        disabled={disabled}
+        onClick={() => {
+          setOwnerAttempted(true);
+          if (owner && owner !== task.assignedOwnerPersonId) send({ assignedOwnerPersonId: owner });
+        }}
+      >
+        Assign to the chosen staff member
+      </Button>
+      {ownerAttempted && (!owner || owner === task.assignedOwnerPersonId) ? (
+        <span className="error-text" role="alert">
+          {owner ? 'This person already owns the task.' : 'Choose a staff member to assign.'}
+        </span>
+      ) : null}
       <label htmlFor="task-resolution">
         Resolution summary{task.resolution ? ' (replaces the recorded one)' : ''}
       </label>
@@ -275,6 +310,7 @@ function Details({ task, facility }: { task: Task; facility: FacilityContext }) 
 }
 
 function Inspections({ task, facility }: { task: Task; facility: FacilityContext }) {
+  const canRecord = useActionAllowed('facilities.record_inspection', task.facilityId);
   const { online } = useApp();
   const inspections = useApiQuery({
     path: '/maintenance-tasks/{id}/inspections',
@@ -350,7 +386,9 @@ function Inspections({ task, facility }: { task: Task; facility: FacilityContext
           </ul>
         )}
       </QueryBoundary>
-      {task.status !== 'closed' || task.requiresInspection ? (
+      {(task.status !== 'closed' || task.requiresInspection) && !canRecord ? (
+        <NotAvailableToYou what="Recording inspections" action="facilities.record_inspection" />
+      ) : task.status !== 'closed' || task.requiresInspection ? (
         <div className="form">
           <fieldset>
             <legend>Record an inspection</legend>
@@ -451,6 +489,7 @@ function TaskView({ task, facility }: { task: Task; facility: FacilityContext })
   const now = useNow();
   const me = useMyPersonId();
   const { assetNames, resourceNames } = useFacilityNames(task.facilityId);
+  const ownerNames = useOwnerNames([task.assignedOwnerPersonId], me);
   const sev = SEVERITY_BADGE[task.severity];
   const st = TASK_BADGE[task.status];
   return (
@@ -476,13 +515,7 @@ function TaskView({ task, facility }: { task: Task; facility: FacilityContext })
           {task.reporter.actorLabel || 'staff'}, {formatInstant(task.reportedAt, facility.timezone)}
         </dd>
         <dt>Owner</dt>
-        <dd>
-          {task.assignedOwnerPersonId === null
-            ? 'Unassigned'
-            : task.assignedOwnerPersonId === me
-              ? 'You'
-              : 'Another staff member'}
-        </dd>
+        <dd data-testid="task-owner">{ownerLabel(task.assignedOwnerPersonId, me, ownerNames)}</dd>
         <dt>Due</dt>
         <dd>{task.dueAt ? formatInstant(task.dueAt, facility.timezone) : 'No due date'}</dd>
         <dt>Evidence</dt>
@@ -504,8 +537,14 @@ function TaskView({ task, facility }: { task: Task; facility: FacilityContext })
           </>
         ) : null}
       </dl>
-      <Lifecycle key={`l-${task.revision}`} task={task} me={me} />
-      <Details key={`d-${task.revision}`} task={task} facility={facility} />
+      <ActionGate
+        action="facilities.manage_maintenance_task"
+        facilityId={task.facilityId}
+        what="Assigning, updating, resolving or closing maintenance tasks"
+      >
+        <Lifecycle key={`l-${task.revision}`} task={task} me={me} />
+        <Details key={`d-${task.revision}`} task={task} facility={facility} />
+      </ActionGate>
       <Inspections task={task} facility={facility} />
       <TaskRestrictions task={task} facility={facility} />
     </div>

@@ -1,7 +1,8 @@
 /**
- * SCR-S-41 maintenance task: SPK-FAC-002 (assign, resolve with a resolution, evidence, inspection),
- * SPK-FAC-004 (closing never reopens a field while restrictions remain), SPK-UX-008 (validation
- * failure, stale version, permission restriction).
+ * SCR-S-41 maintenance task: SPK-FAC-002 (assign to me or to a staff member from the staff
+ * directory, owner names, resolve with a resolution, evidence, inspection), SPK-FAC-004 (closing
+ * never reopens a field while restrictions remain), SPK-UX-008 (validation failure, stale version,
+ * permission restriction).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -11,6 +12,7 @@ import {
   INVENTORY,
   ME_PERSON,
   oneFacilityRoutes,
+  page,
   restriction,
   task,
 } from '../../../features/schedule-facilities/test-fixtures';
@@ -39,6 +41,31 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
     ...overrides,
   };
 }
+
+const JO = '0192f1a0-0000-7000-8000-0000000000e1';
+const SAM = '0192f1a0-0000-7000-8000-0000000000e2';
+const STAFF_JO = {
+  personId: JO,
+  displayName: 'Jo Park',
+  roles: ['facilities_operator' as const],
+  facilityIds: [FACILITY_A],
+  scopes: [{ role: 'facilities_operator' as const, facilityIds: [FACILITY_A] }],
+};
+const STAFF_SAM = {
+  personId: SAM,
+  displayName: 'Sam Lee',
+  roles: ['scheduler' as const],
+  facilityIds: [],
+  scopes: [{ role: 'scheduler' as const, facilityIds: [] }],
+};
+const NAME_JO = {
+  personId: JO,
+  canonicalPersonId: JO,
+  givenName: 'Jo',
+  familyName: 'Park',
+  displayName: 'Jo Park',
+  kind: 'adult' as const,
+};
 
 const patches = (app: ReturnType<typeof createTestApp>) =>
   app.fake.requests.filter((r) => r.method === 'PATCH' && r.route === '/maintenance-tasks/{id}');
@@ -74,6 +101,120 @@ describe('SCR-S-41 MaintenanceTaskScreen', () => {
       assignedOwnerPersonId: ME_PERSON,
       expectedRevision: 2,
     });
+  });
+
+  it('SPK-FAC-002: assigns the task to a staff member chosen from the staff directory of its facility', async () => {
+    const user = userEvent.setup();
+    const assigned = {
+      ...OPEN,
+      status: 'assigned' as const,
+      revision: 3,
+      assignedOwnerPersonId: JO,
+    };
+    const app = createTestApp({
+      routes: routes({
+        'GET /staff-directory': page([STAFF_JO, STAFF_SAM]),
+        'GET /person-names': { status: 200, body: { items: [NAME_JO] } },
+        'PATCH /maintenance-tasks/{id}': () => {
+          app.fake.set('GET /maintenance-tasks/{id}', { status: 200, body: assigned });
+          return fakeResponse(200, assigned);
+        },
+      }),
+    });
+    render(app.at('/facilities/maintenance/tasks/t-1'));
+    expect(await screen.findByTestId('task-owner')).toHaveTextContent('unassigned');
+    const picker = await screen.findByRole('group', { name: 'Assign to from the staff directory' });
+    const select = within(picker).getByLabelText('Assign to');
+    await waitFor(() => expect(select).toBeEnabled());
+    expect(
+      within(select).getByRole('option', { name: 'Jo Park (facilities operator)' }),
+    ).toBeVisible();
+    expect(app.fake.requests.find((r) => r.route === '/staff-directory')?.query).toMatchObject({
+      facilityId: FACILITY_A,
+    });
+    await user.click(screen.getByRole('button', { name: 'Assign to the chosen staff member' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose a staff member to assign.');
+    expect(patches(app)).toHaveLength(0);
+    await user.selectOptions(select, JO);
+    await user.click(screen.getByRole('button', { name: 'Assign to the chosen staff member' }));
+    await waitFor(() => expect(patches(app)).toHaveLength(1));
+    expect(patches(app)[0]?.body).toEqual({ assignedOwnerPersonId: JO, expectedRevision: 2 });
+    expect(await screen.findByTestId('task-owner')).toHaveTextContent('Jo Park');
+  });
+
+  it('finds staff by name prefix and loads more staff with the API cursor', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /staff-directory': (request) =>
+          request.query.cursor === 'staff-2'
+            ? fakeResponse(200, { items: [STAFF_SAM], nextCursor: null })
+            : fakeResponse(200, { items: [STAFF_JO], nextCursor: 'staff-2' }),
+      }),
+    });
+    render(app.at('/facilities/maintenance/tasks/t-1'));
+    await user.click(await screen.findByRole('button', { name: 'Load more staff' }));
+    const select = screen.getByLabelText('Assign to');
+    expect(
+      await within(select).findByRole('option', { name: 'Sam Lee (scheduler)' }),
+    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Find staff by name'), 'Jo');
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/staff-directory').at(-1)?.query,
+      ).toMatchObject({ facilityId: FACILITY_A, query: 'Jo' }),
+    );
+  });
+
+  it('without the staff directory (ACCESS_DENIED) another owner cannot be chosen; Assign to me stays', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /staff-directory': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', { details: { action: 'identity.read_staff_directory' } }),
+          ),
+      }),
+    });
+    render(app.at('/facilities/maintenance/tasks/t-1'));
+    expect(await screen.findByText('Staff directory not available')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Assign to me' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Assign to')).toBeNull();
+  });
+
+  it('an owner the API will not name reads "assigned (name not available)"; a refused owner shows the API message', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-tasks/{id}': {
+          status: 200,
+          body: { ...OPEN, status: 'assigned', assignedOwnerPersonId: SAM },
+        },
+        'GET /staff-directory': page([STAFF_JO]),
+        'GET /person-names': { status: 200, body: { items: [] } },
+        'PATCH /maintenance-tasks/{id}': () =>
+          fakeResponse(
+            400,
+            apiErrorBody('VALIDATION_FAILED', {
+              message: 'The assigned owner must be an active adult person of this organization.',
+              details: { path: 'assignedOwnerPersonId' },
+            }),
+          ),
+      }),
+    });
+    render(app.at('/facilities/maintenance/tasks/t-1'));
+    expect(await screen.findByTestId('task-owner')).toHaveTextContent(
+      'assigned (name not available)',
+    );
+    const select = screen.getByLabelText('Assign to');
+    await waitFor(() => expect(select).toBeEnabled());
+    await user.selectOptions(select, JO);
+    await user.click(screen.getByRole('button', { name: 'Assign to the chosen staff member' }));
+    expect(
+      await screen.findByText(
+        'assignedOwnerPersonId: The assigned owner must be an active adult person of this organization.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('validation failure: resolving needs a resolution summary; then it is sent with evidence', async () => {
