@@ -174,10 +174,16 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     expect(renewals(app)).toHaveLength(0);
 
     failing = false;
+    const basketReads = () => app.fake.requests.filter((r) => r.route === '/me/baskets').length;
+    const before = basketReads();
     await act(async () => {
       fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
     });
-    await waitFor(() => expect(screen.queryByTestId('renewal-baskets-error')).toBeNull());
+    // Wait for the re-read the retry sends, then for its answer to replace the error.
+    await waitFor(() => expect(basketReads()).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.queryByTestId('renewal-baskets-error')).toBeNull(), {
+      timeout: 5_000,
+    });
     await waitFor(() =>
       expect(
         screen.getByRole('button', { name: 'Add the renewal to your basket' }),
