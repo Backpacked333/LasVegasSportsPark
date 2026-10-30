@@ -50,7 +50,6 @@ import { Body, ButtonRow, Detail, ReasonList, Section, Title } from '../../featu
 import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
-import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type Upcoming = Workspace['upcomingFixtures'][number];
