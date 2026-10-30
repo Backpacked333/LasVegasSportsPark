@@ -12,6 +12,7 @@ import {
   MODULE_SETTINGS,
   OperationalExceptions,
   Outbox,
+  renewJobLease,
   runWithTransaction,
   UnitOfWork,
   type Clock,
@@ -155,7 +156,13 @@ export class DeviceDeliveryService {
       .execute();
     const batch = due.slice(0, context.batchSize);
     let processed = 0;
-    for (const { id, organization_id } of batch) {
+    for (const [index, { id, organization_id }] of batch.entries()) {
+      // K-06 (ASYNC-06, SPK-AT-023): the run's lease is renewed before each provider call, outside
+      // any transaction; once another runner holds the job (or the runner gave up on this run) no
+      // further command is sent, and what is left stays due for the run that holds the job.
+      if (!(await renewJobLease(context))) {
+        return { processed, remaining: due.length - index };
+      }
       if (await this.deliverOne(organization_id, id)) processed += 1;
     }
     return { processed, remaining: due.length - batch.length };

@@ -38,13 +38,15 @@ import type { BackgroundWorker } from '../workers/background-workers';
  * working one job; it does not fence a row whose runner was paused past its lease, nor a given-up
  * pass that is still running.
  *
- * Proposed, and not yet done by any registered job (pending, owners entry and finance): a job that
- * calls a provider once per row calls `renewJobLease(context)` before each call, outside any
- * transaction, and stops when it returns false; and it claims each row it sends with its own
- * in-flight marker, checked when the outcome is recorded. `entry.deliver_device_commands` and
- * `finance.reconcile_accounting_exports` call their provider per row with neither today, so a
- * pass of theirs that outlives a lease is given up as a failure and may overlap the run that
- * takes the job over.
+ * A job that calls a provider once per row calls `renewJobLease(context)` before each call,
+ * outside any transaction, and stops when it returns false. `entry.deliver_device_commands` and
+ * `finance.reconcile_accounting_exports` do (Verified: entry `access-hardware.spec.ts` and
+ * finance `accounting-export.spec.ts`, "K-06 / ASYNC-06: ..."), so a pass of theirs keeps the job
+ * while it makes provider calls and sends nothing more once another runner holds it. Proposed, and
+ * not yet done by any registered job (pending, owners entry and finance): such a job also claims
+ * each row it sends with its own in-flight marker, checked when the outcome is recorded; without
+ * it, the one call in flight when a paused runner loses its lease may overlap the run that takes
+ * the job over.
  */
 export interface PeriodicJobLease {
   /**

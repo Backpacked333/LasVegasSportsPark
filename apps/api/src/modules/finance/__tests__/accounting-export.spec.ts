@@ -5,7 +5,10 @@ import { UnitOfWork, databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { LedgerService } from '../ledger/ledger.service';
 import { FakeAccountingProvider } from '../providers/fake-accounting.provider';
-import { RECONCILE_ACCOUNTING_JOB } from '../services/accounting/accounting-export.service';
+import {
+  AccountingExportService,
+  RECONCILE_ACCOUNTING_JOB,
+} from '../services/accounting/accounting-export.service';
 import { createObligationFixture } from '../testing/finance-fixtures';
 import { adult, financeTestApp, post, staff, type Actor } from './support';
 
@@ -355,6 +358,49 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     expect(
       (await t.http.get(`/v1/accounting-export-batches/${batch.id}`).set(gm.header)).body.status,
     ).toBe('accepted');
+  });
+
+  it('K-06 / ASYNC-06: the reconciliation job renews its lease before each provider call and leaves the rest to the run that holds the job', async () => {
+    const waiting = () =>
+      t.db
+        .selectFrom('accounting_export_batches')
+        .select(['id', 'status'])
+        .where('status', 'in', ['unknown', 'submitted'])
+        .execute();
+    expect(await waiting()).toEqual([]);
+    const first = await prepared((await dayWithEntries(4_100)).period);
+    const second = await prepared((await dayWithEntries(4_200)).period);
+    fake.scriptSubmissions('timeout_lost', 'timeout_lost');
+    expect((await submit(first)).body.status).toBe('unknown');
+    expect((await submit(second)).body.status).toBe('unknown');
+    const sentBefore = fake.submissions.length;
+    // A lease that renews for one batch (its status query and its resubmission), then reports
+    // another runner holding the job.
+    const aborts = new AbortController();
+    let renewals = 0;
+    const lease = {
+      signal: aborts.signal,
+      renew: async () => {
+        renewals += 1;
+        if (renewals <= 2) return true;
+        aborts.abort();
+        return false;
+      },
+    };
+    const result = await t.app
+      .get(AccountingExportService)
+      .reconcile({ now: t.clock.now(), batchSize: 50, lease });
+    expect(renewals).toBe(3);
+    expect(result.processed).toBe(1);
+    expect(fake.submissions.length).toBe(sentBefore + 1);
+    const after = await waiting();
+    expect(after).toHaveLength(1);
+    expect(after[0]?.status).toBe('unknown');
+    expect([first.id, second.id]).toContain(after[0]?.id);
+    // The run that holds the job reconciles the rest with the same key.
+    await t.runPeriodicJobs([RECONCILE_ACCOUNTING_JOB]);
+    expect(await waiting()).toEqual([]);
+    expect(fake.submissions.length).toBe(sentBefore + 2);
   });
 
   it('§4.7 invariant 5: the database exports an entry at most once and never edits or deletes an export line', async () => {

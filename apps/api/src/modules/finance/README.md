@@ -256,7 +256,9 @@ contribution's amount and status, never a player's payment or method.
   quote recorded. Once every registration the order made is canceled, the plan is held (MONEY-04):
   the first collection or notice that finds it records the hold on the plan (`hold` on
   `GET /installment-plans/{id}`, `0613`) and raises `finance.installment_registration_canceled`
-  once (finance operator). A held plan is never collected (the worker no longer selects it, a
+  once (finance operator); enrollment's own cancellation of the registration, with any accepted
+  consequence other than `none`, also raises `enrollment.cancellation_consequence_pending` for the
+  finance operator, plan or no plan. A held plan is never collected (the worker no longer selects it, a
   staff collection answers `INSTALLMENT_REGISTRATION_CANCELED`, and the database refuses an
   installment charge for it) and its payer is sent no installment notice. Resolving the exception
   neither lifts the hold nor raises it again; no command ends a hold yet: whether the remaining
@@ -378,8 +380,9 @@ session, starting a sale or adding a line are refused (`ACCESS_DENIED`,
 `details.code: CAPABILITY_DISABLED`); a tender settling an existing open sale, retiring, closing a
 session, voids, returns and reads are never gated (DEC-016), so a sale partly paid (a card tender
 cannot be voided) when the switch is turned off is still completed, returned, and its session and
-register closed through the API. The staff dashboard's sale page does not offer that yet: it
-hides the tender form whenever the switch is off (staff-client follow-up, not done).
+register closed through the API. The staff dashboard's sale page offers the tender form on an open
+sale whatever the switch, and hides only adding a line while it is off (`SalePage.test.tsx`
+"DEC-016 / CAPABILITIES-01: ...").
 
 | Method   | Path                                                                                                             | Who (action)                                                                    |
 | -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -475,7 +478,9 @@ outcome recording and reconciliation are never gated.
   unknown). The periodic job `finance.reconcile_accounting_exports` (every 60 s, failure owner
   finance operator) asks about `unknown` batches and `submitted` ones older than
   `FINANCE_ACCOUNTING_SUBMIT_STALE_SECONDS` (technical setting, default 300) and resubmits with
-  the same key when the connection has no record. Exceptions:
+  the same key when the connection has no record; it renews its lease (`renewJobLease`, K-06)
+  before each connection call and asks about nothing more once another runner holds the job
+  (ASYNC-06). Exceptions:
   `finance.accounting_export_unknown`, `_rejected`, `_conflict`. Every batch transition is
   audited, the move to `unknown` included (`finance.accounting_batch_unknown` with the error).
 - `ACCOUNTING_EXPORT_PORT` has only `FakeAccountingProvider` (success, rejection, timeout/unknown,

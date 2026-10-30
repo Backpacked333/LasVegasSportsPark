@@ -13,8 +13,8 @@ SPK-UX-002, SPK-UX-007, §4.12, DEC-016, DEC-080)
 
 **Migration range:** `packages/db/migrations/0800_entry_*.sql` … `0899` (this module uses `0800`,
 `0801` offline batch request fingerprint, `0802` departure records the visit's person, `0803`
-activity reference checks, `0804` release grant, `0805` access hardware, `0880` organization-scoped
-kernel keys)
+activity reference checks, `0804` release grant, `0805` access hardware, `0806` device registrant
+key, `0880` organization-scoped kernel keys)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`, `AUTHORITY_LOOKUP_PORT` for the online pickup
 check, `HouseholdsService`, `PeopleService`, `RelationshipAuthority.authoritiesOf` for pass
@@ -83,15 +83,15 @@ merged; with it, the whole entry suite (17 files, 122 tests) passes on PGlite an
 | `offline_sync_batches`    | Append-only: device, client batch id (unique per device), request fingerprint (SHA-256 of facility, snapshot and items, 0801), snapshot reference, time and age at receipt, maximum roster age in force, per-item results, counts that must add up, stale flag, exceptions, operation      |
 | `occupancy_snapshots`     | Append-only: facility day window, arrivals, departures, records on site, open from earlier days, reconciled flag, counted, verified occupancy, discrepancy                                                                                                                                 |
 
-Stage 3 (migrations `0804`, `0805`):
+Stage 3 (migrations `0804`, `0805`, `0806`):
 
-| Table / column                       | Purpose                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `release_records.authority_grant_id` | 0804: the identity access grant a verified online check relied on (composite key to `access_grants`); `NOT VALID` check so every new verified release names one (append-only rows before 0804 keep null)                                                                                                                                      |
-| `access_devices`                     | 0805: facility, kind `door/turnstile/gate/scanner`, name, provider device reference (unique in the organization, never reassigned), status `active → retired` (trigger `access_devices_guard`), health `online/offline/unknown` (default unknown), heartbeat timeout (> 0, null = not judged; no default), last heartbeat, revision           |
-| `access_policies`                    | 0805: device, holder kinds, pass statuses (`<@ {active}`), weekly schedule (facility-local), status `draft → active / retired`, `active → retired` (trigger `access_policies_guard`; content immutable), author, approver (`access_policies_four_eyes`), one active per device (partial unique index), revision                               |
-| `device_commands`                    | 0805: device, kind `revoke_credential` (names the pass) / `sync_policy` (policy snapshot, or none for deny-all), status `pending/delivered/failed/unknown/superseded` (trigger `device_commands_guard`), attempts, last error, settled by adapter or receipt, escalation exception; one revocation per device and pass (partial unique index) |
-| `visits.access_device_id`            | 0805: the registered device of an `access_control` arrival (composite key with the visit's facility; only access-control arrivals; immutable like the other arrival facts)                                                                                                                                                                    |
+| Table / column                       | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `release_records.authority_grant_id` | 0804: the identity access grant a verified online check relied on (composite key to `access_grants`); `NOT VALID` check so every new verified release names one (append-only rows before 0804 keep null)                                                                                                                                                                                                                                   |
+| `access_devices`                     | 0805: facility, kind `door/turnstile/gate/scanner`, name, provider device reference (unique in the organization, never reassigned), status `active → retired` (trigger `access_devices_guard`), health `online/offline/unknown` (default unknown), heartbeat timeout (> 0, null = not judged; no default), last heartbeat, revision; 0806: the registrant `(organization_id, registered_by_person_id)` references `persons` (INTEGRITY-07) |
+| `access_policies`                    | 0805: device, holder kinds, pass statuses (`<@ {active}`), weekly schedule (facility-local), status `draft → active / retired`, `active → retired` (trigger `access_policies_guard`; content immutable), author, approver (`access_policies_four_eyes`), one active per device (partial unique index), revision                                                                                                                            |
+| `device_commands`                    | 0805: device, kind `revoke_credential` (names the pass) / `sync_policy` (policy snapshot, or none for deny-all), status `pending/delivered/failed/unknown/superseded` (trigger `device_commands_guard`), attempts, last error, settled by adapter or receipt, escalation exception; one revocation per device and pass (partial unique index)                                                                                              |
+| `visits.access_device_id`            | 0805: the registered device of an `access_control` arrival (composite key with the visit's facility; only access-control arrivals; immutable like the other arrival facts)                                                                                                                                                                                                                                                                 |
 
 Every table carries `organization_id`; references use composite `(organization_id, …)` keys,
 including references into identity, catalog, scheduling and enrollment tables; batch references
@@ -270,7 +270,9 @@ waits `ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS`·2^(n−2) seconds, at most
 `ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS`; every pass reads the clock afresh, so a run whose passes
 take longer than the base delay can send a command a third time), and due commands are taken in
 turns per device (never-attempted first), so an unreachable device with any backlog never keeps
-another device's revocations from being sent and is not re-sent every pass (ASYNC-02); after
+another device's revocations from being sent and is not re-sent every pass (ASYNC-02); the job
+renews its lease (`renewJobLease`, K-06) before each command it sends and sends nothing more once
+another runner holds the job (ASYNC-06); after
 `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS` undelivered attempts (technical setting, default 3)
 one `entry.device_command_undelivered` exception is raised and resolved when the command is later
 delivered; a receipt settles a pending or unknown command once. Heartbeats mark a device online;

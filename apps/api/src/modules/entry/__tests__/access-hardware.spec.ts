@@ -9,6 +9,7 @@ import {
   FakeAccessControlProvider,
 } from '../providers/fake-access-control.provider';
 import { DeviceCommandQueue } from '../services/device-command-queue';
+import { DeviceDeliveryService } from '../services/device-delivery.service';
 import { createPassFixture } from '../testing/entry-fixtures';
 import {
   drainInbox,
@@ -24,6 +25,7 @@ import {
 
 const UNIQUE = '23505';
 const CHECK = '23514';
+const FOREIGN_KEY = '23503';
 const ACTOR = { kind: 'system', actorLabel: 'hardware-test' };
 const ALWAYS = [
   { days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], from: '00:00', to: '24:00' },
@@ -595,6 +597,45 @@ describe('ASYNC-02: device command delivery is fair across devices and backs off
     expect((await backlog()).every((c) => c.status === 'delivered')).toBe(true);
   });
 
+  it('K-06 / ASYNC-06: a pass renews its lease before each command it sends and sends nothing more once the job is held elsewhere', async () => {
+    await h.register(operator, { providerDeviceRef: 'lease-door', kind: 'door' });
+    await revokePasses(2);
+    const due = async () =>
+      t.db
+        .selectFrom('device_commands')
+        .select(['id', 'attempts'])
+        .where('organization_id', '=', t.organizationId)
+        .where('status', '=', 'pending')
+        .execute();
+    const pendingBefore = await due();
+    expect(pendingBefore.length).toBeGreaterThanOrEqual(3); // the deny-all and two revocations
+    const sendsBefore = h.fake().commandCalls.length;
+    // A lease that renews once, then reports another runner holding the job.
+    const aborts = new AbortController();
+    let renewals = 0;
+    const lease = {
+      signal: aborts.signal,
+      renew: async () => {
+        renewals += 1;
+        if (renewals === 1) return true;
+        aborts.abort();
+        return false;
+      },
+    };
+    const result = await t.app
+      .get(DeviceDeliveryService)
+      .deliverDue({ now: t.clock.now(), batchSize: 50, lease });
+    expect(h.fake().commandCalls.length).toBe(sendsBefore + 1);
+    expect(renewals).toBe(2);
+    expect(result).toEqual({ processed: 1, remaining: pendingBefore.length - 1 });
+    // What was not sent stays pending and never attempted, for the run that holds the job.
+    const left = await due();
+    expect(left).toHaveLength(pendingBefore.length - 1);
+    expect(left.every((c) => c.attempts === 0)).toBe(true);
+    await h.deliver();
+    expect(await due()).toHaveLength(0);
+  });
+
   it('the backoff is capped at ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS (300 s) however many attempts were made', async () => {
     const flaky = await h.register(operator, { providerDeviceRef: 'flaky-door', kind: 'door' });
     h.fake().scriptDevice('flaky-door', 'timeout');
@@ -707,7 +748,7 @@ describe('access events from devices (ENT-05, SPK-COND-004)', () => {
   });
 });
 
-describe('access hardware schema invariants (migration 0805)', () => {
+describe('access hardware schema invariants (migrations 0805, 0806)', () => {
   let t: TestApp;
   let author: string;
   let approver: string;
@@ -910,6 +951,20 @@ describe('access hardware schema invariants (migration 0805)', () => {
       CHECK,
     );
     await expectPgError(t.db.deleteFrom('access_devices').where('id', '=', id).execute(), '23001');
+  });
+
+  it('INTEGRITY-07 / §4.3 (0806): a device names a registrant of its own organization, or none', async () => {
+    await expectPgError(
+      t.db
+        .insertInto('access_devices')
+        .values(deviceRow({ registered_by_person_id: newId() }))
+        .execute(),
+      FOREIGN_KEY,
+    );
+    await t.db
+      .insertInto('access_devices')
+      .values(deviceRow({ registered_by_person_id: author }))
+      .execute();
   });
 
   it('commands: one revocation per device and pass, transitions follow DeviceCommandMachine', async () => {
