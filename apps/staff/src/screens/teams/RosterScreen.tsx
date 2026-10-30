@@ -5,9 +5,10 @@
  * removed today still appears on last week's match record; history adds pending and removed rows.
  * Adding a player is checked by the API against the rule set's restrictions and active
  * suspensions: ELIGIBILITY_FAILED lists every reason with who resolves it, and nothing is changed.
- * A concurrent roster edit answers STALE_REVISION and offers "Reload". Players are added by the
- * person reference on their record (the API has no person search); overriding an eligibility
- * failure is pending DEC-066 and not offered.
+ * A concurrent roster edit answers STALE_REVISION and offers "Reload". A player is found by name
+ * or contact through the staff person search (`GET /v1/people`, ID-02; names, kind and status
+ * only) or entered by the reference on their record; overriding an eligibility failure is
+ * pending DEC-066 and not offered.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -31,6 +32,7 @@ import { formatInstant, isoToLocalInput, localInputToIso } from '../../features/
 import { ROSTER_ELIGIBILITY, ROSTER_STATUS, humanizeCode } from '../../features/competition/labels';
 import { TeamsNav } from '../../features/competition/nav';
 import { PENDING } from '../../features/competition/pending';
+import { PersonSearchField } from '../../features/competition/PersonSearchField';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -209,7 +211,8 @@ function AddMember({ workspace }: { workspace: Workspace }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const submit = () => {
     const next: Record<string, string> = {};
-    if (!isRecordReference(person)) next.person = 'Enter the person reference from their record.';
+    if (!isRecordReference(person))
+      next.person = 'Find the player by name, or enter the reference from their record.';
     if (!status) next.status = 'Choose active, guest or substitute.';
     const number = jersey.trim() ? parseWholeNumber(jersey) : null;
     if (jersey.trim() && (number === null || number < 0 || number > 999))
@@ -246,12 +249,11 @@ function AddMember({ workspace }: { workspace: Workspace }) {
         submit();
       }}
     >
-      <TextField
-        label="Person reference"
+      <PersonSearchField
+        label="Player"
         required
         value={person}
         onChange={setPerson}
-        hint="The reference on the person's record. Person search is not available yet."
         error={errors.person}
       />
       <SelectField

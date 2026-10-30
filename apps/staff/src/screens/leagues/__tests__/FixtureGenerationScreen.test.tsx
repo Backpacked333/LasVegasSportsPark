@@ -14,6 +14,7 @@ import {
   division,
   fail,
   ok,
+  page,
   ruleSet,
   season,
   solverRun,
@@ -353,5 +354,138 @@ describe('SCR-S-09 FixtureSpecificationScreen and solver outcomes (SPK-FIX-004, 
     // The run keeps the rule-set version it ran under (SPK-FIX-004 input snapshot).
     expect(await screen.findByText('Indoor 6v6, version 1')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to the specification' })).toBeInTheDocument();
+  });
+});
+
+describe('SCR-S-09 saved specifications and facility choice (CMP-05, K-04)', () => {
+  const routes = {
+    ...TEAM_ROUTES,
+    'GET /divisions/{id}': ok(division({ facilityId: null })),
+    'GET /seasons/{id}': ok(season()),
+    'GET /team-entries': ok(entries),
+    'GET /resources': ok([]),
+  };
+
+  it('lists the division’s saved specifications with a link to each', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /divisions/{id}/fixture-specifications': ok({ items: [specification()] }),
+      },
+    });
+    render(app.at(`/leagues/divisions/${ID.division}/fixture-generation`));
+    const list = await screen.findByRole('list', { name: 'Saved specifications' });
+    expect(within(list).getByRole('link', { name: 'Division A round robin' })).toHaveAttribute(
+      'href',
+      `/leagues/fixture-specifications/${ID.spec}`,
+    );
+    expect(within(list).getByText(/2 teams · 1 games per team/)).toBeInTheDocument();
+  });
+
+  it('shows the empty state for a division without a specification', async () => {
+    const app = createTestApp({
+      routes: { ...routes, 'GET /divisions/{id}/fixture-specifications': ok({ items: [] }) },
+    });
+    render(app.at(`/leagues/divisions/${ID.division}/fixture-generation`));
+    expect(await screen.findByRole('heading', { name: 'No specification yet' })).toBeVisible();
+  });
+
+  it('offers only the facilities the directory marks in the staff member’s scope', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /divisions/{id}/fixture-specifications': ok({ items: [] }),
+        'GET /facilities': ok({
+          items: [
+            {
+              id: FACILITY_A,
+              slug: 'north',
+              name: 'North Park',
+              timezone: 'America/Los_Angeles',
+              status: 'active',
+              address: null,
+              inStaffScope: true,
+            },
+            {
+              id: '0192f1a0-0000-7000-8000-00000000fa09',
+              slug: 'east',
+              name: 'East Fields',
+              timezone: 'America/Los_Angeles',
+              status: 'active',
+              address: null,
+              inStaffScope: false,
+            },
+          ],
+        }),
+      },
+    });
+    render(app.at(`/leagues/divisions/${ID.division}/fixture-generation`));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'North Park' })).toBeVisible());
+    expect(screen.queryByRole('option', { name: 'East Fields' })).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/facilities')).toBe(true);
+  });
+});
+
+describe('SCR-S-09 earlier solver runs (CMP-05, SPK-FIX-004, SPK-AT-011)', () => {
+  it('lists earlier runs newest first in honest words, with Load more', async () => {
+    const app = createTestApp({
+      routes: {
+        ...specRoutes,
+        'GET /fixture-specifications/{id}/solver-runs': ok(
+          page(
+            [
+              solverRun({ id: ID.run, outcome: 'no_proposal_within_limit', proposal: null }),
+              solverRun({ id: ID.draft, outcome: 'feasible', dryRun: false }),
+            ],
+            'more-runs',
+          ),
+        ),
+      },
+    });
+    render(app.at(`/leagues/fixture-specifications/${ID.spec}`));
+    const list = await screen.findByRole('list', { name: 'Earlier runs' });
+    const items = within(list).getAllByRole('listitem');
+    expect(
+      within(items[0] as HTMLElement).getByText(
+        'No feasible proposal found within the search limit',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(items[0] as HTMLElement).getByText(/not proof that a schedule is impossible/),
+    ).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText('Feasible proposal')).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText(/not proven optimal/)).toBeInTheDocument();
+    expect(
+      within(items[1] as HTMLElement).getByText(/Generated fixtures and a draft/),
+    ).toBeVisible();
+    expect(within(items[0] as HTMLElement).getByRole('link')).toHaveAttribute(
+      'href',
+      `/leagues/solver-runs/${ID.run}`,
+    );
+    expect(screen.getByRole('button', { name: 'Load more runs' })).toBeVisible();
+  });
+
+  it('shows the empty state for a specification never run', async () => {
+    const app = createTestApp({
+      routes: { ...specRoutes, 'GET /fixture-specifications/{id}/solver-runs': ok(page([])) },
+    });
+    render(app.at(`/leagues/fixture-specifications/${ID.spec}`));
+    expect(await screen.findByRole('heading', { name: 'No runs yet' })).toBeVisible();
+  });
+
+  it('shows an unreadable run list as not available', async () => {
+    const denied = createTestApp({
+      routes: {
+        ...specRoutes,
+        'GET /fixture-specifications/{id}/solver-runs': fail(
+          403,
+          'ACCESS_DENIED',
+          'contact_support_or_request_access',
+        ),
+      },
+    });
+    render(denied.at(`/leagues/fixture-specifications/${ID.spec}`));
+    const panel = await screen.findByRole('region', { name: 'Earlier runs' });
+    expect(await within(panel).findByText('Not available')).toBeVisible();
   });
 });

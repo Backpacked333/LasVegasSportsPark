@@ -11,6 +11,7 @@ import {
   ID,
   created,
   division,
+  facilities,
   fail,
   ok,
   ruleSet,
@@ -39,6 +40,26 @@ describe('SCR-S-08 SeasonScreen (SPK-COMP-003)', () => {
     // DEC-048 approved combinations are pending: named, not invented.
     expect(screen.getByText(/depends on DEC-048/)).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Season screens' })).toBeInTheDocument();
+  });
+
+  it('names a division’s facility from the directory and links its tournament pools', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /divisions': ok([division({ facilityId: ID.facility })]),
+        'GET /facilities': ok(facilities()),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}`));
+    const list = await screen.findByRole('list', { name: 'Divisions' });
+    expect(await within(list).findByText(/· North Park/)).toBeInTheDocument();
+    expect(
+      within(list).getByRole('link', { name: 'Tournament pools of Division A' }),
+    ).toHaveAttribute('href', `/leagues/divisions/${ID.division}/pools`);
+    expect(screen.getByRole('link', { name: 'Result revisions' })).toHaveAttribute(
+      'href',
+      `/leagues/seasons/${ID.season}/results`,
+    );
   });
 
   it('opens the season with the expected revision and an idempotency key', async () => {

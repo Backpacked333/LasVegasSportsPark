@@ -4,12 +4,16 @@
  * outcomes, SPK-FIX-005 drafts only, SPK-AT-010, SPK-AT-011, SPK-UX-008). While the solver runs
  * the limit is shown (processing state); the outcome comes back as a recorded run. "Check only"
  * records the run without creating fixtures or a draft. A run that fails keeps the specification
- * (the input snapshot) so it can be run again. The solver run page shows a recorded run.
+ * (the input snapshot) so it can be run again. Earlier runs are listed newest first
+ * (`GET /v1/fixture-specifications/{id}/solver-runs`, CMP-05) with the outcome in the same honest
+ * words: "feasible" never reads as optimal and "none found within the limit" never as impossible.
+ * The solver run page shows a recorded run.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError, fieldErrorsOf } from '../../features/competition/CommandError';
@@ -20,10 +24,16 @@ import {
   TextField,
   parseWholeNumber,
 } from '../../features/competition/fields';
-import { formatDateOnly, shortRef } from '../../features/competition/format';
-import { FAIRNESS_PREFERENCE, weekdayName } from '../../features/competition/labels';
+import { formatDateOnly, formatInstant, shortRef } from '../../features/competition/format';
+import {
+  FAIRNESS_PREFERENCE,
+  SOLVER_OUTCOME,
+  SOLVER_STOPPED_BY,
+  weekdayName,
+} from '../../features/competition/labels';
 import { LeaguesNav } from '../../features/competition/nav';
 import { EntryName, useSeasonEntries } from '../../features/competition/names';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { SolverRunView } from './SolverRunView';
@@ -147,7 +157,7 @@ function GenerateForm({
   entries: ReadonlyMap<string, { teamId: string }>;
 }) {
   const generate = useApiCommand('post', '/fixture-specifications/{id}/generate', {
-    invalidate: keys('/seasons/{id}/fixtures'),
+    invalidate: keys('/seasons/{id}/fixtures', '/fixture-specifications/{id}/solver-runs'),
   });
   const [maxCandidates, setMaxCandidates] = useState('');
   const [seconds, setSeconds] = useState('');
@@ -263,6 +273,53 @@ function GenerateForm({
   );
 }
 
+/** Earlier runs of the specification, newest first (CMP-05, SPK-FIX-004, SPK-AT-011). */
+function EarlierRuns({ specificationId }: { specificationId: string }) {
+  const runs = useApiPages({
+    path: '/fixture-specifications/{id}/solver-runs',
+    request: { path: { id: specificationId }, query: { limit: 20 } },
+  });
+  return (
+    <section className="panel" aria-labelledby="earlier-runs-title">
+      <h3 id="earlier-runs-title">Earlier runs</h3>
+      <QueryBoundary
+        query={runs}
+        label="earlier runs"
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No runs yet',
+          description: 'Each check or generation from this specification is recorded here.',
+        }}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Earlier runs">
+            {items.map((run) => {
+              const outcome = SOLVER_OUTCOME[run.outcome];
+              return (
+                <li key={run.id}>
+                  <div className="row-text">
+                    <Link className="row-title" to={`/leagues/solver-runs/${run.id}`}>
+                      Run {shortRef(run.id)}, {formatInstant(run.finishedAt)}
+                    </Link>
+                    <StatusBadge tone={outcome.tone} label={outcome.label} />
+                    <span className="caption">
+                      {run.dryRun ? 'Check only' : 'Generated fixtures and a draft'} · search
+                      stopped because {SOLVER_STOPPED_BY[run.explanation.stoppedBy]} ·{' '}
+                      {run.explanation.candidatesTried} candidates tried
+                    </span>
+                    <span className="caption">{outcome.explanation}</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={runs} label="runs" />
+    </section>
+  );
+}
+
 export function FixtureSpecificationScreen() {
   const { specificationId = '' } = useParams();
   const spec = useApiQuery({
@@ -287,6 +344,7 @@ export function FixtureSpecificationScreen() {
             </p>
             <SpecificationSummary spec={data} entries={byId} />
             <GenerateForm spec={data} entries={byId} />
+            <EarlierRuns specificationId={data.id} />
           </>
         )}
       </QueryBoundary>

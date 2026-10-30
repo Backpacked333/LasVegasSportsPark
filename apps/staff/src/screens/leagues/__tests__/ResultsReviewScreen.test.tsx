@@ -15,10 +15,12 @@ import {
   ok,
   operation,
   page,
-  person,
+  personNames,
   resultRevision,
   reviewTask,
+  season,
   standings,
+  venue,
 } from '../../../features/competition/__tests__/fixtures';
 
 const official = resultRevision({
@@ -274,7 +276,7 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
     const app = createTestApp({
       routes: {
         ...routes([withCards]),
-        'GET /people/{id}': ok(person(ID.person, 'Robin', 'Reyes')),
+        'GET /person-names': personNames({ [ID.person]: ['Robin', 'Reyes', 'adult'] }),
         'POST /fixtures/{id}/results': created(correction),
       },
     });
@@ -420,7 +422,7 @@ describe('SCR-S-11 ResultsReviewQueueScreen (SPK-AT-014, SPK-FIX-002)', () => {
     expect(within(seasons).getByText('2 fixture(s) still unscheduled.')).toBeInTheDocument();
     expect(screen.queryByText('Unrelated')).toBeNull();
     expect(
-      screen.getByText('Submitted results across fixtures: not available yet'),
+      screen.getByRole('heading', { name: 'Submitted results awaiting publication' }),
     ).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/exceptions')?.query).toMatchObject({
       queue: 'league_manager',
@@ -435,5 +437,117 @@ describe('SCR-S-11 ResultsReviewQueueScreen (SPK-AT-014, SPK-FIX-002)', () => {
     });
     render(app.at('/leagues/results-review'));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+});
+
+describe('SCR-S-11 submitted results across fixtures (CMP-05, SPK-RESULT-001)', () => {
+  it('lists a season’s submitted revisions with their fixture and a link to publish', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /exceptions': ok(page([])),
+        'GET /seasons': ok([season()]),
+        'GET /seasons/{id}/result-revisions': ok(page([correction], 'more-results')),
+        'GET /fixtures/{id}': ok(fixtureDetail({ venue: venue() })),
+      },
+    });
+    render(app.at('/leagues/results-review'));
+    expect(await screen.findByText('Choose a season to see its submitted results.')).toBeVisible();
+    await user.selectOptions(await screen.findByLabelText(/^Season/), ID.season);
+    const list = await screen.findByRole('list', { name: 'Submitted results' });
+    expect(await within(list).findByText('Red v Blue, revision 2')).toBeInTheDocument();
+    expect(within(list).getByText('Result submitted')).toBeInTheDocument();
+    expect(within(list).getByText(/Red 2 – 2 Blue/)).toBeInTheDocument();
+    expect(within(list).getByRole('link', { name: 'Review and publish' })).toHaveAttribute(
+      'href',
+      `/leagues/fixtures/${ID.fixture}/results`,
+    );
+    const read = app.fake.requests.find((r) => r.route === '/seasons/{id}/result-revisions');
+    expect(read?.query.status).toBe('submitted');
+    expect(screen.getByRole('button', { name: 'Load more submitted results' })).toBeVisible();
+  });
+});
+
+describe('SCR-S-11 SeasonResultsScreen (CMP-05, SPK-RESULT-004)', () => {
+  const superseded = resultRevision({
+    status: 'superseded',
+    publishedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'L. Manager' },
+    publishedAt: '2026-11-08T09:00:00.000Z',
+    supersededAt: '2026-11-09T09:00:00.000Z',
+    supersededByRevisionId: ID.result2,
+  });
+  const replacing = resultRevision({
+    id: ID.result2,
+    revisionNo: 2,
+    status: 'official',
+    supersedesRevisionId: ID.result1,
+    reason: 'Scorer corrected after video review.',
+    publishedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'L. Manager' },
+    publishedAt: '2026-11-09T09:00:00.000Z',
+  });
+
+  it('keeps the history: superseded and correcting revisions with actor, reason and time', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': ok(page([replacing, superseded])),
+        'GET /fixtures/{id}': ok(fixtureDetail()),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/results`));
+    const list = await screen.findByRole('list', { name: 'Result revisions' });
+    const items = within(list).getAllByRole('listitem');
+    expect(within(items[0] as HTMLElement).getByText('Result official')).toBeInTheDocument();
+    expect(
+      within(items[0] as HTMLElement).getByText(/Scorer corrected after video review/),
+    ).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText('Result superseded')).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText(/Superseded .* by revision/)).toBeVisible();
+    expect(within(items[1] as HTMLElement).getByText(/published by L. Manager/)).toBeVisible();
+  });
+
+  it('filters by status, shows the empty state, and a refused read as not available', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': ok(page([])),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/results`));
+    expect(await screen.findByRole('heading', { name: 'No result revisions' })).toBeVisible();
+    await user.selectOptions(screen.getByLabelText('Result status'), 'submitted');
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some(
+          (r) => r.route === '/seasons/{id}/result-revisions' && r.query.status === 'submitted',
+        ),
+      ).toBe(true),
+    );
+
+    const denied = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': fail(
+          403,
+          'ACCESS_DENIED',
+          'contact_support_or_request_access',
+        ),
+      },
+    });
+    render(denied.at(`/leagues/seasons/${ID.season}/results`));
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
+  });
+
+  it('shows the API error code with Try again when the list fails', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /seasons/{id}': ok(season()),
+        'GET /seasons/{id}/result-revisions': fail(500, 'INTERNAL_ERROR', 'retry_later'),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/results`));
+    expect((await screen.findAllByText(/INTERNAL_ERROR/)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeVisible();
   });
 });

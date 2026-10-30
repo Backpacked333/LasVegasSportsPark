@@ -7,10 +7,12 @@
  * whether coach or family convenience is approved is pending DEC-049, so nothing is preset and a
  * convenience preference needs its approval reference. A specification error (dates outside the
  * season, games per team that do not match the teams and frequency) is the API's 400 answer.
+ * The division's saved specifications are listed first (`GET /v1/divisions/{id}/fixture-
+ * specifications`, CMP-05), so an existing one is opened and run again rather than retyped.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp } from '../../providers/AppProviders';
@@ -26,9 +28,9 @@ import {
   YesNoField,
   parseWholeNumber,
 } from '../../features/competition/fields';
+import { formatDateOnly } from '../../features/competition/format';
 import { FAIRNESS_PREFERENCE, WEEKDAYS } from '../../features/competition/labels';
 import { LeaguesNav } from '../../features/competition/nav';
-import { TeamName, useTeamNames } from '../../features/competition/names';
 import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -160,10 +162,10 @@ function SpecificationForm({ division, season }: { division: Division; season: S
   const apiErrors = fieldErrorsOf(create.error);
   const err = (key: string) => errors[key] ?? apiErrors[key];
 
-  const teamNames = useTeamNames((entries.data ?? []).map((entry) => entry.teamId));
+  // CMP-01: each entry carries its team's name, so no per-team read is needed.
   const teamOptions = (entries.data ?? []).map((entry) => ({
     value: entry.id,
-    label: teamNames.get(entry.teamId) ?? entry.id,
+    label: entry.teamName,
   }));
 
   const submit = () => {
@@ -276,9 +278,7 @@ function SpecificationForm({ division, season }: { division: Division; season: S
           {(data) => (
             <ul aria-label="Teams in this specification">
               {data.map((entry) => (
-                <li key={entry.id}>
-                  <TeamName teamId={entry.teamId} />
-                </li>
+                <li key={entry.id}>{entry.teamName}</li>
               ))}
             </ul>
           )}
@@ -545,6 +545,46 @@ function SpecificationForm({ division, season }: { division: Division; season: S
   );
 }
 
+/** SCR-S-09 "empty (no specification)": the division's saved specifications (CMP-05). */
+function DivisionSpecifications({ divisionId }: { divisionId: string }) {
+  const specifications = useApiQuery({
+    path: '/divisions/{id}/fixture-specifications',
+    request: { path: { id: divisionId } },
+  });
+  return (
+    <section className="panel" aria-labelledby="saved-specifications-title">
+      <h3 id="saved-specifications-title">Saved specifications</h3>
+      <QueryBoundary
+        query={specifications}
+        label="saved specifications"
+        isEmpty={(data) => data.items.length === 0}
+        empty={{
+          title: 'No specification yet',
+          description: 'Define the first fixture specification of this division below.',
+        }}
+      >
+        {(data) => (
+          <ul className="list" aria-label="Saved specifications">
+            {data.items.map((spec) => (
+              <li key={spec.id}>
+                <div className="row-text">
+                  <Link className="row-title" to={`/leagues/fixture-specifications/${spec.id}`}>
+                    {spec.name}
+                  </Link>
+                  <span className="caption">
+                    {spec.teamEntryIds.length} teams · {spec.gamesPerTeam} games per team ·{' '}
+                    {formatDateOnly(spec.startsOn)} to {formatDateOnly(spec.endsOn)}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+    </section>
+  );
+}
+
 export function FixtureGenerationScreen() {
   const { divisionId = '' } = useParams();
   const division = useApiQuery({ path: '/divisions/{id}', request: { path: { id: divisionId } } });
@@ -571,7 +611,10 @@ export function FixtureGenerationScreen() {
       >
         {(divisionData) =>
           season.data ? (
-            <SpecificationForm division={divisionData} season={season.data} />
+            <>
+              <DivisionSpecifications divisionId={divisionData.id} />
+              <SpecificationForm division={divisionData} season={season.data} />
+            </>
           ) : season.error ? (
             <CommandError error={season.error} onRetry={() => void season.refetch()} />
           ) : (

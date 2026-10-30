@@ -19,7 +19,6 @@ import { SelectField, TextAreaField } from '../../features/competition/fields';
 import { formatInstant, shortRef } from '../../features/competition/format';
 import { ENTRY_ELIGIBILITY, TEAM_ENTRY_STATUS } from '../../features/competition/labels';
 import { SeasonLinks, TeamsNav } from '../../features/competition/nav';
-import { TeamName } from '../../features/competition/names';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -195,7 +194,7 @@ function EntryRow({ entry, divisions }: { entry: TeamEntry; divisions: readonly 
     <li aria-labelledby={`entry-${entry.id}`}>
       <div className="row-text">
         <span className="row-title" id={`entry-${entry.id}`}>
-          <TeamName teamId={entry.teamId} />
+          {entry.teamName}
         </span>
         <span className="caption">
           Applied {formatInstant(entry.appliedAt)} ·{' '}

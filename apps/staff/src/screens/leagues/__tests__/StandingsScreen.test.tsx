@@ -1,7 +1,7 @@
 /**
  * SCR-S-13 Standings and brackets (SPK-RESULT-001 official results only, SPK-RESULT-003 versioned
  * rule set and tiebreak explanations, SPK-RESULT-004 / SPK-AT-014 nodes under review, bracket
- * progression, DEC-078 pending).
+ * progression; seeding and tournament pools are in PoolsScreen.test.tsx).
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -133,7 +133,9 @@ describe('SCR-S-13 brackets (SPK-COMP-001 bracket progression, SPK-AT-014)', () 
     expect(within(round2).getByText(/^Bye/)).toBeInTheDocument();
     expect(within(round2).getByText('Not published')).toBeInTheDocument();
     expect(within(round2).queryByText('Under review')).toBeNull();
-    expect(screen.getByText(/depends on DEC-078/)).toBeInTheDocument();
+    // Team names come with the node (CMP-01): no per-team read.
+    expect(within(round1).getByText('Red')).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/teams/{id}')).toHaveLength(0);
   });
 
   it('SCR-S-13: an acknowledged correction review keeps the node under review and offers no Publish', async () => {

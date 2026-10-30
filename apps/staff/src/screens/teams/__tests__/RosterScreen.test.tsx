@@ -6,12 +6,15 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, mePermissions } from '../../../testing/test-app';
 import {
   ID,
   eligibilityReason,
   fail,
   ok,
+  page,
+  personNames,
+  personSearchResult,
   ruleSet,
   season,
   teamEntry,
@@ -172,9 +175,11 @@ describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
     const form = screen.getByRole('form', { name: 'Add a player' });
     await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
     expect(
-      within(form).getByText('Enter the person reference from their record.'),
+      within(form).getByText('Find the player by name, or enter the reference from their record.'),
     ).toBeInTheDocument();
-    await user.type(within(form).getByLabelText(/^Person reference/), ID.child);
+    // Without identity.lookup_person the player is entered by reference (ID-02).
+    expect(within(form).getByText(/Person search is not available to your account/)).toBeVisible();
+    await user.type(within(form).getByLabelText(/^Player: person reference/), ID.child);
     await user.selectOptions(within(form).getByLabelText(/^Playing status/), 'substitute');
     await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
     expect(await within(form).findByText('Not eligible')).toBeInTheDocument();
@@ -189,7 +194,7 @@ describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
       changes: [{ action: 'add', personId: ID.child, status: 'substitute' }],
     });
     // The input is kept for the user to correct.
-    expect(within(form).getByLabelText(/^Person reference/)).toHaveValue(ID.child);
+    expect(within(form).getByLabelText(/^Player: person reference/)).toHaveValue(ID.child);
   });
 
   it('adds a player and states the effective date', async () => {
@@ -205,7 +210,7 @@ describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
     render(app.at(`/teams/entries/${ID.entryRed}/roster`));
     await user.click(await screen.findByRole('button', { name: 'Add a player' }));
     const form = screen.getByRole('form', { name: 'Add a player' });
-    await user.type(within(form).getByLabelText(/^Person reference/), ID.child);
+    await user.type(within(form).getByLabelText(/^Player: person reference/), ID.child);
     await user.selectOptions(within(form).getByLabelText(/^Playing status/), 'active');
     await user.type(within(form).getByLabelText('Jersey number'), '9');
     await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
@@ -286,5 +291,80 @@ describe('SCR-S-17 RosterScreen (SPK-COMP-005, SPK-CAP-004)', () => {
     render(app.at(`/teams/entries/${ID.entryRed}/roster`));
     expect(await screen.findByText('Not available')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add a player' })).toBeDisabled();
+  });
+});
+
+describe('SCR-S-17 adding a player found by person search (ID-02, SPK-IAM-002, §4.14)', () => {
+  const searchRoutes = {
+    ...routes,
+    'GET /me/permissions': mePermissions({ actions: ['identity.lookup_person'] }),
+    'GET /people': ok(page([personSearchResult(ID.child, 'Nia', 'Striker')], 'more-people')),
+    'GET /person-names': personNames({ [ID.child]: ['Nia', 'Striker', 'adult'] }),
+  };
+
+  it('finds the player by name, confirms the choice by name and adds with that reference', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...searchRoutes,
+        'POST /team-entries/{id}/roster': ok(
+          roster([member({ personId: ID.child, displayName: 'Nia Striker' })]),
+        ),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(await screen.findByRole('button', { name: 'Add a player' }));
+    const form = screen.getByRole('form', { name: 'Add a player' });
+    await user.type(await within(form).findByLabelText(/^Player: find by name/), 'Nia');
+    await user.click(within(form).getByRole('button', { name: 'Search' }));
+    const results = await within(form).findByRole('list', { name: /People matching/ });
+    // Names, kind and status only; never a date of birth or contact.
+    expect(within(results).getByText('Nia Striker')).toBeInTheDocument();
+    expect(form.textContent).not.toMatch(/@|\d{4}-\d{2}-\d{2}/);
+    // More matches exist: nothing is silently cut off.
+    expect(within(form).getByRole('button', { name: 'Load more people' })).toBeVisible();
+    await user.click(within(results).getByRole('button', { name: 'Choose Nia Striker as player' }));
+    expect(await within(form).findByTestId('chosen-person')).toHaveTextContent('Nia Striker');
+    await user.selectOptions(within(form).getByLabelText(/^Playing status/), 'active');
+    await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+        expectedRevision: workspace.entry.revision,
+        changes: [{ action: 'add', personId: ID.child, status: 'active' }],
+      }),
+    );
+    // The search text never reaches the page address.
+    expect(window.location.href).not.toContain('Nia');
+  });
+
+  it('lets the player be changed after choosing, and entered by reference instead', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: searchRoutes });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(await screen.findByRole('button', { name: 'Add a player' }));
+    const form = screen.getByRole('form', { name: 'Add a player' });
+    await user.click(
+      await within(form).findByRole('button', { name: 'Enter a reference instead' }),
+    );
+    await user.type(within(form).getByLabelText(/^Player: person reference/), ID.child);
+    expect(await within(form).findByTestId('reference-preview')).toHaveTextContent('Nia Striker');
+    await user.click(within(form).getByRole('button', { name: 'Find by name instead' }));
+    expect(within(form).getByTestId('chosen-person')).toHaveTextContent('Nia Striker');
+    await user.click(within(form).getByRole('button', { name: 'Change player' }));
+    expect(within(form).getByLabelText(/^Player: find by name/)).toHaveValue('');
+  });
+
+  it('names a reference the viewer may not view as not available, never more', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { ...routes, 'GET /person-names': personNames({}) },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(await screen.findByRole('button', { name: 'Add a player' }));
+    const form = screen.getByRole('form', { name: 'Add a player' });
+    await user.type(within(form).getByLabelText(/^Player: person reference/), ID.child);
+    expect(await within(form).findByTestId('reference-preview')).toHaveTextContent(
+      'Person not available to you',
+    );
   });
 });
