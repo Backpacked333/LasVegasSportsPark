@@ -289,8 +289,10 @@ PostgreSQL) unless marked **proposed** or **pending**.
 
 - `GET /v1/enrollments/{id}/transfer-preview` (read only). Cancel and transfer bind the previewed
   consequence: `acceptedConsequence` must match the current one (`CONSEQUENCE_ACCEPTANCE_REQUIRED`,
-  `CONSEQUENCE_CHANGED`); `commit: false` and `acceptConsequence` are deprecated.
-  `__tests__/transfer-consequence.spec.ts`, `registration-commands.spec.ts`.
+  `CONSEQUENCE_CHANGED`); `commit: false` and `acceptConsequence` are deprecated. A target the
+  public catalog does not show (draft, unpublished) answers protected NOT_FOUND to anyone but staff
+  who transfer at its facility, before any of its facts are computed (§4.10, as registration
+  options do). `__tests__/transfer-consequence.spec.ts`, `registration-commands.spec.ts`.
 - `POST /v1/waitlist-entries/{id}/offer` (program administration): offers the place to the next in
   queue only (`NOT_NEXT_IN_QUEUE` names who is), `CAPACITY_UNAVAILABLE` without a free place;
   the same offer payload as the generator.

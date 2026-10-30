@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   EnrollmentMachine,
+  PUBLIC_PUBLICATION_STATES,
   SessionBookingMachine,
   errors,
   newId,
@@ -1182,6 +1184,30 @@ export class EnrollmentsService implements EnrollmentPort {
     );
     if (targetOfferingId === row.offering_id) {
       throw errors.validation('The target offering must differ from the current one.');
+    }
+    // §4.10/§4.14: a customer moves only into an offering the public catalog shows. An unpublished
+    // target answers NOT_FOUND before any of its facts (name, dates, price, capacity, waitlist)
+    // are computed, as registration options do; staff who may transfer at the target's facility
+    // on their role see it.
+    const target = await this.evaluator
+      .snapshot(trx, organizationId, targetOfferingId)
+      .catch((error: unknown) => {
+        if (DomainError.is(error) && error.code === 'NOT_FOUND') {
+          throw errors.protectedNotFound('offering');
+        }
+        throw error;
+      });
+    if (!PUBLIC_PUBLICATION_STATES.includes(target.offering.publicationState)) {
+      const staffMayTransfer =
+        isStaffLike(principal) &&
+        (
+          await this.authorization.decide(principal, EnrollmentActions.transferEnrollment, {
+            type: 'enrollment',
+            organizationId,
+            facilityId: target.offering.facilityId,
+          })
+        ).allowed;
+      if (!staffMayTransfer) throw errors.protectedNotFound('offering');
     }
   }
 
