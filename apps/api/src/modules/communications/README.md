@@ -300,10 +300,15 @@ channel approval and the essential/promotional split (DEC-012, DEC-062), the rem
   leave one active row on PGlite and PostgreSQL), list and revoke; the token is never returned,
   logged, audited or put in an event (`tokenHint`); push fans out to every active device and never
   to a revoked one; no device → `NO_ADDRESS` without a front-desk exception, the in-app notice is
-  delivered; `identity.account_relinked` revokes the account's devices (`account_relinked`,
-  SPK-AT-025, replay-safe); the database refuses two active registrations of one token and
-  inconsistent token/status/revocation columns; push, email and SMS fakes are in the integration
-  register (DEC-020).
+  delivered; `identity.account_relinked` revokes the account's devices last registered or
+  refreshed at or before the relink instant, the event's `occurredAt` (`account_relinked`,
+  SPK-AT-025, §4.12, replay-safe; the audit records the instant). A device the recovered sign-in
+  registers or refreshes before a late follow-up runs stays active. Not covered: a registration by
+  the old sign-in whose request was authenticated before the relink committed, but whose
+  transaction is stamped after the relink instant, also stays active (a window of milliseconds).
+  The database refuses two active registrations of one token and inconsistent
+  token/status/revocation columns; push, email and SMS fakes are in the integration register
+  (DEC-020).
 - **COM-02 retry, names, inbox revision — verified** (`__tests__/delivery-retry.spec.ts`): a failed
   external attempt is retried as a new queued attempt (the failed row untouched, audited with the
   reason, delivered by the next worker pass); front desk is refused; a second retry, an `unknown`, a
