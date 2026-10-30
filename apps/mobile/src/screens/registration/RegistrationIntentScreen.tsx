@@ -22,8 +22,10 @@
  *   uses the team's invitation.
  * A Package G intent whose capability switch is off reads "turned off" (DEC-016, DEC-072,
  * DEC-074, DEC-076, DEC-077, DEC-082), and a command refused with CAPABILITY_DISABLED shows the
- * same state. Until `GET /v1/me/permissions` answers, such an intent is not usable (never a
- * guess); a failed read shows its code and "Try again".
+ * same state. The registration options list such an intent under `unavailableIntents` with its
+ * reason instead of `availableIntents` (CAPABILITIES-07): it is shown turned off whatever the
+ * permission view says. Until `GET /v1/me/permissions` answers, a gated intent is not usable
+ * (never a guess); a failed read shows its code and "Try again".
  *
  * The API checks again on every line (PARTICIPANT_AUTHORITY_REQUIRED, eligibility reasons on the
  * line, DUPLICATE_ENTITLEMENT without revealing who else registered, SPK-AT-004).
@@ -103,12 +105,19 @@ function IntentChooser({ offering }: { offering: Offering }) {
     // Only once everyone's name is known: never ask about a partial household.
     me.data !== undefined && !namesLoading && namesError === null,
   );
-  const intents = options.data?.availableIntents ?? [];
+  const available = options.data?.availableIntents ?? [];
+  /** CAPABILITIES-07: what the offering takes but cannot be used now, as the API reports it. */
+  const reportedOff = new Map(
+    (options.data?.unavailableIntents ?? []).map((u) => [u.intent, u.capability] as const),
+  );
+  const intents = [...available, ...[...reportedOff.keys()].filter((i) => !available.includes(i))];
   /**
    * DEC-016: whether an intent's switch is on. `undefined` while `GET /me/permissions` has not
-   * answered: such an intent is not usable yet (never a guess either way).
+   * answered: such an intent is not usable yet (never a guess either way). An intent the API
+   * reports unavailable is off, whatever the permission view says.
    */
   const switchOf = (intent: RegistrationIntent): boolean | undefined => {
+    if (reportedOff.has(intent)) return false;
     const capability = INTENT_CAPABILITY[intent];
     return capability ? permissions.isCapabilityEnabled(capability) : true;
   };
@@ -253,7 +262,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
           <View accessibilityRole="radiogroup">
             {intents.map((option) => {
               const optionHandling = INTENT_HANDLING[option];
-              const capability = INTENT_CAPABILITY[option];
+              const capability = reportedOff.get(option) ?? INTENT_CAPABILITY[option];
               const off = turnedOff(option);
               const unknown = switchOf(option) === undefined;
               const usable = switchKnownOn(option) && carried(option);

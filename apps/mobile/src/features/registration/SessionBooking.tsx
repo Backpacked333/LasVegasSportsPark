@@ -13,11 +13,13 @@
  *   reports it on, and the API checks every command again (CAPABILITY_DISABLED reads turned off).
  *
  * Money: a booking is offered here only when it owes nothing (the offering's price from the API
- * owes nothing, or a package or membership credit pays for it). The API has no customer command
- * to pay for a single priced session (reported): such a booking stays pending until the front
- * desk takes the payment, so the app does not start one. Whatever the API answers is shown as it
- * is: "Booked" only for a booking the API confirmed; a pending one reads "Booking pending" with
- * the server's hold expiry, never as booked.
+ * owes nothing, or a package or membership credit pays for it). No payment step exists for a
+ * single priced session or trial, for the app or the front desk: the API refuses such a booking
+ * with 409 RESOURCE_CONFLICT `SESSION_PAYMENT_UNAVAILABLE` before anything is held (GAPS-TRIAGE-01;
+ * the payment rules are pending POL-045 / DEC-082 for pickup and DEC-003 for trials), so the app
+ * does not start one. Whatever the API answers is shown as it is: "Booked" only for a booking the
+ * API confirmed; a pending one recorded earlier reads "Booking pending" with the server's hold
+ * expiry, never as booked.
  *
  * States: loading (sessions, credits); empty (no upcoming session); ready; validation failure
  * (the API's eligibility reasons, missing forms, no capacity, duplicate booking); permission

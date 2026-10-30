@@ -562,6 +562,7 @@ export function registrationOptions(
   return {
     offeringId: IDS.offering,
     availableIntents: ['youth', 'makeup'],
+    unavailableIntents: [],
     seasonId: null,
     participants: [IDS.parent, IDS.childA, IDS.childB].map((personId) => ({
       personId,

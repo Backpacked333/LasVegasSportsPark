@@ -19,16 +19,20 @@
  *   applies the limit when a session is booked (MEMBERSHIP_SESSIONS_USED).
  * - Cancel or transfer: SCR-S-27, with its previewed consequence.
  *
- * The API has no staff read of a membership's term dates, its usage per period or earlier
- * suspensions (only the customer's `GET /v1/me/memberships`), so this page lists the suspensions
- * recorded here and says what it cannot show. Renewal and bookings need the `memberships` switch
- * (DEC-016, DEC-072); member pricing is not built (POL-038, DEC-007).
+ * Every suspension of the membership is listed, newest first, from
+ * `GET /v1/enrollments/{id}/membership-suspensions` (GAPS-TRIAGE-02; the suspension commands'
+ * authority, "Load more" for older ones), with the revision ending one needs, and read again after
+ * a suspension is made or ended. The API has no staff read of a membership's term dates or its
+ * usage per period (only the customer's `GET /v1/me/memberships`), so the page says it cannot show
+ * them. Renewal and bookings need the `memberships` switch (DEC-016, DEC-072); member pricing is
+ * not built (POL-038, DEC-007).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../../api/useApiCommand';
+import { useApiPages } from '../../../api/useApiPages';
 import { useApiQuery } from '../../../api/useApiQuery';
 import {
   emptyLocal,
@@ -41,6 +45,7 @@ import { Button } from '../../../ui/Button';
 import { CommandSuccess } from '../../../ui/CommandFeedback';
 import { Facts, SelectField, TextAreaField } from '../../../ui/FormFields';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
+import { LoadMore } from '../../../ui/LoadMore';
 import { isUuid } from '../../../ui/RecordRef';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
@@ -64,6 +69,8 @@ type Suspension = Schema<'MembershipSuspension'>;
 type SessionBooking = Schema<'SessionBooking'>;
 
 const ENROLLMENT_KEY = ['api', '/enrollments/{id}'] as const;
+/** Invalidated after a suspension is made or ended (GAPS-TRIAGE-02). */
+const SUSPENSIONS_KEY = ['api', '/enrollments/{id}/membership-suspensions'] as const;
 
 function EndSuspension({
   suspension,
@@ -78,7 +85,9 @@ function EndSuspension({
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
-  const end = useApiCommand('post', '/membership-suspensions/{id}/end');
+  const end = useApiCommand('post', '/membership-suspensions/{id}/end', {
+    invalidate: [SUSPENSIONS_KEY],
+  });
   const label = `the suspension from ${formatInstant(suspension.from, zone)}`;
   if (suspension.status !== 'active') return null;
   if (!open) {
@@ -140,6 +149,32 @@ function EndSuspension({
   );
 }
 
+function SuspensionItem({
+  suspension: s,
+  zone,
+  onEnded,
+}: {
+  suspension: Suspension;
+  zone: string | null;
+  onEnded: (ended: Suspension) => void;
+}) {
+  return (
+    <li>
+      <div className="row-text">
+        <span>
+          <StatusBadge {...SUSPENSION_STATUS[s.status]} /> From {formatInstant(s.from, zone)}
+          {s.until ? ` until ${formatInstant(s.until, zone)}` : ' until ended'}
+        </span>
+        <span className="caption">
+          {s.reason}
+          {s.endedAt ? `. Ended ${formatInstant(s.endedAt, zone)}: ${s.endedReason ?? ''}` : ''}
+        </span>
+      </div>
+      <EndSuspension suspension={s} zone={zone} onEnded={onEnded} />
+    </li>
+  );
+}
+
 function Suspensions({ enrollment, zone }: { enrollment: Enrollment; zone: string | null }) {
   const { online } = useApp();
   const [recorded, setRecorded] = useState<Suspension[]>([]);
@@ -148,14 +183,32 @@ function Suspensions({ enrollment, zone }: { enrollment: Enrollment; zone: strin
   const [reason, setReason] = useState('');
   const [attempted, setAttempted] = useState(false);
   const [local, setLocal] = useState<Record<string, string>>({});
-  const suspend = useApiCommand('post', '/enrollments/{id}/membership-suspensions');
+  const suspend = useApiCommand('post', '/enrollments/{id}/membership-suspensions', {
+    invalidate: [SUSPENSIONS_KEY],
+  });
   const allowed = useActionAllowed(ACTIONS.manageSuspension, enrollment.offering?.facilityId);
+  const listed = useApiPages({
+    path: '/enrollments/{id}/membership-suspensions',
+    request: { path: { id: enrollment.id } },
+    enabled: allowed,
+  });
   const shownZone = zone ?? 'UTC';
   if (!allowed) {
     return <NotAvailableToYou what="Suspending memberships" action={ACTIONS.manageSuspension} />;
   }
   const upsert = (s: Suspension) =>
-    setRecorded((list) => [...list.filter((x) => x.id !== s.id), s]);
+    setRecorded((list) => [s, ...list.filter((x) => x.id !== s.id)]);
+  /** The API's list, with the answers of commands made here until it is read again. */
+  const shown = (items: readonly Suspension[]): Suspension[] => {
+    const known = new Set(items.map((s) => s.id));
+    return [
+      ...recorded.filter((r) => !known.has(r.id)),
+      ...items.map((s) => {
+        const mine = recorded.find((r) => r.id === s.id);
+        return mine && mine.revision > s.revision ? mine : s;
+      }),
+    ];
+  };
   const serverPath = validationPath(suspend.error);
   const submit = () => {
     setAttempted(true);
@@ -191,32 +244,29 @@ function Suspensions({ enrollment, zone }: { enrollment: Enrollment; zone: strin
   };
   return (
     <>
-      <p className="caption">
-        Suspensions recorded before this page was opened cannot be listed here: the API has no staff
-        read of a membership&apos;s suspensions.
-      </p>
-      {recorded.length > 0 ? (
+      <QueryBoundary
+        query={listed}
+        label="suspensions"
+        isEmpty={(items) => shown(items).length === 0}
+        empty={{ title: 'No suspensions', description: 'This membership was never suspended.' }}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Suspensions of this membership">
+            {shown(items).map((s) => (
+              <SuspensionItem key={s.id} suspension={s} zone={zone} onEnded={upsert} />
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      {listed.data === undefined && recorded.length > 0 ? (
+        // The list could not be read (yet): what was done here is still shown and can be ended.
         <ul className="list" aria-label="Suspensions recorded here">
           {recorded.map((s) => (
-            <li key={s.id}>
-              <div className="row-text">
-                <span>
-                  <StatusBadge {...SUSPENSION_STATUS[s.status]} /> From{' '}
-                  {formatInstant(s.from, zone)}
-                  {s.until ? ` until ${formatInstant(s.until, zone)}` : ' until ended'}
-                </span>
-                <span className="caption">
-                  {s.reason}
-                  {s.endedAt
-                    ? `. Ended ${formatInstant(s.endedAt, zone)}: ${s.endedReason ?? ''}`
-                    : ''}
-                </span>
-              </div>
-              <EndSuspension suspension={s} zone={zone} onEnded={upsert} />
-            </li>
+            <SuspensionItem key={s.id} suspension={s} zone={zone} onEnded={upsert} />
           ))}
         </ul>
       ) : null}
+      <LoadMore pages={listed} label="suspensions" />
       {enrollment.status === 'confirmed' ? (
         <form
           className="pg-form"
@@ -476,9 +526,9 @@ function Detail({ enrollment }: { enrollment: Enrollment }) {
         ]}
       />
       <p className="caption">
-        The term dates, the count used against each period&apos;s limit and earlier suspensions are
-        not readable from the staff API (only the customer&apos;s own view has them), so they are
-        not shown here; the sessions booked with the membership are listed below.
+        The term dates and the count used against each period&apos;s limit are not readable from the
+        staff API (only the customer&apos;s own view has them), so they are not shown here; the
+        sessions booked with the membership and its suspensions are listed below.
       </p>
       <section className="pg-panel" aria-labelledby="member-includes">
         <h4 id="member-includes">What it includes</h4>

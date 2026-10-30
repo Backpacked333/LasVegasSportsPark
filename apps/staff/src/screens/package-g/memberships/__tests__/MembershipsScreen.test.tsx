@@ -55,6 +55,7 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
     'GET /enrollments': page([enrollment()]),
     'GET /enrollments/{id}': ok(enrollment()),
     'GET /session-bookings': ok([]),
+    'GET /enrollments/{id}/membership-suspensions': page([]),
     ...extra,
   };
 }
@@ -142,7 +143,9 @@ describe('SCR-S-53 Memberships', () => {
     expect(within(form).getByText('Enter a date and a time.')).toBeInTheDocument();
     expect(within(form).getByText('A reason is required; it is audited.')).toBeInTheDocument();
     expect(
-      app.fake.requests.some((r) => r.route === '/enrollments/{id}/membership-suspensions'),
+      app.fake.requests.some(
+        (r) => r.method === 'POST' && r.route === '/enrollments/{id}/membership-suspensions',
+      ),
     ).toBe(false);
     setLocal(
       within(form).getByRole('group', { name: 'Suspended from (America/Los_Angeles)' }),
@@ -151,12 +154,14 @@ describe('SCR-S-53 Memberships', () => {
     );
     await user.type(within(form).getByLabelText(/^Reason for suspending/), 'Injury');
     await user.click(within(form).getByRole('button', { name: 'Suspend the membership' }));
-    const recorded = await screen.findByRole('list', { name: 'Suspensions recorded here' });
+    const recorded = await screen.findByRole('list', { name: 'Suspensions of this membership' });
     expect(
       within(recorded).getByText(/From Tue, Nov 10, 00:00 PST until ended/),
     ).toBeInTheDocument();
     expect(
-      app.fake.requests.find((r) => r.route === '/enrollments/{id}/membership-suspensions')?.body,
+      app.fake.requests.find(
+        (r) => r.method === 'POST' && r.route === '/enrollments/{id}/membership-suspensions',
+      )?.body,
     ).toEqual({
       from: '2026-11-10T08:00:00.000Z',
       reason: 'Injury',
@@ -170,6 +175,36 @@ describe('SCR-S-53 Memberships', () => {
     const call = app.fake.requests.find((r) => r.route === '/membership-suspensions/{id}/end');
     expect(call?.params.id).toBe(SUSPENSION_ID);
     expect(call?.body).toEqual({ reason: 'Recovered', expectedRevision: 1 });
+  });
+
+  it('GAPS-TRIAGE-02 / §4.9: an open-ended suspension recorded earlier is listed and ended with its revision', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}/membership-suspensions': page([
+          suspension({ reason: 'Travel', revision: 2 }),
+        ]),
+        'POST /membership-suspensions/{id}/end': ok(
+          suspension({
+            reason: 'Travel',
+            status: 'ended',
+            endedAt: '2026-10-24T12:00:00.000Z',
+            endedReason: 'Back',
+            revision: 3,
+          }),
+        ),
+      }),
+    });
+    render(app.at(DETAIL));
+    const listed = await screen.findByRole('list', { name: 'Suspensions of this membership' });
+    expect(within(listed).getByText(/From Tue, Nov 10, 00:00 PST until ended/)).toBeInTheDocument();
+    await user.click(within(listed).getByRole('button', { name: /^End the suspension from/ }));
+    const end = within(listed).getByRole('form', { name: /^End the suspension from/ });
+    await user.type(within(end).getByLabelText(/^Reason for ending the suspension/), 'Back');
+    await user.click(within(end).getByRole('button', { name: 'End the suspension' }));
+    await waitFor(() => expect(within(listed).getByText('ended')).toBeInTheDocument());
+    const call = app.fake.requests.find((r) => r.route === '/membership-suspensions/{id}/end');
+    expect(call?.body).toEqual({ reason: 'Back', expectedRevision: 2 });
   });
 
   it('SUSPENSION_OVERLAP: an overlapping period is refused with its code and the input kept', async () => {
@@ -416,7 +451,7 @@ describe('SCR-S-53 Memberships', () => {
       app.fake.requests.find((r) => r.route === '/session-bookings' && r.method === 'GET')?.query,
     ).toEqual({ participantPersonId: MEMBER_ID });
     expect(
-      screen.getByText(/the count used against each period's limit and earlier suspensions/),
+      screen.getByText(/the count used against each period's limit are not readable/),
     ).toBeInTheDocument();
   });
 
@@ -459,7 +494,9 @@ describe('SCR-S-53 Memberships', () => {
     expect(within(until).getByRole('alert')).toHaveTextContent('Enter a date and a time.');
     expect(within(until).getByLabelText('Time')).toHaveAttribute('aria-invalid', 'true');
     expect(
-      app.fake.requests.some((r) => r.route === '/enrollments/{id}/membership-suspensions'),
+      app.fake.requests.some(
+        (r) => r.method === 'POST' && r.route === '/enrollments/{id}/membership-suspensions',
+      ),
     ).toBe(false);
   });
 
@@ -488,10 +525,10 @@ describe('SCR-S-53 Memberships', () => {
     expect(within(unknown).getByText('Outcome not known yet')).toBeInTheDocument();
     await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
     expect(
-      await screen.findByRole('list', { name: 'Suspensions recorded here' }),
+      await screen.findByRole('list', { name: 'Suspensions of this membership' }),
     ).toBeInTheDocument();
     const [first, second] = app.fake.requests.filter(
-      (r) => r.route === '/enrollments/{id}/membership-suspensions',
+      (r) => r.method === 'POST' && r.route === '/enrollments/{id}/membership-suspensions',
     );
     expect(second?.body).toEqual({ from: '2026-11-10T08:00:00.000Z', reason: 'Injury' });
     expect(second?.body).toEqual(first?.body);

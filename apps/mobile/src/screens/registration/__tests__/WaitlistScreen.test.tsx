@@ -26,6 +26,7 @@ import {
   waitlistEntry,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
+import { mePermissions } from '../../../testing/test-app';
 import { WaitlistScreen } from '../WaitlistScreen';
 import { WaitlistsScreen } from '../WaitlistsScreen';
 
@@ -189,6 +190,28 @@ describe('SCR-C-16 WaitlistScreen', () => {
     ).toEqual({
       expectedRevision: 4,
     });
+  });
+
+  it('CAPABILITIES-03 / DEC-082: an offer of a pickup seat cannot be accepted while pickup sessions are turned off; declining stays available', async () => {
+    const pickupOffered = waitlistEntry({ ...OFFERED, intent: 'pickup' });
+    const app = renderEntry({
+      routes: routes({
+        'GET /waitlist-entries/{id}': { status: 200, body: pickupOffered },
+        'GET /me/permissions': mePermissions(),
+        'POST /waitlist-offers/{id}/decline': { status: 200, body: offer({ status: 'declined' }) },
+      }),
+    });
+    expect(await screen.findByLabelText('Pickup sessions turned off')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Accept the place' })).toBeDisabled();
+    const decline = screen.getByRole('button', { name: 'Decline the offer' });
+    expect(decline).not.toBeDisabled();
+    await act(async () => {
+      fireEvent.press(decline);
+    });
+    expect(app.fake.requests.some((r) => r.route === '/waitlist-offers/{id}/accept')).toBe(false);
+    expect(
+      app.fake.requests.find((r) => r.route === '/waitlist-offers/{id}/decline')?.body,
+    ).toEqual({ expectedRevision: 4 });
   });
 
   it('offline: the offer stays with its expiry and accepting is disabled', async () => {

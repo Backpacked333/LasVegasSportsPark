@@ -10,20 +10,27 @@
  * Offer duration and priority are POL-006 / DEC-006 (Product and operations): the app shows only
  * the server's expiry, never a duration of its own.
  *
+ * A waitlist for a Package G intent (pickup sessions, memberships, session packages) follows its
+ * capability switch (CAPABILITIES-03, DEC-016): while `GET /v1/me/permissions` reports it off,
+ * an open offer shows "turned off" and cannot be accepted (the API refuses with
+ * CAPABILITY_DISABLED and keeps the offer open); declining and leaving stay available.
+ *
  * States: loading; ready; validation failure (no longer eligible, forms missing); permission
  * restriction (an entry the account may not see is "not available"); stale (offer expired or
  * already accepted: reload); offline (offer shown with its expiry, accept disabled); processing
  * (accepting); success (held basket).
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
+import { CAPABILITY_PRESENTATION, type ApiError, type Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { formatInstant } from '../../features/registration/format';
+import { INTENT_CAPABILITY } from '../../features/registration/intents';
 import { useParticipantNames } from '../../features/registration/participants';
 import { MY_BASKETS_KEY, MY_WAITLIST_KEY } from '../../features/registration/in-progress';
 import { param, registrationRoutes } from '../../features/registration/routes';
@@ -38,6 +45,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing } from '../../ui/theme';
 
@@ -70,6 +78,13 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
   const decline = useApiCommand('post', '/waitlist-offers/{id}/decline', { invalidate });
   const withdraw = useApiCommand('post', '/waitlist-entries/{id}/withdraw', { invalidate });
   const offer = openOffer(entry);
+  const permissions = usePermissions();
+  /** CAPABILITIES-03: the switch the entry's intent sits behind, when it is reported off. */
+  const capability = INTENT_CAPABILITY[entry.intent];
+  const switchedOff =
+    capability !== undefined && permissions.isCapabilityEnabled(capability) === false
+      ? CAPABILITY_PRESENTATION[capability]
+      : null;
 
   const acceptOffer = async () => {
     if (!offer) return;
@@ -127,12 +142,21 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
             onLapsed={refetch}
             testID="waitlist-offer"
           />
+          {switchedOff ? (
+            <StateView
+              variant="turned-off"
+              subject={switchedOff.label}
+              decisions={switchedOff.decisions}
+              owner={switchedOff.owner}
+              stillAvailable="The place stays held until the offer expires; declining and leaving the waitlist stay available."
+            />
+          ) : null}
           <ButtonRow>
             <Button
               label="Accept the place"
               onPress={() => void acceptOffer()}
               busy={accept.isProcessing}
-              disabled={offline}
+              disabled={offline || switchedOff !== null}
               accessibilityHint="Holds the place in a basket so you can pay"
             />
             <Button
