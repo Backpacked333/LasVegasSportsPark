@@ -309,17 +309,33 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
       .get(`/v1/credits/${compensated.body.recovery.creditId as string}`)
       .set(parent.header);
     expect(credit.body).toMatchObject({ sourceKind: 'compensation', originalMinor: 6_000 });
-    // The payment shows nothing left to refund, and a further refund is refused.
+    // The payment shows nothing left to refund, and why: the rest went back as credit.
     const payment = await t.http.get(`/v1/payments/${attemptId}`).set(finance.header);
-    expect(payment.body.refundableMinor).toBe(0);
+    expect(payment.body).toMatchObject({ refundableMinor: 0, compensatedMinor: 6_000 });
+    const refundView = await t.http
+      .get(`/v1/refunds/${partial.body.id as string}`)
+      .set(finance.header);
+    expect(refundView.body.refundable).toEqual({
+      capturedMinor: 10_000,
+      refundedMinor: 4_000,
+      reservedMinor: 0,
+      compensatedMinor: 6_000,
+      availableMinor: 0,
+      currency: 'USD',
+    });
+    // A further refund is refused, naming every part of what was captured.
     const again = await post(t, `/v1/payments/${attemptId}/refunds`, finance.header, {
       amountMinor: 6_000,
       reason: 'Refund the rest too',
     });
     expect(again.status).toBe(409);
-    expect(again.body.details).toMatchObject({
+    expect(again.body.details).toEqual({
       code: 'REFUND_EXCEEDS_REFUNDABLE',
       availableMinor: 0,
+      capturedMinor: 10_000,
+      refundedMinor: 4_000,
+      reservedMinor: 0,
+      compensatedMinor: 6_000,
     });
     // The database refuses it whoever writes it, and never gives compensated funds back.
     const refundableRow = () =>

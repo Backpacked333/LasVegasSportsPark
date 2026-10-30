@@ -64,6 +64,7 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
         capturedMinor: 10_000,
         refundedMinor: 4_000,
         reservedMinor: 0,
+        compensatedMinor: 0,
         availableMinor: 6_000,
       },
     });
@@ -143,6 +144,12 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
     });
     expect(blocked.status).toBe(409);
     expect(blocked.body.code).toBe('REFUND_PENDING');
+    // MONEY-02: the details name what a compensation credit took (nothing here).
+    expect(blocked.body.details).toEqual({
+      availableMinor: 4_000,
+      reservedMinor: 6_000,
+      compensatedMinor: 0,
+    });
     // The provider's webhook settles it; a duplicate delivery changes nothing.
     const event = provider(t).refundWebhook(uncertain.body.id as string);
     await deliver(t, event);
