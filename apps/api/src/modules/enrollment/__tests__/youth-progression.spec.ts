@@ -537,6 +537,148 @@ describe('youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006)', () => {
     expect(family).not.toContain(original.id);
   });
 
+  /** A coach holding an accepted assignment on a session of `offeringId` (WRK-03, IF-34). */
+  async function coachOn(offeringId: string): Promise<Actor> {
+    const person = await staff(t, ['coach']);
+    const sessionId = await createOfferingSessionFixture(t, {
+      offeringId,
+      scheduledStart: new Date('2026-11-19T01:00:00Z'),
+      scheduledEnd: new Date('2026-11-19T02:00:00Z'),
+    });
+    await createAssignmentFixture(t, {
+      targetType: 'session',
+      targetId: sessionId,
+      offeringId,
+      personId: person.personId,
+      scheduledStart: '2026-11-19T01:00:00Z',
+      scheduledEnd: '2026-11-19T02:00:00Z',
+      status: 'accepted',
+      kind: 'coach',
+      role: 'head_coach',
+    });
+    return person;
+  }
+
+  it('§4.7 invariant 9 / SPK-YOUTH-005: a correction keeps its original’s offering, skill area and visibility, so a staff-only row or another offering’s staff never replace family feedback', async () => {
+    const original = await draft(coach, 'family', { scaleValue: 2, comments: 'Developing' });
+    const published = await post(t, `/v1/assessments/${original.id}/review`, reviewer.header, {
+      decision: 'approve',
+      expectedRevision: original.revision,
+    });
+    expect(published.body.status).toBe('published');
+    const correction = (overrides: Record<string, unknown> = {}) => ({
+      templateId,
+      participantPersonId: kid,
+      offeringId: setup.offeringId,
+      skillAreaKey: 'dribbling',
+      observedOn: '2026-11-12',
+      scaleValue: 3,
+      visibility: 'family',
+      comments: 'Secure',
+      correctsAssessmentId: original.id,
+      reason: 'Scored on the wrong drill',
+      ...overrides,
+    });
+    // A staff-only correction of family feedback, or one of another skill area, is refused.
+    for (const overrides of [
+      { visibility: 'staff_only', comments: undefined },
+      { skillAreaKey: 'passing' },
+    ]) {
+      const refused = await post(t, '/v1/assessments', coach.header, correction(overrides));
+      expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+      expect(refused.body.details).toMatchObject({ code: 'CORRECTION_MISMATCH' });
+    }
+    // Staff of another offering the child attends answer as if the assessment did not exist.
+    const other = await offering(t, { kind: 'term', programId, basePriceMinor: 0 });
+    await createEnrollmentFixture(t, {
+      offeringId: other.offeringId,
+      participantPersonId: kid,
+      status: 'confirmed',
+    });
+    const otherCoach = await coachOn(other.offeringId);
+    const elsewhere = await post(
+      t,
+      '/v1/assessments',
+      otherCoach.header,
+      correction({ offeringId: other.offeringId }),
+    );
+    const unknown = await post(
+      t,
+      '/v1/assessments',
+      otherCoach.header,
+      correction({ offeringId: other.offeringId, correctsAssessmentId: newId() }),
+    );
+    expect(elsewhere.status).toBe(400);
+    expect({ code: elsewhere.body.code, message: elsewhere.body.message }).toEqual({
+      code: unknown.body.code,
+      message: unknown.body.message,
+    });
+    // The database refuses the same rows from any writer.
+    const row = (overrides: Record<string, unknown>) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      template_id: templateId,
+      participant_person_id: kid,
+      offering_id: setup.offeringId,
+      skill_area_key: 'dribbling',
+      observed_on: '2026-11-12',
+      scale_value: 3,
+      visibility: 'family' as const,
+      author_person_id: coach.personId,
+      author: json({ kind: 'system' }),
+      corrects_assessment_id: original.id,
+      correction_reason: 'Direct write',
+      ...overrides,
+    });
+    for (const overrides of [
+      { visibility: 'staff_only' },
+      { skill_area_key: 'passing' },
+      { offering_id: other.offeringId, author_person_id: otherCoach.personId },
+    ]) {
+      expect(
+        await rejectsWith(
+          t.db
+            .insertInto('assessments')
+            .values(row(overrides) as never)
+            .execute(),
+        ),
+      ).toBe('23514');
+    }
+    // A matching correction in progress cannot be turned into a staff-only one either.
+    const started = await post(t, '/v1/assessments', coach.header, correction());
+    expect(started.status, JSON.stringify(started.body)).toBe(201);
+    const hidden = await t.http
+      .patch(`/v1/assessments/${started.body.id as string}`)
+      .set(coach.header)
+      .set('Idempotency-Key', `k-${newId()}`)
+      .send({ visibility: 'staff_only', expectedRevision: started.body.revision });
+    expect(hidden.status, JSON.stringify(hidden.body)).toBe(400);
+    expect(hidden.body.details).toMatchObject({ code: 'CORRECTION_MISMATCH' });
+    expect(
+      await rejectsWith(
+        t.db
+          .updateTable('assessments')
+          .set({ visibility: 'staff_only', comments: null })
+          .where('id', '=', started.body.id as string)
+          .execute(),
+      ),
+    ).toBe('23514');
+    // Another coach of the offering learns that a correction is live, not which draft it is;
+    // a program manager is told which.
+    const secondCoach = await coachOn(setup.offeringId);
+    const blocked = await post(t, '/v1/assessments', secondCoach.header, correction());
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.details).toMatchObject({
+      code: 'ALREADY_CORRECTED',
+      correctedByAssessmentId: null,
+    });
+    const named = await post(t, '/v1/assessments', reviewer.header, correction());
+    expect(named.status).toBe(409);
+    expect(named.body.details.correctedByAssessmentId).toBe(started.body.id);
+    // The family still sees the feedback they were shown.
+    expect((await feedback()).assessments.map((a) => a.id)).toContain(original.id);
+  });
+
   it('§4.9: the database refuses a correction without a reason and a second live correction', async () => {
     const original = await draft(coach, 'staff_only', { skillAreaKey: 'passing' });
     await post(t, `/v1/assessments/${original.id}/review`, reviewer.header, {

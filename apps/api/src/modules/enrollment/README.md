@@ -16,7 +16,7 @@ Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 
 SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
 **Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
-`0500` to `0514`; `0503` came from the review stage, `0510` to `0514` from the stage-5 review)
+`0500` to `0515`; `0503` came from the review stage, `0510` to `0515` from the stage-5 review)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
@@ -336,7 +336,7 @@ benefits, terms, deposits) are configuration in the catalog; nothing here suppli
 | `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506       | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
 | `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508, 0512, 0514 | `bookings.spec.ts`                                          |
 | `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508, 0512, 0514 | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
-| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511        | `youth-progression.spec.ts`                                 |
+| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511, 0515  | `youth-progression.spec.ts`                                 |
 
 Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
 `startCheckout`) re-checks every live line's capability before any payment attempt ("DEC-016:
@@ -432,8 +432,13 @@ mirrored by a database transition guard.
   (`correctsAssessmentId`) that requires `reason` (§4.9; stored as `correctionReason`, refused by
   `assessments_correction_reason` without one, and audited with the corrected id); an assessment
   has at most one live correction (`assessments_one_live_correction_idx`, 409 `ALREADY_CORRECTED`),
-  so a later correction corrects the correction. `GET /v1/me/youth-feedback` shows only published
-  family feedback that no published or recorded correction replaces, and shared recommendations,
+  so a later correction corrects the correction. A correction corrects the same observation: the
+  same participant and offering, a template of the same program, the same skill area and the same
+  visibility (400 `CORRECTION_MISMATCH`, also on edit and review; `assessments_correction_match`,
+  0515), and an assessment of another offering answers as one that does not exist; another
+  author's live draft is not named to a coach (409 `ALREADY_CORRECTED` with
+  `correctedByAssessmentId: null`). `GET /v1/me/youth-feedback` shows only published family
+  feedback that no published family correction replaces, and shared recommendations,
   never staff or review notes; one `youth_feedback` notice per published assessment or shared
   recommendation carries no staff content. A shared recommendation's content is fixed and a
   withdrawn one never changes (`progression_recommendations_content_fixed`, 0511). **Verified**,

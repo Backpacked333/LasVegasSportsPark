@@ -154,6 +154,47 @@ export class YouthProgressionService {
     );
   }
 
+  private correctionMismatch(): Error {
+    return errors.validation(
+      'A correction corrects the same observation: a template of the same program, the same skill area and the same visibility.',
+      { code: 'CORRECTION_MISMATCH', path: 'correctsAssessmentId' },
+    );
+  }
+
+  /**
+   * A correction replaces what it corrects in the family view (§4.7 invariant 9), so it must be
+   * the same observation (assessments_correction_match, 0515): a template of the same program
+   * (a later version is allowed), the same skill area and the same visibility. A staff-only row
+   * never decides what family-visible feedback says (SPK-YOUTH-005).
+   */
+  private async assertCorrectionMatches(
+    trx: Trx,
+    corrected: AssessmentRow,
+    correction: {
+      templateId: string;
+      skillAreaKey: string;
+      visibility: AssessmentRow['visibility'];
+    },
+  ): Promise<void> {
+    if (
+      correction.skillAreaKey !== corrected.skill_area_key ||
+      correction.visibility !== corrected.visibility
+    ) {
+      throw this.correctionMismatch();
+    }
+    if (correction.templateId === corrected.template_id) return;
+    const programs = await trx
+      .selectFrom('assessment_templates')
+      .select(['id', 'program_id'])
+      .where('organization_id', '=', corrected.organization_id)
+      .where('id', 'in', [correction.templateId, corrected.template_id])
+      .execute();
+    const programOf = (id: string) => programs.find((p) => p.id === id)?.program_id;
+    if (programOf(correction.templateId) !== programOf(corrected.template_id)) {
+      throw this.correctionMismatch();
+    }
+  }
+
   private toRecommendation(row: RecommendationRow): ProgressionRecommendation {
     return {
       id: row.id,
@@ -432,7 +473,7 @@ export class YouthProgressionService {
   ): Promise<Assessment> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
-      await this.requireOfferingAuthor(
+      const author = await this.requireOfferingAuthor(
         trx,
         principal,
         EnrollmentActions.authorAssessment,
@@ -463,25 +504,43 @@ export class YouthProgressionService {
           organizationId,
           input.correctsAssessmentId,
         );
+        // The caller is authorized on input.offeringId only: an assessment of another offering
+        // (or participant) answers exactly as one that does not exist (§4.10), and never gets
+        // replaced by staff of a different offering.
         if (
           !corrected ||
           corrected.participant_person_id !== input.participantPersonId ||
+          corrected.offering_id !== input.offeringId ||
           !['published', 'recorded'].includes(corrected.status)
         ) {
-          throw errors.validation('Only a published or recorded assessment is corrected.', {
-            path: 'correctsAssessmentId',
-          });
+          throw errors.validation(
+            'Only a published or recorded assessment of this participant and offering is corrected.',
+            { path: 'correctsAssessmentId' },
+          );
         }
+        await this.assertCorrectionMatches(trx, corrected, {
+          templateId: input.templateId,
+          skillAreaKey: input.skillAreaKey,
+          visibility: input.visibility,
+        });
         // One live correction per assessment (assessments_one_live_correction_idx, 0510), so
         // which value stands is never ambiguous: a later correction corrects the correction.
         const live = await trx
           .selectFrom('assessments')
-          .select('id')
+          .select(['id', 'status', 'author_person_id'])
           .where('organization_id', '=', organizationId)
           .where('corrects_assessment_id', '=', corrected.id)
           .where('status', '<>', 'withdrawn')
           .executeTakeFirst();
-        if (live) throw this.alreadyCorrected(live.id);
+        if (live) {
+          // Another author's draft is not the caller's to read (participantAssessments): it is
+          // named only to its author and to program managers.
+          const visible =
+            live.status !== 'draft' ||
+            live.author_person_id === principal.personId ||
+            author.asProgramManager;
+          throw this.alreadyCorrected(visible ? live.id : null);
+        }
       }
       // §4.9: a correction says why (the contract requires it; the database refuses one without).
       const correctionReason = input.correctsAssessmentId ? (input.reason ?? '').trim() : null;
@@ -516,6 +575,9 @@ export class YouthProgressionService {
           ) {
             // A concurrent correction of the same assessment won.
             throw this.alreadyCorrected(null);
+          }
+          if (pgConstraintName(error) === 'assessments_correction_match') {
+            throw this.correctionMismatch();
           }
           if ((error as { code?: string }).code === '23514') {
             throw errors.validation(
@@ -570,6 +632,21 @@ export class YouthProgressionService {
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'draft' && row.status !== 'returned') {
         throw errors.invalidTransition('Assessment', row.status, 'edit');
+      }
+      if (row.corrects_assessment_id) {
+        // A correction keeps the observation it corrects (assessments_correction_match).
+        const corrected = await this.loadAssessment(
+          trx,
+          organizationId,
+          row.corrects_assessment_id,
+        );
+        if (corrected) {
+          await this.assertCorrectionMatches(trx, corrected, {
+            templateId: row.template_id,
+            skillAreaKey: input.skillAreaKey ?? row.skill_area_key,
+            visibility: input.visibility ?? row.visibility,
+          });
+        }
       }
       await trx
         .updateTable('assessments')
@@ -690,6 +767,22 @@ export class YouthProgressionService {
         });
       }
       assertExpectedRevision(input.expectedRevision, row.revision);
+      if (input.decision === 'approve' && row.corrects_assessment_id) {
+        // A correction written before 0515 that does not match what it corrects is never
+        // approved over the original (assessments_correction_match); the reviewer returns it.
+        const corrected = await this.loadAssessment(
+          trx,
+          organizationId,
+          row.corrects_assessment_id,
+        );
+        if (corrected) {
+          await this.assertCorrectionMatches(trx, corrected, {
+            templateId: row.template_id,
+            skillAreaKey: row.skill_area_key,
+            visibility: row.visibility,
+          });
+        }
+      }
       const event: AssessmentEvent =
         input.decision === 'return'
           ? 'return'
@@ -971,8 +1064,10 @@ export class YouthProgressionService {
       .where('assessments.participant_person_id', 'in', subjects)
       .where('assessments.status', '=', 'published')
       .where('assessments.visibility', '=', 'family')
-      // §4.7 invariant 9, SPK-YOUTH-005: a value a reviewed correction replaced no longer stands;
-      // the family sees the correction (when it is family-visible), never both.
+      // §4.7 invariant 9, SPK-YOUTH-005: a value a published (family-visible, reviewed)
+      // correction replaced no longer stands; the family sees the correction, never both. Only
+      // family feedback replaces family feedback: a staff-only row never hides what the family
+      // was shown (corrections keep their original's visibility, assessments_correction_match).
       .where(({ not, exists, selectFrom }) =>
         not(
           exists(
@@ -980,7 +1075,8 @@ export class YouthProgressionService {
               .select('correction.id')
               .whereRef('correction.organization_id', '=', 'assessments.organization_id')
               .whereRef('correction.corrects_assessment_id', '=', 'assessments.id')
-              .where('correction.status', 'in', ['published', 'recorded']),
+              .where('correction.status', '=', 'published')
+              .where('correction.visibility', '=', 'family'),
           ),
         ),
       )
