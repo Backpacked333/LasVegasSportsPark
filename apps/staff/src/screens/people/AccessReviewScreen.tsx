@@ -19,7 +19,7 @@
  * The workflow is restricted: a review the viewer may not see is shown as not available, and
  * offline the review is read-only.
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
@@ -28,7 +28,12 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { PeopleNav } from '../../features/people/PeopleNav';
 import { PersonReferenceField, referenceError } from '../../features/people/PersonReferenceField';
-import { PersonName, usePeopleNames, type PeopleNames } from '../../features/people/names';
+import {
+  PersonName,
+  personNameText,
+  usePeopleNames,
+  type PeopleNames,
+} from '../../features/people/names';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError, CommandSuccess, fieldErrorsOf } from '../../ui/CommandFeedback';
@@ -165,44 +170,65 @@ function parseGrantIds(text: string): string[] {
     .filter(Boolean);
 }
 
+type GrantView = Schema<'GrantView'>;
+
 /**
- * The permissions held over the review's subject, chosen one by one from the subject's authority
- * (`GET /v1/people/{id}/authority`, `identity.read_authority`), each with its holder and state.
- * Where that read is not available, permission references are entered instead.
+ * The permissions held over the review's subject, from the subject's authority
+ * (`GET /v1/people/{id}/authority`, `identity.read_authority`), read only while the reviewer is
+ * choosing permissions. `grants` is null while the checkbox list is not shown (no read, still
+ * loading, failed or nothing held): references are typed instead.
+ */
+function useSubjectGrants(subjectPersonId: string, wanted: boolean): GrantView[] | null {
+  const permissions = usePermissions();
+  const permitted = permissions.isPermitted('identity.read_authority');
+  const authority = useApiQuery({
+    path: '/people/{id}/authority',
+    request: { path: { id: subjectPersonId } },
+    enabled: wanted && permitted === true,
+  });
+  if (!authority.data) return null;
+  const grants = authority.data.grants.filter(
+    (g) => g.subjectPersonId === subjectPersonId && g.status !== 'revoked' && g.status !== 'ended',
+  );
+  return grants.length > 0 ? grants : null;
+}
+
+/**
+ * The permissions chosen one by one, each with its holder (named through
+ * `GET /v1/person-names`, a child by given name only, never the grant's composed display name)
+ * and state. Where the subject's authority is not readable, permission references are entered.
  */
 function GrantChoice({
-  subjectPersonId,
+  grants,
   selected,
   onSelected,
   text,
   onText,
   error,
 }: {
-  subjectPersonId: string;
+  grants: readonly GrantView[] | null;
   selected: readonly string[];
   onSelected: (ids: string[]) => void;
   text: string;
   onText: (value: string) => void;
   error: string | undefined;
 }) {
-  const permissions = usePermissions();
-  const permitted = permissions.isPermitted('identity.read_authority');
-  const authority = useApiQuery({
-    path: '/people/{id}/authority',
-    request: { path: { id: subjectPersonId } },
-    enabled: permitted === true,
-  });
-  const grants = (authority.data?.grants ?? []).filter(
-    (g) => g.subjectPersonId === subjectPersonId && g.status !== 'revoked' && g.status !== 'ended',
-  );
-  if (authority.data && grants.length > 0) {
+  const names = usePeopleNames((grants ?? []).map((g) => g.actorPersonId));
+  if (grants) {
+    const holder = (id: string) =>
+      personNameText(names, id) ??
+      (names.get(id) === undefined && !names.failed
+        ? 'a person (loading the name)'
+        : names.failed && names.error && presentationForError(names.error) !== 'unavailable'
+          ? `a person (name could not be loaded: ${names.error.code})`
+          : 'a person not available to you');
     return (
       <CheckboxGroup
         legend="Permissions"
         hint="Choose each permission; the others are not affected."
         options={grants.map((g) => ({
           value: g.grantId,
-          label: `${g.permission} held by ${g.actorDisplayName ?? 'a person not available to you'} · state ${g.status}${g.underReview ? ' · under review' : ''}`,
+          label: `${g.permission} held by ${holder(g.actorPersonId)} · state ${g.status}${g.underReview ? ' · under review' : ''}`,
         }))}
         value={selected}
         onChange={onSelected}
@@ -248,7 +274,15 @@ function DecisionForm({ review }: { review: AccessReview }) {
   // over the subject (ID-08: naming a person never lifts another person's), or named permissions
   // (SPK-IAM-005). A restriction names one person's permissions or specific ones.
   const effectiveTarget = kind === 'lift' ? liftTarget : restrictTarget;
-  const grantIdList = chosenGrants.length > 0 ? chosenGrants : parseGrantIds(grantIds);
+  const grants = useSubjectGrants(
+    review.subjectPersonId,
+    targeting && effectiveTarget === 'grants',
+  );
+  // Only the control on screen is sent: the ticked permissions while the list is shown, the typed
+  // references otherwise (text typed before the list appeared is never sent hidden).
+  const grantIdList = grants
+    ? chosenGrants.filter((id) => grants.some((g) => g.grantId === id))
+    : parseGrantIds(grantIds);
 
   const reload = () => {
     decide.reset();
@@ -406,7 +440,7 @@ function DecisionForm({ review }: { review: AccessReview }) {
               />
             ) : (
               <GrantChoice
-                subjectPersonId={review.subjectPersonId}
+                grants={grants}
                 selected={chosenGrants}
                 onSelected={setChosenGrants}
                 text={grantIds}

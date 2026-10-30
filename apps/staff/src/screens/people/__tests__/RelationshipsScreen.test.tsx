@@ -524,4 +524,27 @@ describe('SCR-S-21 RelationshipsScreen', () => {
       limit: '10',
     });
   });
+
+  it('Enter in the find-by-name box runs the search and never submits the relationship form', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: baseRoutes({
+        'GET /me/permissions': mePermissions({ actions: ['identity.lookup_person'] }),
+        'GET /people': { status: 200, body: searchPage() },
+      }),
+    });
+    render(app.at(PATH));
+    const form = await relationshipForm();
+    await user.type(within(form).getByLabelText(/Other person reference/), OTHER_ID);
+    await user.click(
+      within(form).getByRole('button', { name: 'Find by name for other person reference' }),
+    );
+    const finder = within(form).getByRole('group', {
+      name: 'Find by name for other person reference',
+    });
+    await user.type(within(finder).getByLabelText('Find by name or contact'), 'Sam{Enter}');
+    await waitFor(() => expect(app.fake.requests.some((r) => r.route === '/people')).toBe(true));
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    expect(within(form).getByLabelText(/Other person reference/)).toHaveValue(OTHER_ID);
+  });
 });

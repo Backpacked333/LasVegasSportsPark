@@ -6,8 +6,9 @@
  * before any request; a valid reference is previewed with `GET /v1/people/{id}` so staff confirm
  * who they mean. A protected NOT_FOUND reads "no person with this reference is available to you",
  * never that the person exists. Search results show names only (a child by given name only).
+ * Enter in the search box runs the search; it never submits the command form around the field.
  */
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -136,8 +137,22 @@ function FindByName({
     setError(null);
     setQuery(trimmed);
   };
+  // The field always sits inside a command form (assign, decide, record a relationship): Enter
+  // in the search box runs the search and must never submit that form's command (implicit
+  // submission), so the keystroke is handled here and stops.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' || !(event.target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    search();
+  };
   return (
-    <div className="form" role="group" aria-label={`Find by name for ${fieldLabel.toLowerCase()}`}>
+    <div
+      className="form"
+      role="group"
+      aria-label={`Find by name for ${fieldLabel.toLowerCase()}`}
+      onKeyDown={onKeyDown}
+    >
       <TextField
         label="Find by name or contact"
         type="search"

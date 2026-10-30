@@ -24,12 +24,14 @@ export function exceptionItem(overrides: Record<string, unknown> = {}) {
     nextActions: [
       {
         action: 'finance.reconcile_payment',
+        verb: 'open',
         label: 'Reconcile the payment with the provider',
         method: 'POST',
         href: `/v1/payments/${PAYMENT_ID}/reconcile`,
       },
       {
         action: 'exceptions.manage',
+        verb: 'acknowledge',
         label: 'Acknowledge',
         method: 'POST',
         href: `/v1/exceptions/${EXCEPTION_ID}/acknowledge`,
@@ -46,6 +48,25 @@ export function exceptionItem(overrides: Record<string, unknown> = {}) {
     details: { exceptionId: EXCEPTION_ID, revision: 4 },
     ...overrides,
   };
+}
+
+/**
+ * The exception lifecycle steps as the API lists them (SUP-01 `verb`). `action` is the kernel's
+ * `exceptions.manage`, or `exceptions.manage_own_queue` for a viewer who holds the role the queue
+ * is named after (K-10); the client must offer the step either way.
+ */
+export function lifecycleActions(
+  action: 'exceptions.manage' | 'exceptions.manage_own_queue' = 'exceptions.manage',
+  verbs: readonly ('acknowledge' | 'resolve' | 'close')[] = ['acknowledge', 'resolve', 'close'],
+) {
+  const labels = { acknowledge: 'Acknowledge', resolve: 'Mark resolved', close: 'Close' };
+  return verbs.map((verb) => ({
+    action,
+    verb,
+    label: labels[verb],
+    method: 'POST',
+    href: `/v1/exceptions/${EXCEPTION_ID}/${verb}`,
+  }));
 }
 
 export function operationalException(overrides: Record<string, unknown> = {}) {
@@ -77,12 +98,7 @@ export function operationalException(overrides: Record<string, unknown> = {}) {
         reason: null,
       },
     ],
-    nextActions: ['acknowledge', 'resolve', 'close'].map((verb) => ({
-      action: 'exceptions.manage',
-      label: verb,
-      method: 'POST',
-      href: `/v1/exceptions/${EXCEPTION_ID}/${verb}`,
-    })),
+    nextActions: lifecycleActions(),
     underlyingRecordUnchanged: true,
     ...overrides,
   };

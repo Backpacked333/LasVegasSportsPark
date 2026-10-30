@@ -9,7 +9,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
-import { INVITATION_ID, PERSON_ID, invitationView } from './fixtures';
+import { CHILD_ID, INVITATION_ID, PERSON_ID, invitationView, personNames } from './fixtures';
 
 const READER = mePermissions({ actions: ['identity.read_invitations'] });
 
@@ -24,6 +24,7 @@ describe('SCR-S-21 InvitationsScreen', () => {
           reads += 1;
           return fakeResponse(200, { items: [invitationView()], nextCursor: null });
         },
+        'GET /person-names': personNames(),
         'POST /invitations/{id}/revoke': {
           status: 200,
           body: invitationView({ status: 'revoked', revision: 2 }),
@@ -34,7 +35,7 @@ describe('SCR-S-21 InvitationsScreen', () => {
     const list = await screen.findByRole('list', { name: 'Invitations' });
     const record = within(list).getByLabelText('Invitation record');
     expect(within(record).getByText('Status: pending')).toBeInTheDocument();
-    expect(within(record).getByRole('link', { name: 'Sam Rivera' })).toBeInTheDocument();
+    expect(await within(record).findByRole('link', { name: 'Sam Rivera' })).toBeInTheDocument();
     expect(within(record).getByRole('link', { name: 'Alex Rivera' })).toHaveAttribute(
       'href',
       `/people/${PERSON_ID}`,
@@ -59,6 +60,85 @@ describe('SCR-S-21 InvitationsScreen', () => {
     expect(post?.headers['idempotency-key']).toMatch(/^key-/);
     // The list is read again after the change.
     await waitFor(() => expect(reads).toBeGreaterThan(1));
+    // One name read for the whole page.
+    expect(app.fake.requests.filter((r) => r.route === '/person-names').length).toBe(1);
+  });
+
+  it('§4.14: names a child it covers by given name only, never with the invitation’s composed name', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': READER,
+        'GET /invitations': {
+          status: 200,
+          body: {
+            items: [
+              invitationView({
+                scope: { type: 'person', personId: CHILD_ID },
+                subjects: [{ personId: CHILD_ID, displayName: 'Mia Rivera' }],
+              }),
+            ],
+            nextCursor: null,
+          },
+        },
+        'GET /person-names': personNames(),
+      },
+    });
+    render(app.at('/people/invitations'));
+    const record = within(await screen.findByRole('list', { name: 'Invitations' })).getByLabelText(
+      'Invitation record',
+    );
+    expect(await within(record).findByRole('link', { name: 'Mia' })).toHaveAttribute(
+      'href',
+      `/people/${CHILD_ID}`,
+    );
+    expect(within(record).queryByText(/Mia Rivera/)).toBeNull();
+  });
+
+  it('SPK-UX-008: a failed name read shows its code and Try again; a denied one reads not available', async () => {
+    const user = userEvent.setup();
+    let answer: 'fail' | 'ok' = 'fail';
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': READER,
+        'GET /invitations': { status: 200, body: { items: [invitationView()], nextCursor: null } },
+        'GET /person-names': () =>
+          answer === 'fail'
+            ? fakeResponse(500, apiErrorBody('INTERNAL_ERROR'))
+            : fakeResponse(200, personNames().body),
+      },
+    });
+    const first = render(app.at('/people/invitations'));
+    const record = within(await screen.findByRole('list', { name: 'Invitations' })).getByLabelText(
+      'Invitation record',
+    );
+    expect(
+      (await within(record).findAllByText(/name could not be loaded \(INTERNAL_ERROR\)/)).length,
+    ).toBeGreaterThan(0);
+    expect(within(record).queryByText('a person not available to you')).toBeNull();
+    answer = 'ok';
+    await user.click(
+      within(record).getAllByRole('button', {
+        name: 'Try loading the names again',
+      })[0] as HTMLElement,
+    );
+    expect(await within(record).findByRole('link', { name: 'Sam Rivera' })).toBeInTheDocument();
+    first.unmount();
+
+    const denied = createTestApp({
+      routes: {
+        'GET /me/permissions': READER,
+        'GET /invitations': { status: 200, body: { items: [invitationView()], nextCursor: null } },
+        'GET /person-names': () => fakeResponse(403, apiErrorBody('ACCESS_DENIED')),
+      },
+    });
+    render(denied.at('/people/invitations'));
+    const deniedRecord = within(
+      await screen.findByRole('list', { name: 'Invitations' }),
+    ).getByLabelText('Invitation record');
+    expect(
+      (await within(deniedRecord).findAllByText('a person not available to you')).length,
+    ).toBeGreaterThan(0);
+    expect(within(deniedRecord).queryByText(/name could not be loaded/)).toBeNull();
   });
 
   it('lists any status when asked, page by page, and says when there are none', async () => {

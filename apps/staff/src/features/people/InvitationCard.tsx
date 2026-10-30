@@ -8,11 +8,15 @@
  * idempotency key per intent. STALE_REVISION or INVALID_TRANSITION (accepted or revoked meanwhile)
  * offers "Reload", which re-reads the lists the invitation came from. Offline, revoking is not
  * offered (§4.15). The one-time token is shown only on the record a creation returned.
+ *
+ * People are named through `GET /v1/person-names` (`names.tsx`: a child by given name only,
+ * §4.14), never with the invitation's own `displayName` strings, which the API composes from given
+ * and family name whatever the person's kind. A list names all its cards in one read
+ * (`InvitationCardList`).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -20,6 +24,7 @@ import { CommandError, CommandSuccess } from '../../ui/CommandFeedback';
 import { Facts, TextField } from '../../ui/FormFields';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { formatDateTime } from '../../ui/time';
+import { PERSON_NAMES_MAX, PersonName, usePeopleNames, type PeopleNames } from './names';
 import { INVITATION_STATUS_TONE } from './people';
 
 export type Invitation = Schema<'Invitation'>;
@@ -40,17 +45,16 @@ function isView(invitation: Invitation | InvitationView): invitation is Invitati
   return 'effectiveStatus' in invitation;
 }
 
-function Party({
-  id,
-  name,
-  self,
-}: {
-  id: string;
-  name: string | null | undefined;
-  self: string | undefined;
-}) {
-  if (id === self) return <span>this person</span>;
-  return <Link to={`/people/${id}`}>{name ?? 'Open the person record'}</Link>;
+/** Everyone an invitation names: inviter, recipient and the people it covers. */
+export function invitationPersonIds(invitation: Invitation | InvitationView): string[] {
+  const covered = isView(invitation)
+    ? invitation.subjects.map((s) => s.personId)
+    : invitation.scope.type === 'person'
+      ? [invitation.scope.personId]
+      : [];
+  return [invitation.invitedByPersonId, invitation.recipientPersonId, ...covered].filter(
+    (id): id is string => !!id,
+  );
 }
 
 export function InvitationCard({
@@ -58,8 +62,11 @@ export function InvitationCard({
   token = null,
   self,
   onRevoked,
+  names,
 }: {
   invitation: Invitation | InvitationView;
+  /** The names of the people it names, when a list read them for all its cards. */
+  names?: PeopleNames;
   /** The one-time code, only on the record a creation just returned. */
   token?: string | null;
   /** The person whose screen this is, shown as "this person". */
@@ -72,6 +79,8 @@ export function InvitationCard({
 }) {
   const { online } = useApp();
   const queryClient = useQueryClient();
+  const own = usePeopleNames(names ? [] : invitationPersonIds(invitation));
+  const shownNames = names ?? own;
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -124,10 +133,10 @@ export function InvitationCard({
           [
             'Inviter',
             invitation.invitedByPersonId ? (
-              <Party
+              <PersonName
                 key="inviter"
                 id={invitation.invitedByPersonId}
-                name={view?.inviter?.displayName}
+                names={shownNames}
                 self={self}
               />
             ) : (
@@ -137,7 +146,12 @@ export function InvitationCard({
           [
             'Recipient',
             invitation.recipientPersonId ? (
-              <Party key="recipient" id={invitation.recipientPersonId} name={null} self={self} />
+              <PersonName
+                key="recipient"
+                id={invitation.recipientPersonId}
+                names={shownNames}
+                self={self}
+              />
             ) : invitation.recipientContact ? (
               `${invitation.recipientContact.kind}: ${invitation.recipientContact.value}`
             ) : (
@@ -151,12 +165,17 @@ export function InvitationCard({
                 {subjects.map((s, i) => (
                   <span key={s.personId}>
                     {i > 0 ? ', ' : ''}
-                    <Party id={s.personId} name={s.displayName} self={self} />
+                    <PersonName id={s.personId} names={shownNames} self={self} />
                   </span>
                 ))}
               </span>
             ) : invitation.scope.type === 'person' ? (
-              <Party key="scope" id={invitation.scope.personId} name={null} self={self} />
+              <PersonName
+                key="scope"
+                id={invitation.scope.personId}
+                names={shownNames}
+                self={self}
+              />
             ) : (
               `household ${invitation.scope.householdId}`
             ),
@@ -205,5 +224,39 @@ export function InvitationCard({
       <CommandSuccess message={success} />
       <CommandError error={revoke.error} onRetry={submit} onReload={reload} />
     </div>
+  );
+}
+
+/**
+ * A list of invitations whose people are named in one `GET /v1/person-names` read (at most 100
+ * ids; a larger page lets each card read its own names).
+ */
+export function InvitationCardList({
+  invitations,
+  label,
+  self,
+  onRevoked,
+}: {
+  invitations: readonly (Invitation | InvitationView)[];
+  label: string;
+  self?: string;
+  onRevoked?: (invitation: Invitation) => void;
+}) {
+  const ids = [...new Set(invitations.flatMap(invitationPersonIds))].filter((id) => id !== self);
+  const batched = ids.length <= PERSON_NAMES_MAX;
+  const names = usePeopleNames(batched ? ids : []);
+  return (
+    <ul className="list" aria-label={label}>
+      {invitations.map((invitation) => (
+        <li key={invitation.id}>
+          <InvitationCard
+            invitation={invitation}
+            self={self}
+            onRevoked={onRevoked}
+            names={batched ? names : undefined}
+          />
+        </li>
+      ))}
+    </ul>
   );
 }

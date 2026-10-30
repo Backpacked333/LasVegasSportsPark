@@ -24,6 +24,7 @@ import {
   PAYMENT_ID,
   exceptionItem,
   expectedArrivalsReport,
+  lifecycleActions,
   scheduledEvent,
 } from './fixtures';
 
@@ -103,10 +104,12 @@ describe('SCR-S-01 TodayScreen issues', () => {
         ),
       ),
     ).toBeInTheDocument();
-    // The lifecycle verbs are offered as buttons, the domain action as the next step.
+    // The lifecycle verbs are offered as buttons, the domain action as the next step, linked to
+    // the owning module's staff screen.
     expect(
-      within(row).getByText('Next: Reconcile the payment with the provider'),
-    ).toBeInTheDocument();
+      within(row).getByRole('link', { name: 'Reconcile the payment with the provider' }),
+    ).toHaveAttribute('href', `/finance/payments/${PAYMENT_ID}`);
+    expect(within(row).queryByRole('link', { name: 'Acknowledge' })).toBeNull();
     expect(within(row).getByText('Resolution history (1)')).toBeInTheDocument();
     expect(within(row).getByRole('link', { name: /Open exception/ })).toHaveAttribute(
       'href',
@@ -183,6 +186,59 @@ describe('SCR-S-01 TodayScreen issues', () => {
     await waitFor(() =>
       expect(app.fake.requests.filter((r) => r.route === '/today').length).toBeGreaterThan(1),
     );
+  });
+
+  it('K-10, SUP-01: a queue owner gets Acknowledge from exceptions.manage_own_queue, by verb, with the item revision', async () => {
+    const user = userEvent.setup();
+    const ownQueue = exceptionItem({
+      ownerQueue: 'front_desk',
+      revision: 7,
+      details: { exceptionId: EXCEPTION_ID },
+      nextActions: [
+        {
+          action: 'communications.read_notification',
+          verb: 'view',
+          label: 'Review the delivery attempts',
+          method: 'GET',
+          href: '/v1/notifications/0192f1a0-0000-7000-8000-0000000000d1/deliveries',
+        },
+        {
+          action: 'reporting.something_unmapped',
+          verb: 'view',
+          label: 'Read the owning record',
+          method: 'GET',
+          href: '/v1/unmapped/0192f1a0-0000-7000-8000-0000000000d2',
+        },
+        ...lifecycleActions('exceptions.manage_own_queue', ['acknowledge', 'resolve', 'close']),
+      ],
+    });
+    const app = createTestApp({
+      routes: {
+        'GET /today': todayFeed([ownQueue]),
+        'POST /exceptions/{id}/acknowledge': { status: 200, body: { status: 'acknowledged' } },
+      },
+    });
+    render(app.at('/today'));
+    const row = await screen.findByTestId(`today-item-exception:${EXCEPTION_ID}`);
+    expect(within(row).getByRole('link', { name: 'Review the delivery attempts' })).toHaveAttribute(
+      'href',
+      '/communications/notifications/0192f1a0-0000-7000-8000-0000000000d1',
+    );
+    // A step no staff screen serves is named, not linked.
+    expect(within(row).getByText('Read the owning record')).toBeInTheDocument();
+    expect(within(row).queryByRole('link', { name: 'Read the owning record' })).toBeNull();
+    // Lifecycle steps are never listed as plain "Next" text.
+    expect(within(row).queryByText(/Mark resolved/)).toBeNull();
+    await user.click(
+      within(row).getByRole('button', {
+        name: 'Acknowledge: Payment outcome unknown for checkout',
+      }),
+    );
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/exceptions/{id}/acknowledge')).toBe(true),
+    );
+    const ack = app.fake.requests.find((r) => r.route === '/exceptions/{id}/acknowledge');
+    expect(ack?.body).toEqual({ expectedRevision: 7 });
   });
 
   it('reports STALE_REVISION on acknowledge with "Reload", which re-reads Today', async () => {

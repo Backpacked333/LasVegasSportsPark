@@ -31,6 +31,7 @@ import { withServerDefaults } from '../../api/server-defaults';
 import {
   INVITATION_LIST_KEYS,
   InvitationCard,
+  InvitationCardList,
   revokedMessage,
   type Invitation,
 } from '../../features/people/InvitationCard';
@@ -309,17 +310,12 @@ function AuthorityView({ personId, authority }: { personId: string; authority: P
         {authority.pendingInvitations.length === 0 ? (
           <p>No pending invitation concerns this person.</p>
         ) : (
-          <ul className="list" aria-label="Pending invitations">
-            {authority.pendingInvitations.map((i) => (
-              <li key={i.id}>
-                <InvitationCard
-                  invitation={i}
-                  self={personId}
-                  onRevoked={(next) => setInvitationOutcome(revokedMessage(next))}
-                />
-              </li>
-            ))}
-          </ul>
+          <InvitationCardList
+            invitations={authority.pendingInvitations}
+            label="Pending invitations"
+            self={personId}
+            onRevoked={(next) => setInvitationOutcome(revokedMessage(next))}
+          />
         )}
       </section>
     </>
@@ -782,17 +778,12 @@ function InvitationHistoryList({ personId, status }: { personId: string; status:
         }}
       >
         {(items) => (
-          <ul className="list" aria-label="Invitations covering this person">
-            {items.map((i) => (
-              <li key={i.id}>
-                <InvitationCard
-                  invitation={i}
-                  self={personId}
-                  onRevoked={(next) => setOutcome(revokedMessage(next))}
-                />
-              </li>
-            ))}
-          </ul>
+          <InvitationCardList
+            invitations={items}
+            label="Invitations covering this person"
+            self={personId}
+            onRevoked={(next) => setOutcome(revokedMessage(next))}
+          />
         )}
       </QueryBoundary>
       <LoadMore pages={pages} label="invitations" />

@@ -2,7 +2,9 @@
  * SCR-S-22 Disputed access reviews, the queue (SPK-IAM-005, DEC-004, POL-023).
  *
  * - Reviews from `GET /v1/access-reviews` (default: every review that is not closed; filters by
- *   status and owning role), newest first, page by page: subject (as the API names them), reason,
+ *   status and owning role), newest first, page by page: subject (named through
+ *   `GET /v1/person-names`, one read per page: a child by given name only, §4.14; the summary's
+ *   `subjectDisplayName` carries the family name whatever the kind and is not shown), reason,
  *   status as text, owning role and whether a person owns it, the end of the review's effect, how
  *   many permissions its restrictions suspend now, and the decisions its state allows
  *   (`allowedDecisions`, the API's, never computed here). The queue is for review deciders
@@ -13,11 +15,17 @@
  * - A review opens by its reference too (for example from a case), and anyone who may open a review
  *   can start one. A shared household, address or surname is never evidence of authority.
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
+import {
+  NameUnavailable,
+  personNameText,
+  usePeopleNames,
+  type PeopleNames,
+} from '../../features/people/names';
 import { PeopleNav } from '../../features/people/PeopleNav';
 import { Button } from '../../ui/Button';
 import { SelectField, TextField } from '../../ui/FormFields';
@@ -30,13 +38,69 @@ import { formatDateTime } from '../../ui/time';
 import { REVIEW_OWNER_ROLES, type ReviewOwnerRole } from './OpenAccessReviewScreen';
 import { REVIEW_STATUS_TONE } from './review-vocabulary';
 
-type ReviewStatus = Schema<'AccessReviewSummary'>['status'];
+type ReviewSummary = Schema<'AccessReviewSummary'>;
+type ReviewStatus = ReviewSummary['status'];
 
 export const REVIEWS_PAGE_SIZE = 25;
 export const ESCALATED_PAGE_SIZE = 25;
 export const READ_REVIEW_ACTION = 'identity.read_access_review';
 
 const REVIEW_STATUSES: readonly ReviewStatus[] = ['open', 'escalated', 'decided', 'closed'];
+
+function SubjectLink({ review, names }: { review: ReviewSummary; names: PeopleNames }) {
+  const name = personNameText(names, review.subjectPersonId);
+  // Omitted by the API, or a denied read: not available. Any other failed read: its code.
+  const denied =
+    names.get(review.subjectPersonId) === null ||
+    (names.error !== null && presentationForError(names.error) === 'unavailable');
+  const text =
+    name ??
+    (denied
+      ? 'Subject not available to you'
+      : names.failed
+        ? 'Open the review'
+        : 'Loading the subject’s name…');
+  return (
+    <>
+      <Link to={`/people/access-reviews/${review.id}`} className="row-title">
+        {text}
+      </Link>
+      {names.failed && text === 'Open the review' ? <NameUnavailable names={names} /> : null}
+    </>
+  );
+}
+
+function ReviewRows({ items }: { items: readonly ReviewSummary[] }) {
+  const names = usePeopleNames(items.map((r) => r.subjectPersonId));
+  return (
+    <ul className="list" aria-label="Access reviews">
+      {items.map((r) => (
+        <li key={r.id}>
+          <div className="row-text">
+            <SubjectLink review={r} names={names} />
+            <span>{r.reason}</span>
+            <span className="caption">
+              owner {r.ownerRole}
+              {r.ownerPersonId ? ' (assigned)' : ' (unassigned)'} · opened{' '}
+              {formatDateTime(r.createdAt)} · in effect{' '}
+              {r.effectiveTo ? `until ${formatDateTime(r.effectiveTo)}` : 'until closed'}
+            </span>
+            <span className="caption">
+              {r.restrictedGrantCount} permission(s) restricted now · decisions available:{' '}
+              {r.allowedDecisions.length > 0 ? r.allowedDecisions.join(', ') : 'none'}
+            </span>
+          </div>
+          <span className="actions-row">
+            <StatusBadge tone={REVIEW_STATUS_TONE[r.status]} label={`Status: ${r.status}`} />
+            {r.restrictedGrantCount > 0 ? (
+              <StatusBadge tone="warning" label="Restriction in force" />
+            ) : null}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function ReviewQueue({ status, ownerRole }: { status: string; ownerRole: string }) {
   const pages = useApiPages({
@@ -63,36 +127,7 @@ function ReviewQueue({ status, ownerRole }: { status: string; ownerRole: string 
         }}
         unavailableOffline={['recording decisions']}
       >
-        {(items) => (
-          <ul className="list" aria-label="Access reviews">
-            {items.map((r) => (
-              <li key={r.id}>
-                <div className="row-text">
-                  <Link to={`/people/access-reviews/${r.id}`} className="row-title">
-                    {r.subjectDisplayName ?? 'Subject not available to you'}
-                  </Link>
-                  <span>{r.reason}</span>
-                  <span className="caption">
-                    owner {r.ownerRole}
-                    {r.ownerPersonId ? ' (assigned)' : ' (unassigned)'} · opened{' '}
-                    {formatDateTime(r.createdAt)} · in effect{' '}
-                    {r.effectiveTo ? `until ${formatDateTime(r.effectiveTo)}` : 'until closed'}
-                  </span>
-                  <span className="caption">
-                    {r.restrictedGrantCount} permission(s) restricted now · decisions available:{' '}
-                    {r.allowedDecisions.length > 0 ? r.allowedDecisions.join(', ') : 'none'}
-                  </span>
-                </div>
-                <span className="actions-row">
-                  <StatusBadge tone={REVIEW_STATUS_TONE[r.status]} label={`Status: ${r.status}`} />
-                  {r.restrictedGrantCount > 0 ? (
-                    <StatusBadge tone="warning" label="Restriction in force" />
-                  ) : null}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+        {(items) => <ReviewRows items={items} />}
       </QueryBoundary>
       <LoadMore pages={pages} label="access reviews" />
     </>

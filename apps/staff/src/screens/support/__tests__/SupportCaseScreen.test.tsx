@@ -442,6 +442,178 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     expect(posts[1]?.headers['idempotency-key']).not.toBe(posts[0]?.headers['idempotency-key']);
   });
 
+  it('SPK-SUPPORT-003: a closing refused with ACTION_OUTCOME_UNKNOWN names the actions to record first', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /cases/{id}': { status: 200, body: supportCase({ relatedRecords: [], origin: null }) },
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+        'POST /cases/{id}/transition': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('RESOURCE_CONFLICT', {
+              message: 'This case has an action whose outcome is not recorded yet.',
+              nextAction: 'settle_case_action',
+              details: { code: 'ACTION_OUTCOME_UNKNOWN', caseActionIds: ['act-1'] },
+            }),
+          ),
+      },
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const panel = await screen.findByRole('region', { name: 'Status' });
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(await within(panel).findByText(/Error code: RESOURCE_CONFLICT/)).toBeInTheDocument();
+    const unsettled = within(panel).getByRole('list', { name: 'Actions with an unknown outcome' });
+    expect(within(unsettled).getByRole('link', { name: 'finance.refund' })).toHaveAttribute(
+      'href',
+      '#case-action-act-1',
+    );
+  });
+
+  it('SPK-SUPPORT-003: an exception manager records an unknown action’s outcome with evidence, so the case can close', async () => {
+    const user = userEvent.setup();
+    const settledAction = {
+      ...(supportCase().actions[0] as Record<string, unknown>),
+      status: 'succeeded',
+      commandOperationId: OPERATION_ID,
+      revision: 2,
+    };
+    let settled = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['exceptions.manage'] }),
+        'GET /cases/{id}': () =>
+          fakeResponse(
+            200,
+            supportCase({
+              relatedRecords: [],
+              origin: null,
+              revision: settled ? 4 : 3,
+              actions: [settled ? settledAction : supportCase().actions[0]],
+            }),
+          ),
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+        'POST /cases/{id}/actions/{actionId}/settle': () => {
+          settled = true;
+          return fakeResponse(200, { case: supportCase({ revision: 4 }), action: settledAction });
+        },
+      },
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const form = await screen.findByRole('form', { name: 'Record the outcome: finance.refund' });
+    // Succeeded needs the command that ran; nothing is sent until the form is complete.
+    await user.click(within(form).getByLabelText(/^succeeded: /));
+    await user.type(within(form).getByLabelText(/^How the outcome was confirmed/), 'Refund shown');
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(
+      within(form).getByText(
+        'Name the command that ran: its operation or its audit record reference.',
+      ),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route?.endsWith('/settle'))).toBe(false);
+    await user.type(
+      within(form).getByLabelText(/^Operation of the command that ran/),
+      OPERATION_ID,
+    );
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(
+      await screen.findByText('Outcome recorded for finance.refund. Action: succeeded.'),
+    ).toBeInTheDocument();
+    const post = app.fake.requests.find((r) => r.route === '/cases/{id}/actions/{actionId}/settle');
+    expect(post?.params).toEqual({ id: CASE_ID, actionId: 'act-1' });
+    expect(post?.body).toEqual({
+      outcome: 'succeeded',
+      expectedRevision: 1,
+      reason: 'Refund shown',
+      operationId: OPERATION_ID,
+    });
+    expect(post?.headers['idempotency-key']).toMatch(/^key-/);
+    // The case is re-read: the action is settled and its form is gone; the outcome stays announced.
+    const actions = screen.getByRole('list', { name: 'Linked actions' });
+    await waitFor(() => expect(within(actions).getByText('Action: succeeded')).toBeInTheDocument());
+    expect(screen.queryByRole('form', { name: 'Record the outcome: finance.refund' })).toBeNull();
+    expect(
+      screen.getByText('Outcome recorded for finance.refund. Action: succeeded.'),
+    ).toBeInTheDocument();
+  });
+
+  it('records a failed outcome with a reason only; an API refusal shows its code; without the role nothing is offered', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['exceptions.manage'] }),
+        'GET /cases/{id}': {
+          status: 200,
+          body: supportCase({ relatedRecords: [], origin: null }),
+        },
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+        'POST /cases/{id}/actions/{actionId}/settle': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', {
+              message: 'This outcome belongs to a queue outside your scope.',
+            }),
+          ),
+      },
+    });
+    const first = render(app.at(`/admin/cases/${CASE_ID}`));
+    const form = await screen.findByRole('form', { name: 'Record the outcome: finance.refund' });
+    await user.click(within(form).getByLabelText(/^failed: /));
+    await user.type(
+      within(form).getByLabelText(/^How the outcome was confirmed/),
+      'No refund in finance',
+    );
+    await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
+    expect(await within(form).findByText('Not available to you')).toBeInTheDocument();
+    expect(within(form).getByText(/a queue outside your scope/)).toBeInTheDocument();
+    const post = app.fake.requests.find((r) => r.route === '/cases/{id}/actions/{actionId}/settle');
+    expect(post?.body).toEqual({
+      outcome: 'failed',
+      expectedRevision: 1,
+      reason: 'No refund in finance',
+    });
+    first.unmount();
+
+    const reader = createTestApp({
+      routes: {
+        'GET /cases/{id}': { status: 200, body: supportCase({ relatedRecords: [], origin: null }) },
+        'GET /person-names': names([SUBJECT_ID, 'Alex', 'Rivera']),
+      },
+    });
+    render(reader.at(`/admin/cases/${CASE_ID}`));
+    const actions = await screen.findByRole('list', { name: 'Linked actions' });
+    expect(
+      within(actions).getByText(/Someone who manages exceptions records its outcome/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: /^Record the outcome/ })).toBeNull();
+  });
+
+  it('Enter in the owner’s find-by-name box searches and never sends the assign command', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...detailRoutes({
+          'GET /cases/{id}': {
+            status: 200,
+            body: supportCase({ owner: { personId: SUBJECT_ID, queue: 'support_operator' } }),
+          },
+        }),
+        'GET /me/permissions': mePermissions({ actions: ['identity.lookup_person'] }),
+        'GET /people': { status: 200, body: { items: [], nextCursor: null } },
+      },
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const form = await screen.findByRole('form', { name: 'Assign the case' });
+    await user.click(
+      within(form).getByRole('button', {
+        name: 'Find by name for owner (staff person reference)',
+      }),
+    );
+    await user.type(within(form).getByLabelText('Find by name or contact'), 'Sam{Enter}');
+    await waitFor(() => expect(app.fake.requests.some((r) => r.route === '/people')).toBe(true));
+    expect(app.fake.requests.some((r) => r.route === '/cases/{id}/assign')).toBe(false);
+  });
+
   it('SCR-S-49: steps that do not end the case need no acknowledgment while records are in recovery', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

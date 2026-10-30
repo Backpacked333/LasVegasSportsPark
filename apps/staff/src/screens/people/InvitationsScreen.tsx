@@ -3,13 +3,14 @@
  * newest first, filtered by the API's effective status (a pending invitation past its expiry is
  * listed as expired), page by page with the API's cursor. Each invitation shows its full record
  * and a pending one can be revoked with a reason and its expected revision (`InvitationCard`).
+ * People are named through `GET /v1/person-names`, one read per page (a child by given name only).
  * The token is never returned by a list. Roles without `identity.read_invitations` see "not
  * available to you"; an ACCESS_DENIED answer reads the same.
  */
 import { useState } from 'react';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
-import { InvitationCard, revokedMessage } from '../../features/people/InvitationCard';
+import { InvitationCardList, revokedMessage } from '../../features/people/InvitationCard';
 import { PeopleNav } from '../../features/people/PeopleNav';
 import { INVITATION_STATUSES, type InvitationStatus } from '../../features/people/people';
 import { CommandSuccess } from '../../ui/CommandFeedback';
@@ -49,16 +50,11 @@ function InvitationList({ status }: { status: string }) {
         unavailableOffline={['revoking invitations']}
       >
         {(items) => (
-          <ul className="list" aria-label="Invitations">
-            {items.map((invitation) => (
-              <li key={invitation.id}>
-                <InvitationCard
-                  invitation={invitation}
-                  onRevoked={(i) => setOutcome(revokedMessage(i))}
-                />
-              </li>
-            ))}
-          </ul>
+          <InvitationCardList
+            invitations={items}
+            label="Invitations"
+            onRevoked={(i) => setOutcome(revokedMessage(i))}
+          />
         )}
       </QueryBoundary>
       <LoadMore pages={pages} label="invitations" />

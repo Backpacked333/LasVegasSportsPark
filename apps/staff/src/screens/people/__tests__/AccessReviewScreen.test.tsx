@@ -12,6 +12,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import {
+  CHILD_ID,
   GRANT_ID,
   OTHER_ID,
   PERSON_ID,
@@ -24,6 +25,8 @@ import {
 } from './fixtures';
 
 const READER = mePermissions({ actions: ['identity.read_access_review'] });
+/** A person GET /person-names does not name for this viewer (omitted, ID-02). */
+const UNKNOWN_ID = '0192f1a0-0000-7000-8000-0000000001ff';
 
 const PATH = `/people/access-reviews/${REVIEW_ID}`;
 
@@ -62,12 +65,16 @@ describe('SCR-S-22 AccessReviewsScreen', () => {
           status: 200,
           body: { items: [reviewSummary()], nextCursor: null },
         },
+        'GET /person-names': personNames(),
         'GET /cases': { status: 200, body: { items: [], nextCursor: null } },
       },
     });
     render(app.at('/people/access-reviews'));
     const list = await screen.findByRole('list', { name: 'Access reviews' });
-    expect(within(list).getByRole('link', { name: 'Alex Rivera' })).toHaveAttribute('href', PATH);
+    expect(await within(list).findByRole('link', { name: 'Alex Rivera' })).toHaveAttribute(
+      'href',
+      PATH,
+    );
     expect(within(list).getByText('Status: open')).toBeInTheDocument();
     expect(within(list).getByText('Restriction in force')).toBeInTheDocument();
     expect(
@@ -95,6 +102,7 @@ describe('SCR-S-22 AccessReviewsScreen', () => {
                   items: [
                     reviewSummary({
                       id: '0192f1a0-0000-7000-8000-000000000202',
+                      subjectPersonId: UNKNOWN_ID,
                       subjectDisplayName: null,
                       status: 'escalated',
                     }),
@@ -103,6 +111,7 @@ describe('SCR-S-22 AccessReviewsScreen', () => {
                 }
               : { items: [reviewSummary()], nextCursor: 'r-2' },
           ),
+        'GET /person-names': personNames(),
         'GET /cases': { status: 200, body: { items: [], nextCursor: null } },
       },
     });
@@ -110,8 +119,8 @@ describe('SCR-S-22 AccessReviewsScreen', () => {
     await screen.findByRole('list', { name: 'Access reviews' });
     await user.click(screen.getByRole('button', { name: 'Load more access reviews' }));
     expect(await screen.findByText('Status: escalated')).toBeInTheDocument();
-    // A subject the viewer may not view is never guessed.
-    expect(screen.getByText('Subject not available to you')).toBeInTheDocument();
+    // A subject the viewer may not view (omitted by GET /person-names) is never guessed.
+    expect(await screen.findByText('Subject not available to you')).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('Review status'), 'escalated');
     await user.selectOptions(screen.getByLabelText('Owning role'), 'general_manager');
     await waitFor(() =>
@@ -124,6 +133,59 @@ describe('SCR-S-22 AccessReviewsScreen', () => {
         ),
       ).toBe(true),
     );
+  });
+
+  it('§4.14: names a child subject by given name only, never with the summary’s composed name', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': READER,
+        'GET /access-reviews': {
+          status: 200,
+          body: {
+            items: [reviewSummary({ subjectPersonId: CHILD_ID, subjectDisplayName: 'Mia Rivera' })],
+            nextCursor: null,
+          },
+        },
+        'GET /person-names': personNames(),
+        'GET /cases': { status: 200, body: { items: [], nextCursor: null } },
+      },
+    });
+    render(app.at('/people/access-reviews'));
+    const list = await screen.findByRole('list', { name: 'Access reviews' });
+    expect(await within(list).findByRole('link', { name: 'Mia' })).toHaveAttribute('href', PATH);
+    expect(within(list).queryByText(/Mia Rivera/)).toBeNull();
+  });
+
+  it('SPK-UX-008: a failed name read shows its code and Try again, not "not available"', async () => {
+    const user = userEvent.setup();
+    let fail = true;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': READER,
+        'GET /access-reviews': {
+          status: 200,
+          body: { items: [reviewSummary()], nextCursor: null },
+        },
+        'GET /person-names': () =>
+          fail
+            ? fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE'))
+            : fakeResponse(200, personNames().body),
+        'GET /cases': { status: 200, body: { items: [], nextCursor: null } },
+      },
+    });
+    render(app.at('/people/access-reviews'));
+    const list = await screen.findByRole('list', { name: 'Access reviews' });
+    expect(
+      await within(list).findByText(/name could not be loaded \(INTEGRATION_UNAVAILABLE\)/),
+    ).toBeInTheDocument();
+    expect(within(list).getByRole('link', { name: 'Open the review' })).toHaveAttribute(
+      'href',
+      PATH,
+    );
+    expect(within(list).queryByText('Subject not available to you')).toBeNull();
+    fail = false;
+    await user.click(within(list).getByRole('button', { name: 'Try loading the names again' }));
+    expect(await within(list).findByRole('link', { name: 'Alex Rivera' })).toBeInTheDocument();
   });
 
   it('says when no review is open', async () => {
@@ -325,6 +387,7 @@ describe('SCR-S-22 AccessReviewScreen', () => {
         'GET /me/permissions': mePermissions({ actions: ['identity.read_authority'] }),
         'GET /access-reviews/{id}': { status: 200, body: accessReview() },
         'GET /people/{id}/authority': { status: 200, body: authority() },
+        'GET /person-names': personNames(),
         'POST /access-reviews/{id}/decisions': {
           status: 200,
           body: accessReview({ revision: 3 }),
@@ -351,6 +414,45 @@ describe('SCR-S-22 AccessReviewScreen', () => {
       expectedRevision: 2,
       grantIds: [`${GRANT_ID.slice(0, -1)}9`],
     });
+  });
+
+  it('never sends permission references typed before the subject’s permissions were listed', async () => {
+    const user = userEvent.setup();
+    let release: (response: Response) => void = () => undefined;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['identity.read_authority'] }),
+        'GET /access-reviews/{id}': { status: 200, body: accessReview() },
+        'GET /people/{id}/authority': () =>
+          new Promise<Response>((resolve) => {
+            release = resolve;
+          }),
+        'GET /person-names': personNames(),
+        'POST /access-reviews/{id}/decisions': {
+          status: 200,
+          body: accessReview({ revision: 3 }),
+        },
+      },
+    });
+    render(app.at(PATH));
+    const form = await screen.findByRole('form', { name: 'Record a decision' });
+    await user.selectOptions(within(form).getByRole('combobox', { name: /^Decision/ }), 'restrict');
+    await user.click(within(form).getByLabelText('Specific permissions by reference'));
+    // While the authority read is pending, references are typed.
+    await user.type(within(form).getByLabelText(/^Permission references/), GRANT_ID);
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/people/{id}/authority')).toBe(true),
+    );
+    await act(async () => {
+      release(fakeResponse(200, authority()));
+    });
+    // The list replaces the text box; nothing is ticked, so nothing is sent.
+    await within(form).findByLabelText('pay held by Sam Rivera · state suspended · under review');
+    expect(within(form).queryByLabelText(/^Permission references/)).toBeNull();
+    await user.click(within(form).getByLabelText('When it is lifted by a later decision'));
+    await user.click(within(form).getByRole('button', { name: 'Record decision' }));
+    expect(within(form).getByText('Choose or enter one or more permissions.')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/access-reviews/{id}/decisions')).toBe(false);
   });
 
   it('enters permission references where the subject’s authority is not readable, validated before sending', async () => {

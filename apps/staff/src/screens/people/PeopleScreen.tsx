@@ -5,8 +5,11 @@
  * least 2 characters (validated before any request), optionally narrowed by kind and status
  * (merged records only when asked for). Results are names only, never dates of birth or
  * contacts; a child is shown by given name only. Results page with the API's cursor ("Load
- * more"). The search term stays in the screen's state, never in the address (§4.14: the route
- * holds only the opaque person id). Only this organization's people are searched (§4.3); "no
+ * more"). The search term stays in the screen's state, never in the page address (§4.14: the
+ * route holds only the opaque person id). It does travel in the API request URL, because the
+ * contract makes it a query parameter (`SearchPeopleQuery`), so it can reach server and proxy
+ * access logs; a body-carried search is reported as an API issue. Only this organization's
+ * people are searched (§4.3); "no
  * match" never says anything about another organization. Roles without `identity.lookup_person`
  * see "not available to you"; an ACCESS_DENIED answer reads the same. Lookup latency is DEC-036.
  */

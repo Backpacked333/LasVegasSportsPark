@@ -374,6 +374,45 @@ describe('SCR-S-50 AssistantPanel', () => {
     expect(within(card).queryByText('Not available to you')).toBeNull();
   });
 
+  it('SPK-UX-008: a failed GET /me/permissions shows its code and Try again instead of loading forever', async () => {
+    const user = userEvent.setup();
+    let permissionsOk = false;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': () =>
+          permissionsOk
+            ? fakeResponse(200, mePermissions({ enabled: ['assistant'] }).body)
+            : fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
+        'GET /recommendations': byStatus([recommendation()]),
+      },
+    });
+    render(app.at('/today'));
+    const panel = await openPanel(user);
+    const unknown = await within(panel).findByTestId('assistant-capability-unknown');
+    expect(within(unknown).getByText(/Error code: INTERNAL_ERROR/)).toBeInTheDocument();
+    expect(within(unknown).getByText(/rejecting stays available/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/Loading whether the assistant is turned on/)).toBeNull();
+    // Until the switch is known only Reject is offered; nothing is guessed either way.
+    const card = await within(panel).findByRole('listitem', {
+      name: 'Tell U12 families about the pitch change',
+    });
+    expect(within(card).queryByRole('button', { name: /^Approve recommendation/ })).toBeNull();
+    expect(within(card).getByRole('button', { name: /^Reject recommendation/ })).toBeEnabled();
+    expect(within(panel).queryByText('Assistant turned off')).toBeNull();
+    // Try again re-reads the permissions; once the switch is known to be on, Ask and Approve appear.
+    permissionsOk = true;
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(
+      await within(panel).findByRole('form', { name: 'Ask the assistant' }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(card).getByRole('button', { name: /^Approve recommendation/ }),
+      ).toBeInTheDocument(),
+    );
+    expect(within(panel).queryByTestId('assistant-capability-unknown')).toBeNull();
+  });
+
   it('AUT-03: a settler records the reconciled outcome of an unknown apply with evidence, a reason and the expected revision', async () => {
     const user = userEvent.setup();
     const settled = recommendation({
@@ -397,11 +436,20 @@ describe('SCR-S-50 AssistantPanel', () => {
         ],
       },
     });
+    // The fakes reflect the settlement after the POST, as the API does: the applied
+    // recommendation leaves the "approved" list and its own read answers settled, so the card and
+    // its form go away; the outcome must still be reported (panel level).
+    let isSettled = false;
     const app = createTestApp({
       routes: {
         'GET /me/permissions': mePermissions({ actions: ['automation.settle_apply'] }),
-        'GET /recommendations': byStatus([unknownApply()]),
-        'POST /recommendations/{id}/settle-apply': { status: 200, body: settled },
+        'GET /recommendations': (req: { query: Record<string, string> }) =>
+          byStatus([isSettled ? settled : unknownApply()])(req),
+        'GET /recommendations/{id}': () => fakeResponse(200, isSettled ? settled : unknownApply()),
+        'POST /recommendations/{id}/settle-apply': () => {
+          isSettled = true;
+          return fakeResponse(200, settled);
+        },
       },
     });
     render(app.at('/today'));
@@ -421,8 +469,27 @@ describe('SCR-S-50 AssistantPanel', () => {
     await user.type(within(form).getByLabelText(/^Reason/), 'Delivery log checked');
     await user.click(within(form).getByRole('button', { name: 'Record outcome' }));
     expect(
-      await within(panel).findByText('Outcome recorded. Recommendation applied; apply applied.'),
+      await within(panel).findByText(
+        'Outcome recorded for “Tell U12 families about the pitch change”. Recommendation applied; apply applied.',
+      ),
     ).toBeInTheDocument();
+    // The settled recommendation left "Awaiting review" after the lists were re-read.
+    await waitFor(() =>
+      expect(
+        within(panel).queryByRole('form', { name: /^Record the reconciled outcome/ }),
+      ).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(
+        within(panel).getByText('No recommendations are waiting for review.'),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      within(panel).getByText(
+        'Outcome recorded for “Tell U12 families about the pitch change”. Recommendation applied; apply applied.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(panel).getByRole('status')).toHaveTextContent(/Outcome recorded/);
     const post = app.fake.requests.find((r) => r.route === '/recommendations/{id}/settle-apply');
     expect(post?.body).toEqual({
       expectedRevision: 5,

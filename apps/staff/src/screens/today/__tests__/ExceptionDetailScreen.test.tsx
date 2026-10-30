@@ -16,6 +16,7 @@ import {
   EXCEPTION_ID,
   PAYMENT_ID,
   auditPage,
+  lifecycleActions,
   operationalException,
   paymentAttempt,
 } from './fixtures';
@@ -180,6 +181,48 @@ describe('SCR-S-02 ExceptionDetailScreen', () => {
     await user.click(await screen.findByRole('button', { name: 'Acknowledge' }));
     expect(await screen.findByText('Not available to you')).toBeInTheDocument();
     expect(screen.getByText(/a queue outside your scope/)).toBeInTheDocument();
+  });
+
+  it('K-10, SUP-01: offers the lifecycle a queue owner holds through exceptions.manage_own_queue, and links the domain step', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes({
+          ownerQueue: 'finance_operator',
+          nextActions: [
+            {
+              action: 'finance.reconcile_payment',
+              verb: 'open',
+              label: 'Reconcile the payment with the provider',
+              method: 'POST',
+              href: `/v1/payments/${PAYMENT_ID}/reconcile`,
+            },
+            ...lifecycleActions('exceptions.manage_own_queue', ['resolve', 'close']),
+          ],
+        }),
+        'POST /exceptions/{id}/resolve': {
+          status: 200,
+          body: operationalException({ status: 'resolved', revision: 5 }),
+        },
+      },
+    });
+    render(app.at(PATH));
+    expect(await screen.findByRole('button', { name: 'Mark resolved' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Acknowledge' })).toBeNull();
+    const next = screen.getByRole('region', { name: 'Next permitted actions' });
+    expect(
+      within(next).getByRole('link', { name: 'Reconcile the payment with the provider' }),
+    ).toHaveAttribute('href', `/finance/payments/${PAYMENT_ID}`);
+    // The lifecycle steps are buttons, never listed as domain actions.
+    expect(within(next).queryByText('exceptions.manage_own_queue')).toBeNull();
+    await user.type(screen.getByLabelText(/Resolution note/), 'Provider confirmed the charge');
+    await user.click(screen.getByRole('button', { name: 'Mark resolved' }));
+    expect(
+      await screen.findByText('Exception marked resolved. State: resolved.'),
+    ).toBeInTheDocument();
+    const resolve = app.fake.requests.find((r) => r.route === '/exceptions/{id}/resolve');
+    expect(resolve?.body).toEqual({ expectedRevision: 4, reason: 'Provider confirmed the charge' });
   });
 
   it('offers no workflow buttons when the API lists none for the viewer', async () => {

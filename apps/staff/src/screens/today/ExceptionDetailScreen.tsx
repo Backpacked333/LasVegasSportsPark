@@ -3,9 +3,11 @@
  * `GET /v1/exceptions/{id}`: title, severity, status, affected record, owner queue, age, deadline,
  * next permitted actions and the resolution history.
  *
- * Acknowledge, resolve and close are offered only where the API lists them for the viewer; each
- * sends the exception's expected revision and an idempotency key per intent; resolve and close
- * need a note. Closing never marks the underlying payment, booking or delivery resolved: the
+ * Acknowledge, resolve and close are offered only where the API lists them for the viewer (each
+ * next action's `verb`, whether `exceptions.manage` or the queue owner's
+ * `exceptions.manage_own_queue` authorizes it, SUP-01, K-10); each sends the exception's expected
+ * revision and an idempotency key per intent; resolve and close need a note. Domain next actions
+ * link to the owning module's staff screen. Closing never marks the underlying payment, booking or delivery resolved: the
  * affected record's own state is read from its owning module beside the exception (every record
  * type with a single-record read, `AffectedRecordState.tsx`) and a record in recovery says so.
  * Times are in the exception's facility zone (`GET /v1/facilities`, SPK-SCHED-008). The audit
@@ -37,6 +39,7 @@ import {
 import { EXCEPTIONS_KEY, EXCEPTION_KEY, SEVERITY_BADGE, TODAY_KEY } from './TodayScreen';
 import { AffectedRecordState } from './AffectedRecordState';
 import { AuditHistory } from './AuditHistory';
+import { NextActionLink } from './NextActionLink';
 import { useFacilityDirectory } from './useFacilityDirectory';
 
 type OperationalException = Schema<'OperationalException'>;
@@ -240,7 +243,7 @@ function ExceptionView({ exception }: { exception: OperationalException }) {
           <ul className="list">
             {next.map((a) => (
               <li key={`${a.action}-${a.href ?? ''}`}>
-                <span>{a.label}</span>
+                <NextActionLink action={a} />
                 <span className="caption">{a.action}</span>
               </li>
             ))}

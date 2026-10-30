@@ -17,8 +17,12 @@
  *   `RELATED_RECORD_IN_RECOVERY`, listing them): the refused operations join the notice, and the
  *   acknowledged command sends `acknowledgeOpenRecovery: true` with the reason, which the API
  *   audits. Closing with an action whose outcome is unknown is refused by the API
- *   (`ACTION_OUTCOME_UNKNOWN`), shown with its code. A linked action with an unknown outcome says
- *   so and is not repeated.
+ *   (`ACTION_OUTCOME_UNKNOWN`, nextAction `settle_case_action`), shown with its code and the
+ *   actions it names. A linked action with an unknown outcome says so and is never repeated; a
+ *   viewer whose role holds `exceptions.manage` records its outcome from the owning module's
+ *   records (`POST /v1/cases/{id}/actions/{actionId}/settle`: succeeded with the executed
+ *   command's operation or audit record, or failed, and a reason), which is what lets the case
+ *   close. The outcome is reported above the list, because the settle form closes with it.
  * - How the case was opened (`openedVia`): a customer's own request (SPK-SUPPORT-002) says so; the
  *   customer sees its status, never notes, the owner or internal details. A subject merged into
  *   another record links to the surviving record (SPK-IAM-007). People are named from
@@ -30,6 +34,7 @@ import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { PersonName, usePeopleNames } from '../../features/people/names';
@@ -37,7 +42,7 @@ import { PersonReferenceField, referenceError } from '../../features/people/Pers
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError, CommandSuccess, fieldErrorsOf } from '../../ui/CommandFeedback';
-import { Facts, SelectField, TextAreaField, TextField } from '../../ui/FormFields';
+import { Facts, RadioGroup, SelectField, TextAreaField, TextField } from '../../ui/FormFields';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { RecordRef, isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
@@ -232,16 +237,140 @@ function CaseHistory({ item }: { item: CaseDetail }) {
   );
 }
 
+/** Recording an unknown outcome is the exception workflow's (the API also checks the queue). */
+export const SETTLE_CASE_ACTION_PERMISSION = 'exceptions.manage';
+
+const SETTLE_OUTCOMES = [
+  {
+    value: 'succeeded',
+    label: 'succeeded: the owning module’s records show the command took effect',
+  },
+  { value: 'failed', label: 'failed: the owning module’s records show it had no effect' },
+] as const;
+
+/**
+ * Record the outcome of a linked action whose outcome is unknown, from the owning module's records
+ * (SPK-SUPPORT-003, §4.11). It never re-runs the command. "succeeded" names the executed command
+ * by its operation or audit record (the API checks it is this action's command); "failed" needs
+ * only the reason. One idempotency key per intent; the action's revision is sent as expected.
+ */
+function SettleCaseActionForm({
+  item,
+  action,
+  onSettled,
+}: {
+  item: CaseDetail;
+  action: CaseAction;
+  onSettled: (message: string) => void;
+}) {
+  const { online } = useApp();
+  const [outcome, setOutcome] = useState('');
+  const [operationId, setOperationId] = useState('');
+  const [auditRecordId, setAuditRecordId] = useState('');
+  const [reason, setReason] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const settle = useApiCommand('post', '/cases/{id}/actions/{actionId}/settle', {
+    invalidate: [CASE_KEY, CASES_KEY],
+  });
+  const reload = useReload([settle.reset]);
+  const apiErrors = fieldErrorsOf(settle.error);
+  const submit = () => {
+    const problems: Record<string, string> = {};
+    const op = operationId.trim().toLowerCase();
+    const audit = auditRecordId.trim().toLowerCase();
+    if (!outcome) problems['outcome'] = 'Choose what the owning module’s records show.';
+    if (op && !isUuid(op))
+      problems['operationId'] = 'Enter the operation reference (36 characters).';
+    if (audit && !isUuid(audit)) {
+      problems['auditRecordId'] = 'Enter the audit record reference (36 characters).';
+    }
+    if (outcome === 'succeeded' && !op && !audit) {
+      problems['operationId'] =
+        'Name the command that ran: its operation or its audit record reference.';
+    }
+    if (!reason.trim()) problems['reason'] = 'Write how the outcome was confirmed.';
+    setErrors(problems);
+    if (Object.keys(problems).length > 0) return;
+    void settle
+      .submit({
+        path: { id: item.id, actionId: action.id },
+        body: {
+          outcome: outcome as 'succeeded' | 'failed',
+          expectedRevision: action.revision,
+          reason: reason.trim(),
+          ...(op ? { operationId: op } : {}),
+          ...(audit ? { auditRecordId: audit } : {}),
+        },
+      })
+      .then((r) =>
+        onSettled(`Outcome recorded for ${r.action.actionId}. Action: ${r.action.status}.`),
+      )
+      .catch(() => undefined);
+  };
+  return (
+    <form
+      noValidate
+      className="form"
+      aria-label={`Record the outcome: ${action.actionId}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
+      <RadioGroup
+        legend="What the owning module’s records show"
+        name={`settle-case-action-${action.id}`}
+        required
+        value={outcome}
+        onChange={setOutcome}
+        error={errors['outcome'] ?? apiErrors['outcome']}
+        options={SETTLE_OUTCOMES}
+      />
+      <TextField
+        label="Operation of the command that ran"
+        hint="Needed for succeeded unless the audit record is given, for example the refund's operation."
+        value={operationId}
+        onChange={setOperationId}
+        error={errors['operationId'] ?? apiErrors['operationId']}
+      />
+      <TextField
+        label="Audit record of the command that ran"
+        value={auditRecordId}
+        onChange={setAuditRecordId}
+        error={errors['auditRecordId'] ?? apiErrors['auditRecordId']}
+      />
+      <TextAreaField
+        label="How the outcome was confirmed"
+        required
+        value={reason}
+        onChange={setReason}
+        error={errors['reason'] ?? apiErrors['reason']}
+        maxLength={2000}
+      />
+      <Button type="submit" busy={settle.isProcessing} disabled={!online}>
+        Record outcome
+      </Button>
+      <CommandError error={settle.error} onRetry={submit} onReload={reload} />
+    </form>
+  );
+}
+
 function CaseActions({ item }: { item: CaseDetail }) {
+  const permissions = usePermissions();
+  // Reported here: once the outcome is recorded the action is no longer unknown and its form goes.
+  const [settled, setSettled] = useState<string | null>(null);
+  const maySettle =
+    permissions.isPermitted(SETTLE_CASE_ACTION_PERMISSION, item.facilityId) === true;
   return (
     <section className="panel" aria-labelledby="case-actions-title">
       <h3 id="case-actions-title">Actions taken</h3>
+      <CommandSuccess message={settled} />
       {item.actions.length === 0 ? (
         <p>No command has been linked to this case.</p>
       ) : (
         <ul className="list" aria-label="Linked actions">
           {item.actions.map((a) => (
-            <li key={a.id}>
+            <li key={a.id} id={`case-action-${a.id}`}>
               <div className="row-text">
                 <span className="row-title">{a.actionId}</span>
                 <span className="caption">
@@ -258,7 +387,13 @@ function CaseActions({ item }: { item: CaseDetail }) {
                 {a.status === 'unknown' ? (
                   <span className="caption">
                     Outcome unknown: the owning module is being checked. Do not repeat this action.
+                    {maySettle
+                      ? ' Record its outcome once the owning module’s records show it; the case closes only after that.'
+                      : ' Someone who manages exceptions records its outcome; the case closes only after that.'}
                   </span>
+                ) : null}
+                {a.status === 'unknown' && maySettle ? (
+                  <SettleCaseActionForm item={item} action={a} onSettled={setSettled} />
                 ) : null}
               </div>
               <StatusBadge tone={ACTION_TONE[a.status]} label={`Action: ${a.status}`} />
@@ -309,6 +444,17 @@ const ENDING_EVENTS: ReadonlySet<CaseEvent> = new Set(['resolve', 'close']);
 
 function recoverySignature(records: readonly RecordInRecovery[]): string {
   return records.map((r) => `${r.type}:${r.id}:${r.state}`).join('|');
+}
+
+/** The linked actions the API named when it refused to close with an unknown outcome. */
+export function unsettledActionIds(error: unknown): string[] {
+  const e = error as { code?: unknown; details?: unknown } | null | undefined;
+  if (!e || e.code !== 'RESOURCE_CONFLICT') return [];
+  const details = e.details as { code?: unknown; caseActionIds?: unknown } | null | undefined;
+  if (details?.code !== 'ACTION_OUTCOME_UNKNOWN' || !Array.isArray(details.caseActionIds)) {
+    return [];
+  }
+  return details.caseActionIds.filter((id): id is string => typeof id === 'string');
 }
 
 /** SUP-04: the operations the API listed when it refused to end the case while they recover. */
@@ -554,7 +700,29 @@ function TransitionPanel({ item }: { item: CaseDetail }) {
         onRetry={lastEvent ? () => run(lastEvent) : undefined}
         onReload={reload}
       />
+      <UnsettledActions item={item} ids={unsettledActionIds(transition.error)} />
     </section>
+  );
+}
+
+/** ACTION_OUTCOME_UNKNOWN: the actions whose outcome must be recorded before the case closes. */
+function UnsettledActions({ item, ids }: { item: CaseDetail; ids: readonly string[] }) {
+  if (ids.length === 0) return null;
+  return (
+    <div role="alert" data-testid="unsettled-actions">
+      <p>Record the outcome of these actions first (under Actions taken):</p>
+      <ul className="list" aria-label="Actions with an unknown outcome">
+        {ids.map((id) => {
+          const action = item.actions.find((a) => a.id === id);
+          return (
+            <li key={id}>
+              <a href={`#case-action-${id}`}>{action ? action.actionId : 'Linked action'}</a>
+              <code>{id}</code>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

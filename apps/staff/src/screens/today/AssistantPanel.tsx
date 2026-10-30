@@ -16,23 +16,28 @@
  *   decides whether new questions, approvals and applies are accepted: while it is off the panel
  *   says "Assistant turned off" above the recommendations already proposed, which stay readable and
  *   can still be rejected; Ask, Approve and Apply are not offered (the API answers ACCESS_DENIED
- *   CAPABILITY_DISABLED, shown as the same turned-off state, if one is sent anyway).
+ *   CAPABILITY_DISABLED, shown as the same turned-off state, if one is sent anyway). If that read
+ *   fails, the panel shows its error code with "Try again" (or the offline state) in place of the
+ *   switch, never an endless "loading", and offers Reject only until the switch is known.
  * - An apply whose outcome is unknown (its operation `recovery_required`) is never applied again;
  *   a viewer whose role holds `automation.settle_apply` records the reconciled outcome
  *   (`POST /v1/recommendations/{id}/settle-apply`: applied or not applied, the evidence in the
  *   owning module's records and a reason, with the expected revision). Settlements are listed
- *   with who recorded them. Settling is never gated by the capability (AUT-03).
+ *   with who recorded them. Settling is never gated by the capability (AUT-03). The outcome is
+ *   reported at panel level, because a settled recommendation leaves the lists it was shown in
+ *   (an applied one is no longer awaiting review) and its form closes once the outcome is known.
  */
 import {
   ApiError,
   CAPABILITY_PRESENTATION,
   apiQueryKey,
+  presentationForError,
   type ApiResponse,
   type Schema,
 } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { usePermissions } from '../../api/permissions';
+import { usePermissions, type PermissionsState } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useOperation } from '../../api/useOperation';
@@ -179,14 +184,20 @@ function SettlementList({ settlements }: { settlements: readonly Settlement[] })
  * AUT-03: record the reconciled outcome of an apply whose outcome was unknown, from the owning
  * module's records. Never re-runs the command; the expected revision guards a concurrent change.
  */
-function SettleApplyForm({ recommendation: rec }: { recommendation: Recommendation }) {
+function SettleApplyForm({
+  recommendation: rec,
+  onSettled,
+}: {
+  recommendation: Recommendation;
+  /** Reported above the cards: once settled, this form and often its card are gone. */
+  onSettled: (message: string) => void;
+}) {
   const { online } = useApp();
   const queryClient = useQueryClient();
   const [outcome, setOutcome] = useState('');
   const [evidence, setEvidence] = useState('');
   const [reason, setReason] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [success, setSuccess] = useState<string | null>(null);
   const invalidate = [RECOMMENDATIONS_KEY, RECOMMENDATION_KEY, REQUEST_KEY];
   const settle = useApiCommand('post', '/recommendations/{id}/settle-apply', { invalidate });
   const reload = () => {
@@ -194,7 +205,6 @@ function SettleApplyForm({ recommendation: rec }: { recommendation: Recommendati
     void Promise.all(invalidate.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
   };
   const submit = () => {
-    setSuccess(null);
     const problems: Record<string, string> = {};
     if (!outcome) problems['outcome'] = 'Choose what the owning module’s records show.';
     if (!evidence.trim()) {
@@ -214,7 +224,9 @@ function SettleApplyForm({ recommendation: rec }: { recommendation: Recommendati
         },
       })
       .then((r) =>
-        setSuccess(`Outcome recorded. Recommendation ${r.status}; apply ${r.apply.state}.`),
+        onSettled(
+          `Outcome recorded for “${r.title}”. Recommendation ${r.status}; apply ${r.apply.state}.`,
+        ),
       )
       .catch(() => undefined);
   };
@@ -257,7 +269,6 @@ function SettleApplyForm({ recommendation: rec }: { recommendation: Recommendati
       <Button type="submit" busy={settle.isProcessing} disabled={!online}>
         Record outcome
       </Button>
-      <CommandSuccess message={success} />
       <CommandError error={settle.error} onRetry={submit} onReload={reload} />
     </form>
   );
@@ -266,10 +277,12 @@ function SettleApplyForm({ recommendation: rec }: { recommendation: Recommendati
 function RecommendationCard({
   recommendation: rec,
   assistantOn,
+  onSettled,
 }: {
   recommendation: Recommendation;
   /** The organization's `assistant` switch; undefined until GET /v1/me/permissions answers. */
   assistantOn: boolean | undefined;
+  onSettled: (message: string) => void;
 }) {
   const { online } = useApp();
   const permissions = usePermissions();
@@ -407,7 +420,7 @@ function RecommendationCard({
             The owning module&apos;s records are being checked. Do not apply this again.
             {shown.apply.lastError ? ` (${shown.apply.lastError.code})` : ''}
           </p>
-          {canSettle ? <SettleApplyForm recommendation={shown} /> : null}
+          {canSettle ? <SettleApplyForm recommendation={shown} onSettled={onSettled} /> : null}
         </div>
       ) : shown.apply.lastError ? (
         <p className="error-text">
@@ -486,9 +499,11 @@ function RecommendationCard({
 function AssistantAnswer({
   initial,
   assistantOn,
+  onSettled,
 }: {
   initial: AssistantRequest;
   assistantOn: boolean | undefined;
+  onSettled: (message: string) => void;
 }) {
   const now = useNow();
   const queryClient = useQueryClient();
@@ -532,7 +547,12 @@ function AssistantAnswer({
           <h4>Proposals for review</h4>
           <ul className="list" aria-label="Proposals from this answer">
             {answer.recommendations.map((r) => (
-              <RecommendationCard key={r.id} recommendation={r} assistantOn={assistantOn} />
+              <RecommendationCard
+                key={r.id}
+                recommendation={r}
+                assistantOn={assistantOn}
+                onSettled={onSettled}
+              />
             ))}
           </ul>
         </>
@@ -544,9 +564,11 @@ function AssistantAnswer({
 function AskForm({
   facilityId,
   assistantOn,
+  onSettled,
 }: {
   facilityId: string | null;
   assistantOn: boolean | undefined;
+  onSettled: (message: string) => void;
 }) {
   const { online } = useApp();
   const [prompt, setPrompt] = useState('');
@@ -595,7 +617,12 @@ function AskForm({
       </form>
       <CommandError error={ask.error} onRetry={submit} />
       {ask.data ? (
-        <AssistantAnswer key={ask.data.id} initial={ask.data} assistantOn={assistantOn} />
+        <AssistantAnswer
+          key={ask.data.id}
+          initial={ask.data}
+          assistantOn={assistantOn}
+          onSettled={onSettled}
+        />
       ) : null}
     </>
   );
@@ -617,10 +644,56 @@ function AssistantSwitchedOff() {
   );
 }
 
+/**
+ * Whether the assistant is turned on is not known yet (SPK-UX-008): loading, or the
+ * GET /v1/me/permissions failure with its code and "Try again", or the offline state; never an
+ * endless "loading". Same states as `CapabilityGate`.
+ */
+function AssistantSwitchUnknown({ query }: { query: PermissionsState['query'] }) {
+  const now = useNow();
+  const retry = () => void query.refetch();
+  const withheld = (
+    <p className="caption">
+      Asking, approving and applying are offered once it is known whether the assistant is turned
+      on; rejecting stays available.
+    </p>
+  );
+  if (query.error) {
+    const presentation = presentationForError(query.error);
+    return (
+      <div data-testid="assistant-capability-unknown">
+        {presentation === 'unavailable' ? (
+          <StateView
+            variant="unavailable"
+            title="Not available to you"
+            description="Whether the assistant is turned on could not be read for you."
+          />
+        ) : presentation === 'offline' ? (
+          <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
+        ) : (
+          <StateView variant="error" error={query.error} onRetry={retry} />
+        )}
+        {withheld}
+      </div>
+    );
+  }
+  if (query.fetchStatus === 'paused') {
+    return (
+      <div data-testid="assistant-capability-unknown">
+        <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
+        {withheld}
+      </div>
+    );
+  }
+  return <StateView variant="loading" label="whether the assistant is turned on" />;
+}
+
 export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
   const { online } = useApp();
   const permissions = usePermissions();
   const assistantOn = permissions.isCapabilityEnabled(ASSISTANT_CAPABILITY);
+  // AUT-03: a recorded settlement is reported here; the card it came from may leave the list.
+  const [settled, setSettled] = useState<string | null>(null);
   // Read by status (the API filters), so newer applied or rejected ones never push the ones
   // still waiting out of the page; a page that has more says so (never a false "none").
   const proposed = useApiQuery({
@@ -668,19 +741,25 @@ export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
     body = (
       <>
         {assistantOn === true ? (
-          <AskForm facilityId={facilityId} assistantOn={assistantOn} />
+          <AskForm facilityId={facilityId} assistantOn={assistantOn} onSettled={setSettled} />
         ) : assistantOn === false ? (
           <AssistantSwitchedOff />
         ) : (
-          <StateView variant="loading" label="whether the assistant is turned on" />
+          <AssistantSwitchUnknown query={permissions.query} />
         )}
+        <CommandSuccess message={settled} />
         <h4>Awaiting review</h4>
         {open.length === 0 && !more ? (
           <p>No recommendations are waiting for review.</p>
         ) : (
           <ul className="list" aria-label="Recommendations awaiting review">
             {open.map((r) => (
-              <RecommendationCard key={r.id} recommendation={r} assistantOn={assistantOn} />
+              <RecommendationCard
+                key={r.id}
+                recommendation={r}
+                assistantOn={assistantOn}
+                onSettled={setSettled}
+              />
             ))}
           </ul>
         )}
