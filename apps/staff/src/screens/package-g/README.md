@@ -11,9 +11,12 @@ changes one (K-12). Status legend as in `apps/staff/README.md`.
 | SCR-S-52 Parties                   | `parties/`            | `/schedule/parties`           | Schedule       | `parties`          | Placeholder, **Verified** in jsdom; not built |
 | SCR-S-53 Memberships               | `memberships/`        | `/finance/memberships`        | Finance        | `memberships`      | Placeholder, **Verified** in jsdom; not built |
 | SCR-S-54 Session packages          | `session-packages/`   | `/finance/session-packages`   | Finance        | `session_packages` | Placeholder, **Verified** in jsdom; not built |
-| SCR-S-55 Point of sale             | `point-of-sale/`      | `/finance/point-of-sale`      | Finance        | `point_of_sale`    | Placeholder, **Verified** in jsdom; not built |
-| SCR-S-56 Access hardware           | `access-hardware/`    | `/admin/access-hardware`      | Administration | `access_hardware`  | Placeholder, **Verified** in jsdom; not built |
-| SCR-S-57 Accounting export batches | `accounting-exports/` | `/finance/accounting-exports` | Finance        | `accounting`       | Placeholder, **Verified** in jsdom; not built |
+| SCR-S-55 Point of sale             | `point-of-sale/`      | `/finance/point-of-sale`      | Finance        | `point_of_sale`    | Built, **Verified** in jsdom (1)              |
+| SCR-S-56 Access hardware           | `access-hardware/`    | `/admin/access-hardware`      | Administration | `access_hardware`  | Built, **Verified** in jsdom (1)              |
+| SCR-S-57 Accounting export batches | `accounting-exports/` | `/finance/accounting-exports` | Finance        | `accounting`       | Built, **Verified** in jsdom (1)              |
+
+(1) Built screens, their pages, API operations, states and what stays pending (DEC-019, DEC-057,
+POL-018; DEC-023, DEC-032, POL-043; DEC-022): `src/features/pos-access-accounting/README.md`.
 
 ## For the builder of one screen
 
