@@ -4,7 +4,7 @@
  * price, policy value or real person is used; ids are fixed UUID-shaped strings.
  */
 import type { Schema } from '@sportspark/api-client';
-import { FACILITY_A, TEST_NOW } from '../../../testing/test-app';
+import { FACILITY_A, FACILITY_B, TEST_NOW } from '../../../testing/test-app';
 
 export const NOW_ISO = TEST_NOW.toISOString();
 export const ORG = '0192f1a0-0000-7000-8000-0000000000aa';
@@ -364,6 +364,170 @@ export function policyVersion(
     revision: 2,
     createdAt: '2026-08-20T07:00:00.000Z',
     updatedAt: '2026-08-30T07:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** `GET /v1/facilities` (K-04): both test facilities, in staff scope, with IANA zones. */
+export function facilityList(overrides: Partial<Schema<'FacilitySummary'>>[] = []): {
+  status: number;
+  body: Schema<'FacilityList'>;
+} {
+  const base: Schema<'FacilitySummary'>[] = [FACILITY_A, FACILITY_B].map((id, i) => ({
+    id,
+    slug: `north-park-${i + 1}`,
+    name: `North Park ${i + 1}`,
+    timezone: 'America/Los_Angeles',
+    status: 'active',
+    address: null,
+    inStaffScope: true,
+  }));
+  return {
+    status: 200,
+    body: { items: base.map((f, i) => ({ ...f, ...(overrides[i] ?? {}) })) },
+  };
+}
+
+export function staffMembershipView(
+  overrides: Partial<Schema<'StaffMembershipView'>> = {},
+): Schema<'StaffMembershipView'> {
+  return { ...staffMembership(), personDisplayName: 'Alex Rivera', ...overrides };
+}
+
+export function capability(
+  id: Schema<'CapabilityId'>,
+  overrides: Partial<Schema<'Capability'>> = {},
+): Schema<'Capability'> {
+  return {
+    capability: id,
+    enabled: false,
+    enforcement: 'commands',
+    description: `Description of ${id}`,
+    applicabilityReferences: id === 'assistant' ? ['DEC-016'] : ['DEC-016', 'DEC-076'],
+    relatedDecisions: [],
+    owningModules: ['enrollment'],
+    decisionReference: null,
+    reason: null,
+    changedByPersonId: null,
+    changedAt: null,
+    revision: null,
+    ...overrides,
+  };
+}
+
+const PENDING_REGISTER: Schema<'IntegrationRegister'> = {
+  productAndVendor: null,
+  accountOwner: null,
+  authorizedAccess: null,
+  supportedOperations: null,
+  sandboxAvailability: null,
+  documentation: null,
+  eventBehavior: null,
+  rateLimits: null,
+  idempotency: null,
+  failureHandling: null,
+  reconciliationOwner: null,
+  exitProcedure: null,
+};
+
+/** `GET /v1/admin/integrations` as the API answers while no provider is selected (§5.2). */
+export function integrations(): Schema<'Integrations'> {
+  const gates: [Schema<'ProviderGate'>, string][] = [
+    ['identity', 'DEC-018'],
+    ['payments', 'DEC-019'],
+    ['messaging', 'DEC-020'],
+    ['hosting', 'DEC-021'],
+    ['accounting', 'DEC-022'],
+    ['hardware', 'DEC-023'],
+    ['assistant', 'DEC-013'],
+  ];
+  return {
+    gates: gates.map(([gate, decisionRef]) => ({
+      gate,
+      decisionRef,
+      status: 'pending_decision',
+      register: { ...PENDING_REGISTER },
+      evidenceLevel: null,
+      adapters:
+        gate === 'payments'
+          ? [
+              {
+                id: 'finance.payment_provider',
+                gate,
+                port: 'PAYMENT_PROVIDER_PORT',
+                adapter: { name: 'FakePaymentProvider', kind: 'fake' },
+                productionAllowed: false,
+                scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
+                reconciliationOwner: 'finance_operator',
+              },
+            ]
+          : [],
+    })),
+  };
+}
+
+export function adminSettings(
+  facilityOverrides: Partial<Schema<'AdminFacilitySettings'>>[] = [],
+): Schema<'AdminSettings'> {
+  return {
+    organization: {
+      id: ORG,
+      slug: 'sports-park',
+      name: 'Sports Park Organization',
+      status: 'active',
+      revision: 3,
+      settings: {},
+    },
+    facilities: [FACILITY_A, FACILITY_B].map((id, i) => ({
+      id,
+      slug: `north-park-${i + 1}`,
+      name: `North Park ${i + 1}`,
+      timezone: 'America/Los_Angeles',
+      status: 'active',
+      address: null,
+      revision: 1,
+      settings: {},
+      ...(facilityOverrides[i] ?? {}),
+    })),
+  };
+}
+
+export function auditRecord(
+  n: number,
+  overrides: Partial<Schema<'AuditRecord'>> = {},
+): Schema<'AuditRecord'> {
+  return {
+    id: uuid(9100 + n),
+    occurredAt: NOW_ISO,
+    actor: { ...actor, staffRoles: ['system_administrator'] },
+    action: 'identity.manage_staff_membership',
+    targetType: 'staff_membership',
+    targetId: MEMBERSHIP_1,
+    beforeRevision: 1,
+    afterRevision: 2,
+    reason: 'Role change approved',
+    correlationId: `corr-${n}`,
+    operationId: null,
+    details: { operation: 'update' },
+    ...overrides,
+  };
+}
+
+export function providerEvent(
+  n: number,
+  overrides: Partial<Schema<'ProviderEvent'>> = {},
+): Schema<'ProviderEvent'> {
+  return {
+    id: uuid(9200 + n),
+    provider: 'fake-payments',
+    providerEventId: `evt_${n}`,
+    eventType: 'payment.succeeded',
+    signatureVerified: true,
+    status: 'processed',
+    attempts: 1,
+    lastError: null,
+    receivedAt: NOW_ISO,
+    processedAt: NOW_ISO,
     ...overrides,
   };
 }

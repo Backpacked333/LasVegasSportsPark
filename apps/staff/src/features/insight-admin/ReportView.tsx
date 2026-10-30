@@ -4,7 +4,10 @@
  * and denominator, time basis, exclusions, dimensions, currency, freshness, access scope),
  * SPK-REPORT-002 to SPK-REPORT-006 (the figures with their disclosures), SPK-UX-008 partial
  * completion (a figure the API could not compute is marked "Not available" with its reason, never
- * zero, rule G13) and stale version (freshness and the as-of instant per metric).
+ * zero, rule G13) and stale version (freshness and the as-of instant per metric). REP-03: how the
+ * figures were read (`freshness.consistency`) and every module setting the report used, configured
+ * or not, with the pending decision that sets it (`settings`; a value left to operators is never a
+ * client default).
  * Rows are aggregates only; the API sends no person-level rows (rule G9, §4.14).
  */
 import type { Schema } from '@sportspark/api-client';
@@ -17,6 +20,47 @@ type MetricDefinition = Schema<'MetricDefinition'>;
 type MetricValue = Schema<'ReportMetricValue'>;
 type ReportColumn = Schema<'ReportColumn'>;
 type ReportRow = Schema<'ReportRow'>;
+type ReportSettingUse = Schema<'ReportSettingUse'>;
+
+const CONSISTENCY_LABELS: Record<Schema<'ReportingConsistency'>, string> = {
+  snapshot: 'Every figure was read in one consistent snapshot.',
+  owner_reads:
+    'Some figures were read by their owning module at the request instant, outside the snapshot.',
+};
+
+export function consistencyText(consistency: Schema<'ReportingConsistency'> | undefined): string {
+  return consistency
+    ? CONSISTENCY_LABELS[consistency]
+    : 'Stored before reports were read in one snapshot.';
+}
+
+/** The module settings a report used (REP-03): configuration, never a client default. */
+export function ReportSettings({ settings }: { settings: readonly ReportSettingUse[] }) {
+  if (settings.length === 0) return null;
+  return (
+    <section className="ia-section" aria-label="Settings this report used">
+      <h4>Settings this report used</h4>
+      <ul>
+        {settings.map((setting) => (
+          <li key={setting.setting}>
+            <StatusBadge
+              tone={setting.configured ? 'info' : 'pending'}
+              label={setting.configured ? 'configured' : 'not configured'}
+            />{' '}
+            {setting.setting}
+            {setting.configured && setting.value !== null ? ` = ${setting.value}` : ''}.{' '}
+            {setting.effect}{' '}
+            <span className="caption">
+              {setting.configured
+                ? `Configured by the operator; ${setting.pendingDecision} is still pending.`
+                : `Pending ${setting.pendingDecision}.`}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 export function metricAnchor(metricKey: string, prefix = 'def'): string {
   return `${prefix}-${metricKey}`;
@@ -257,6 +301,8 @@ export function ReportView({
             {FRESHNESS_LABELS[report.freshness.class]}.{' '}
             {POINT_IN_TIME_LABELS[report.freshness.pointInTime]}. {report.freshness.note}
           </dd>
+          <dt>Read</dt>
+          <dd>{consistencyText(report.freshness.consistency)}</dd>
           {report.runId ? (
             <>
               <dt>Stored run</dt>
@@ -294,6 +340,8 @@ export function ReportView({
           </ul>
         </section>
       ))}
+
+      <ReportSettings settings={report.settings ?? []} />
 
       {report.disclosures.length > 0 ? (
         <section className="ia-section" aria-label="Disclosures">

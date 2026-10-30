@@ -3,7 +3,8 @@
  * after corrections), §4.14 (expiring, single-use exports; aggregate content only), SPK-UX-008
  * (empty, permission restriction, offline disabled, processing, success "download until",
  * stale "regenerate"), protected NOT_FOUND shown as not available, and the one-time token sent
- * only as a header, never in a URL.
+ * only as a header, never in a URL. REP-01: the requester's own exports (`GET /v1/reports/exports`)
+ * with status filter and cursor; REP-03: the export lifetime pending DEC-060.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -12,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   EXPORT_1,
   RUN_1,
+  uuid,
   RUN_2,
   exportCreated,
   ok,
@@ -34,6 +36,7 @@ function app(routes: Record<string, FakeHandler> = {}, now?: () => Date) {
   return createTestApp({
     routes: {
       'GET /reports/runs': page([runSummary(RUN_1)]),
+      'GET /reports/exports': page([]),
       ...routes,
     },
     now,
@@ -138,7 +141,8 @@ describe('SCR-S-45 ExportsScreen', () => {
         (r) => !r.path.includes('spx_') && !JSON.stringify(r.query).includes('spx_'),
       ),
     ).toBe(true);
-    expect(await screen.findByText('downloaded')).toBeInTheDocument();
+    const made = screen.getByRole('list', { name: 'Exports made on this page' });
+    expect(await within(made).findByText('downloaded')).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: `Download export ${EXPORT_1.slice(0, 8)}` }),
     ).toBeNull();
@@ -210,7 +214,8 @@ describe('SCR-S-45 ExportsScreen', () => {
     expect(
       await screen.findByText(`Expired at ${formatInstant('2026-10-24T11:00:00.000Z')}`),
     ).toBeInTheDocument();
-    expect(screen.getByText('expired')).toBeInTheDocument();
+    const made = screen.getByRole('list', { name: 'Exports made on this page' });
+    expect(within(made).getByText('expired')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Download export/ })).toBeNull();
   });
 
@@ -328,6 +333,122 @@ describe('SCR-S-45 ExportsScreen', () => {
       (r) => r.route === '/reports/exports' && r.method === 'POST',
     );
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('REP-01: lists your earlier exports with status and expiry, never a download token', async () => {
+    const EXPORT_2 = uuid(202);
+    const test = app({
+      'GET /reports/exports': page([
+        reportExport('ready'),
+        reportExport('revoked', { id: EXPORT_2 }),
+      ]),
+    });
+    render(test.at('/reports/exports'));
+    const list = await screen.findByRole('list', { name: 'Your exports' });
+    const [ready, revoked] = within(list).getAllByRole('listitem') as HTMLElement[];
+    expect(within(ready!).getByText('ready')).toBeInTheDocument();
+    expect(
+      within(ready!).getByText(
+        new RegExp(`Download until ${formatInstant('2026-10-25T12:00:00.000Z')}`),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(ready!).getByRole('link', {
+        name: `make a new export of run ${RUN_1.slice(0, 8)}`,
+      }),
+    ).toHaveAttribute('href', `/reports/exports?run=${RUN_1}`);
+    expect(within(ready!).queryByRole('button', { name: /Download export/ })).toBeNull();
+    expect(
+      within(ready!).getByRole('button', { name: `Revoke export ${EXPORT_1.slice(0, 8)}` }),
+    ).toBeInTheDocument();
+    expect(within(revoked!).getByText('revoked')).toBeInTheDocument();
+    expect(within(revoked!).getByText(/Sent to the wrong person/)).toBeInTheDocument();
+    expect(within(revoked!).queryByRole('button', { name: /Revoke/ })).toBeNull();
+    expect(test.fake.requests.find((r) => r.route === '/reports/exports')?.query).toMatchObject({
+      limit: '20',
+    });
+  });
+
+  it('REP-01: filters your exports by status and loads more with the cursor', async () => {
+    const user = userEvent.setup();
+    const test = app({
+      'GET /reports/exports': (request) =>
+        request.query.cursor
+          ? fakeResponse(200, {
+              items: [reportExport('expired', { id: uuid(203) })],
+              nextCursor: null,
+            })
+          : fakeResponse(200, { items: [reportExport('downloaded')], nextCursor: 'c-2' }),
+    });
+    render(test.at('/reports/exports'));
+    await screen.findByRole('list', { name: 'Your exports' });
+    await user.click(screen.getByRole('button', { name: 'Load more exports' }));
+    const list = screen.getByRole('list', { name: 'Your exports' });
+    await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(2));
+    await user.selectOptions(screen.getByLabelText('Export status'), 'expired');
+    await waitFor(() =>
+      expect(
+        test.fake.requests.some(
+          (r) => r.route === '/reports/exports' && r.query.status === 'expired',
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('says so when you have no earlier exports, and lists an export made here only once', async () => {
+    const user = userEvent.setup();
+    render(
+      app({
+        'POST /reports/exports': { status: 201, body: exportCreated() },
+        'GET /reports/exports/{id}': ok(reportExport('ready')),
+        'GET /reports/exports': page([reportExport('ready')]),
+      }).at('/reports/exports'),
+    );
+    expect(await screen.findByRole('list', { name: 'Your exports' })).toBeInTheDocument();
+    await createExport(user);
+    await screen.findByRole('list', { name: 'Exports made on this page' });
+    expect(await screen.findByRole('heading', { name: 'No earlier exports' })).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Your exports' })).toBeNull();
+  });
+
+  it('shows your exports as not available when the API refuses the list', async () => {
+    render(
+      app({
+        'GET /reports/exports': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', { message: 'You may not list exports.' }),
+          ),
+      }).at('/reports/exports'),
+    );
+    const section = await screen.findByRole('region', { name: 'Your exports' });
+    expect(await within(section).findByText('Not available to you')).toBeInTheDocument();
+    expect(within(section).getByText(/Exporting needs its own permission/)).toBeInTheDocument();
+  });
+
+  it('REP-03: an unconfigured export lifetime is shown as waiting on DEC-060, not as a failure', async () => {
+    const user = userEvent.setup();
+    render(
+      app({
+        'POST /reports/exports': () =>
+          fakeResponse(
+            400,
+            apiErrorBody('VALIDATION_FAILED', {
+              message: 'No export lifetime is configured.',
+              details: {
+                code: 'EXPORT_LIFETIME_UNCONFIGURED',
+                setting: 'REPORTING_EXPORT_LIFETIME_MINUTES',
+                pendingDecision: 'DEC-060',
+              },
+            }),
+          ),
+      }).at('/reports/exports'),
+    );
+    await createExport(user);
+    const note = await screen.findByTestId('pending-note');
+    expect(note).toHaveTextContent('REPORTING_EXPORT_LIFETIME_MINUTES');
+    expect(note).toHaveTextContent('DEC-060');
+    expect(screen.queryByText('Something went wrong')).toBeNull();
   });
 });
 

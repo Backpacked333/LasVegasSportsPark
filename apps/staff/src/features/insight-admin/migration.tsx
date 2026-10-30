@@ -86,8 +86,8 @@ function DecideException({ exception }: { exception: ImportException }) {
       resolution = { permissions: permissions as Schema<'GrantPermission'>[] };
     }
     if (decision === 'accept' && exception.kind === 'ambiguous_balance' && amount.trim()) {
-      // The staged balance's currency is not on the exception (API gap), so the scale is never
-      // inferred from a typed currency: the approved amount is entered in minor units.
+      // The approved amount is entered in minor units of the staged balance's currency (MIG-01
+      // names it on the exception); it is formatted for display only, never converted.
       const minor = /^\d{1,15}$/.test(amount.trim()) ? Number(amount.trim()) : null;
       if (minor === null || minor < 1)
         next.amount =
@@ -150,16 +150,24 @@ function DecideException({ exception }: { exception: ImportException }) {
       {decision === 'accept' && exception.kind === 'ambiguous_balance' ? (
         <>
           <TextField
-            label="Approved amount in minor units of the staged balance's currency"
+            label={`Approved amount in minor units of ${exception.currency ?? "the staged balance's currency"}`}
             inputMode="numeric"
             value={amount}
             onChange={setAmount}
-            hint="For example cents: 2500 for 25.00. Leave empty to accept the staged amount."
+            hint={`For example cents: 2500 for 25.00. Leave empty to accept the staged amount${
+              exception.stagedAmountMinor !== null
+                ? ` (${formatMinor(exception.stagedAmountMinor, exception.currency)})`
+                : ''
+            }.`}
             error={errors.amount}
           />
           {/^\d{1,15}$/.test(amount.trim()) && Number(amount.trim()) > 0 ? (
             <p className="caption" role="status">
-              Records amountMinor {Number(amount.trim())} in the staged balance&apos;s currency.
+              Records amountMinor {Number(amount.trim())}
+              {exception.currency
+                ? `: ${formatMinor(Number(amount.trim()), exception.currency)}`
+                : " in the staged balance's currency (not stated)"}
+              .
             </p>
           ) : null}
         </>
@@ -204,7 +212,17 @@ export function ExceptionCard({ exception }: { exception: ImportException }) {
           Review owner: {roleLabel(exception.reviewOwnerRole)} · {exception.phase} phase · raised{' '}
           {formatInstant(exception.createdAt)} · batch {shortId(exception.batchId)}
         </span>
+        {exception.stagedAmountMinor !== null ? (
+          <span className="caption">
+            Staged amount {formatMinor(exception.stagedAmountMinor, exception.currency)}
+          </span>
+        ) : null}
         <ReasonList reasons={exception.reasons} />
+        {exception.resolution?.amountMinor !== undefined ? (
+          <span className="caption">
+            Approved amount {formatMinor(exception.resolution.amountMinor, exception.currency)}
+          </span>
+        ) : null}
         {exception.decision ? (
           <span className="caption">
             Decision: {exception.decision}

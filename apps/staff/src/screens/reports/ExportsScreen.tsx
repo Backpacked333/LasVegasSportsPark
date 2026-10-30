@@ -6,7 +6,12 @@
  *   from viewing the report, so ACCESS_DENIED here says export is a separate permission;
  * - expiring and single use: each export shows the API's expiry instant ("download until"); the
  *   one-time token the API returns is held in this page's memory only and spent by the download;
- *   leaving the page means making a new export;
+ *   leaving the page means making a new export. How long an export lives is a module setting
+ *   pending DEC-060: while it is not configured the API refuses every export
+ *   (EXPORT_LIFETIME_UNCONFIGURED), shown as waiting on that decision;
+ * - your exports: every export you requested (`GET /v1/reports/exports`, REP-01), newest first with
+ *   a status filter and the API's cursor, with its expiry, download, revocation and permission;
+ *   the API never returns a token, so an earlier export is downloaded again by making a new one;
  * - reproducible after corrections: "Check reproduction" re-evaluates a run at its as-of instant
  *   and compares digests (`POST /v1/reports/runs/{id}/reproduce`); a mismatch, or corrections made
  *   after the as-of instant, mean exporting a new run ("Run again with current data");
@@ -21,18 +26,21 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { downloadExport, saveFile } from '../../features/insight-admin/download';
 import {
   CommandError,
   CommandSuccess,
   InsightQueryBoundary,
+  PendingNote,
   detailCodeOf,
 } from '../../features/insight-admin/feedback';
 import { RadioGroup, SelectField, TextField } from '../../features/insight-admin/fields';
 import { formatInstant, shortId } from '../../features/insight-admin/format';
 import {
   ALL_REPORTS,
+  DECISIONS,
   EXPORT_BADGES,
   POINT_IN_TIME_LABELS,
   reportTitle,
@@ -40,6 +48,7 @@ import {
 import { ReportsNav } from '../../features/insight-admin/nav';
 import { useApi, useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type ReportRunSummary = Schema<'ReportRunSummary'>;
@@ -56,6 +65,8 @@ export interface ExportHandle {
 }
 
 const RUNS_KEY = ['api', '/reports/runs'] as const;
+const EXPORTS_KEY = ['api', '/reports/exports'] as const;
+const EXPORT_KEY = ['api', '/reports/exports/{id}'] as const;
 const DENIED_EXPORT =
   'Exporting needs its own permission, checked separately from viewing the report (SPK-REPORT-007).';
 
@@ -70,7 +81,7 @@ function ExportForm({
 }) {
   const { online } = useApp();
   const [format, setFormat] = useState<ExportFormat>('csv');
-  const create = useApiCommand('post', '/reports/exports');
+  const create = useApiCommand('post', '/reports/exports', { invalidate: [EXPORTS_KEY] });
   const send = () =>
     void create
       .submit({ body: { reportRunId: runId, format } })
@@ -105,7 +116,17 @@ function ExportForm({
         {create.isProcessing ? 'Generating export' : 'Create export'}
       </Button>
       {!online ? <p className="caption">Exports need a connection.</p> : null}
-      <CommandError error={create.error} onRetry={send} deniedDescription={DENIED_EXPORT} />
+      {detailCodeOf(create.error) === 'EXPORT_LIFETIME_UNCONFIGURED' ? (
+        <PendingNote
+          decisions={DECISIONS.exportRetention.ids}
+          owner={DECISIONS.exportRetention.owner}
+        >
+          No export can be made yet: how long an export stays downloadable is not configured
+          (REPORTING_EXPORT_LIFETIME_MINUTES).
+        </PendingNote>
+      ) : (
+        <CommandError error={create.error} onRetry={send} deniedDescription={DENIED_EXPORT} />
+      )}
     </form>
   );
 }
@@ -335,7 +356,7 @@ function RevokeExport({
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const revoke = useApiCommand('post', '/reports/exports/{id}/revoke', {
-    invalidate: [['api', '/reports/exports/{id}']],
+    invalidate: [EXPORT_KEY, EXPORTS_KEY],
   });
   const send = () =>
     void revoke
@@ -359,7 +380,8 @@ function RevokeExport({
   };
   const reload = () => {
     revoke.reset();
-    void queryClient.invalidateQueries({ queryKey: ['api', '/reports/exports/{id}'] });
+    void queryClient.invalidateQueries({ queryKey: EXPORT_KEY });
+    void queryClient.invalidateQueries({ queryKey: EXPORTS_KEY });
   };
   if (!open) {
     return (
@@ -418,7 +440,11 @@ function SessionExport({
   const [downloaded, setDownloaded] = useState<string | null>(null);
 
   const refresh = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: ['api', '/reports/exports/{id}'] }),
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: EXPORT_KEY }),
+        queryClient.invalidateQueries({ queryKey: EXPORTS_KEY }),
+      ]),
     [queryClient],
   );
 
@@ -531,6 +557,107 @@ function SessionExport({
   );
 }
 
+type ReportExport = Schema<'ReportExport'>;
+type ExportStatus = Schema<'ReportExportStatus'>;
+
+function ListedExport({ record }: { record: ReportExport }) {
+  const now = useNow(15_000);
+  const expired = now.getTime() >= new Date(record.expiresAt).getTime();
+  const badge =
+    record.status === 'ready' && expired ? EXPORT_BADGES.expired : EXPORT_BADGES[record.status];
+  return (
+    <li aria-labelledby={`listed-export-${record.id}`}>
+      <div className="ia-export">
+        <div className="row-text">
+          <span className="row-title" id={`listed-export-${record.id}`}>
+            {reportTitle(record.reportKey)} · {record.format.toUpperCase()} export{' '}
+            {shortId(record.id)}
+          </span>
+          <StatusBadge tone={badge.tone} label={badge.label} />
+          {record.status === 'ready' && !expired ? (
+            <span>
+              Download until {formatInstant(record.expiresAt)}. The one-time download link was shown
+              only when the export was made;{' '}
+              <Link to={`/reports/exports?run=${record.reportRunId}`}>
+                make a new export of run {shortId(record.reportRunId)}
+              </Link>{' '}
+              to download it again.
+            </span>
+          ) : null}
+          {record.status === 'expired' || (record.status === 'ready' && expired) ? (
+            <span>Expired at {formatInstant(record.expiredAt ?? record.expiresAt)}</span>
+          ) : null}
+          {record.downloadedAt ? (
+            <span>Downloaded {formatInstant(record.downloadedAt)}</span>
+          ) : null}
+          {record.revokedAt ? (
+            <span>
+              Revoked {formatInstant(record.revokedAt)}
+              {record.revokeReason ? `: ${record.revokeReason}` : ''}
+            </span>
+          ) : null}
+          <span className="caption">
+            Run {shortId(record.reportRunId)} · {record.rowCount} row
+            {record.rowCount === 1 ? '' : 's'} · requested {formatInstant(record.requestedAt)} ·
+            checked against {record.authorizedAction}
+          </span>
+        </div>
+        {record.status === 'ready' && !expired ? (
+          <div className="ia-row-actions">
+            <RevokeExport exportRecord={record} onRevoked={() => undefined} />
+          </div>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+function YourExports({ heldIds }: { heldIds: ReadonlySet<string> }) {
+  const [status, setStatus] = useState('');
+  const pages = useApiPages({
+    path: '/reports/exports',
+    request: { query: { limit: 20, ...(status ? { status: status as ExportStatus } : {}) } },
+  });
+  return (
+    <section className="ia-section" aria-labelledby="your-exports-title">
+      <h3 id="your-exports-title">Your exports</h3>
+      <p className="caption">
+        Every export you requested, newest first. Exports made on this page are listed above with
+        their download.
+      </p>
+      <SelectField
+        label="Export status"
+        value={status}
+        onChange={setStatus}
+        placeholder="All statuses"
+        options={Object.keys(EXPORT_BADGES).map((s) => ({ value: s, label: s }))}
+      />
+      <InsightQueryBoundary
+        query={pages}
+        label="your exports"
+        isEmpty={(items) => items.filter((e) => !heldIds.has(e.id)).length === 0}
+        empty={{
+          title: status ? 'No export with this status' : 'No earlier exports',
+          description: 'Exports you make from a stored run are listed here until they are removed.',
+        }}
+        unavailableOffline={['creating, downloading or revoking exports']}
+        deniedDescription={DENIED_EXPORT}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Your exports">
+            {items
+              .filter((record) => !heldIds.has(record.id))
+              .map((record) => (
+                <ListedExport key={record.id} record={record} />
+              ))}
+          </ul>
+        )}
+      </InsightQueryBoundary>
+      <LoadMore pages={pages} label="exports" />
+    </section>
+  );
+}
+
 export function ExportsScreen() {
   const [search, setSearch] = useSearchParams();
   const selectedRun = search.get('run');
@@ -568,8 +695,8 @@ export function ExportsScreen() {
         <h3 id="session-exports-title">Exports made on this page</h3>
         {handles.length === 0 ? (
           <p className="caption" data-testid="no-session-exports">
-            No exports yet. Exports made here stay downloadable only while this page is open; the
-            API does not list earlier exports.
+            No exports made on this page yet. An export made here can be downloaded once while this
+            page is open; your earlier exports are listed below.
           </p>
         ) : (
           <ul className="list" aria-label="Exports made on this page">
@@ -579,6 +706,8 @@ export function ExportsScreen() {
           </ul>
         )}
       </section>
+
+      <YourExports heldIds={new Set(handles.map((h) => h.id))} />
 
       {selectedRun ? <SelectedRun runId={selectedRun} onCreated={onCreated} /> : null}
 

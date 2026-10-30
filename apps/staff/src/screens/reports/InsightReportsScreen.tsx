@@ -10,7 +10,10 @@
  *   preselected; which method Finance agrees is DEC-085); margin only with agreed cost inputs.
  * - Demand: observed demand and any forecast are separate series; the forecast method is named.
  * - Retention: one of the five SPK-REPORT-005 cohorts per request; households and returning
- *   participants are different metrics.
+ *   participants are different metrics. Rental customers (REP-02) are the bookers of confirmed or
+ *   completed rentals and parties, read whether or not those capabilities are turned on; "not
+ *   offered" is not computed for them (DEC-076, DEC-077 pending), so that option is not offered.
+ *   A program applies to youth participants only.
  * No improvement target is shown or invented (DEC-045).
  */
 import { useState, type FormEvent } from 'react';
@@ -143,12 +146,14 @@ export function buildInsightParams(
         if (!DATE.test(extras[field])) errors[field] = 'Enter a date.';
         else params[field] = extras[field];
       }
-      if (extras.programId) {
+      if (extras.cohort === 'youth_participants' && extras.programId) {
         if (!UUID_PATTERN.test(extras.programId.trim())) errors.programId = 'Enter a program id.';
         else params.programId = extras.programId.trim();
       }
     }
-    if (extras.excludeNotOffered) params.excludeNotOffered = 'true';
+    if (extras.excludeNotOffered && extras.cohort !== 'rental_customers') {
+      params.excludeNotOffered = 'true';
+    }
   }
   return { params: Object.keys(errors).length > 0 ? null : params, errors };
 }
@@ -336,21 +341,34 @@ function ExtraFields({
                 onChange={(comparisonTo) => set({ comparisonTo })}
                 error={errors.comparisonTo}
               />
-              <TextField
-                label="Program id"
-                value={extras.programId}
-                onChange={(programId) => set({ programId })}
-                hint="Optional: one program only."
-                error={errors.programId}
-              />
+              {extras.cohort === 'youth_participants' ? (
+                <TextField
+                  label="Program id"
+                  value={extras.programId}
+                  onChange={(programId) => set({ programId })}
+                  hint="Optional: one program only."
+                  error={errors.programId}
+                />
+              ) : null}
             </>
           ) : null}
-          <CheckboxField
-            label="Leave out members who could not return"
-            checked={extras.excludeNotOffered}
-            onChange={(excludeNotOffered) => set({ excludeNotOffered })}
-            hint="They are always counted separately; this only removes them from the denominator."
-          />
+          {extras.cohort === 'rental_customers' ? (
+            <PendingNote
+              decisions={DECISIONS.rentalApplicability.ids}
+              owner={DECISIONS.rentalApplicability.owner}
+            >
+              Rental customers are the bookers of confirmed or completed rentals and parties in each
+              period, counted whether or not rentals and parties are turned on. Whether a customer
+              could not return (not offered) is not computed for them.
+            </PendingNote>
+          ) : (
+            <CheckboxField
+              label="Leave out members who could not return"
+              checked={extras.excludeNotOffered}
+              onChange={(excludeNotOffered) => set({ excludeNotOffered })}
+              hint="They are always counted separately; this only removes them from the denominator."
+            />
+          )}
         </>
       );
     default:

@@ -78,4 +78,39 @@ describe('SCR-S-48 ImportReviewScreen', () => {
     );
     expect(await screen.findByRole('heading', { name: 'Nothing to review' })).toBeInTheDocument();
   });
+
+  it('MIG-01: shows a staged balance and an approved amount in the currency the row states', async () => {
+    render(
+      createTestApp({
+        routes: {
+          'GET /import-exceptions': page([
+            importException('ambiguous_balance'),
+            importException('ambiguous_balance', {
+              id: 'e3',
+              externalId: 'X-4',
+              status: 'decided',
+              decision: 'accept',
+              resolution: { amountMinor: 2400 },
+              decisionReason: 'Finance approved',
+              stagedAmountMinor: 2500,
+              currency: 'EUR',
+            }),
+            importException('ambiguous_balance', {
+              id: 'e4',
+              externalId: 'X-5',
+              stagedAmountMinor: 1000,
+              currency: null,
+            }),
+          ]),
+        },
+      }).at('/admin/migration/review'),
+    );
+    const list = await screen.findByRole('list', { name: 'Import exceptions' });
+    expect(within(list).getByText('Staged amount -$25.00')).toBeInTheDocument();
+    expect(within(list).getByText('Staged amount €25.00')).toBeInTheDocument();
+    expect(within(list).getByText('Approved amount €24.00')).toBeInTheDocument();
+    expect(
+      within(list).getByText('Staged amount 1,000 (minor units, currency not stated)'),
+    ).toBeInTheDocument();
+  });
 });

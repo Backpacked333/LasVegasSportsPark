@@ -277,33 +277,100 @@ export const DECISIONS = {
     ids: ['DEC-060'],
     owner: "Operator/privacy owner (with the responsible operator's advisers)",
   },
+  capabilities: { ids: ['DEC-016'], owner: 'Product owner' },
+  facilityInventory: { ids: ['DEC-001'], owner: 'Operations' },
+  rentalApplicability: { ids: ['DEC-076', 'DEC-077'], owner: 'Product owner' },
 } as const;
 
-/** The six §5.2 provider-selection gates, each its own decision record (DEC-018 to DEC-023). */
-export const PROVIDER_GATES: readonly { id: string; title: string; decision: string }[] = [
-  { id: 'identity', title: 'Identity provider', decision: 'DEC-018' },
-  { id: 'payments', title: 'Payment processor and merchant arrangement', decision: 'DEC-019' },
-  { id: 'messaging', title: 'Messaging providers (push, email, SMS)', decision: 'DEC-020' },
-  { id: 'hosting', title: 'Hosting and recovery environment', decision: 'DEC-021' },
-  { id: 'accounting', title: 'Accounting connection', decision: 'DEC-022' },
-  { id: 'hardware', title: 'Hardware interfaces', decision: 'DEC-023' },
-];
+/** Owners of the decisions the integration register names per gate (decision register). */
+export function decisionOwner(decision: string): string {
+  return ['DEC-013', 'DEC-018', 'DEC-019', 'DEC-020', 'DEC-021', 'DEC-022', 'DEC-023'].includes(
+    decision,
+  )
+    ? DECISIONS.providers.owner
+    : 'see the decision register';
+}
 
-/** The twelve §5.1 register fields recorded for every provider. */
-export const REGISTER_FIELDS: readonly string[] = [
-  'Product and vendor',
-  'Account owner',
-  'Authorized access',
-  'Supported operations',
-  'Sandbox availability',
-  'Documentation',
-  'Event behavior',
-  'Rate limits',
-  'Idempotency',
-  'Failure handling',
-  'Reconciliation owner',
-  'Exit procedure',
-];
+/**
+ * Titles of the §5.2 provider-selection gates the integration register returns
+ * (`GET /v1/admin/integrations`; each gate names its own pending decision, DEC-018 to DEC-023 and
+ * DEC-013 for the assistant). A gate the client does not know is shown by its id.
+ */
+export const PROVIDER_GATE_TITLES: Record<Schema<'ProviderGate'>, string> = {
+  identity: 'Identity provider',
+  payments: 'Payment processor and merchant arrangement',
+  messaging: 'Messaging providers (push, email, SMS)',
+  hosting: 'Hosting and recovery environment',
+  accounting: 'Accounting connection',
+  hardware: 'Hardware interfaces',
+  assistant: 'Operational assistant',
+};
+
+export function gateTitle(gate: string): string {
+  return (PROVIDER_GATE_TITLES as Record<string, string>)[gate] ?? gate;
+}
+
+/** The twelve §5.1 register fields recorded for every provider, in the API's field order. */
+export const REGISTER_FIELD_LABELS: Record<keyof Schema<'IntegrationRegister'>, string> = {
+  productAndVendor: 'Product and vendor',
+  accountOwner: 'Account owner',
+  authorizedAccess: 'Authorized access',
+  supportedOperations: 'Supported operations',
+  sandboxAvailability: 'Sandbox availability',
+  documentation: 'Documentation',
+  eventBehavior: 'Event behavior',
+  rateLimits: 'Rate limits',
+  idempotency: 'Idempotency',
+  failureHandling: 'Failure handling',
+  reconciliationOwner: 'Reconciliation owner',
+  exitProcedure: 'Exit procedure',
+};
 
 /** §5.1 capability evidence, in order. */
 export const EVIDENCE_LEVELS: readonly string[] = ['documented', 'tested', 'accepted', 'live'];
+
+/** The §5.2 scenarios a deterministic fake adapter reproduces. */
+export const SCENARIO_LABELS: Record<Schema<'IntegrationScenario'>, string> = {
+  success: 'success',
+  failure: 'failure',
+  timeout_unknown: 'timeout or unknown outcome',
+  duplicate: 'duplicate webhook',
+};
+
+export const ADAPTER_KIND_LABELS: Record<Schema<'IntegrationAdapter'>['adapter']['kind'], string> =
+  {
+    fake: 'Test adapter (deterministic fake)',
+    local: 'Local adapter',
+    provider: 'Provider adapter',
+  };
+
+/** Provider event states of the inbox (§4.12); "dead" means its retries are exhausted. */
+export const PROVIDER_EVENT_BADGES: Record<Schema<'ProviderEventStatus'>, Badge> = {
+  received: badge('info', 'received'),
+  processed: badge('success', 'processed'),
+  failed: badge('danger', 'failed'),
+  ignored: badge('neutral', 'ignored'),
+  dead: badge('danger', 'dead'),
+};
+
+/** How a capability switch is enforced (K-12). */
+export const ENFORCEMENT_LABELS: Record<Schema<'CapabilityEnforcement'>, string> = {
+  commands: 'New commitments check this switch; existing records stay readable and can be ended.',
+  recorded_only:
+    'Recorded only: nothing checks this switch; whether it is enforced is itself a DEC-016 question.',
+};
+
+export const FACILITY_STATUS_BADGES: Record<Schema<'FacilityStatus'>, Badge> = {
+  active: badge('success', 'active'),
+  closed: badge('warning', 'closed'),
+  archived: badge('neutral', 'archived'),
+};
+
+export const ORGANIZATION_STATUS_BADGES: Record<
+  Schema<'AdminOrganizationSettings'>['status'],
+  Badge
+> = {
+  active: badge('success', 'active'),
+  suspended: badge('warning', 'suspended'),
+  archived: badge('neutral', 'archived'),
+};

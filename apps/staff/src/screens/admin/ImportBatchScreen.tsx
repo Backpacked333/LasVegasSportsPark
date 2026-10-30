@@ -10,7 +10,10 @@
  * chunk while received, complete the review (expected revision; refused while exceptions are open),
  * apply (processing "Importing"; repeatable: matched records create nothing, charge nothing and
  * send nothing), abort (reason and expected revision), and reconcile an applied batch at the four
- * §5.5 levels. Partial completion is expected per row: every row's outcome and reasons are listed.
+ * §5.5 levels. The batch's reconciliation reports are listed newest first
+ * (`GET /v1/import-batches/{id}/reconciliation-reports`, MIG-01) and its latest report
+ * (`latestReconciliationReportId`) is shown with its sign-offs; superseded reports stay as evidence.
+ * Partial completion is expected per row: every row's outcome and reasons are listed.
  * Staged payloads are never shown (personal and child data, §4.14).
  */
 import type { Schema } from '@sportspark/api-client';
@@ -33,10 +36,12 @@ import {
   shortId,
 } from '../../features/insight-admin/format';
 import {
+  APPROVAL_BADGES,
   BATCH_BADGES,
   ENTITY_TYPE_LABELS,
   EXCEPTION_STATUS_BADGES,
   ENTITY_TYPES,
+  RECONCILIATION_BADGES,
   ROW_OUTCOME_BADGES,
   type RowOutcome,
 } from '../../features/insight-admin/labels';
@@ -313,11 +318,24 @@ function AbortAction({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) 
   );
 }
 
-function ReconcileAction({ batch }: { batch: ImportBatch }) {
+const REPORTS_KEY = ['api', '/import-batches/{id}/reconciliation-reports'] as const;
+
+function ReconcileAction({
+  batch,
+  onGenerated,
+}: {
+  batch: ImportBatch;
+  onGenerated: (reportId: string) => void;
+}) {
   const { online } = useApp();
-  const generate = useApiCommand('post', '/import-batches/{id}/reconciliation-reports');
+  const generate = useApiCommand('post', '/import-batches/{id}/reconciliation-reports', {
+    invalidate: [REPORTS_KEY, BATCH_KEY],
+  });
   const send = () =>
-    void generate.submit({ path: { id: batch.id }, body: {} }).catch(() => undefined);
+    void generate
+      .submit({ path: { id: batch.id }, body: {} })
+      .then((report) => onGenerated(report.id))
+      .catch(() => undefined);
   return (
     <div className="ia-action">
       <Button busy={generate.isProcessing} disabled={!online} onClick={send}>
@@ -328,13 +346,12 @@ function ReconcileAction({ batch }: { batch: ImportBatch }) {
         again supersedes a pending report; earlier reports stay as evidence.
       </p>
       <CommandError error={generate.error} onRetry={send} />
-      {generate.data ? <GeneratedReport reportId={generate.data.id} /> : null}
     </div>
   );
 }
 
 /**
- * The generated report read through its own query, so a sign-off refetches it and the next
+ * One reconciliation report read through its own query, so a sign-off refetches it and the next
  * sign-off carries the current revision (the mutation result would stay as generated).
  */
 function GeneratedReport({ reportId }: { reportId: string }) {
@@ -356,6 +373,82 @@ function GeneratedReport({ reportId }: { reportId: string }) {
       >
         {(data) => <ReconciliationReportView report={data} />}
       </InsightQueryBoundary>
+    </>
+  );
+}
+
+function ReportList({ batch, latestId }: { batch: ImportBatch; latestId: string }) {
+  const reports = useApiQuery({
+    path: '/import-batches/{id}/reconciliation-reports',
+    request: { path: { id: batch.id } },
+  });
+  return (
+    <InsightQueryBoundary
+      query={reports}
+      label="the reconciliation reports of this batch"
+      isEmpty={(data) => data.items.length === 0}
+      empty={{
+        title: 'No reconciliation report yet',
+        description: 'Reconcile the applied batch to produce one.',
+      }}
+    >
+      {(data) => (
+        <ul className="list" aria-label="Reconciliation reports of this batch">
+          {data.items.map((report) => {
+            const status = RECONCILIATION_BADGES[report.status];
+            const approval = APPROVAL_BADGES[report.approvalStatus];
+            return (
+              <li key={report.id}>
+                <div className="row-text">
+                  <Link to={`/admin/migration/reconciliation/${report.id}`}>
+                    Reconciliation report {shortId(report.id)}
+                  </Link>
+                  <span>
+                    <StatusBadge tone={status.tone} label={status.label} />{' '}
+                    <StatusBadge tone={approval.tone} label={`sign-off ${approval.label}`} />
+                    {report.id === latestId ? (
+                      <>
+                        {' '}
+                        <StatusBadge tone="info" label="latest" />
+                      </>
+                    ) : null}
+                  </span>
+                  <span className="caption">
+                    Generated {formatInstant(report.generatedAt)} by {report.generatedBy.actorLabel}{' '}
+                    · {report.discrepancyCount} discrepanc
+                    {report.discrepancyCount === 1 ? 'y' : 'ies'}
+                    {report.supersededByReportId
+                      ? ` · superseded by ${shortId(report.supersededByReportId)}`
+                      : ''}
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </InsightQueryBoundary>
+  );
+}
+
+function Reconciliation({ batch }: { batch: ImportBatch }) {
+  const [generatedId, setGeneratedId] = useState<string | null>(null);
+  const latestId = generatedId ?? batch.latestReconciliationReportId;
+  return (
+    <>
+      <ReconcileAction batch={batch} onGenerated={setGeneratedId} />
+      <section className="ia-section" aria-labelledby="reconciliation-reports-title">
+        <h4 id="reconciliation-reports-title">Reconciliation reports</h4>
+        {latestId ? (
+          <>
+            <ReportList batch={batch} latestId={latestId} />
+            <h4>Latest report</h4>
+            <GeneratedReport key={latestId} reportId={latestId} />
+          </>
+        ) : (
+          <p className="caption">No reconciliation report yet for this batch.</p>
+        )}
+      </section>
     </>
   );
 }
@@ -383,7 +476,7 @@ function NextSteps({ batch, onDone }: { batch: ImportBatch; onDone: OnDone }) {
           {batch.applyStartedAt ? null : <AbortAction batch={batch} onDone={onDone} />}
         </>
       ) : null}
-      {batch.status === 'applied' ? <ReconcileAction batch={batch} /> : null}
+      {batch.status === 'applied' ? <Reconciliation batch={batch} /> : null}
       {batch.status === 'aborted' ? (
         <p>
           Aborted {formatInstant(batch.abortedAt)}
