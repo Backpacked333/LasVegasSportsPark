@@ -7,9 +7,9 @@
  * that returns a redeemed credit. Used on SCR-S-27 (an enrollment and the enrollment lookup); the
  * SCR-S-54 screen may reuse it.
  *
- * Reads and reversals are never turned off by the API, so the list sits under
- * `CapabilityGate whenOff="notice"`: with the switch off, existing packages stay listed and a
- * redemption can still be reversed. Expiry and credit-return values are the package definition's
+ * Reads and reversals are never turned off by the API, so the list sits under `CapabilityNotice`:
+ * it always renders, and with the switch off existing packages stay listed and a redemption can
+ * still be reversed. Expiry and credit-return values are the package definition's
  * (POL-039); nothing is computed here. Only names and opaque references are shown (§4.14).
  */
 import type { Schema } from '@sportspark/api-client';
@@ -18,11 +18,12 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
+import { useApiQuery } from '../../api/useApiQuery';
 import { Button } from '../../ui/Button';
-import { CapabilityGate } from '../../ui/CapabilityGate';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { CapabilityNotice } from './CapabilityNotice';
 import { CommandError } from './CommandError';
 import { Facts, TextArea } from './fields';
 import { formatInstant, shortRef } from './format';
@@ -120,7 +121,7 @@ function RedemptionRow({
 }: {
   redemption: Redemption;
   reversed: boolean;
-  zone: string | null;
+  zone: string;
 }) {
   const online = useOnline();
   const [open, setOpen] = useState(false);
@@ -164,15 +165,31 @@ function RedemptionRow({
   );
 }
 
+/**
+ * SPK-SCHED-008: package times in the facility's zone. A list for one enrollment is given its
+ * offering's zone; otherwise each package reads its own offering (`GET /v1/offerings/{id}`, the
+ * cache the offering name shares) and, until that answers or when it cannot, shows UTC, named.
+ */
+function usePackageZone(offeringId: string, given: string | null | undefined): string {
+  const offering = useApiQuery({
+    path: '/offerings/{id}',
+    request: { path: { id: offeringId } },
+    enabled: !given,
+    staleTime: 5 * 60_000,
+  });
+  return given || offering.data?.facility?.timezone || 'UTC';
+}
+
 function EntitlementCard({
   entitlement,
   enrollmentId,
-  zone,
+  zone: givenZone,
 }: {
   entitlement: Entitlement;
   enrollmentId?: string;
-  zone: string | null;
+  zone: string | null | undefined;
 }) {
+  const zone = usePackageZone(entitlement.offeringId, givenZone);
   const reversed = reversedIds(entitlement);
   return (
     <li aria-labelledby={`package-${entitlement.id}`}>
@@ -238,11 +255,12 @@ export interface PackageFilter {
 export function PackageEntitlementList({
   filter,
   enrollmentId,
-  zone = null,
+  zone,
   title = 'Session packages',
 }: {
   filter: PackageFilter;
   enrollmentId?: string;
+  /** The facility zone of every package listed; leave out to resolve it per package. */
   zone?: string | null;
   title?: string;
 }) {
@@ -253,9 +271,8 @@ export function PackageEntitlementList({
   return (
     <section className="rf-panel" aria-labelledby="packages-title">
       <h3 id="packages-title">{title}</h3>
-      <CapabilityGate
+      <CapabilityNotice
         capability="session_packages"
-        whenOff="notice"
         stillAvailable="Existing packages stay listed, and a redemption can still be reversed: reads and reversals are never turned off."
       >
         <QueryBoundary
@@ -279,7 +296,7 @@ export function PackageEntitlementList({
           )}
         </QueryBoundary>
         <LoadMore pages={packages} label="session packages" />
-      </CapabilityGate>
+      </CapabilityNotice>
     </section>
   );
 }

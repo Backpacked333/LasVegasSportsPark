@@ -13,48 +13,51 @@ import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/S
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { OrderSection } from './ObligationScreen';
 
-function OrderObligations({ orderId }: { orderId: string }) {
-  // Shares the cache entry OrderSection reads.
-  const order = useApiQuery({ path: '/orders/{id}', request: { path: { id: orderId } } });
-  return (
-    <QueryBoundary query={order} label="the order" empty={{ title: '', description: '' }}>
-      {(data) =>
-        data.obligationIds.length === 0 ? (
-          <p>No obligation was created for this order.</p>
-        ) : (
-          <ul className="list" aria-label="Obligations of the order">
-            {data.obligationIds.map((id) => (
-              <li key={id}>
-                <Link to={`/finance/obligations/${id}`}>Obligation {shortRef(id)}</Link>
-              </li>
-            ))}
-          </ul>
-        )
-      }
-    </QueryBoundary>
+function OrderObligations({ obligationIds }: { obligationIds: readonly string[] }) {
+  return obligationIds.length === 0 ? (
+    <p>No obligation was created for this order.</p>
+  ) : (
+    <ul className="list" aria-label="Obligations of the order">
+      {obligationIds.map((id) => (
+        <li key={id}>
+          <Link to={`/finance/obligations/${id}`}>Obligation {shortRef(id)}</Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 
 export function OrderScreen() {
   const { orderId = '' } = useParams();
+  // Shares the cache entry OrderSection reads.
+  const order = useApiQuery({ path: '/orders/{id}', request: { path: { id: orderId } } });
   return (
     <section aria-labelledby="order-screen-title">
       {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
       <h2 id="order-screen-title">Order</h2>
       <SectionNav label="Finance" links={FINANCE_LINKS} />
-      <OrderSection orderId={orderId} />
-      <section className="rf-panel" aria-labelledby="order-obligations-title">
-        <h3 id="order-obligations-title">Obligations</h3>
-        <OrderObligations orderId={orderId} />
-      </section>
-      <section className="rf-panel" aria-labelledby="order-payments-title">
-        <h3 id="order-payments-title">Payment attempts</h3>
-        <PaymentAttemptList
-          filter={{ orderId }}
-          label="Payment attempts of the order"
-          showPayer={false}
-        />
-      </section>
+      {/* §4.10: the obligations and payment attempts are listed only for an order the viewer may
+          read, so an unavailable order never shows "no payment attempt", which would imply that
+          it exists. */}
+      <QueryBoundary query={order} label="the order" empty={{ title: '', description: '' }}>
+        {(data) => (
+          <>
+            <OrderSection orderId={data.id} />
+            <section className="rf-panel" aria-labelledby="order-obligations-title">
+              <h3 id="order-obligations-title">Obligations</h3>
+              <OrderObligations obligationIds={data.obligationIds} />
+            </section>
+            <section className="rf-panel" aria-labelledby="order-payments-title">
+              <h3 id="order-payments-title">Payment attempts</h3>
+              <PaymentAttemptList
+                filter={{ orderId: data.id }}
+                label="Payment attempts of the order"
+                showPayer={false}
+              />
+            </section>
+          </>
+        )}
+      </QueryBoundary>
     </section>
   );
 }

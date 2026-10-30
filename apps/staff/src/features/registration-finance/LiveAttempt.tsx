@@ -3,6 +3,7 @@
  * checkout, as the API reports it (`liveAttempt`). A payment that is created or processing is
  * waited for; `action_required` waits for the payer; `unknown` is never shown as paid or failed:
  * it is reconciled from provider evidence before anything else, and nobody pays again meanwhile.
+ * Money records carry no facility, so the time is shown in UTC and named, as in the attempt list.
  */
 import { formatAge, type Schema } from '@sportspark/api-client';
 import { Link } from 'react-router';
@@ -26,7 +27,7 @@ export function LiveAttemptNotice({
       </span>
       <span className="caption">
         {attempt.status === 'unknown'
-          ? `Outcome unknown since ${formatInstant(attempt.unknownSince)}${
+          ? `Outcome unknown since ${formatInstant(attempt.unknownSince, 'UTC')}${
               attempt.unknownSince ? ` (${formatAge(new Date(attempt.unknownSince), now)})` : ''
             }: do not take payment again until it is reconciled.`
           : attempt.status === 'action_required'

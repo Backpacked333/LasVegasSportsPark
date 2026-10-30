@@ -37,8 +37,11 @@ const QUEUE = byStatus([], [application()]);
 async function openQueue(routes: Record<string, FakeHandler> = {}, queue: FakeHandler = QUEUE) {
   const app = createTestApp({ routes: { ...nameRoutes(), 'GET /applications': queue, ...routes } });
   render(app.at('/registrations/queue'));
-  const list = await screen.findByRole('list', { name: 'Applications' });
-  const card = within(list).getAllByRole('listitem')[0]!;
+  // The default queue lists the API's two waiting states apart (each newest first).
+  const [list] = await screen.findAllByRole('list', {
+    name: /^(Applications awaiting review|Submitted applications)$/,
+  });
+  const card = within(list!).getAllByRole('listitem')[0]!;
   return { app, card };
 }
 
@@ -205,7 +208,7 @@ describe('SCR-S-24 RegistrationQueueScreen', () => {
     );
     expect(await screen.findByText(/Error code: SERVICE_UNAVAILABLE/)).toBeInTheDocument();
     const cards = () =>
-      screen.getByRole('list', { name: 'Applications' }).querySelectorAll(':scope > li');
+      screen.getByRole('list', { name: 'Submitted applications' }).querySelectorAll(':scope > li');
     expect(cards()).toHaveLength(1);
     await user.click(screen.getByRole('button', { name: 'Load more submitted applications' }));
     await waitFor(() => expect(cards()).toHaveLength(2));
@@ -214,6 +217,51 @@ describe('SCR-S-24 RegistrationQueueScreen', () => {
       .filter((r) => r.route === '/applications' && r.query.status === 'submitted')
       .map((r) => r.query.cursor ?? null);
     expect(cursors).toEqual([null, 'c2', 'c2']);
+  });
+
+  it('SCR-S-24: keeps the API order (newest first) per waiting state and says older ones follow under Load more', async () => {
+    const older = application({
+      id: '0192f1a0-0000-7000-8000-000000000603',
+      participantPersonId: '0192f1a0-0000-7000-8000-000000000302',
+      status: 'awaiting_review',
+      eligibility: eligibility(true),
+      submittedAt: '2026-10-20T09:00:00.000Z',
+    });
+    const newer = application({
+      status: 'awaiting_review',
+      eligibility: eligibility(true),
+      submittedAt: '2026-10-24T09:00:00.000Z',
+    });
+    const queue: FakeHandler = (request) =>
+      fakeResponse(200, {
+        items: request.query.status === 'awaiting_review' ? [newer, older] : [],
+        nextCursor: request.query.status === 'awaiting_review' ? 'c2' : null,
+      });
+    await openQueue({}, queue);
+    const section = screen
+      .getByRole('heading', { name: 'Awaiting review' })
+      .closest('section') as HTMLElement;
+    const list = within(section).getByRole('list', { name: 'Applications awaiting review' });
+    const titles = within(list)
+      .getAllByRole('listitem')
+      .filter((li) => li.parentElement === list)
+      .map((li) => li.getAttribute('aria-labelledby'));
+    // Not re-sorted: the API's newest-first order of the first page stays as given.
+    expect(titles).toEqual([
+      `application-${APPLICATION_ID}`,
+      'application-0192f1a0-0000-7000-8000-000000000603',
+    ]);
+    await waitFor(() =>
+      expect(
+        within(section).getByText(/Newest first, as the API lists them; older applications follow/),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      within(section).getByRole('button', { name: 'Load more applications awaiting review' }),
+    ).toBeInTheDocument();
+    // The other waiting state is empty and says so; the queue as a whole is not "clear".
+    expect(screen.getByRole('heading', { name: 'None waiting' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Queue clear' })).toBeNull();
   });
 
   it('SPK-UX-005: says which decision permissions the API lists for this principal', async () => {

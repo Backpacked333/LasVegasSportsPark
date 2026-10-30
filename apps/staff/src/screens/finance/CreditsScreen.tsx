@@ -27,6 +27,7 @@ import {
   TextArea,
   TextField,
 } from '../../features/registration-finance/fields';
+import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import {
   dateToInstant,
   formatInstant,
@@ -280,8 +281,9 @@ function IssueCredit({ ownerId }: { ownerId: string }) {
       >
         <fieldset className="rf-plain" disabled={locked}>
           <div className="rf-grid">
-            <TextField
+            <PersonReferenceField
               label="Owner reference"
+              person="Owner"
               required
               value={owner}
               onChange={setOwner}
@@ -450,8 +452,9 @@ export function CreditsScreen() {
         <OneCredit creditId={creditId} />
       ) : (
         <>
-          <TextField
+          <PersonReferenceField
             label="Credit owner reference"
+            person="Credit owner"
             hint="The person reference whose credits to show."
             value={owner}
             onChange={setOwner}
@@ -462,7 +465,7 @@ export function CreditsScreen() {
             <StateView
               variant="empty"
               title="Choose a credit owner"
-              description="Enter a person reference to list their credits with balances and history."
+              description="Find the person or enter their reference to list their credits with balances and history."
             />
           )}
           <IssueCredit ownerId={ownerId} />

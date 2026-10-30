@@ -7,6 +7,7 @@
  * computes or adjusts the consequence; refund and credit rules are pending DEC-009.
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
+import { useState } from 'react';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { formatMoney, shortRef } from './format';
@@ -28,6 +29,58 @@ export function acceptedOf(consequence: Consequence): AcceptedConsequence {
 /** Whether the customer must accept the consequence before the command is sent. */
 export function needsAcceptance(consequence: Consequence | null | undefined): boolean {
   return !consequence || consequence.kind !== 'none';
+}
+
+/** The same kind, amount and currency: what the API compares in the command (ENR-03). */
+export function sameConsequence(
+  accepted: AcceptedConsequence | null,
+  consequence: Consequence | null,
+): boolean {
+  if (!accepted || !consequence) return false;
+  return (
+    accepted.kind === consequence.kind &&
+    accepted.amountMinor === consequence.amountMinor &&
+    accepted.currency === consequence.currency
+  );
+}
+
+/**
+ * The customer's acceptance, bound to the consequence they saw (ENR-03). Ticking the box keeps a
+ * snapshot of the consequence shown at that moment, and the command sends that snapshot, never the
+ * current preview: when a background re-read of the preview shows a different consequence, the
+ * acceptance no longer matches, the box shows unticked and nothing can be sent until the customer
+ * accepts the consequence shown now. A consequence of kind "none" needs no acceptance.
+ */
+export function useAcceptance(consequence: Consequence | null) {
+  const [accepted, setAccepted] = useState<AcceptedConsequence | null>(null);
+  const mustAccept = needsAcceptance(consequence);
+  const current = consequence !== null && sameConsequence(accepted, consequence);
+  return {
+    mustAccept,
+    /** Whether the box shows ticked: accepted, and for the consequence shown now. */
+    checked: current,
+    /** An earlier acceptance that no longer matches the consequence shown. */
+    outdated: accepted !== null && consequence !== null && !current,
+    setChecked: (checked: boolean) =>
+      setAccepted(checked && consequence ? acceptedOf(consequence) : null),
+    clear: () => setAccepted(null),
+    /** What to send as `acceptedConsequence`, or null while the command must not be sent. */
+    toSend: (): AcceptedConsequence | null => {
+      if (!consequence) return null;
+      if (!mustAccept) return acceptedOf(consequence);
+      return current ? accepted : null;
+    },
+  };
+}
+
+/** Said next to the box when the consequence changed after the customer accepted it. */
+export function AcceptanceOutdated() {
+  return (
+    <p role="status" className="rf-error">
+      The financial consequence changed after the customer accepted it. Review the consequence shown
+      now with the customer and accept it again.
+    </p>
+  );
 }
 
 function isConsequence(value: unknown): value is Consequence {

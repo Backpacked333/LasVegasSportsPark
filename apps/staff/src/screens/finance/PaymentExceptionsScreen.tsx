@@ -3,7 +3,8 @@
  * views chosen with `?view=` (opaque, no personal data in the URL):
  *
  * - Exceptions (default): the finance operator's open exceptions
- *   (`GET /v1/exceptions?queue=finance_operator`) grouped as unknown payment outcomes, unknown
+ *   (`GET /v1/exceptions?queue=finance_operator`, keyset pages newest first with "Load more"; the
+ *   counts say "loaded so far" until the last page) grouped as unknown payment outcomes, unknown
  *   refund outcomes, checkouts needing recovery, provider events that match no attempt, and other
  *   finance exceptions, each with severity and status as text, age, owner queue, deadline, and a
  *   link to the affected record to reconcile it. Empty says there are no unknown outcomes.
@@ -20,8 +21,8 @@ import { formatAge } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useApiPages } from '../../api/useApiPages';
-import { useApiQuery } from '../../api/useApiQuery';
 import { SelectField, TextField } from '../../features/registration-finance/fields';
+import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import { formatInstant, humanize, shortRef } from '../../features/registration-finance/format';
 import {
   EXCEPTION_SEVERITY,
@@ -146,10 +147,12 @@ function ExceptionsView() {
   // '' asks for the API's active set (open and acknowledged): an acknowledged unknown outcome is
   // still unresolved and must stay visible (SCR-S-36).
   const [status, setStatus] = useState<ExceptionStatus | ''>('');
-  const exceptions = useApiQuery({
+  // K-10 (§4.5): the queue is the API's keyset pages, newest first, with "Load more".
+  const exceptions = useApiPages({
     path: '/exceptions',
-    request: { query: { queue: 'finance_operator', limit: 200, ...(status ? { status } : {}) } },
+    request: { query: { queue: 'finance_operator', limit: 50, ...(status ? { status } : {}) } },
   });
+  const more = exceptions.hasNextPage;
   return (
     <>
       <SelectField
@@ -165,7 +168,11 @@ function ExceptionsView() {
       <QueryBoundary
         query={exceptions}
         label="finance exceptions"
-        isEmpty={(page) => page.items.filter((e) => e.category.startsWith('finance.')).length === 0}
+        // "None" is said only once every page has loaded: an empty first page with more to load
+        // shows the groups and "Load more" instead.
+        isEmpty={(items) =>
+          !more && items.filter((e) => e.category.startsWith('finance.')).length === 0
+        }
         empty={
           status === ''
             ? {
@@ -180,15 +187,21 @@ function ExceptionsView() {
         }
         unavailableOffline={['reconciling']}
       >
-        {(page) => (
+        {(loaded) => (
           <>
+            {more ? (
+              <p className="caption" role="status">
+                Counts are of the exceptions loaded so far, newest first; more exist under “Load
+                more finance exceptions”.
+              </p>
+            ) : null}
             {[
               ...EXCEPTION_GROUPS,
               // Every finance exception is shown: a category not listed above (for example one a
               // later release adds) is never dropped.
               {
                 title: 'Finance exceptions of another kind',
-                categories: page.items
+                categories: loaded
                   .map((e) => e.category)
                   .filter(
                     (c) =>
@@ -197,16 +210,17 @@ function ExceptionsView() {
                   ),
               },
             ].map((group) => {
-              const items = page.items.filter((e) => group.categories.includes(e.category));
+              const items = loaded.filter((e) => group.categories.includes(e.category));
               if (group.title === 'Finance exceptions of another kind' && items.length === 0)
                 return null;
               return (
                 <section key={group.title} className="rf-panel" aria-label={group.title}>
                   <h3>
-                    {group.title} ({items.length})
+                    {group.title} ({items.length}
+                    {more ? ' loaded so far' : ''})
                   </h3>
                   {items.length === 0 ? (
-                    <p className="caption">None.</p>
+                    <p className="caption">{more ? 'None loaded so far.' : 'None.'}</p>
                   ) : (
                     <ul className="list" aria-label={`${group.title}: items`}>
                       {items.map((exception) => (
@@ -217,16 +231,10 @@ function ExceptionsView() {
                 </section>
               );
             })}
-            {page.nextCursor ? (
-              <StateView
-                variant="empty"
-                title="More exceptions exist"
-                description="Only the first 200 are shown."
-              />
-            ) : null}
           </>
         )}
       </QueryBoundary>
+      <LoadMore pages={exceptions} label="finance exceptions" />
     </>
   );
 }
@@ -294,8 +302,9 @@ function AttemptsView() {
           onChange={(v) => setPurpose(v as Purpose | '')}
           options={PURPOSES.map((p) => ({ value: p, label: humanize(p) }))}
         />
-        <TextField
+        <PersonReferenceField
           label="Payer reference"
+          person="Payer"
           value={payer}
           onChange={setPayer}
           hint="A person reference narrows to one payer."

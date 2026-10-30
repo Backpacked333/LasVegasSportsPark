@@ -19,6 +19,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useApiPages } from '../../api/useApiPages';
 import { SelectField, TextField } from '../../features/registration-finance/fields';
+import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import {
   dateToInstant,
   formatInstant,
@@ -82,8 +83,9 @@ function ObligationList() {
             label: badge.label,
           }))}
         />
-        <TextField
+        <PersonReferenceField
           label="Customer reference"
+          person="Customer"
           value={debtor}
           onChange={setDebtor}
           hint="A person reference narrows to one customer."
@@ -185,8 +187,9 @@ function OrderList() {
   return (
     <>
       <div className="rf-grid">
-        <TextField
+        <PersonReferenceField
           label="Payer reference"
+          person="Payer"
           value={payer}
           onChange={setPayer}
           hint="A person reference narrows to one payer."

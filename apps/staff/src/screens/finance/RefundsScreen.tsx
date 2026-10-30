@@ -166,18 +166,20 @@ export function RefundsScreen() {
                   description={`Only a succeeded payment can be refunded; this attempt is ${PAYMENT_STATUS[data.status].label}.`}
                 />
               )}
+              {/* §4.10: listed only for a payment the viewer may read, so an unavailable payment
+                  never shows "no refund", which would imply that it exists. */}
+              <section className="rf-panel" aria-labelledby="earlier-refunds-title">
+                <h3 id="earlier-refunds-title">Earlier refunds</h3>
+                <RefundList
+                  filter={{ paymentAttemptId: data.id }}
+                  label="Earlier refunds of this payment"
+                  emptyDescription="No refund has been requested for this payment."
+                />
+              </section>
             </>
           )
         }
       </QueryBoundary>
-      <section className="rf-panel" aria-labelledby="earlier-refunds-title">
-        <h3 id="earlier-refunds-title">Earlier refunds</h3>
-        <RefundList
-          filter={{ paymentAttemptId: paymentId }}
-          label="Earlier refunds of this payment"
-          emptyDescription="No refund has been requested for this payment."
-        />
-      </section>
     </section>
   );
 }

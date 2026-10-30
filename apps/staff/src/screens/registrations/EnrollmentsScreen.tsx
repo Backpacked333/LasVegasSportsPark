@@ -11,7 +11,8 @@ import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useApiPages } from '../../api/useApiPages';
-import { SelectField, TextField } from '../../features/registration-finance/fields';
+import { SelectField } from '../../features/registration-finance/fields';
+import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import { formatInstant } from '../../features/registration-finance/format';
 import { ENROLLMENT_STATUS, REGISTRATION_INTENT } from '../../features/registration-finance/labels';
 import { OfferingName, PersonName } from '../../features/registration-finance/names';
@@ -54,11 +55,12 @@ export function EnrollmentsScreen() {
         onChange={(id) => setParams(id ? { offering: id } : {})}
       />
       <div className="rf-grid">
-        <TextField
+        <PersonReferenceField
           label="Or participant reference"
+          person="Participant"
           value={participant}
           onChange={setParticipant}
-          hint="The participant's person reference from People and families."
+          hint="Find the participant by name or contact, or enter their person reference."
         />
         <SelectField
           label="Enrollment status"
@@ -77,7 +79,7 @@ export function EnrollmentsScreen() {
         </p>
       ) : null}
       {offeringId === '' && participantId === '' ? (
-        <p>Choose an offering or enter a participant reference.</p>
+        <p>Choose an offering or find the participant.</p>
       ) : (
         <>
           <QueryBoundary

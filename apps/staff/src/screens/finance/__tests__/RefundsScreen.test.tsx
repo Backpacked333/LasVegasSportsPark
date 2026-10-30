@@ -3,7 +3,8 @@
  * before execution, the amount in minor units, partial refunds with what remains, over-refund and
  * concurrent reservation answers, an unknown refund keeping its reservation until reconciled, and
  * credits with owner, uses, expiry, balance, source and history; a payment's earlier refunds and
- * refunds by state (`GET /refunds`, FIN-02), and credits in keyset pages.
+ * refunds by state (`GET /refunds`, FIN-02), and credits in keyset pages; a payment the viewer
+ * may not read never shows its refunds (§4.10); owners found by name (ID-03).
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -20,6 +21,8 @@ import {
   nameRoutes,
   ok,
   paymentDetail,
+  peopleSearch,
+  personMatch,
   refund,
 } from '../../../features/registration-finance/__tests__/fixtures';
 
@@ -195,6 +198,19 @@ describe('SCR-S-37 RefundsScreen', () => {
     });
     render(app.at(REFUNDS_PATH));
     expect(await screen.findByText('No refund has been requested for this payment.')).toBeVisible();
+  });
+  it('§4.10: a payment the viewer may not read shows only "not available", never its refunds', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /payments/{id}': apiError(404, 'NOT_FOUND', { nextAction: 'verify_reference' }),
+        'GET /refunds': ok({ items: [], nextCursor: null }),
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
+    expect(screen.queryByText('No refund has been requested for this payment.')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Earlier refunds' })).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/refunds')).toBe(false);
   });
 });
 
@@ -401,5 +417,60 @@ describe('SCR-S-37 CreditsScreen', () => {
     const list = screen.getByRole('list', { name: 'Credits' });
     await waitFor(() => expect(list.querySelectorAll(':scope > li')).toHaveLength(2));
     expect(screen.queryByRole('button', { name: 'Load more credits' })).toBeNull();
+  });
+
+  it('ID-03: finds the credit owner by name, and issues a credit to a person found by name', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': peopleSearch([personMatch(ADULT_ID, 'Sam', 'Rivera')]),
+        'POST /credits': ok(credit({ sourceKind: 'goodwill', status: 'active' }), 201),
+      }),
+    });
+    render(app.at('/finance/credits'));
+    const finder = await screen.findByRole('group', { name: 'Find the credit owner' });
+    await user.type(within(finder).getByLabelText(/^Find the credit owner/), 'Rivera{Enter}');
+    await user.click(
+      await within(finder).findByRole('button', { name: 'Use Sam Rivera as the credit owner' }),
+    );
+    expect(screen.getByLabelText(/^Credit owner reference/)).toHaveValue(ADULT_ID);
+    expect(await screen.findByRole('list', { name: 'Credits' })).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/credits')?.query).toMatchObject({
+      ownerPersonId: ADULT_ID,
+    });
+    // Issuing: Enter in the owner search never submits the credit form.
+    await user.click(screen.getByText('Issue a credit'));
+    const form = screen.getByRole('form', { name: 'Issue a credit' });
+    const f = within(form);
+    await user.clear(f.getByLabelText(/^Owner reference/));
+    const ownerFinder = f.getByRole('group', { name: 'Find the owner' });
+    await user.type(within(ownerFinder).getByLabelText(/^Find the owner/), 'Rivera{Enter}');
+    await user.click(
+      await within(ownerFinder).findByRole('button', { name: 'Use Sam Rivera as the owner' }),
+    );
+    expect(f.getByLabelText(/^Owner reference/)).toHaveValue(ADULT_ID);
+    expect(app.fake.requests.some((r) => r.route === '/credits' && r.method === 'POST')).toBe(
+      false,
+    );
+    expect(f.queryByText('Choose at least one permitted use.')).toBeNull();
+  });
+
+  it('ID-03: a person search the viewer may not use is not available; the owner reference stays', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+        }),
+      }),
+    });
+    render(app.at('/finance/credits'));
+    const finder = await screen.findByRole('group', { name: 'Find the credit owner' });
+    await user.type(within(finder).getByLabelText(/^Find the credit owner/), 'Rivera{Enter}');
+    expect(
+      await within(finder).findByText(/Person search is not available to you/),
+    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/^Credit owner reference/), ADULT_ID);
+    expect(await screen.findByRole('list', { name: 'Credits' })).toBeInTheDocument();
   });
 });

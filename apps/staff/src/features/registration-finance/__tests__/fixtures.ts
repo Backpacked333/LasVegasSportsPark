@@ -3,7 +3,7 @@
  * (docs/api/openapi.json). Ids are fixed UUIDs; names are invented and carry no real person.
  */
 import type { Schema, Schemas } from '@sportspark/api-client';
-import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { fakeResponse, type FakeHandler, type FakeRequest } from '@sportspark/api-client/testing';
 import { FACILITY_A, TEST_NOW } from '../../../testing/test-app';
 
 export const NOW = TEST_NOW.toISOString();
@@ -192,6 +192,28 @@ export const peopleHandler: FakeHandler = (request) => {
         nextAction: 'verify_reference',
       });
 };
+
+/** A `GET /people` search result (ID-03): names only. */
+export function personMatch(id: string, givenName: string, familyName: string) {
+  return { id, givenName, familyName, kind: 'adult', status: 'active', matchedOn: 'name' };
+}
+
+/**
+ * `GET /people?query=` answering keyset pages: the first page holds `first`; with `second`, the
+ * first page names cursor `p2` and the second page holds `second`.
+ */
+export function peopleSearch(
+  first: ReturnType<typeof personMatch>[],
+  second?: ReturnType<typeof personMatch>[],
+): (request: FakeRequest) => Response {
+  return (request) =>
+    fakeResponse(
+      200,
+      request.query.cursor === 'p2'
+        ? { items: second ?? [], nextCursor: null }
+        : { items: first, nextCursor: second ? 'p2' : null },
+    );
+}
 
 /** Routes most screens need to name people and offerings. */
 export function nameRoutes(

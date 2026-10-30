@@ -393,6 +393,41 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
     });
   });
 
+  it('ID-03: Enter in the payer search searches and never starts the basket without the payer', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': ok({
+          items: [
+            {
+              id: ADULT_ID,
+              givenName: 'Sam',
+              familyName: 'Rivera',
+              kind: 'adult',
+              status: 'active',
+              matchedOn: 'name',
+            },
+          ],
+          nextCursor: null,
+        }),
+      }),
+    });
+    render(app.at('/registrations/assisted'));
+    await user.type(await screen.findByLabelText(/^Household adult/), PERSON_ID);
+    const finder = screen.getByRole('group', { name: 'Find the payer' });
+    await user.type(within(finder).getByLabelText(/^Find the payer/), 'Rivera{Enter}');
+    expect(
+      await within(finder).findByRole('button', { name: 'Use Sam Rivera as the payer' }),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/people')?.query).toMatchObject({
+      query: 'Rivera',
+    });
+    // The basket form was not submitted: no basket with the household adult as payer.
+    expect(app.fake.requests.some((r) => r.method === 'POST' && r.route === '/baskets')).toBe(
+      false,
+    );
+  });
+
   it('a person search the viewer may not use is not available, and the reference stays', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

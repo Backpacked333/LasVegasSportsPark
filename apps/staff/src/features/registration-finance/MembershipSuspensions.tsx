@@ -6,7 +6,8 @@
  * suspension's `expectedRevision`), each with one idempotency key per intent. Times are entered
  * and shown in the offering facility's zone (SPK-SCHED-008).
  *
- * The API never turns suspensions off, so the panel sits under `CapabilityGate whenOff="notice"`.
+ * The API never turns suspensions off, so the panel sits under `CapabilityNotice`: the form always
+ * renders, and the switch shows as a notice only once `GET /v1/me/permissions` says it is off.
  * The API has no staff read of a membership's suspensions (only `GET /v1/me/memberships` for the
  * customer), so suspensions recorded before this page was opened are not listed; the ones made
  * here are shown with their state and can be ended. Membership benefits and terms are POL-038 and
@@ -16,8 +17,8 @@ import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { Button } from '../../ui/Button';
-import { CapabilityGate } from '../../ui/CapabilityGate';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { CapabilityNotice } from './CapabilityNotice';
 import { CommandError, fieldErrorsOf } from './CommandError';
 import { TextArea, TextField } from './fields';
 import { formatInstant, localToInstant } from './format';
@@ -205,9 +206,8 @@ export function MembershipSuspensionPanel({
   return (
     <section className="rf-panel" aria-labelledby="suspensions-title">
       <h3 id="suspensions-title">Membership suspensions</h3>
-      <CapabilityGate
+      <CapabilityNotice
         capability="memberships"
-        whenOff="notice"
         stillAvailable="Suspending a membership and ending a suspension stay available: they are never turned off."
       >
         <p className="caption">
@@ -245,7 +245,7 @@ export function MembershipSuspensionPanel({
             ))}
           </ul>
         ) : null}
-      </CapabilityGate>
+      </CapabilityNotice>
     </section>
   );
 }

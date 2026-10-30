@@ -61,7 +61,7 @@ import { OfferingName, PersonName } from '../../features/registration-finance/na
 import { OfferingPicker } from '../../features/registration-finance/OfferingPicker';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
 import { PaymentAttemptList } from '../../features/registration-finance/PaymentAttempts';
-import { PersonSearch } from '../../features/registration-finance/PersonSearch';
+import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import { PENDING } from '../../features/registration-finance/pending';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { useNow } from '../../providers/AppProviders';
@@ -93,44 +93,6 @@ function useBasketReload(reset: () => void) {
     reset();
     void queryClient.invalidateQueries({ queryKey: BASKET_KEY });
   };
-}
-
-/** A person reference field that shows whose record it is once the reference is complete. */
-function PersonReferenceField({
-  label,
-  value,
-  onChange,
-  error,
-  required,
-  hint,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  error?: string | null;
-  required?: boolean;
-  hint?: string;
-}) {
-  const valid = UUID.test(value.trim());
-  return (
-    <div>
-      <TextField
-        label={label}
-        required={required}
-        hint={hint}
-        value={value}
-        onChange={onChange}
-        error={error}
-      />
-      {valid ? (
-        <p className="caption" aria-live="polite">
-          {label}: <PersonName id={value.trim()} />
-        </p>
-      ) : (
-        <PersonSearch label={label} onChoose={onChange} />
-      )}
-    </div>
-  );
 }
 
 function StartBasket() {

@@ -4,9 +4,11 @@
  * proposed participation, affected dates, capacity implications, the refund, credit or charge and
  * whether approval is required, all as the API computed them (`GET .../cancellation-preview`,
  * `GET .../transfer-preview`, read-only). Cancelling needs a reason; a consequence that is not
- * "none" needs the customer's acceptance, and the previewed consequence is sent back as
- * `acceptedConsequence` (ENR-03): when it changed in between, the API commits nothing and the
- * screen shows the current one to accept again. Both commands send `expectedRevision` and an
+ * "none" needs the customer's acceptance, and the consequence the customer accepted (a snapshot
+ * taken when the box is ticked, never a later re-read of the preview) is sent back as
+ * `acceptedConsequence` (ENR-03): a re-read that shows a different consequence unticks the box,
+ * and when it changed on the server in between, the API commits nothing and the screen shows the
+ * current one to accept again. Both commands send `expectedRevision` and an
  * idempotency key per intent (§4.9).
  *
  * - A transfer links the old and new enrollments; attendance stays on the original (SPK-REG-010).
@@ -28,11 +30,11 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration-finance/CommandError';
 import { EligibilityView } from '../../features/registration-finance/Eligibility';
 import {
+  AcceptanceOutdated,
   ConsequenceConflict,
   ConsequenceView,
-  acceptedOf,
   consequenceConflictOf,
-  needsAcceptance,
+  useAcceptance,
 } from '../../features/registration-finance/consequence';
 import { CheckboxField, Facts, TextArea } from '../../features/registration-finance/fields';
 import { formatDate, formatInstant, formatMoney } from '../../features/registration-finance/format';
@@ -84,11 +86,12 @@ function CancelSection({ enrollment }: { enrollment: Enrollment }) {
   const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
-  const [accepted, setAccepted] = useState(false);
   const preview = useApiQuery({
     path: '/enrollments/{id}/cancellation-preview',
     request: { path: { id: enrollment.id } },
   });
+  // ENR-03: the acceptance is bound to the consequence the customer saw, not to later re-reads.
+  const acceptance = useAcceptance(preview.data?.financialConsequence ?? null);
   const cancel = useApiCommand('post', '/enrollments/{id}/cancel', {
     invalidate: [
       ENROLLMENT_KEY,
@@ -99,7 +102,7 @@ function CancelSection({ enrollment }: { enrollment: Enrollment }) {
   const conflict = consequenceConflictOf(cancel.error);
   const previewAgain = () => {
     cancel.reset();
-    setAccepted(false);
+    acceptance.clear();
     void queryClient.invalidateQueries({
       queryKey: ['api', '/enrollments/{id}/cancellation-preview'],
     });
@@ -119,7 +122,7 @@ function CancelSection({ enrollment }: { enrollment: Enrollment }) {
       >
         {(data) => {
           const consequence = data.financialConsequence ?? null;
-          const mustAccept = needsAcceptance(consequence);
+          const { mustAccept } = acceptance;
           return (
             <>
               <Participation label="Existing participation" summary={data.existing} />
@@ -154,14 +157,15 @@ function CancelSection({ enrollment }: { enrollment: Enrollment }) {
                       return;
                     }
                     setReasonError(null);
-                    if (!consequence || (mustAccept && !accepted)) return;
+                    const acceptedConsequence = acceptance.toSend();
+                    if (!acceptedConsequence) return;
                     cancel
                       .submit({
                         path: { id: enrollment.id },
                         body: {
                           reason: reason.trim(),
                           expectedRevision: enrollment.revision,
-                          acceptedConsequence: acceptedOf(consequence),
+                          acceptedConsequence,
                         },
                       })
                       .catch(() => undefined);
@@ -177,10 +181,11 @@ function CancelSection({ enrollment }: { enrollment: Enrollment }) {
                   {consequence && mustAccept ? (
                     <CheckboxField
                       label="The customer accepted the financial consequence shown"
-                      checked={accepted}
-                      onChange={setAccepted}
+                      checked={acceptance.checked}
+                      onChange={acceptance.setChecked}
                     />
                   ) : null}
+                  {consequence && mustAccept && acceptance.outdated ? <AcceptanceOutdated /> : null}
                   {!consequence ? (
                     <p>The API did not state the financial consequence: preview again first.</p>
                   ) : null}
@@ -188,7 +193,7 @@ function CancelSection({ enrollment }: { enrollment: Enrollment }) {
                     <Button
                       type="submit"
                       busy={cancel.isProcessing}
-                      disabled={!online || !consequence || (mustAccept && !accepted)}
+                      disabled={!online || !consequence || (mustAccept && !acceptance.checked)}
                     >
                       Cancel the enrollment
                     </Button>
@@ -262,20 +267,21 @@ function TransferSection({ enrollment }: { enrollment: Enrollment }) {
   const online = useOnline();
   const queryClient = useQueryClient();
   const [target, setTarget] = useState('');
-  const [accepted, setAccepted] = useState(false);
   // ENR-03: the read-only preview (a GET), so a stale preview is never replayed by a POST.
   const preview = useApiQuery({
     path: '/enrollments/{id}/transfer-preview',
     request: { path: { id: enrollment.id }, query: { targetOfferingId: target } },
     enabled: target !== '',
   });
+  // ENR-03: the acceptance is bound to the consequence the customer saw, not to later re-reads.
+  const acceptance = useAcceptance(target ? (preview.data?.financialConsequence ?? null) : null);
   const commit = useApiCommand('post', '/enrollments/{id}/transfer', {
     invalidate: [ENROLLMENT_KEY, ['api', '/enrollments']],
   });
   const conflict = consequenceConflictOf(commit.error);
   const previewAgain = () => {
     commit.reset();
-    setAccepted(false);
+    acceptance.clear();
     void queryClient.invalidateQueries({ queryKey: ['api', '/enrollments/{id}/transfer-preview'] });
   };
   const reload = () => {
@@ -292,7 +298,7 @@ function TransferSection({ enrollment }: { enrollment: Enrollment }) {
         excludeId={enrollment.offeringId}
         onChange={(id) => {
           setTarget(id);
-          setAccepted(false);
+          acceptance.clear();
           commit.reset();
         }}
       />
@@ -305,30 +311,32 @@ function TransferSection({ enrollment }: { enrollment: Enrollment }) {
         >
           {(data) => {
             const consequence = data.financialConsequence ?? null;
-            const mustAccept = needsAcceptance(consequence);
+            const { mustAccept } = acceptance;
             return (
               <>
                 <TransferPreviewView preview={data} />
                 {consequence && mustAccept ? (
                   <CheckboxField
                     label="The customer accepted the financial consequence shown"
-                    checked={accepted}
-                    onChange={setAccepted}
+                    checked={acceptance.checked}
+                    onChange={acceptance.setChecked}
                   />
                 ) : null}
+                {consequence && mustAccept && acceptance.outdated ? <AcceptanceOutdated /> : null}
                 <div className="rf-actions">
                   <Button
                     busy={commit.isProcessing}
-                    disabled={!online || !consequence || (mustAccept && !accepted)}
+                    disabled={!online || !consequence || (mustAccept && !acceptance.checked)}
                     onClick={() => {
-                      if (!consequence) return;
+                      const acceptedConsequence = acceptance.toSend();
+                      if (!acceptedConsequence) return;
                       commit
                         .submit({
                           path: { id: enrollment.id },
                           body: {
                             targetOfferingId: target,
                             commit: true,
-                            acceptedConsequence: acceptedOf(consequence),
+                            acceptedConsequence,
                             expectedRevision: enrollment.revision,
                           },
                         })

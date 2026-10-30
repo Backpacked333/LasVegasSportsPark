@@ -2,8 +2,11 @@
  * SCR-S-27 cancellation and transfer (SPK-REG-010, SPK-PAY-008, SPK-PAY-009, §4.8 transfer,
  * DEC-009, ENR-03): preview before commitment with participation, dates, capacity, the financial
  * consequence and approval (the read-only transfer preview); commands with the expected revision
- * and the accepted consequence bound to the preview; CONSEQUENCE_CHANGED, capacity changed, refund
- * pending and not-found answers; keyset paging of the enrollment lookup.
+ * and the accepted consequence bound to what the customer saw (a re-read that changes it unticks
+ * the acceptance); CONSEQUENCE_CHANGED, capacity changed, refund pending and not-found answers;
+ * keyset paging of the enrollment lookup, its person search and its offering picker. Package G
+ * (ENR-11, ENR-12): suspensions and package reversals under the switch notice, which never hides
+ * them, the reversal history, a package list the viewer may not read, and facility-zone times.
  */
 import {
   capabilityDisabledBody,
@@ -15,9 +18,14 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import {
+  ADULT_ID,
   ENROLLMENT_ID,
   ENROLLMENT_NEW_ID,
   NOW,
+  PERSON_ID,
+  POLICY_CANCELLATION_ID,
+  personMatch,
+  peopleSearch,
   REDEMPTION_ID,
   SUSPENSION_ID,
   enrollmentOffering,
@@ -156,6 +164,100 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
       c.getByLabelText('The customer accepted the financial consequence shown'),
     ).not.toBeChecked();
     expect(c.getByLabelText(/^Reason for canceling/)).toHaveValue('Moving away');
+  });
+
+  it('ENR-03: the acceptance is bound to the consequence shown; a re-read that changes it unticks the box and sends nothing until it is accepted again', async () => {
+    const user = userEvent.setup();
+    let preview = cancellationPreview();
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}/cancellation-preview': () => fakeResponse(200, preview),
+        'POST /enrollments/{id}/cancel': ok(enrollment({ status: 'canceled' })),
+      }),
+    });
+    render(app.at(PATH));
+    const cancel = (await screen.findByRole('heading', { name: 'Cancel' })).closest(
+      'section',
+    ) as HTMLElement;
+    const c = within(cancel);
+    await user.type(await c.findByLabelText(/^Reason for canceling/), 'Moving away');
+    const box = () => c.getByLabelText('The customer accepted the financial consequence shown');
+    await user.click(box());
+    expect(box()).toBeChecked();
+    // A background re-read (window focus, reconnect) answers a different consequence.
+    preview = {
+      ...cancellationPreview(),
+      financialConsequence: {
+        kind: 'credit',
+        amountMinor: 2500,
+        currency: 'USD',
+        explanation: 'Half the sessions have run.',
+        policyVersionId: POLICY_CANCELLATION_ID,
+      },
+    };
+    await app.queryClient.invalidateQueries({
+      queryKey: ['api', '/enrollments/{id}/cancellation-preview'],
+    });
+    expect(await c.findByText('Half the sessions have run.')).toBeInTheDocument();
+    await waitFor(() => expect(box()).not.toBeChecked());
+    expect(c.getByText(/changed after the customer accepted it/)).toBeInTheDocument();
+    const submit = c.getByRole('button', { name: 'Cancel the enrollment' });
+    expect(submit).toBeDisabled();
+    await user.click(submit);
+    expect(app.fake.requests.some((r) => r.route === '/enrollments/{id}/cancel')).toBe(false);
+    // Accepted again for the consequence shown now: that consequence is what is sent.
+    await user.click(box());
+    expect(c.queryByText(/changed after the customer accepted it/)).toBeNull();
+    await user.click(c.getByRole('button', { name: 'Cancel the enrollment' }));
+    expect(await c.findByText('Enrollment now canceled.')).toBeInTheDocument();
+    expect(
+      app.fake.requests.find((r) => r.route === '/enrollments/{id}/cancel')?.body,
+    ).toMatchObject({
+      acceptedConsequence: { kind: 'credit', amountMinor: 2500, currency: 'USD' },
+    });
+  });
+
+  it('ENR-03: a transfer preview re-read with a different charge unticks the acceptance', async () => {
+    const user = userEvent.setup();
+    let preview = transferPreview(false);
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}/transfer-preview': () => fakeResponse(200, preview),
+        'POST /enrollments/{id}/transfer': ok(transferPreview(true)),
+      }),
+    });
+    render(app.at(PATH));
+    await screen.findByRole('heading', { name: 'Transfer' });
+    const t = await chooseTarget(user);
+    await t.findByRole('group', { name: 'Transfer preview' });
+    const box = () => t.getByLabelText('The customer accepted the financial consequence shown');
+    await user.click(box());
+    preview = {
+      ...transferPreview(false),
+      financialConsequence: {
+        kind: 'charge',
+        amountMinor: 3000,
+        currency: 'USD',
+        explanation: 'The evening group costs more.',
+        policyVersionId: null,
+      },
+    };
+    await app.queryClient.invalidateQueries({
+      queryKey: ['api', '/enrollments/{id}/transfer-preview'],
+    });
+    expect(await t.findByText('The evening group costs more.')).toBeInTheDocument();
+    await waitFor(() => expect(box()).not.toBeChecked());
+    expect(t.getByRole('button', { name: 'Transfer the enrollment' })).toBeDisabled();
+    expect(app.fake.requests.some((r) => r.route === '/enrollments/{id}/transfer')).toBe(false);
+    await user.click(box());
+    await user.click(t.getByRole('button', { name: 'Transfer the enrollment' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/enrollments/{id}/transfer')?.body,
+      ).toMatchObject({
+        acceptedConsequence: { kind: 'charge', amountMinor: 3000, currency: 'USD' },
+      }),
+    );
   });
 
   it('ENR-03: reads the transfer preview, requires acceptance of the charge, then commits it as previewed and links both enrollments', async () => {
@@ -473,7 +575,7 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
   });
 
-  it('ENR-11: a redemption already reversed is shown without Reverse; a refused reversal shows its code', async () => {
+  it('ENR-11: with the switch off the package stays listed and correctable; a refused reversal shows its code', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
@@ -496,7 +598,7 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
     expect(within(list).getByText(/Error code: RESOURCE_CONFLICT/)).toBeInTheDocument();
   });
 
-  it('a package list the viewer may not read is not available, and a turned-off command shows turned off', async () => {
+  it('ENR-12: a suspension refused with CAPABILITY_DISABLED shows turned off with its code', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
@@ -518,5 +620,182 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
     expect(
       await p.findByText(/Error code: ACCESS_DENIED \(CAPABILITY_DISABLED\)/),
     ).toBeInTheDocument();
+  });
+
+  it('ENR-11: a redemption already reversed is shown without Reverse, with its reversal', async () => {
+    const REVERSAL_ID = '0192f1a0-0000-7000-8000-000000001406';
+    const reversed = packageEntitlement({
+      redeemedCount: 0,
+      remainingCredits: 10,
+      redemptions: [
+        ...packageEntitlement().redemptions,
+        {
+          id: REVERSAL_ID,
+          sessionBookingId: '0192f1a0-0000-7000-8000-000000001405',
+          kind: 'reversal',
+          reversesRedemptionId: REDEMPTION_ID,
+          reason: 'Session canceled by the coach',
+          redeemedAt: NOW,
+        },
+      ],
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}': ok(
+          enrollment({ intent: 'package_purchase', offering: enrollmentOffering('package') }),
+        ),
+        'GET /package-entitlements': ok({ items: [reversed], nextCursor: null }),
+      }),
+    });
+    render(app.at(PATH));
+    const history = await screen.findByRole('list', { name: 'Redemption history' });
+    const rows = within(history).getAllByRole('listitem');
+    expect(within(rows[0]!).getByText('Redeemed, later reversed')).toBeInTheDocument();
+    expect(within(rows[1]!).getByText('Reversal: credit returned')).toBeInTheDocument();
+    expect(within(rows[1]!).getByText(/Session canceled by the coach/)).toBeInTheDocument();
+    // Neither the reversed redemption nor the reversal itself can be reversed.
+    expect(
+      within(history).queryByRole('button', { name: /^Reverse the redemption of/ }),
+    ).toBeNull();
+  });
+
+  it('ENR-11: a session package list the viewer may not read is not available', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}': ok(
+          enrollment({ intent: 'package_purchase', offering: enrollmentOffering('package') }),
+        ),
+        'GET /package-entitlements': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+        }),
+      }),
+    });
+    render(app.at(PATH));
+    const panel = (await screen.findByRole('heading', { name: 'Session package' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(await within(panel).findByText('Not available')).toBeInTheDocument();
+    expect(within(panel).queryByRole('list', { name: 'Session packages' })).toBeNull();
+  });
+
+  it('DEC-016: commands the API never turns off stay available while the switch read fails', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': apiError(503, 'SERVICE_UNAVAILABLE', { nextAction: 'retry_later' }),
+        'GET /enrollments/{id}': ok(
+          enrollment({ intent: 'membership', offering: enrollmentOffering('membership') }),
+        ),
+      }),
+    });
+    render(app.at(PATH));
+    const panel = (await screen.findByRole('heading', { name: 'Membership suspensions' })).closest(
+      'section',
+    ) as HTMLElement;
+    const p = within(panel);
+    expect(p.getByRole('form', { name: 'Suspend the membership' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/me/permissions')).toBe(true),
+    );
+    // The failed read neither hides the form nor claims the switch is off.
+    expect(p.getByRole('button', { name: 'Suspend the membership' })).toBeEnabled();
+    expect(p.queryByText('Memberships turned off')).toBeNull();
+    expect(p.queryByText(/SERVICE_UNAVAILABLE/)).toBeNull();
+  });
+
+  it('SPK-SCHED-008: the lookup shows session package times in the offering facility zone', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments': ok({ items: [enrollment()], nextCursor: null }),
+        'GET /package-entitlements': ok({ items: [packageEntitlement()], nextCursor: null }),
+      }),
+    });
+    render(app.at(`/registrations/enrollments?offering=${OFFERING_ID}`));
+    const list = await screen.findByRole('list', { name: 'Session packages' });
+    // 08:00 UTC on 31 January is midnight in Los Angeles (PST), the offering facility's zone.
+    expect(await within(list).findByText(/Jan 31, 2027, 12:00 AM PST/)).toBeInTheDocument();
+  });
+
+  it('ID-03: the enrollment lookup finds the participant by name and lists their enrollments', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /people': peopleSearch(
+          [personMatch(ADULT_ID, 'Sam', 'Rivera')],
+          [personMatch(PERSON_ID, 'Alex', 'Rivera')],
+        ),
+        'GET /enrollments': ok({ items: [enrollment()], nextCursor: null }),
+        'GET /package-entitlements': ok({ items: [], nextCursor: null }),
+      }),
+    });
+    render(app.at('/registrations/enrollments'));
+    const finder = await screen.findByRole('group', { name: 'Find the participant' });
+    // Enter searches; it never submits anything.
+    await user.type(within(finder).getByLabelText(/^Find the participant/), 'Rivera{Enter}');
+    expect(
+      await within(finder).findByRole('button', { name: 'Use Sam Rivera as the participant' }),
+    ).toBeInTheDocument();
+    // §4.5: further matches are a page away, never cut off.
+    await user.click(
+      within(finder).getByRole('button', { name: 'Load more people matching for the participant' }),
+    );
+    await user.click(
+      await within(finder).findByRole('button', { name: 'Use Alex Rivera as the participant' }),
+    );
+    expect(screen.getByLabelText(/^Or participant reference/)).toHaveValue(PERSON_ID);
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.route === '/enrollments')?.query).toMatchObject({
+        participantPersonId: PERSON_ID,
+      }),
+    );
+    expect(await screen.findByRole('list', { name: 'Enrollments' })).toBeInTheDocument();
+  });
+
+  it('§4.5: the offering picker pages programs and offerings with Load more', async () => {
+    const user = userEvent.setup();
+    const later = { ...program(), id: '0192f1a0-0000-7000-8000-000000000109', name: 'Winter camp' };
+    const app = createTestApp({
+      routes: routes({
+        'GET /programs': (request) =>
+          fakeResponse(
+            200,
+            request.query.cursor === 'g2'
+              ? { items: [later], nextCursor: null }
+              : { items: [program()], nextCursor: 'g2' },
+          ),
+        'GET /programs/{id}/offerings': (request) =>
+          fakeResponse(
+            200,
+            request.query.cursor === 'o2'
+              ? { items: [OFFERINGS[1]], nextCursor: null }
+              : { items: [OFFERINGS[0]], nextCursor: 'o2' },
+          ),
+      }),
+    });
+    render(app.at('/registrations/enrollments'));
+    const programSelect = await screen.findByLabelText('Enrollments in: program');
+    await waitFor(() =>
+      expect(within(programSelect).getByRole('option', { name: 'Spring academy' })).toBeVisible(),
+    );
+    expect(within(programSelect).queryByRole('option', { name: 'Winter camp' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Load more programs (enrollments in)' }));
+    expect(
+      await within(programSelect).findByRole('option', { name: 'Winter camp' }),
+    ).toBeInTheDocument();
+    await user.selectOptions(programSelect, PROGRAM_ID);
+    const offeringSelect = screen.getByLabelText('Enrollments in: offering');
+    await waitFor(() =>
+      expect(
+        within(offeringSelect).getByRole('option', { name: /^Spring academy U10 \(/ }),
+      ).toBeVisible(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Load more offerings (enrollments in)' }));
+    expect(
+      await within(offeringSelect).findByRole('option', { name: /evenings/ }),
+    ).toBeInTheDocument();
+    expect(
+      app.fake.requests
+        .filter((r) => r.route === '/programs/{id}/offerings')
+        .map((r) => r.query.cursor ?? null),
+    ).toEqual([null, 'o2']);
   });
 });
