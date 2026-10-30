@@ -24,14 +24,15 @@ const SCREENS = [
     to: '/registrations/waitlists',
     title: 'Waitlist management',
     id: 'SCR-S-26',
-    purpose: 'Waitlist entries with priority basis, preferences, status and offer history.',
+    purpose:
+      'Waitlist entries with priority basis, preferences, status and offer history; offer a free place to the next entry.',
   },
   {
     to: '/registrations/enrollments',
     title: 'Cancellation and transfer',
     id: 'SCR-S-27',
     purpose:
-      'Preview and commit cancellations and transfers with dates, capacity and the financial consequence.',
+      'Preview and commit cancellations and transfers with dates, capacity and the accepted financial consequence; membership suspensions and session package corrections.',
   },
 ] as const;
 

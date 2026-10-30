@@ -9,7 +9,7 @@ import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
-import { useApiQuery } from '../../api/useApiQuery';
+import { useApiPages } from '../../api/useApiPages';
 import { CommandError, fieldErrorsOf } from '../../features/registration-finance/CommandError';
 import { SelectField, TextArea, TextField } from '../../features/registration-finance/fields';
 import { PROGRAM_STATUS } from '../../features/registration-finance/labels';
@@ -17,7 +17,7 @@ import { OfflineCaption, useOnline } from '../../features/registration-finance/o
 import { PENDING } from '../../features/registration-finance/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { StateView } from '../../ui/StateView';
+import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type ProgramStatus = Schema<'ProgramStatus'>;
@@ -186,9 +186,10 @@ function CreateProgram() {
 
 export function ProgramsScreen() {
   const [status, setStatus] = useState<'' | ProgramStatus>('');
-  const programs = useApiQuery({
+  // §4.5: keyset pages with "Load more"; nothing is silently cut off.
+  const programs = useApiPages({
     path: '/programs',
-    request: { query: { limit: 200, ...(status ? { status } : {}) } },
+    request: { query: { limit: 50, ...(status ? { status } : {}) } },
   });
   return (
     <section aria-labelledby="programs-title">
@@ -212,7 +213,7 @@ export function ProgramsScreen() {
       <QueryBoundary
         query={programs}
         label="programs"
-        isEmpty={(data) => data.items.length === 0}
+        isEmpty={(items) => items.length === 0}
         empty={{
           title: 'No programs',
           description:
@@ -220,9 +221,9 @@ export function ProgramsScreen() {
         }}
         unavailableOffline={['creating or changing programs']}
       >
-        {(data) => (
+        {(items) => (
           <ul className="list" aria-label="Programs">
-            {data.items.map((program) => (
+            {items.map((program) => (
               <li key={program.id}>
                 <div className="row-text">
                   <Link className="row-title" to={`/programs/${program.id}`}>
@@ -239,13 +240,7 @@ export function ProgramsScreen() {
           </ul>
         )}
       </QueryBoundary>
-      {programs.data?.nextCursor ? (
-        <StateView
-          variant="empty"
-          title="More programs exist"
-          description="Only the first 200 are shown. Narrow the list by status."
-        />
-      ) : null}
+      <LoadMore pages={programs} label="programs" />
       <CreateProgram />
     </section>
   );

@@ -5,8 +5,9 @@
  * idempotency key per intent) asks the provider for its authoritative record; the
  * PaymentAttemptMachine lets `unknown` become only `succeeded`, `failed` or `canceled`. Nothing
  * here retries a payment. A result that is still unresolved stays a recovery-required state with
- * its age and owner. Provider events and their signature state are not published by the API, so
- * they are shown as not available. The provider itself is pending DEC-019.
+ * its age and owner. The attempt's detail (FIN-02) carries what can still be refunded and its
+ * earlier refunds (SCR-S-37). Provider events are listed by provider in the events view (K-08);
+ * the API does not tie an event to one attempt. The provider itself is pending DEC-019.
  */
 import { formatAge } from '@sportspark/api-client';
 import { Link, useParams } from 'react-router';
@@ -15,7 +16,11 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration-finance/CommandError';
 import { Facts } from '../../features/registration-finance/fields';
 import { formatInstant, formatMoney, humanize } from '../../features/registration-finance/format';
-import { PAYMENT_STATUS, paymentUnresolved } from '../../features/registration-finance/labels';
+import {
+  PAYMENT_STATUS,
+  REFUND_STATUS,
+  paymentUnresolved,
+} from '../../features/registration-finance/labels';
 import { PersonName } from '../../features/registration-finance/names';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
 import { PENDING } from '../../features/registration-finance/pending';
@@ -132,11 +137,40 @@ export function PaymentAttemptScreen() {
                 error={reconcile.error}
                 onRetry={() => reconcile.submit({ path: { id: data.id } }).catch(() => undefined)}
               />
-              <StateView
-                variant="unavailable"
-                title="Provider events not available"
-                description="The provider events for this attempt and their signature verification state are recorded by the API but not published to this dashboard."
-              />
+              <section className="rf-panel" aria-labelledby="payment-refunds-title">
+                <h3 id="payment-refunds-title">Refunds of this payment</h3>
+                <p>
+                  Still refundable: {formatMoney(data.refundableMinor, data.currency)} (captured
+                  minus refunded minus reserved by pending refunds).
+                </p>
+                {data.refunds.length === 0 ? (
+                  <p className="caption">No refund has been requested for this payment.</p>
+                ) : (
+                  <ul className="list" aria-label="Refunds of this payment">
+                    {data.refunds.map((r) => (
+                      <li key={r.id}>
+                        <Link to={`/finance/refunds/${r.id}`}>
+                          {formatMoney(r.amountMinor, r.currency)} requested{' '}
+                          {formatInstant(r.requestedAt, 'UTC')}
+                        </Link>
+                        <StatusBadge {...REFUND_STATUS[r.status]} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+              <section className="rf-panel" aria-labelledby="payment-events-title">
+                <h3 id="payment-events-title">Provider events</h3>
+                <p className="caption">
+                  The API does not tie a provider event to one attempt; the events of this provider
+                  show their signature verification and processing state.
+                </p>
+                <Link
+                  to={`/finance/payments?view=events&provider=${encodeURIComponent(data.provider)}`}
+                >
+                  Provider events from {data.provider}
+                </Link>
+              </section>
               <StateView
                 variant="pending-decision"
                 subject="Evidence from a selected payment processor"

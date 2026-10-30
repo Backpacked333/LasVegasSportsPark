@@ -66,6 +66,16 @@ export const PENDING = {
     subject: 'The classification target for unresolved payment events',
     owner: 'Technical lead/operator',
   },
+  reviewDeadline: {
+    ids: ['DEC-028'],
+    subject: 'Review deadlines for applications awaiting approval',
+    owner: 'Product and operations',
+  },
+  waitlistOfferExpiry: {
+    ids: ['DEC-006'],
+    subject: 'How long a waitlist offer holds its place',
+    owner: 'Product and operations',
+  },
   overrideAuthority: {
     ids: ['DEC-066'],
     subject: 'Which roles may override an eligibility failure',

@@ -1,13 +1,18 @@
 /**
  * SCR-S-14 offering setup (SPK-CAT-001, SPK-CAT-003, SPK-PAY-001, SPK-SCHED-008, §4.9): edits
  * with the expected revision, sessions in facility time, cancel with a reason, price rule versions
- * in minor units, copy as a draft, and the staff-details restriction.
+ * in minor units, copy as a draft, and the staff-details restriction; the facility zone from the
+ * facility directory (K-04) and the responsible manager from the staff directory (ID-04).
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { createTestApp } from '../../../testing/test-app';
+import {
+  MANAGER_ID,
+  facilitiesRoute,
+} from '../../../features/registration-finance/__tests__/fixtures';
+import { FACILITY_A, createTestApp, todayFeed } from '../../../testing/test-app';
 import {
   NOW,
   OFFERING_B_ID,
@@ -225,6 +230,90 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
     expect(await screen.findByText(/Error code: VALIDATION_FAILED/)).toBeInTheDocument();
     expect(screen.getAllByText('At least one capacity unit is required.').length).toBeGreaterThan(
       0,
+    );
+  });
+
+  it('SPK-SCHED-008: takes the facility zone from the facility directory when the Today feed names none', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /today': todayFeed([], []),
+        'GET /facilities': facilitiesRoute,
+        'GET /offerings/{id}': ok(offering({ facility: null as never })),
+      }),
+    });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const add = await screen.findByRole('form', { name: 'Add a session' });
+    expect(
+      within(add).getByLabelText(/^Session starts \(facility time, America\/Los_Angeles\)/),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/facilities')).toBe(true);
+  });
+
+  it('ID-04: chooses the responsible manager from the staff directory of the facility', async () => {
+    const user = userEvent.setup();
+    const OTHER = '0192f1a0-0000-7000-8000-000000000304';
+    const app = createTestApp({
+      routes: routes({
+        'GET /staff-directory': ok({
+          items: [
+            {
+              personId: MANAGER_ID,
+              displayName: 'Pat Lee',
+              roles: ['program_manager'],
+              facilityIds: [FACILITY_A],
+              scopes: [{ role: 'program_manager', facilityIds: [FACILITY_A] }],
+            },
+            {
+              personId: OTHER,
+              displayName: 'Jo Park',
+              roles: ['league_manager', 'front_desk'],
+              facilityIds: [],
+              scopes: [],
+            },
+          ],
+          nextCursor: null,
+        }),
+        'PATCH /offerings/{id}': ok(offering()),
+      }),
+    });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const form = await screen.findByRole('form', { name: 'Offering configuration' });
+    const select = await within(form).findByLabelText('Responsible manager (staff directory)');
+    expect(select).toHaveValue(MANAGER_ID);
+    await user.selectOptions(select, OTHER);
+    expect(within(form).getByLabelText(/^Responsible manager \(person reference\)/)).toHaveValue(
+      OTHER,
+    );
+    expect(
+      within(form).getByRole('option', { name: 'Jo Park (league manager, front desk)' }),
+    ).toBeVisible();
+    expect(app.fake.requests.find((r) => r.route === '/staff-directory')?.query).toMatchObject({
+      facilityId: FACILITY_A,
+    });
+    await user.click(within(form).getByRole('button', { name: 'Save offering' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.method === 'PATCH')?.body).toMatchObject({
+        responsibleManagerPersonId: OTHER,
+      }),
+    );
+  });
+
+  it('keeps the person reference when the staff directory is not available', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /staff-directory': apiError(403, 'ACCESS_DENIED', {
+          nextAction: 'contact_support_or_request_access',
+        }),
+      }),
+    });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const form = await screen.findByRole('form', { name: 'Offering configuration' });
+    expect(
+      await within(form).findByText(/The staff directory is not available \(ACCESS_DENIED\)/),
+    ).toBeInTheDocument();
+    expect(within(form).queryByLabelText('Responsible manager (staff directory)')).toBeNull();
+    expect(within(form).getByLabelText(/^Responsible manager \(person reference\)/)).toHaveValue(
+      MANAGER_ID,
     );
   });
 });

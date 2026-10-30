@@ -13,15 +13,21 @@
  *   application whose evaluation failed (the only state the API accepts it from), and the API
  *   decides (ACCESS_DENIED names the missing permission). Approve is not offered on an ineligible
  *   application without an override.
- * - The API states no review deadline or resolver per application, so they are shown as not
- *   available rather than invented.
+ * - Lists are the API's keyset pages (`GET /v1/applications`, newest first, ENR-02) with "Load
+ *   more", shown in that order and labelled so: the default view lists the two waiting states
+ *   apart, each newest first, and never re-sorts a partial set (older applications follow under
+ *   "Load more"; the API offers no oldest-first order).
+ * - Review deadlines are pending DEC-028 (the API states none), so none is invented. Who may
+ *   decide is the API's: the permission names and whether this principal holds them come from
+ *   `GET /v1/me/permissions`; the API states no named resolver per application.
  */
 import type { Schema } from '@sportspark/api-client';
 import { formatAge } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
-import { useApiQuery } from '../../api/useApiQuery';
+import { usePermissions } from '../../api/permissions';
+import { useApiPages } from '../../api/useApiPages';
 import { CommandError } from '../../features/registration-finance/CommandError';
 import { EligibilityView } from '../../features/registration-finance/Eligibility';
 import { SelectField, TextArea } from '../../features/registration-finance/fields';
@@ -38,6 +44,7 @@ import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
+import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 
 type Application = Schema<'Application'>;
@@ -121,7 +128,8 @@ function ApplicationCard({ application }: { application: Application }) {
           {application.requiresApproval ? ' · approval required before payment' : ''}
         </span>
         <span className="caption">
-          Review deadline and resolver: not available (the API does not state them).
+          Review deadline: pending {PENDING.reviewDeadline.ids.join(', ')} (none is set). Resolver:
+          not stated per application.
         </span>
         <StatusBadge {...APPLICATION_STATUS[application.status]} />
         <EligibilityView
@@ -221,85 +229,152 @@ const STATUS_FILTERS: readonly ApplicationStatus[] = [
 const NEEDS_DECISION = 'needs_decision';
 type Filter = ApplicationStatus | typeof NEEDS_DECISION | '';
 
-function ApplicationList({ items, more }: { items: readonly Application[]; more: boolean }) {
+function ApplicationList({
+  items,
+  label = 'Applications',
+}: {
+  items: readonly Application[];
+  label?: string;
+}) {
+  return (
+    <ul className="list" aria-label={label}>
+      {items.map((application) => (
+        <ApplicationCard key={application.id} application={application} />
+      ))}
+    </ul>
+  );
+}
+
+const WAITING: readonly {
+  status: 'awaiting_review' | 'submitted';
+  title: string;
+  label: string;
+  description: string;
+  none: string;
+}[] = [
+  {
+    status: 'awaiting_review',
+    title: 'Awaiting review',
+    label: 'Applications awaiting review',
+    description: 'Eligible applications waiting for approval or decline.',
+    none: 'No eligible application is awaiting review.',
+  },
+  {
+    status: 'submitted',
+    title: 'Submitted, eligibility not met',
+    label: 'Submitted applications',
+    description:
+      'Applications the API keeps in submitted (eligibility failed or not yet evaluated): decline, or override eligibility.',
+    none: 'No submitted application is waiting for a decision.',
+  },
+];
+
+/**
+ * One waiting state in the API's order (newest first, ENR-02) with "Load more": the list is never
+ * re-sorted, because a re-sorted first page would put the oldest loaded application on top while
+ * older ones are still on pages not loaded (the API offers no oldest-first order).
+ */
+function WaitingList({ state }: { state: (typeof WAITING)[number] }) {
+  const pages = useApiPages({
+    path: '/applications',
+    request: { query: { limit: 50, status: state.status } },
+  });
+  const id = `queue-${state.status}`;
+  return (
+    <section className="rf-panel" aria-labelledby={id}>
+      <h3 id={id}>{state.title}</h3>
+      <p className="caption">
+        {state.description} Newest first, as the API lists them
+        {pages.hasNextPage ? '; older applications follow under “Load more”' : ''}.
+      </p>
+      <QueryBoundary
+        query={pages}
+        label={state.label.toLowerCase()}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'None waiting',
+          description: state.none,
+        }}
+        unavailableOffline={['approving, declining or overriding']}
+      >
+        {(items) => <ApplicationList items={items} label={state.label} />}
+      </QueryBoundary>
+      <LoadMore pages={pages} label={state.label.toLowerCase()} />
+    </section>
+  );
+}
+
+/** Every application waiting for a decision: the API's two waiting states, each in its order. */
+function DecisionQueue() {
+  const awaiting = useApiPages({
+    path: '/applications',
+    request: { query: { limit: 50, status: 'awaiting_review' } },
+  });
+  const submitted = useApiPages({
+    path: '/applications',
+    request: { query: { limit: 50, status: 'submitted' } },
+  });
+  // Shares the cache entries the two lists read: "Queue clear" only when both answered empty.
+  const clear =
+    awaiting.data?.length === 0 &&
+    !awaiting.hasNextPage &&
+    submitted.data?.length === 0 &&
+    !submitted.hasNextPage;
+  if (clear) {
+    return (
+      <StateView
+        variant="empty"
+        title="Queue clear"
+        description="No application is waiting for a decision."
+      />
+    );
+  }
   return (
     <>
-      <ul className="list" aria-label="Applications">
-        {items.map((application) => (
-          <ApplicationCard key={application.id} application={application} />
-        ))}
-      </ul>
-      {more ? (
-        <StateView
-          variant="empty"
-          title="More applications exist"
-          description="Only the first 200 of each status are shown."
-        />
-      ) : null}
+      {WAITING.map((state) => (
+        <WaitingList key={state.status} state={state} />
+      ))}
     </>
   );
 }
 
-function DecisionQueue() {
-  const awaiting = useApiQuery({
+function StatusQueue({ status }: { status: ApplicationStatus | '' }) {
+  const applications = useApiPages({
     path: '/applications',
-    request: { query: { limit: 200, status: 'awaiting_review' } },
-  });
-  const submitted = useApiQuery({
-    path: '/applications',
-    request: { query: { limit: 200, status: 'submitted' } },
+    request: { query: { limit: 50, ...(status ? { status } : {}) } },
   });
   return (
-    <QueryBoundary
-      query={awaiting}
-      label="applications awaiting review"
-      empty={{ title: '', description: '' }}
-      unavailableOffline={['approving, declining or overriding']}
-    >
-      {(a) => (
-        <QueryBoundary
-          query={submitted}
-          label="submitted applications"
-          empty={{ title: '', description: '' }}
-          unavailableOffline={['approving, declining or overriding']}
-        >
-          {(b) => {
-            const seen = new Set<string>();
-            const items = [...a.items, ...b.items]
-              .filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)))
-              .sort((x, y) => (x.submittedAt ?? '').localeCompare(y.submittedAt ?? ''));
-            if (items.length === 0) {
-              return (
-                <StateView
-                  variant="empty"
-                  title="Queue clear"
-                  description="No application is waiting for a decision."
-                />
-              );
-            }
-            return <ApplicationList items={items} more={!!(a.nextCursor ?? b.nextCursor)} />;
-          }}
-        </QueryBoundary>
-      )}
-    </QueryBoundary>
+    <>
+      <QueryBoundary
+        query={applications}
+        label="applications"
+        isEmpty={(items) => items.length === 0}
+        empty={{ title: 'No applications', description: 'No application has this status.' }}
+        unavailableOffline={['approving, declining or overriding']}
+      >
+        {(items) => <ApplicationList items={items} />}
+      </QueryBoundary>
+      <LoadMore pages={applications} label="applications" />
+    </>
   );
 }
 
-function StatusQueue({ status }: { status: ApplicationStatus | '' }) {
-  const applications = useApiQuery({
-    path: '/applications',
-    request: { query: { limit: 200, ...(status ? { status } : {}) } },
-  });
+/** What the API's role view says about deciding (SPK-UX-005); the API still decides per record. */
+function DecisionAuthority() {
+  const permissions = usePermissions();
+  const describe = (actionId: string): string => {
+    const held = permissions.actionPermission(actionId);
+    if (held === undefined) return 'not known yet';
+    if (held === null) return 'not held by your roles';
+    if (held.kind === 'conditional') return 'held for some records';
+    return held.facilityIds === null ? 'held in every facility' : 'held in some facilities';
+  };
   return (
-    <QueryBoundary
-      query={applications}
-      label="applications"
-      isEmpty={(page) => page.items.length === 0}
-      empty={{ title: 'No applications', description: 'No application has this status.' }}
-      unavailableOffline={['approving, declining or overriding']}
-    >
-      {(page) => <ApplicationList items={page.items} more={page.nextCursor !== null} />}
-    </QueryBoundary>
+    <p className="caption" aria-label="Decision permissions">
+      Approving or declining needs enrollment.review_application (
+      {describe('enrollment.review_application')}); overriding eligibility needs
+      enrollment.override_eligibility ({describe('enrollment.override_eligibility')}).
+    </p>
   );
 }
 
@@ -314,6 +389,7 @@ export function RegistrationQueueScreen() {
         policy says so: pending {PENDING.approvals.ids.join(', ')} (owner: {PENDING.approvals.owner}
         ).
       </p>
+      <DecisionAuthority />
       <SelectField
         label="Applications"
         value={status}

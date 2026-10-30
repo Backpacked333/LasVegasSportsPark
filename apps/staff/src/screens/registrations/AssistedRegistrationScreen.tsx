@@ -14,6 +14,14 @@
  *   and the API checks tender permissions. Installment plans are pending DEC-073.
  * - QUOTE_EXPIRED offers a new quote; PAYMENT_OUTCOME_UNKNOWN and `recovery_required` are recovery
  *   states that link to SCR-S-36 and never invite a second payment.
+ * - Basket to checkout (FIN-04, ENR-06, SPK-UX-001): once checkout starts, the basket names its
+ *   order (`orderRef`) and the checkout operation (`lastOperationId`). After a reload the screen
+ *   follows that operation (`GET /v1/operations/{id}`) to its outcome, opens the checkout it
+ *   names, and lists the order's payment attempts (`GET /v1/payments?orderId=`), so an unknown
+ *   payment is never mistaken for a failure or a success and is never paid twice.
+ * - People are found by name or contact (`GET /v1/people`, names only) or entered by reference.
+ * - The intents offered for a line are the offering's (`GET /v1/offerings/{id}/registration-
+ *   options`, ENR-05) with the participant's read-only eligibility before anything is added.
  * - Offline: commands are disabled and what was typed is kept.
  */
 import type { Schema } from '@sportspark/api-client';
@@ -22,6 +30,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import { useOperation } from '../../api/useOperation';
 import { CommandError, fieldErrorsOf } from '../../features/registration-finance/CommandError';
 import { EligibilityView } from '../../features/registration-finance/Eligibility';
 import { useFacilities } from '../../features/registration-finance/facilities';
@@ -42,6 +51,7 @@ import {
   CHECKOUT_STATUS,
   HOLD_STATUS,
   LINE_OUTCOME,
+  OPERATION_STATUS,
   PAYMENT_STATUS,
   QUOTE_STATUS,
   REGISTRATION_INTENT,
@@ -50,6 +60,8 @@ import {
 import { OfferingName, PersonName } from '../../features/registration-finance/names';
 import { OfferingPicker } from '../../features/registration-finance/OfferingPicker';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
+import { PaymentAttemptList } from '../../features/registration-finance/PaymentAttempts';
+import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import { PENDING } from '../../features/registration-finance/pending';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { useNow } from '../../providers/AppProviders';
@@ -83,42 +95,6 @@ function useBasketReload(reset: () => void) {
   };
 }
 
-/** A person reference field that shows whose record it is once the reference is complete. */
-function PersonReferenceField({
-  label,
-  value,
-  onChange,
-  error,
-  required,
-  hint,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  error?: string | null;
-  required?: boolean;
-  hint?: string;
-}) {
-  const valid = UUID.test(value.trim());
-  return (
-    <div>
-      <TextField
-        label={label}
-        required={required}
-        hint={hint}
-        value={value}
-        onChange={onChange}
-        error={error}
-      />
-      {valid ? (
-        <p className="caption" aria-live="polite">
-          {label}: <PersonName id={value.trim()} />
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 function StartBasket() {
   const navigate = useNavigate();
   const online = useOnline();
@@ -133,7 +109,7 @@ function StartBasket() {
       <p className="caption">
         Name the household adult the registration belongs to. The participant, payer and any form
         signer stay distinct from you, the staff actor, who is recorded separately (SPK-REG-009).
-        Find people in <Link to="/people">People and families</Link>.
+        Search by name or contact, or find people in <Link to="/people">People and families</Link>.
       </p>
       <form
         noValidate
@@ -257,6 +233,27 @@ function AddLine({ basket }: { basket: Basket }) {
   const add = useApiCommand('post', '/baskets/{id}/lines', { invalidate: [BASKET_KEY] });
   const reloadAfterAdd = useBasketReload(add.reset);
   const server = fieldErrorsOf(add.error);
+  const participantId = UUID.test(participant.trim()) ? participant.trim() : '';
+  // ENR-05: what the offering accepts and the participant's read-only eligibility per intent.
+  const options = useApiQuery({
+    path: '/offerings/{id}/registration-options',
+    request: {
+      path: { id: offeringId },
+      query: participantId ? { participantPersonIds: participantId } : {},
+    },
+    enabled: offeringId !== '',
+  });
+  const available = options.data?.availableIntents;
+  const intentChoices = (available ?? (Object.keys(REGISTRATION_INTENT) as Intent[])).map(
+    (value) => ({ value, label: REGISTRATION_INTENT[value] }),
+  );
+  const notAccepted = intent !== '' && available !== undefined && !available.includes(intent);
+  const preview =
+    intent && participantId
+      ? options.data?.participants
+          .find((p) => p.personId === participantId)
+          ?.intents.find((i) => i.intent === intent)?.eligibility
+      : undefined;
   return (
     <form
       noValidate
@@ -268,6 +265,7 @@ function AddLine({ basket }: { basket: Basket }) {
           errors.participantPersonId = 'Enter the participant’s person reference.';
         if (!offeringId) errors.offeringId = 'Choose an offering.';
         if (!intent) errors.intent = 'Choose the registration intent.';
+        else if (notAccepted) errors.intent = 'This offering does not accept this intent.';
         setLocal(errors);
         if (Object.keys(errors).length > 0 || !intent) return;
         add
@@ -303,12 +301,30 @@ function AddLine({ basket }: { basket: Basket }) {
           value={intent}
           placeholder="Choose an intent"
           onChange={(v) => setIntent(v as Intent | '')}
-          options={Object.entries(REGISTRATION_INTENT).map(([value, label]) => ({ value, label }))}
-          error={local.intent ?? server.intent}
+          options={intentChoices}
+          error={
+            local.intent ??
+            server.intent ??
+            (notAccepted ? 'This offering does not accept this intent.' : null)
+          }
         />
       </div>
       <OfferingPicker label="Offering" value={offeringId} onChange={setOfferingId} />
       {local.offeringId ? <p className="rf-error">{local.offeringId}</p> : null}
+      {offeringId && options.error ? (
+        <p className="caption">
+          The intents this offering accepts could not be read ({options.error.code}); the API checks
+          the intent when the line is added.
+        </p>
+      ) : null}
+      {available ? (
+        <p className="caption">
+          This offering accepts: {available.map((i) => REGISTRATION_INTENT[i]).join(', ')}.
+        </p>
+      ) : null}
+      {preview ? (
+        <EligibilityView result={preview} label="Eligibility before adding (read only)" />
+      ) : null}
       <div className="rf-actions">
         <Button type="submit" busy={add.isProcessing} disabled={!online}>
           Add to basket
@@ -475,6 +491,89 @@ function CheckoutResult({ checkout }: { checkout: Checkout }) {
   );
 }
 
+function CheckoutById({ checkoutId }: { checkoutId: string }) {
+  const checkout = useApiQuery({
+    path: '/registration-checkouts/{id}',
+    request: { path: { id: checkoutId } },
+  });
+  return (
+    <QueryBoundary query={checkout} label="the checkout" empty={{ title: '', description: '' }}>
+      {(data) => <CheckoutResult checkout={data} />}
+    </QueryBoundary>
+  );
+}
+
+/**
+ * FIN-04, ENR-06 (SPK-UX-001): the checkout a basket started, from the basket's own references:
+ * the checkout operation's state and outcome, the checkout it names once known, and the order's
+ * payment attempts. Nothing here retries a payment.
+ */
+function CheckoutTrace({ basket }: { basket: Basket }) {
+  const orderId = basket.orderRef && UUID.test(basket.orderRef) ? basket.orderRef : null;
+  const operation = useOperation(basket.lastOperationId);
+  const op = operation.data;
+  const result =
+    op?.result && typeof op.result === 'object' ? (op.result as Record<string, unknown>) : null;
+  const checkoutId = typeof result?.['checkoutId'] === 'string' ? result['checkoutId'] : null;
+  return (
+    <section className="rf-panel" aria-labelledby="checkout-trace-title">
+      <h4 id="checkout-trace-title">Checkout of this basket</h4>
+      <Facts
+        label="Checkout references"
+        items={[
+          [
+            'Order',
+            orderId ? (
+              <Link key="order" to={`/finance/orders/${orderId}`}>
+                Order {shortRef(orderId)}
+              </Link>
+            ) : (
+              'No order yet'
+            ),
+          ],
+          [
+            'Checkout operation',
+            basket.lastOperationId ? (
+              op ? (
+                <StatusBadge key="op" {...OPERATION_STATUS[op.status]} />
+              ) : operation.error ? (
+                `Not available (${operation.error.code})`
+              ) : (
+                'Loading…'
+              )
+            ) : (
+              'Not recorded'
+            ),
+          ],
+        ]}
+      />
+      {op && (op.status === 'pending' || op.status === 'running') ? (
+        <p role="status">
+          The checkout is still running; this updates when it finishes. Do not take payment again.
+        </p>
+      ) : null}
+      {op?.error ? (
+        <p>
+          {op.status === 'recovery_required'
+            ? 'Recovery required: money was received but the registration could not be completed. The finance operator queue owns it.'
+            : 'The checkout did not complete.'}{' '}
+          <span className="caption">
+            {op.error.code}: {op.error.message}
+          </span>
+        </p>
+      ) : null}
+      {checkoutId ? <CheckoutById checkoutId={checkoutId} /> : null}
+      {orderId ? (
+        <PaymentAttemptList
+          filter={{ orderId }}
+          label="Payment attempts of the order"
+          showPayer={false}
+        />
+      ) : null}
+    </section>
+  );
+}
+
 function PriceAndPay({ basket }: { basket: Basket }) {
   const online = useOnline();
   const { facilities } = useFacilities();
@@ -582,9 +681,6 @@ function PriceAndPay({ basket }: { basket: Basket }) {
             A checkout for this basket is in progress or its payment outcome is being confirmed.
             Check the payment before doing anything else.
           </p>
-          {basket.orderRef ? (
-            <p className="caption">Order reference {shortRef(basket.orderRef)}.</p>
-          ) : null}
           <Link to="/finance/payments">Open unknown payment outcomes</Link>
         </section>
       ) : basket.status !== 'held' && !checkout.data ? (
@@ -592,6 +688,10 @@ function PriceAndPay({ basket }: { basket: Basket }) {
           This basket is {BASKET_STATUS[basket.status].label}. Each line links to its enrollment
           once one exists.
         </p>
+      ) : null}
+      {basket.status !== 'held' && !checkout.data && basket.orderRef ? (
+        // The checkout sets the order reference and its operation together (FIN-04).
+        <CheckoutTrace basket={basket} />
       ) : null}
       <CommandError error={quote.error} onRequote={requote} />
       {current && !unresolved ? <QuoteView quote={current} /> : null}

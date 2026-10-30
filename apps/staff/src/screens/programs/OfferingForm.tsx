@@ -9,7 +9,10 @@
  *   entitlement definitions are `GET /v1/entitlement-definitions`. Nothing is preset.
  * - The registration window is entered as wall-clock time in the facility's time zone when the API
  *   states it (SPK-SCHED-008), otherwise in UTC, and the label says which.
- * - The API has no staff directory, so the responsible manager is a person reference.
+ * - The responsible manager is chosen from the staff directory of the offering's facility
+ *   (`GET /v1/staff-directory`, ID-04), names and roles only, or entered as a person reference
+ *   when the directory is not available to the viewer or the person is not listed. The API
+ *   validates that the manager is an active person; no role is preset here.
  * - Input is kept after a validation or stale-version answer (SPK-UX-008).
  */
 import type { Schema } from '@sportspark/api-client';
@@ -122,6 +125,17 @@ export function OfferingForm({
   const entitlementOptions = (entitlements.data ?? [])
     .filter((e) => e.status === 'active' || e.id === entitlement)
     .map((e) => ({ value: e.id, label: e.name }));
+
+  const directory = useApiQuery({
+    path: '/staff-directory',
+    request: { query: { limit: 200, ...(facilityId ? { facilityId } : {}) } },
+    staleTime: 60_000,
+  });
+  const staffOptions = (directory.data?.items ?? []).map((e) => ({
+    value: e.personId,
+    label: `${e.displayName} (${e.roles.map((r) => r.replaceAll('_', ' ')).join(', ')})`,
+  }));
+  const listed = staffOptions.some((o) => o.value === manager.trim());
 
   const err = (key: string) => local[key] ?? serverErrors[key] ?? null;
   const zoneLabel = zone
@@ -377,9 +391,27 @@ export function OfferingForm({
             onChange={setCancellationPolicy}
             error={err('cancellationPolicyVersionId')}
           />
+          {directory.data ? (
+            <SelectField
+              label="Responsible manager (staff directory)"
+              value={listed ? manager.trim() : ''}
+              placeholder={staffOptions.length === 0 ? 'No staff listed' : 'Not chosen'}
+              options={staffOptions}
+              onChange={setManager}
+              hint={
+                directory.data.nextCursor
+                  ? 'More staff exist than are listed: enter a reference below for anyone else.'
+                  : undefined
+              }
+            />
+          ) : null}
           <TextField
             label="Responsible manager (person reference)"
-            hint="The API offers no staff directory to choose from."
+            hint={
+              directory.error
+                ? `The staff directory is not available (${directory.error.code}); enter the person reference.`
+                : 'Filled in when a staff member is chosen; or enter a person reference.'
+            }
             value={manager}
             onChange={setManager}
             error={err('responsibleManagerPersonId')}
