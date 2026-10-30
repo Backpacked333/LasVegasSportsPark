@@ -90,14 +90,14 @@ any screen still a placeholder.
 
 ## Pending decisions and open gaps
 
-| Item                                                                                     | State                                                                                                                          |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Whether a request reserves time or takes a deposit before approval                       | **Pending decision** DEC-029, DEC-030 (shown on the booking flow in request mode)                                              |
-| Rental and party terms (POL-040), membership terms and member pricing (POL-038, DEC-007) | The API's approved versions are shown; nothing is invented                                                                     |
-| Taxes and fees that may appear on receipts                                               | DEC-057 (Finance); the API applies only approved charge policies                                                               |
-| Party extras, automatic renewal, POS inventory, gift cards, tipping                      | Not built: unspecified or unapproved (stage 3 left them out)                                                                   |
-| A party package's guest limit before booking                                             | Not readable by a customer (entitlement definitions are staff reads); the API's answer is shown                                |
-| Whether a card refund on a point-of-sale return has arrived                              | `PosReceipt.returns` carries no refund status; the receipt says so                                                             |
-| Booking a session with a session package credit (`packageEntitlementId`)                 | Built by the money screen group on `/session-packages` (`screens/payments/README.md`), not here                                |
-| Cancel of a held booking whose basket checkout completed                                 | The API cancels it as a hold (releases only a `held` basket) and keeps the payment (API issue); the app offers no release then |
-| Cancel of a held booking while its basket is in checkout                                 | The API does not refuse it (API issue); the app offers none until the payment outcome is known                                 |
+| Item                                                                                     | State                                                                                                                |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Whether a request reserves time or takes a deposit before approval                       | **Pending decision** DEC-029, DEC-030 (shown on the booking flow in request mode)                                    |
+| Rental and party terms (POL-040), membership terms and member pricing (POL-038, DEC-007) | The API's approved versions are shown; nothing is invented                                                           |
+| Taxes and fees that may appear on receipts                                               | DEC-057 (Finance); the API applies only approved charge policies                                                     |
+| Party extras, automatic renewal, POS inventory, gift cards, tipping                      | Not built: unspecified or unapproved (stage 3 left them out)                                                         |
+| A party package's guest limit before booking                                             | Not readable by a customer (entitlement definitions are staff reads); the API's answer is shown                      |
+| Whether a card refund on a point-of-sale return has arrived                              | `PosReceipt.returns` carries no refund status; the receipt says so                                                   |
+| Booking a session with a session package credit (`packageEntitlementId`)                 | Built by the money screen group on `/session-packages` (`screens/payments/README.md`), not here                      |
+| Cancel of a held booking whose basket checkout completed                                 | The API refuses it (409 `BOOKING_CONFIRMATION_PENDING`, stage-4 fix); the app offers no release then either          |
+| Cancel of a held booking while its basket is in checkout                                 | The API refuses it (409 `CHECKOUT_IN_PROGRESS`, stage-4 fix); the app offers none until the payment outcome is known |

@@ -66,16 +66,13 @@ the six permissions and date wording; `PersonAccess`, `ClaimForm`, `CommandError
 
 ## API observations (reported)
 
-- `POST /v1/team-invitations/{id}/decline` takes `expectedRevision` but the service does not check
-  it (`apps/api/src/modules/competition/services/roster.service.ts`, `decline`), unlike the family
-  decline; the app sends the revision it read.
+- Fixed in the API during stage-4 integration: `POST /v1/team-invitations/{id}/decline` now
+  refuses a stale `expectedRevision` (STALE_REVISION), and `GET /v1/me/team-invitations?status=`
+  filters on the effective status like `GET /v1/me/invitations`; the app sends the revision it read
+  and still leaves out any row whose `effectiveStatus` is not `pending`.
 - Accepting a listed invitation (family or team) and declining a family one need the one-time link
   token; invitations found through `GET /v1/me/invitations` or `/v1/me/team-invitations` cannot be
   accepted in the app without the link until tokens are delivered by messaging (DEC-020).
-- `GET /v1/me/team-invitations?status=pending` filters on the stored status, not the effective one
-  (`apps/api/src/modules/competition/services/roster.service.ts`, `listMyInvitations`), unlike
-  `GET /v1/me/invitations`: a team invitation past its expiry that the sweep has not recorded is
-  returned with `effectiveStatus` `expired`. The app leaves such rows out of the open list.
 - `InvitationView` names who accepted (`acceptedByPersonId`) but not who declined, and
   `TeamInvitationView` names neither; a closed invitation can be described as "You accepted" only
   for a family invitation, and a declined one is described without saying who declined it.

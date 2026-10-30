@@ -71,8 +71,9 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
   unpaid); the basket is read again right before the cancel is sent. While the basket is
   `checking_out`, once it is `fulfilled` or `partially_fulfilled` (the payment completed and the
   booking moves on asynchronously), or when the basket cannot be read, cancellation is not offered
-  and "Reload the booking" or the checkout link is. This is client-side only until the API refuses
-  it (API issue 3); its CHECKOUT_IN_PROGRESS answer is shown in words.
+  and "Reload the booking" or the checkout link is. The API now refuses the first two too (409
+  `CHECKOUT_IN_PROGRESS` and `BOOKING_CONFIRMATION_PENDING`, fixed during stage-4 integration;
+  `partially_fulfilled` stays client-side only); its answer is shown in words.
 
 ## API issues found (not fixed here)
 
@@ -83,14 +84,10 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
    period and suspensions are only in the customer's `GET /v1/me/memberships`; `Enrollment` carries
    none of them. Staff can suspend and end suspensions they recorded in the page, but cannot list
    earlier ones or see the usage (`MembershipsService.listMine`, `MembershipSchema`).
-3. `POST /v1/bookings/{id}/cancel` does not refuse a held booking whose basket is no longer
-   `held`: while the basket is `checking_out`, or after it is `fulfilled` but before the
-   asynchronous enrollment confirmation moves the booking on, it cancels the booking and releases
-   the reservation but leaves the basket (and any payment) as it is, with no refund preview
-   (`BookingsService.cancel` releases the basket only when `held`). It should answer
-   RESOURCE_CONFLICT `CHECKOUT_IN_PROGRESS` as the enrollment cancellation does
-   (`EnrollmentsService.cancel`), and refuse (or route through the paid cancellation) once the
-   basket is fulfilled. The screen avoids it as far as a client can (above).
+3. Fixed during stage-4 integration: `POST /v1/bookings/{id}/cancel` on a held booking answers 409
+   `CHECKOUT_IN_PROGRESS` while its basket is `checking_out` and 409 `BOOKING_CONFIRMATION_PENDING`
+   once it is `fulfilled` (`BookingsService.cancel`, `bookings.spec.ts`). A `partially_fulfilled`
+   basket is not refused by the API; the screen still avoids it (above).
 4. `GET /v1/entitlement-definitions` returns every definition unpaged and without a kind filter;
    these screens read definitions one by one through the offerings instead.
 

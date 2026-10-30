@@ -5,11 +5,10 @@
  * this person or to an email or phone they verified, newest first, each opening its detail
  * (InvitationScreen) to read before answering. Both lists are keyset pages with "Load more".
  *
- * Only invitations still open are listed. The family list filters on the effective status, so
- * one past its expiry is not returned; the team list filters on the stored status (reported), so a
- * pending team invitation past its expiry that the sweep has not recorded yet comes back with
- * `effectiveStatus` `expired`: such rows are left out here, and do not count against "No open
- * invitations". The same rule is applied to both lists. Answering needs the token from the invitation link (except declining a team invitation); the
+ * Only invitations still open are listed. Both lists filter on the effective status, so one past
+ * its expiry is not returned even before the sweep records it (the team list does since the
+ * stage-4 API fix); rows whose `effectiveStatus` is not `pending` are still left out here as a
+ * guard, and do not count against "No open invitations". The same rule is applied to both lists. Answering needs the token from the invitation link (except declining a team invitation); the
  * detail says so. Invitations this person sent are on the family screen (SCR-C-31).
  *
  * States: loading; empty ("No open invitations"); ready; validation failure: not applicable;
