@@ -54,12 +54,26 @@ export class FakeAccessControlProvider implements AccessDevicePort {
   private counter = 0;
   private readonly commandScript: FakeDeviceCommandOutcome[] = [];
   private readonly commandResults = new Map<string, AccessDeviceCommandResult>();
+  private readonly deviceScript = new Map<string, Exclude<FakeDeviceCommandOutcome, 'deliver'>>();
   /** Every sendCommand call, including repeats (tests assert on it). */
   readonly commandCalls: AccessDeviceCommand[] = [];
 
   /** The next new commands, in order, behave like this (IF-38). */
   scriptCommands(...outcomes: FakeDeviceCommandOutcome[]): void {
     this.commandScript.push(...outcomes);
+  }
+
+  /**
+   * Every command sent to this device behaves like this until the script is cleared with `null`:
+   * `timeout` is a device that is down (no answer), `fail` one that refuses everything. Neither
+   * consumes `scriptCommands` nor is remembered, so the device's later answers are its own.
+   */
+  scriptDevice(
+    deviceRef: string,
+    outcome: Exclude<FakeDeviceCommandOutcome, 'deliver'> | null,
+  ): void {
+    if (outcome === null) this.deviceScript.delete(deviceRef);
+    else this.deviceScript.set(deviceRef, outcome);
   }
 
   /**
@@ -71,13 +85,10 @@ export class FakeAccessControlProvider implements AccessDevicePort {
     const key = `${command.organizationId}:${command.deviceRef}:${command.commandId}`;
     const earlier = this.commandResults.get(key);
     if (earlier) return earlier;
+    const forced = this.deviceScript.get(command.deviceRef);
+    if (forced) return FakeAccessControlProvider.resultOf(forced);
     const outcome = this.commandScript.shift() ?? 'deliver';
-    const result: AccessDeviceCommandResult =
-      outcome === 'deliver'
-        ? { outcome: 'delivered' }
-        : outcome === 'fail'
-          ? { outcome: 'failed', error: 'fake device: the command was refused' }
-          : { outcome: 'unknown', error: 'fake device: no answer within the timeout' };
+    const result = FakeAccessControlProvider.resultOf(outcome);
     // A lost answer is not remembered as an outcome: a retry may still be delivered.
     if (outcome !== 'timeout') this.commandResults.set(key, result);
     return result;
@@ -149,6 +160,14 @@ export class FakeAccessControlProvider implements AccessDevicePort {
       },
     };
     return { body, signature: FakeAccessControlProvider.sign(body) };
+  }
+
+  private static resultOf(outcome: FakeDeviceCommandOutcome): AccessDeviceCommandResult {
+    return outcome === 'deliver'
+      ? { outcome: 'delivered' }
+      : outcome === 'fail'
+        ? { outcome: 'failed', error: 'fake device: the command was refused' }
+        : { outcome: 'unknown', error: 'fake device: no answer within the timeout' };
   }
 
   static sign(body: unknown): string {

@@ -227,8 +227,9 @@ order. Proven under true concurrency by `__tests__/entry-concurrency.spec.ts` wi
 - Denied pickups are recorded `denied` unless staff escalate (`escalateDeniedPickups: false`;
   DEC-005); every denial still raises an exception.
 - Device clock tolerance 5 minutes (engineering proposal).
-- Technical setting (K-15, `entry.settings.ts`): `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS`
-  (default 3). No policy value of the access hardware work has a default: a device's heartbeat
+- Technical settings (K-15, `entry.settings.ts`): `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS`
+  (default 3), `ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS` (default 30) and
+  `ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS` (default 300), engineering proposals. No policy value of the access hardware work has a default: a device's heartbeat
   timeout, a policy's holder kinds and schedule are configuration entered by staff, and nothing is
   admitted until a policy is approved (deny-all).
 
@@ -254,7 +255,11 @@ active one and is sent; retiring the active policy without a replacement sends d
 synchronization supersedes an undelivered older one (`supersede`, an engineering addition to the
 ENT-05 plan so a retried older sync never overwrites a newer policy, **proposed**). A revoked pass
 is queued for every active device (passes carry no facility), and only its reference hash is sent.
-Delivery runs outside transactions; failed and unknown commands retry; after
+Delivery runs outside transactions; failed and unknown commands retry with a backoff (the first
+retry on the next run, the retry after attempt n ≥ 2 after `ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS`
+·2^(n−2), at most `ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS`), and due commands are taken in turns per
+device (never-attempted first), so an unreachable device with any backlog never keeps another
+device's revocations from being sent and is not re-sent every pass (ASYNC-02); after
 `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS` undelivered attempts (technical setting, default 3)
 one `entry.device_command_undelivered` exception is raised and resolved when the command is later
 delivered; a receipt settles a pending or unknown command once. Heartbeats mark a device online;
@@ -291,6 +296,9 @@ reference. Access events are never attendance, check-in or pickup authority (SPK
   (DEC-023); entry sends the policy (holder kinds, active passes only, facility-local weekly
   windows) and revocations, nothing more.
 - Device commands of a retired device are not delivered and stay in their last state.
+- No exception names a device command that waits without a first attempt; with the per-device
+  turns this happens only while more commands are due than one delivery run sends
+  (`PERIODIC_JOBS_MAX_PASSES` × 50 per minute), and escalation starts at the third attempt.
 - `GET /attendance` returns one page; `GET /visits` is cursor-paginated.
 
 ## Cross-branch notes (stage 3)
