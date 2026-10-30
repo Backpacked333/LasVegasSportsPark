@@ -1,11 +1,13 @@
 /**
- * SCR-C-33 transfer preview (SPK-REG-010, §4.8 `POST /v1/enrollments/{id}/transfer`, §4.9,
- * SPK-UX-008): preview first (`commit: false`), the money consequence acknowledged before the
- * commit, a changed consequence never committed unseen, approval-required transfers refused in
- * the app, and one idempotency key per intent.
+ * SCR-C-33 transfer preview (SPK-REG-010, ENR-03, §4.8 `POST /v1/enrollments/{id}/transfer`,
+ * §4.9, SPK-UX-008): the read-only `GET /v1/enrollments/{id}/transfer-preview` first (no command
+ * to preview), the money consequence acknowledged and sent as `acceptedConsequence` with the
+ * commit, a changed consequence never committed unseen (re-read at confirm, and the API's
+ * CONSEQUENCE_CHANGED), approval-required transfers refused in the app, and one idempotency key
+ * per intent.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   accountRoutes,
@@ -46,21 +48,22 @@ const PREVIOUS = enrollment({
   revision: 4,
 });
 
-function transferHandler(preview: () => unknown, committed?: () => Response): FakeHandler {
-  return (req) => {
-    const body = req.body as { commit?: boolean };
-    if (body.commit) {
-      return committed
-        ? committed()
-        : fakeResponse(200, {
-            ...transferPreview(),
-            committed: true,
-            newEnrollment: NEXT,
-            previousEnrollment: PREVIOUS,
-          });
-    }
-    return fakeResponse(200, preview());
-  };
+/** The read-only preview (ENR-03): answers whatever `preview()` returns at the time. */
+function previewHandler(preview: () => unknown): FakeHandler {
+  return () => fakeResponse(200, preview());
+}
+
+/** The commit: `committed()` decides the answer; the default commits the transfer. */
+function commitHandler(committed?: () => Response): FakeHandler {
+  return () =>
+    committed
+      ? committed()
+      : fakeResponse(200, {
+          ...transferPreview(),
+          committed: true,
+          newEnrollment: NEXT,
+          previousEnrollment: PREVIOUS,
+        });
 }
 
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
@@ -69,7 +72,8 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
     'GET /enrollments/{id}': { status: 200, body: enrollment() },
     'GET /offerings/{id}': { status: 200, body: offering() },
     'GET /offerings': page([offering(), TARGET]),
-    'POST /enrollments/{id}/transfer': transferHandler(() => transferPreview()),
+    'GET /enrollments/{id}/transfer-preview': previewHandler(() => transferPreview()),
+    'POST /enrollments/{id}/transfer': commitHandler(),
     ...overrides,
   };
 }
@@ -82,6 +86,8 @@ function renderTransfer(overrides: Record<string, FakeHandler> = {}) {
 
 const transfers = (app: ReturnType<typeof createTestApp>) =>
   app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/enrollments/{id}/transfer');
+const previews = (app: ReturnType<typeof createTestApp>) =>
+  app.fake.requests.filter((r) => r.route === '/enrollments/{id}/transfer-preview');
 
 async function chooseAndPreview() {
   fireEvent.press(await screen.findByRole('radio', { name: /^Autumn U10 Sunday League/ }));
@@ -104,16 +110,14 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
     expect(list?.query).toEqual({ programId: IDS.program, limit: '50' });
   });
 
-  it('SPK-REG-010: previews with commit false and shows both participations, dates, capacity, eligibility, money and approval', async () => {
+  it('SPK-REG-010, ENR-03: previews with the read-only GET and shows both participations, dates, capacity, eligibility, money and approval', async () => {
     const app = renderTransfer();
     await chooseAndPreview();
-    const [preview] = transfers(app);
-    expect(preview?.body).toEqual({
-      targetOfferingId: IDS.offeringB,
-      commit: false,
-      acceptConsequence: false,
-      expectedRevision: 3,
-    });
+    const [preview] = previews(app);
+    expect(preview?.method).toBe('GET');
+    expect(preview?.query).toEqual({ targetOfferingId: IDS.offeringB });
+    // Previewing sends no command at all.
+    expect(transfers(app)).toHaveLength(0);
     expect(screen.getByLabelText('Activity: Autumn U10 League')).toBeOnTheScreen();
     expect(screen.getByLabelText('Activity: Autumn U10 Sunday League')).toBeOnTheScreen();
     expect(screen.getByText('The two activities overlap in time.')).toBeOnTheScreen();
@@ -129,18 +133,15 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
     let committed = false;
     const app = renderTransfer({
       'GET /enrollments/{id}': () => fakeResponse(200, committed ? PREVIOUS : enrollment()),
-      'POST /enrollments/{id}/transfer': transferHandler(
-        () => transferPreview(),
-        () => {
-          committed = true;
-          return fakeResponse(200, {
-            ...transferPreview(),
-            committed: true,
-            newEnrollment: NEXT,
-            previousEnrollment: PREVIOUS,
-          });
-        },
-      ),
+      'POST /enrollments/{id}/transfer': commitHandler(() => {
+        committed = true;
+        return fakeResponse(200, {
+          ...transferPreview(),
+          committed: true,
+          newEnrollment: NEXT,
+          previousEnrollment: PREVIOUS,
+        });
+      }),
     });
     await chooseAndPreview();
     fireEvent.press(
@@ -165,17 +166,18 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
       screen.getByLabelText('Autumn U10 League, Transferred to Autumn U10 Sunday League'),
     ).toBeOnTheScreen();
 
+    // Preview, re-read at confirm time (both GET), then one commit.
+    expect(previews(app)).toHaveLength(2);
     const sent = transfers(app);
-    // Preview, re-preview at confirm time, then the commit.
-    expect(sent.map((r) => (r.body as { commit: boolean }).commit)).toEqual([false, false, true]);
-    expect(sent[2]?.body).toEqual({
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toEqual({
       targetOfferingId: IDS.offeringB,
       commit: true,
-      acceptConsequence: true,
+      // ENR-03: the consequence the customer accepted, exactly as previewed.
+      acceptedConsequence: { kind: 'charge', amountMinor: 1500, currency: 'USD' },
       expectedRevision: 3,
     });
-    const keys = sent.map((r) => r.headers['idempotency-key']);
-    expect(new Set(keys).size).toBe(3);
+    expect(sent[0]?.headers['idempotency-key']).toMatch(/^key-/);
 
     fireEvent.press(screen.getByRole('button', { name: /^Autumn U10 Sunday League, Confirmed/ }));
     expect(mockRouter.replace).toHaveBeenCalledWith(`/enrollments/${IDS.enrollmentB}`);
@@ -184,7 +186,7 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
   it('stale version: a consequence that changed since the preview is not committed and must be accepted again', async () => {
     let current = transferPreview();
     const app = renderTransfer({
-      'POST /enrollments/{id}/transfer': transferHandler(() => current),
+      'GET /enrollments/{id}/transfer-preview': previewHandler(() => current),
     });
     await chooseAndPreview();
     fireEvent.press(
@@ -209,7 +211,48 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
     expect(
       screen.getByRole('checkbox', { name: 'I accept: Additional charge of $25.00' }),
     ).not.toBeChecked();
-    expect(transfers(app).some((r) => (r.body as { commit: boolean }).commit)).toBe(false);
+    expect(transfers(app)).toHaveLength(0);
+  });
+
+  it('ENR-03: a consequence the API says changed between the re-read and the commit is not committed and must be accepted again', async () => {
+    const app = renderTransfer({
+      'POST /enrollments/{id}/transfer': commitHandler(() =>
+        fakeResponse(
+          409,
+          apiErrorBody('RESOURCE_CONFLICT', {
+            message:
+              'The financial consequence changed since it was previewed; review and accept it again.',
+            nextAction: 'resolve_conflict',
+            details: {
+              code: 'CONSEQUENCE_CHANGED',
+              consequence: consequence({
+                kind: 'charge',
+                amountMinor: 2500,
+                explanation: 'Price changed.',
+              }),
+            },
+          }),
+        ),
+      ),
+    });
+    await chooseAndPreview();
+    fireEvent.press(
+      screen.getByRole('checkbox', { name: 'I accept: Additional charge of $15.00' }),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Transfer' }));
+    });
+    expect(
+      await screen.findByLabelText(
+        'The money consequence changed since you reviewed it. Review it again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Additional charge of $25.00')).toBeOnTheScreen();
+    expect(
+      screen.getByRole('checkbox', { name: 'I accept: Additional charge of $25.00' }),
+    ).not.toBeChecked();
+    expect(screen.queryByTestId('transfer-success')).toBeNull();
+    expect(transfers(app)).toHaveLength(1);
   });
 
   it('SPK-REG-010: "No money changes" that became a charge on the re-preview is never committed unseen', async () => {
@@ -217,7 +260,7 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
       financialConsequence: consequence({ kind: 'none', amountMinor: 0 }),
     });
     const app = renderTransfer({
-      'POST /enrollments/{id}/transfer': transferHandler(() => current),
+      'GET /enrollments/{id}/transfer-preview': previewHandler(() => current),
     });
     await chooseAndPreview();
     current = transferPreview({
@@ -235,7 +278,84 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
         'The money consequence changed since you reviewed it. Review it again.',
       ),
     ).toBeOnTheScreen();
-    expect(transfers(app).some((r) => (r.body as { commit: boolean }).commit)).toBe(false);
+    expect(transfers(app)).toHaveLength(0);
+  });
+
+  it('SPK-UX-008: a preview that cannot be read shows the code and a retry; nothing is committed', async () => {
+    const app = renderTransfer({
+      'GET /enrollments/{id}/transfer-preview': () =>
+        fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: /^Autumn U10 Sunday League/ }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Preview transfer' }));
+    });
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(screen.queryByTestId('transfer-preview')).toBeNull();
+    expect(transfers(app)).toHaveLength(0);
+  });
+
+  it('SPK-UX-008: a confirm-time re-read that fails is a preview failure (nothing committed), and its retry checks again before committing', async () => {
+    let reads = 0;
+    const app = renderTransfer({
+      'GET /enrollments/{id}/transfer-preview': () => {
+        reads += 1;
+        if (reads === 2) {
+          return fakeResponse(
+            503,
+            apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+          );
+        }
+        return fakeResponse(200, transferPreview());
+      },
+    });
+    await chooseAndPreview();
+    fireEvent.press(
+      screen.getByRole('checkbox', { name: 'I accept: Additional charge of $15.00' }),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Transfer' }));
+    });
+    const failed = await screen.findByTestId('transfer-recheck-failed');
+    expect(within(failed).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    // Only a GET failed: nothing claims the transfer may already have been made.
+    expect(screen.queryByText(/may already have been made/)).toBeNull();
+    expect(screen.queryByLabelText('No answer yet')).toBeNull();
+    expect(transfers(app)).toHaveLength(0);
+
+    await act(async () => {
+      fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
+    });
+    expect(await screen.findByTestId('transfer-success')).toBeOnTheScreen();
+    // The retry read the preview again (third GET) before the single commit.
+    expect(previews(app)).toHaveLength(3);
+    expect(transfers(app)).toHaveLength(1);
+    expect(transfers(app)[0]?.body).toMatchObject({
+      acceptedConsequence: { kind: 'charge', amountMinor: 1500, currency: 'USD' },
+    });
+  });
+
+  it('a confirm-time re-read with no answer reads offline, never "may already have been made"', async () => {
+    let reads = 0;
+    const app = renderTransfer({
+      'GET /enrollments/{id}/transfer-preview': () => {
+        reads += 1;
+        if (reads === 2) throw new TypeError('Network request failed');
+        return fakeResponse(200, transferPreview());
+      },
+    });
+    await chooseAndPreview();
+    fireEvent.press(
+      screen.getByRole('checkbox', { name: 'I accept: Additional charge of $15.00' }),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Transfer' }));
+    });
+    expect(await screen.findByTestId('transfer-recheck-failed')).toBeOnTheScreen();
+    expect(screen.queryByText(/may already have been made/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+    expect(transfers(app)).toHaveLength(0);
   });
 
   it('lists no targets when the current activity cannot be read (never every offering)', async () => {
@@ -251,7 +371,7 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
 
   it('permission restriction: a transfer that needs staff approval cannot be committed in the app', async () => {
     renderTransfer({
-      'POST /enrollments/{id}/transfer': transferHandler(() =>
+      'GET /enrollments/{id}/transfer-preview': previewHandler(() =>
         transferPreview({ requiredApproval: true }),
       ),
     });
@@ -263,7 +383,7 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
 
   it('validation failure: an ineligible target shows the API reasons and no commit', async () => {
     renderTransfer({
-      'POST /enrollments/{id}/transfer': transferHandler(() =>
+      'GET /enrollments/{id}/transfer-preview': previewHandler(() =>
         transferPreview({
           eligibility: {
             eligible: false,
@@ -302,17 +422,15 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
 
   it('RESOURCE_CONFLICT APPROVAL_REQUIRED on commit reads "Staff approval needed", nothing changed', async () => {
     renderTransfer({
-      'POST /enrollments/{id}/transfer': transferHandler(
-        () => transferPreview(),
-        () =>
-          fakeResponse(
-            409,
-            apiErrorBody('RESOURCE_CONFLICT', {
-              message: 'The target offering requires staff approval; ask staff to transfer.',
-              nextAction: 'resolve_conflict',
-              details: { code: 'APPROVAL_REQUIRED' },
-            }),
-          ),
+      'POST /enrollments/{id}/transfer': commitHandler(() =>
+        fakeResponse(
+          409,
+          apiErrorBody('RESOURCE_CONFLICT', {
+            message: 'The target offering requires staff approval; ask staff to transfer.',
+            nextAction: 'resolve_conflict',
+            details: { code: 'APPROVAL_REQUIRED' },
+          }),
+        ),
       ),
     });
     await chooseAndPreview();
@@ -328,19 +446,16 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
   it('§4.9: a commit with no answer is checked again with the same idempotency key', async () => {
     let commits = 0;
     const app = renderTransfer({
-      'POST /enrollments/{id}/transfer': transferHandler(
-        () => transferPreview(),
-        () => {
-          commits += 1;
-          if (commits === 1) throw new TypeError('Network request failed');
-          return fakeResponse(200, {
-            ...transferPreview(),
-            committed: true,
-            newEnrollment: NEXT,
-            previousEnrollment: PREVIOUS,
-          });
-        },
-      ),
+      'POST /enrollments/{id}/transfer': commitHandler(() => {
+        commits += 1;
+        if (commits === 1) throw new TypeError('Network request failed');
+        return fakeResponse(200, {
+          ...transferPreview(),
+          committed: true,
+          newEnrollment: NEXT,
+          previousEnrollment: PREVIOUS,
+        });
+      }),
     });
     await chooseAndPreview();
     fireEvent.press(
@@ -354,9 +469,7 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });
     expect(await screen.findByTestId('transfer-success')).toBeOnTheScreen();
-    const commitKeys = transfers(app)
-      .filter((r) => (r.body as { commit: boolean }).commit)
-      .map((r) => r.headers['idempotency-key']);
+    const commitKeys = transfers(app).map((r) => r.headers['idempotency-key']);
     expect(commitKeys).toHaveLength(2);
     expect(commitKeys[0]).toBe(commitKeys[1]);
   });

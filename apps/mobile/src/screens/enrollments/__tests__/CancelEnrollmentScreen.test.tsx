@@ -1,8 +1,9 @@
 /**
  * SCR-C-33 cancellation preview (SPK-REG-010, SPK-PAY-008, SPK-PAY-009, §4.9, SPK-UX-008): the
  * money consequence and everything else the preview states is shown before commitment; the
- * command carries expectedRevision, a reason and one idempotency key per intent; a changed
- * consequence is never committed unseen.
+ * command carries expectedRevision, a reason, the accepted consequence (ENR-03) and one
+ * idempotency key per intent; a changed consequence is never committed unseen, including when the
+ * API refuses the acceptance (CONSEQUENCE_CHANGED).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
@@ -104,8 +105,52 @@ describe('SCR-C-33 CancelEnrollmentScreen', () => {
     expect(screen.getByTestId('cancel-success')).toBeOnTheScreen();
     expect(screen.getByLabelText('Recorded money consequence: Refund of $60.00')).toBeOnTheScreen();
     const [sent] = cancels(app);
-    expect(sent?.body).toEqual({ expectedRevision: 3, reason: 'Moving away' });
+    expect(sent?.body).toEqual({
+      expectedRevision: 3,
+      reason: 'Moving away',
+      // ENR-03: the consequence the customer accepted, exactly as previewed.
+      acceptedConsequence: { kind: 'refund', amountMinor: 6000, currency: 'USD' },
+    });
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
+  });
+
+  it('ENR-03: a consequence the API says changed after acceptance cancels nothing and must be accepted again', async () => {
+    let preview = cancellationPreview();
+    const app = renderCancel({
+      routes: routes({
+        'GET /enrollments/{id}/cancellation-preview': () => fakeResponse(200, preview),
+        'POST /enrollments/{id}/cancel': () => {
+          preview = cancellationPreview({
+            financialConsequence: consequence({ amountMinor: 3000, explanation: 'Late refund.' }),
+          });
+          return fakeResponse(
+            409,
+            apiErrorBody('RESOURCE_CONFLICT', {
+              message:
+                'The financial consequence changed since it was previewed; review and accept it again.',
+              nextAction: 'resolve_conflict',
+              details: {
+                code: 'CONSEQUENCE_CHANGED',
+                consequence: consequence({ amountMinor: 3000, explanation: 'Late refund.' }),
+              },
+            }),
+          );
+        },
+      }),
+    });
+    await fillAndConfirm();
+    expect(
+      await screen.findByLabelText(
+        'The money consequence changed since you reviewed it. Review it again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Refund of $30.00')).toBeOnTheScreen();
+    expect(
+      screen.getByRole('checkbox', { name: 'I understand: Refund of $30.00' }),
+    ).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Cancel registration' })).toBeDisabled();
+    expect(screen.queryByTestId('cancel-success')).toBeNull();
+    expect(cancels(app)).toHaveLength(1);
   });
 
   it('validation failure: a missing reason is a field message and sends nothing', async () => {

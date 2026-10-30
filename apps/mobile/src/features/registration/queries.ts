@@ -57,3 +57,17 @@ export function useApiRecords<P extends GetPath>(
   });
   return out;
 }
+
+/**
+ * SPK-SCHED-008: the facility time zone of each offering, from `GET /v1/offerings/{id}`
+ * (`facility.timezone`; the same cache as the offering screens). A list record that carries only
+ * an offering id (a waitlist entry, ENR-01) reads its offering for the zone; until it answers, or
+ * when the offering is not readable, the instant is shown in the device zone with the zone named.
+ */
+export function useOfferingTimeZones(
+  offeringIds: readonly string[],
+  enabled = true,
+): (offeringId: string) => string | undefined {
+  const offerings = useApiRecords('/offerings/{id}', offeringIds, enabled);
+  return (offeringId) => offerings[offeringId]?.data?.facility.timezone;
+}

@@ -3,11 +3,15 @@
  * SPK-PLACE-002, SPK-YOUTH-003, SPK-UX-004, SPK-UX-008; §4.6 EnrollmentMachine, §4.11).
  *
  * `GET /v1/enrollments/{id}` with what the API lets this customer read around it: the offering
- * (published offerings only), the placement request, the order and its installment plan
+ * the enrollment carries (ENR-02: name, dates and facility zone, also for a closed season), the
+ * placement request ("Confirmed: <team>" once placed), the order and its installment plan
  * ("Confirmed. Next payment due <date>." — a future installment never makes the enrollment look
- * unconfirmed), the operation of a pending enrollment (a `recovery_required` checkout reads
- * "Payment received. We are completing your registration."), and the linked enrollments of a
- * transfer (the old and new records stay linked; attendance history is kept).
+ * unconfirmed), what a pending enrollment waits for ("Registration pending: <reason>",
+ * `pendingReason`), the operation or checkout of a pending enrollment (a `recovery_required`
+ * checkout, from the operation or `GET /v1/me/registration-checkouts`, reads "Payment received.
+ * We are completing your registration."), and the linked enrollments of a transfer (the old and
+ * new records stay linked; attendance history is kept). A membership shows its term,
+ * suspensions and the renewal the customer may start (MembershipSection).
  *
  * Entry to SCR-C-33: "Review cancellation" for pending and confirmed enrollments and "Review a
  * transfer" for confirmed ones (EnrollmentMachine transitions); the API's preview then says
@@ -21,7 +25,9 @@ import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
-import { formatDateRange, formatInstant, formatMoney } from '../../features/money/format';
+import { formatDateRange, formatMoney } from '../../features/money/format';
+import { formatInstant } from '../../features/registration/format';
+import { checkoutOf, useMyCheckouts } from '../../features/registration/in-progress';
 import { useNameOf } from '../../features/money/people';
 import { useApiRecords } from '../../features/money/records';
 import { moneyRoutes, param } from '../../features/money/routes';
@@ -43,6 +49,8 @@ import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { INTENT_LABELS, offeringLabel } from './EnrollmentsScreen';
+import { MembershipSection } from './MembershipSection';
+import { enrollmentOffering } from './participation';
 
 type Order = Schema<'Order'>;
 
@@ -51,10 +59,16 @@ const CANCELABLE: readonly Enrollment['status'][] = ['pending', 'confirmed'];
 const TRANSFERABLE: readonly Enrollment['status'][] = ['confirmed'];
 
 function useEnrollmentContext(enrollment: Enrollment) {
+  // The enrollment carries its offering (ENR-02); the public read is only a fallback.
   const offering = useApiQuery({
     path: '/offerings/{id}',
     request: { path: { id: enrollment.offeringId } },
+    enabled: !enrollment.offering,
   });
+  const checkouts = useMyCheckouts(enrollment.status === 'pending' && enrollment.basketId !== null);
+  const checkout = enrollment.basketId
+    ? checkoutOf(checkouts.data, { basketId: enrollment.basketId })
+    : null;
   const placement = useApiQuery({
     path: '/placement-requests/{id}',
     request: { path: { id: enrollment.placementRequestId ?? '' } },
@@ -87,7 +101,7 @@ function useEnrollmentContext(enrollment: Enrollment) {
       .map((r) => r.data?.offeringId)
       .filter((id): id is string => typeof id === 'string'),
   );
-  return { offering, placement, order, plan, operation, linked, linkedOfferings };
+  return { offering, checkout, placement, order, plan, operation, linked, linkedOfferings };
 }
 
 function PaymentSummary({
@@ -144,7 +158,9 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
   const offline = reachable === false;
   const nameOf = useNameOf();
   const ctx = useEnrollmentContext(enrollment);
-  const offeringName = ctx.offering.data?.name ?? null;
+  const about = enrollmentOffering(enrollment, ctx.offering.data);
+  const offeringName = about?.name ?? null;
+  const timeZone = about?.timezone ?? undefined;
   const nextInstallment = ctx.plan.data ? nextScheduledInstallment(ctx.plan.data) : null;
   const target = enrollment.transferredToEnrollmentId
     ? ctx.linked[enrollment.transferredToEnrollmentId]?.data
@@ -152,11 +168,14 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
   const source = enrollment.transferredFromEnrollmentId
     ? ctx.linked[enrollment.transferredFromEnrollmentId]?.data
     : undefined;
-  const recoveryRequired = ctx.operation.data?.status === 'recovery_required';
+  const recoveryRequired =
+    enrollment.status === 'pending' &&
+    (ctx.operation.data?.status === 'recovery_required' ||
+      ctx.checkout?.status === 'recovery_required');
   const status = enrollmentStatus(enrollment, {
     offeringName,
     transferTargetName: target
-      ? (ctx.linkedOfferings[target.offeringId]?.data?.name ?? null)
+      ? (enrollmentOffering(target, ctx.linkedOfferings[target.offeringId]?.data)?.name ?? null)
       : null,
     placement: ctx.placement.data ?? null,
     placementUnknown: enrollment.placementRequestId !== null && ctx.placement.data === undefined,
@@ -168,23 +187,31 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
     : null;
   return (
     <View>
-      <Section title={offeringLabel({ data: ctx.offering.data, loading: ctx.offering.isPending })}>
+      <Section
+        title={
+          about?.name ??
+          offeringLabel({
+            data: ctx.offering.data,
+            loading: ctx.offering.isPending && ctx.offering.fetchStatus === 'fetching',
+          })
+        }
+      >
         <StatusBadge {...status} testID="enrollment-status" />
         <Field label="Participant" value={nameOf(enrollment.participantPersonId)} />
         <Field label="Kind" value={INTENT_LABELS[enrollment.intent]} />
-        {ctx.offering.data ? (
-          <Field
-            label="Dates"
-            value={formatDateRange(ctx.offering.data.startsOn, ctx.offering.data.endsOn)}
-          />
+        {about ? (
+          <Field label="Dates" value={formatDateRange(about.startsOn, about.endsOn)} />
         ) : null}
         {enrollment.confirmedAt ? (
-          <Field label="Confirmed" value={formatInstant(enrollment.confirmedAt)} />
+          <Field label="Confirmed" value={formatInstant(enrollment.confirmedAt, timeZone)} />
         ) : null}
         {enrollment.status === 'pending' && !recoveryRequired ? (
           <Caption>
-            The facility has not confirmed this registration yet. Anything you need to do appears on
-            Home.
+            {enrollment.pendingReason === 'forms'
+              ? 'A required form is not signed yet. Forms are signed from the registration basket or from Home.'
+              : enrollment.pendingReason === 'payment'
+                ? 'The payment for this registration is not finished. Open it from Discover, under In progress.'
+                : 'The facility has not confirmed this registration yet. Anything you need to do appears on Home.'}
           </Caption>
         ) : null}
         {recoveryRequired ? (
@@ -214,7 +241,7 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
       {enrollment.status === 'canceled' ? (
         <Section title="Cancellation">
           {enrollment.canceledAt ? (
-            <Field label="Canceled" value={formatInstant(enrollment.canceledAt)} />
+            <Field label="Canceled" value={formatInstant(enrollment.canceledAt, timeZone)} />
           ) : null}
           {enrollment.cancellationReason ? (
             <Field label="Reason" value={enrollment.cancellationReason} />
@@ -239,7 +266,10 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
           </Caption>
           {source ? (
             <ListRow
-              title={`Transferred from ${offeringLabel(ctx.linkedOfferings[source.offeringId])}`}
+              title={`Transferred from ${
+                enrollmentOffering(source, ctx.linkedOfferings[source.offeringId]?.data)?.name ??
+                offeringLabel(ctx.linkedOfferings[source.offeringId])
+              }`}
               status={enrollmentStatus(source)}
               onPress={() => router.push(moneyRoutes.enrollment(source.id))}
               accessibilityHint="Opens the earlier enrollment"
@@ -247,13 +277,20 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
           ) : null}
           {target ? (
             <ListRow
-              title={`Transferred to ${offeringLabel(ctx.linkedOfferings[target.offeringId])}`}
+              title={`Transferred to ${
+                enrollmentOffering(target, ctx.linkedOfferings[target.offeringId]?.data)?.name ??
+                offeringLabel(ctx.linkedOfferings[target.offeringId])
+              }`}
               status={enrollmentStatus(target)}
               onPress={() => router.push(moneyRoutes.enrollment(target.id))}
               accessibilityHint="Opens the new enrollment"
             />
           ) : null}
         </Section>
+      ) : null}
+
+      {enrollment.intent === 'membership' ? (
+        <MembershipSection enrollment={enrollment} timeZone={timeZone} />
       ) : null}
 
       {CANCELABLE.includes(enrollment.status) ? (

@@ -1,12 +1,18 @@
 /**
  * SCR-C-10 Participant and placement information (SPK-PLACE-001, SPK-PLACE-005, §4.14, DEC-051):
  * only configured fields are collected (pending state while DEC-051 is open), the request carries
- * no teammate identities, field-level validation keeps the input, and the season gap reads as not
- * available.
+ * no teammate identities and the season the API's registration options name (ENR-05), field-level
+ * validation keeps the input, and an offering with no season reads as not available.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { IDS, basket, familyRoutes, line } from '../../../features/registration/testing/fixtures';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import {
+  IDS,
+  basket,
+  familyRoutes,
+  line,
+  registrationOptions,
+} from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { PlacementInformationScreen } from '../PlacementInformationScreen';
 
@@ -18,6 +24,7 @@ jest.mock('expo-router', () => ({
 
 const FIELDS = [
   'availability',
+  'preferredCompetition',
   'declaredLevel',
   'positionPreferences',
   'notes',
@@ -29,37 +36,45 @@ const ADULT_LINE = basket({
   ],
 });
 
+const COMPETITION = {
+  id: '0192f1a0-0000-7000-8000-0000000000c7',
+  name: 'Monday coed league',
+  kind: 'league' as const,
+  sportFormat: 'small_sided_other' as const,
+  description: null,
+  status: 'active' as const,
+  revision: 1,
+  createdAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: '2026-10-01T00:00:00.000Z',
+};
+
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     ...familyRoutes(),
+    'GET /competitions': { status: 200, body: [COMPETITION] },
     'GET /baskets/{id}': { status: 200, body: ADULT_LINE },
+    'GET /offerings/{id}/registration-options': {
+      status: 200,
+      body: registrationOptions({ availableIntents: ['individual_league'], seasonId: IDS.season }),
+    },
     ...overrides,
   };
 }
 
-function renderPlacement(
-  options: Parameters<typeof createRegistrationTestApp>[0] = {},
-  seasonId: string | null = IDS.season,
-) {
+function renderPlacement(options: Parameters<typeof createRegistrationTestApp>[0] = {}) {
   const app = createRegistrationTestApp({ config: { placementFields: FIELDS }, ...options });
-  render(
-    <PlacementInformationScreen
-      basketId={IDS.basket}
-      lineId={IDS.lineA}
-      seasonId={seasonId ?? undefined}
-    />,
-    { wrapper: app.wrapper },
-  );
+  render(<PlacementInformationScreen basketId={IDS.basket} lineId={IDS.lineA} />, {
+    wrapper: app.wrapper,
+  });
   return app;
 }
 
 describe('SCR-C-10 PlacementInformationScreen', () => {
   it('DEC-051: without approved fields it shows the pending decision and collects nothing', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
-    render(
-      <PlacementInformationScreen basketId={IDS.basket} lineId={IDS.lineA} seasonId={IDS.season} />,
-      { wrapper: app.wrapper },
-    );
+    render(<PlacementInformationScreen basketId={IDS.basket} lineId={IDS.lineA} />, {
+      wrapper: app.wrapper,
+    });
     expect(await screen.findByLabelText('Waiting on a decision')).toBeOnTheScreen();
     expect(screen.getByText(/depends on DEC-051, DEC-031/)).toBeOnTheScreen();
     expect(app.fake.requests).toHaveLength(0);
@@ -83,6 +98,8 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
     fireEvent.changeText(screen.getByLabelText('To (HH:MM)'), '20:00');
     fireEvent.press(screen.getByRole('button', { name: 'Add this time' }));
     expect(screen.getByText('Monday 18:00 to 20:00')).toBeOnTheScreen();
+    // SPK-PLACE-001: the preferred competition from the API's list of active competitions.
+    fireEvent.press(await screen.findByRole('radio', { name: 'Monday coed league' }));
     fireEvent.changeText(screen.getByLabelText('Playing level'), 'Played college club soccer');
     fireEvent.changeText(screen.getByLabelText('Preferred positions'), 'Goalkeeper, Defender');
     const save = screen.getByRole('button', { name: 'Save placement information' });
@@ -95,12 +112,57 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
       offeringId: IDS.offering,
       applicationId: '0192f1a0-0000-7000-8000-0000000000d1',
       availability: [{ weekday: 1, from: '18:00', to: '20:00' }],
+      preferredCompetitionId: COMPETITION.id,
       declaredLevel: 'Played college club soccer',
       positionPreferences: ['Goalkeeper', 'Defender'],
       requestedTeammatePersonIds: [],
     });
     expect(await screen.findByLabelText('Placement information sent')).toBeOnTheScreen();
     expect(screen.getByText(/No team is assigned yet, and no place is reserved/)).toBeOnTheScreen();
+    expect(app.fake.requests.find((r) => r.route === '/competitions')?.query).toEqual({
+      status: 'active',
+    });
+  });
+
+  it('SPK-PLACE-001: "No preference" sends no competition; a competition list that cannot be read shows its code and keeps the rest saveable', async () => {
+    let failing = true;
+    const app = renderPlacement({
+      routes: routes({
+        'GET /competitions': () =>
+          failing
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(200, [COMPETITION]),
+        'POST /placement-requests': {
+          status: 201,
+          body: { id: IDS.placement, status: 'unassigned' },
+        },
+      }),
+    });
+    const choice = await screen.findByTestId('preferred-competition');
+    expect(
+      await within(choice).findByText(/Error code: INTEGRATION_UNAVAILABLE/),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Save placement information' })).not.toBeDisabled();
+
+    failing = false;
+    await act(async () => {
+      fireEvent.press(within(choice).getByRole('button', { name: 'Try again' }));
+    });
+    expect(await screen.findByRole('radio', { name: 'No preference' })).toBeChecked();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Save placement information' }));
+    });
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/placement-requests')).toBe(true),
+    );
+    const body = app.fake.requests.find((r) => r.route === '/placement-requests')?.body as Record<
+      string,
+      unknown
+    >;
+    expect(body).not.toHaveProperty('preferredCompetitionId');
   });
 
   it('checks a time window before adding it', async () => {
@@ -157,10 +219,32 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
     expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
   });
 
-  it("API gap: without the offering's season the form reads not available", async () => {
-    renderPlacement({ routes: routes() }, null);
-    expect(await screen.findByLabelText('Not available in the app yet')).toBeOnTheScreen();
+  it('SPK-PLACE-001: the season comes from the offering’s registration options; none reads not available', async () => {
+    const app = renderPlacement({
+      routes: routes({
+        'GET /offerings/{id}/registration-options': {
+          status: 200,
+          body: registrationOptions({ seasonId: null }),
+        },
+      }),
+    });
+    expect(await screen.findByLabelText('Not available for this activity')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Save placement information' })).toBeNull();
+    expect(
+      app.fake.requests.find((r) => r.route === '/offerings/{id}/registration-options')?.params.id,
+    ).toBe(IDS.offering);
+  });
+
+  it('SPK-UX-008: a season read that fails shows its code with a retry, and nothing is sent', async () => {
+    const app = renderPlacement({
+      routes: routes({
+        'GET /offerings/{id}/registration-options': () =>
+          fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+      }),
+    });
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
   });
 
   it('offline: answers are kept and saving is disabled', async () => {

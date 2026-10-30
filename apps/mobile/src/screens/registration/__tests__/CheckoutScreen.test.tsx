@@ -14,6 +14,7 @@ import {
   familyRoutes,
   inMinutes,
   line,
+  page,
   quote,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
@@ -104,7 +105,53 @@ describe('SCR-C-14 CheckoutScreen', () => {
       authorizeFutureInstallments: false,
     });
     expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
-    expect(app.progressStore.snapshot().checkoutId).toBe(IDS.checkout);
+    // Answered: the API lists the checkout from now on; nothing is left on the device.
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull();
+  });
+
+  it('SPK-UX-001: a price already used for a checkout links to it from the API, after a reinstall too', async () => {
+    renderCheckout({
+      routes: routes({
+        'GET /registration-quotes/{id}': {
+          status: 200,
+          body: quote({ status: 'consumed', consumedByCheckoutId: IDS.checkout }),
+        },
+        'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) },
+      }),
+    });
+    expect(
+      await screen.findByText(
+        'A checkout already exists for this price. It is never charged twice.',
+      ),
+    ).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'See your payment and registration' }));
+    expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
+  });
+
+  it('SPK-UX-001: a checking-out basket finds its checkout in GET /me/registration-checkouts', async () => {
+    const app = renderCheckout({
+      routes: routes({
+        'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) },
+        'GET /me/registration-checkouts': page([checkout({ status: 'finalizing' })]),
+      }),
+    });
+    fireEvent.press(
+      await screen.findByRole('button', { name: 'See your payment and registration' }),
+    );
+    expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
+    expect(checkoutRequests(app)).toHaveLength(0);
+  });
+
+  it('SPK-PAY-007: a definite refusal leaves no unanswered checkout to look for later', async () => {
+    const app = renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () =>
+          fakeResponse(409, apiErrorBody('QUOTE_EXPIRED', { nextAction: 'request_new_quote' })),
+      }),
+    });
+    await choosePaymentAndPay();
+    expect(await screen.findByText(/Error code: QUOTE_EXPIRED/)).toBeOnTheScreen();
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull();
   });
 
   it('SPK-PAY-007: no answer is "being confirmed, do not pay again", and returning to the app asks again with the same key', async () => {

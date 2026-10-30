@@ -113,7 +113,19 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
       creditIds: [],
     });
     expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/quote/${IDS.quote2}`);
-    expect(app.progressStore.snapshot().quoteId).toBe(IDS.quote2);
+  });
+
+  it('SPK-UX-001: a price used for a checkout opens that checkout, as the API names it', async () => {
+    renderQuote({
+      routes: routes({
+        'GET /registration-quotes/{id}': {
+          status: 200,
+          body: quote({ status: 'consumed', consumedByCheckoutId: IDS.checkout }),
+        },
+      }),
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'See your payment' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
   });
 
   it('VALIDATION_FAILED: an unknown discount code is shown at the field and the code is kept', async () => {

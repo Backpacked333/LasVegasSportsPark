@@ -1,32 +1,76 @@
 /**
- * SCR-C-09 Registration intent chooser (SPK-REG-001, SPK-IAM-003, SPK-REG-003, SPK-REG-004;
- * journeys A3, C2; SPK-AT-001 a returning parent registers two children). Choose how to register
- * (individual league entry, create a team entry, youth enrollment, rental request; joining a known
- * team and session bookings are explained), then the participant(s), then add one basket line per
- * participant: `POST /v1/baskets` when no open basket is in progress, then
- * `POST /v1/baskets/{id}/lines` with the basket's `expectedRevision`.
+ * SCR-C-09 Registration intent chooser (SPK-REG-001, SPK-REG-002, SPK-IAM-003, SPK-REG-003,
+ * SPK-REG-004; journeys A3, C2; SPK-AT-001 a returning parent registers two children).
  *
- * Who can be chosen comes from `GET /v1/me` authorities (the API's answer, never inferred): a
- * person the account may only view is listed as not available to register. The API checks again on
- * every line (PARTICIPANT_AUTHORITY_REQUIRED, ELIGIBILITY reasons on the line,
- * DUPLICATE_ENTITLEMENT without revealing who else registered, SPK-AT-004).
+ * The intents offered are the API's: `GET /v1/offerings/{id}/registration-options`
+ * `availableIntents` (ENR-05), never a table kept in the app. The same read names, per person the
+ * account may register, the read-only eligibility of each intent; a person the API leaves out
+ * (the account may only view them) is listed as not available to register, without a reason.
+ *
+ * How each intent is carried:
+ * - basket intents (individual league entry, create a team entry, youth enrollment, membership,
+ *   session package): choose the participant(s), then one basket line per participant:
+ *   `POST /v1/baskets` when no open basket exists (the newest open one of `GET /v1/me/baskets`
+ *   is reused), then `POST /v1/baskets/{id}/lines` with the basket's `expectedRevision`. The
+ *   choice of participants belongs to one intent: choosing another intent starts from nobody,
+ *   and only participants the API reports eligible for the current intent are ever sent;
+ * - trials and pickup sessions: one participant in one session (`SessionBooking.tsx`,
+ *   `POST /v1/trial-participations`, `POST /v1/session-bookings`), only when nothing is owed;
+ * - rentals and parties exist only with their reservation: "Continue to booking" opens the
+ *   Package G booking route (`/bookings/new/{offeringId}`), which this screen does not build;
+ * - makeups are booked from the participant's makeup sessions (SCR-C-35); joining a known team
+ *   uses the team's invitation.
+ * A Package G intent whose capability switch is off reads "turned off" (DEC-016, DEC-072,
+ * DEC-074, DEC-076, DEC-077, DEC-082), and a command refused with CAPABILITY_DISABLED shows the
+ * same state. Until `GET /v1/me/permissions` answers, such an intent is not usable (never a
+ * guess); a failed read shows its code and "Try again".
+ *
+ * The API checks again on every line (PARTICIPANT_AUTHORITY_REQUIRED, eligibility reasons on the
+ * line, DUPLICATE_ENTITLEMENT without revealing who else registered, SPK-AT-004).
  *
  * States: loading; empty (no one to register: family setup is in Account); ready; validation
- * failure (intent not available for this offering, API errors with field messages); permission
- * restriction; stale (offering no longer open, basket changed: reload); offline (cannot start, the
- * choice is kept); processing (adding); success (the basket, SCR-C-11).
+ * failure (intent not available for this offering, a participant not eligible with the API's
+ * reasons and alternatives, API errors with field messages); permission restriction; stale
+ * (offering no longer open, basket changed: reload); offline (cannot start, the choice is kept);
+ * processing (adding); success (the basket, SCR-C-11); turned off.
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
+import {
+  CAPABILITY_PRESENTATION,
+  turnedOffLabel,
+  type ApiError,
+  type Schema,
+} from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import { moneyRoutes } from '../../features/money/routes';
+import { packageGRoutes } from '../../features/package-g/routes';
 import { CommandError } from '../../features/registration/CommandError';
 import type { RegistrationIntent } from '../../features/registration/format';
-import { INTENT_HANDLING, INTENT_LABELS, intentsFor } from '../../features/registration/intents';
-import { useParticipants, type Participant } from '../../features/registration/participants';
-import { useRegistrationProgress } from '../../features/registration/progress';
+import {
+  MY_BASKETS_KEY,
+  openBasketOf,
+  useMyBaskets,
+} from '../../features/registration/in-progress';
+import {
+  HANDLING_NOTE,
+  INTENT_CAPABILITY,
+  INTENT_HANDLING,
+  INTENT_LABELS,
+} from '../../features/registration/intents';
+import {
+  blockingEligibilityReasons,
+  eligibilityMessages,
+  eligibilityOf,
+  eligibilityStatus,
+  mayRegister,
+  useRegistrationOptions,
+} from '../../features/registration/options';
+import { useParticipants } from '../../features/registration/participants';
+import { SessionBookingFlow } from '../../features/registration/SessionBooking';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { registrationWindowStatus } from '../../features/registration/status';
 import { Body, ButtonRow, ChoiceRow, Section, Title } from '../../features/registration/ui';
@@ -41,41 +85,58 @@ import { StatusBadge } from '../../ui/StatusBadge';
 type Offering = Schema<'Offering'>;
 type Basket = Schema<'Basket'>;
 
-const HANDLING_NOTE = {
-  team_invitation: 'Joining a team uses the invitation the team sends you (Account, invitations).',
-  session_booking: 'Booking a single session is not available in the app yet.',
-} as const;
-
-function canRegister(participant: Participant): boolean {
-  return participant.self || participant.permissions.includes('register');
+/** Participants chosen in one intent: a change of intent never carries a choice over. */
+interface Selection {
+  intent: RegistrationIntent | null;
+  ids: readonly string[];
 }
 
 function IntentChooser({ offering }: { offering: Offering }) {
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const { participants, me, namesLoading } = useParticipants();
-  const { progress, update } = useRegistrationProgress();
-  const intents = intentsFor(offering.kind);
-  const firstBasketIntent = intents.find((i) => INTENT_HANDLING[i] === 'basket') ?? null;
-  const [intent, setIntent] = useState<RegistrationIntent | null>(firstBasketIntent);
-  const [selected, setSelected] = useState<string[]>([]);
-  /** Participants already added in this intent, so a retry never adds them twice. */
-  const [added, setAdded] = useState<string[]>([]);
+  const { participants, me, namesLoading, namesError, retryNames } = useParticipants();
+  const permissions = usePermissions();
+  const options = useRegistrationOptions(
+    offering.id,
+    participants.map((p) => p.personId),
+    // Only once everyone's name is known: never ask about a partial household.
+    me.data !== undefined && !namesLoading && namesError === null,
+  );
+  const intents = options.data?.availableIntents ?? [];
+  /**
+   * DEC-016: whether an intent's switch is on. `undefined` while `GET /me/permissions` has not
+   * answered: such an intent is not usable yet (never a guess either way).
+   */
+  const switchOf = (intent: RegistrationIntent): boolean | undefined => {
+    const capability = INTENT_CAPABILITY[intent];
+    return capability ? permissions.isCapabilityEnabled(capability) : true;
+  };
+  const turnedOff = (intent: RegistrationIntent) => switchOf(intent) === false;
+  const switchKnownOn = (intent: RegistrationIntent) => switchOf(intent) === true;
+  const carried = (intent: RegistrationIntent) => {
+    const handling = INTENT_HANDLING[intent];
+    return handling === 'basket' || handling === 'booking' || handling === 'session';
+  };
+  const firstUsable =
+    intents.find((i) => INTENT_HANDLING[i] === 'basket' && switchKnownOn(i)) ??
+    intents.find((i) => carried(i) && switchKnownOn(i)) ??
+    null;
+  const [chosen, setChosen] = useState<RegistrationIntent | null>(null);
+  const intent = chosen !== null && switchKnownOn(chosen) ? chosen : firstUsable;
+  const [selection, setSelection] = useState<Selection>({ intent: null, ids: [] });
+  /** Participants already added, per intent, so a retry never adds them twice. */
+  const [added, setAdded] = useState<Partial<Record<RegistrationIntent, readonly string[]>>>({});
   const [failure, setFailure] = useState<ApiError | null>(null);
   const [working, setWorking] = useState(false);
-  /** The basket as the API last answered in this intent (its revision is the next expected one). */
+  /** The basket as the API last answered (its revision is the next expected one). */
   const [lastBasket, setLastBasket] = useState<Basket | null>(null);
 
-  const current = useApiQuery({
-    path: '/baskets/{id}',
-    request: { path: { id: progress.basketId ?? '' } },
-    enabled: progress.basketId !== null,
-  });
-  const openBasket = current.data?.status === 'open' ? current.data : null;
-  const createBasket = useApiCommand('post', '/baskets');
+  const baskets = useMyBaskets();
+  const openBasket = openBasketOf(baskets.data);
+  const createBasket = useApiCommand('post', '/baskets', { invalidate: [MY_BASKETS_KEY] });
   const addLine = useApiCommand('post', '/baskets/{id}/lines', {
-    invalidate: [['api', '/baskets/{id}']],
+    invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
 
   if (me.isPending || namesLoading) {
@@ -84,9 +145,10 @@ function IntentChooser({ offering }: { offering: Offering }) {
   if (me.error) {
     return <QueryErrorView error={me.error} onRetry={() => void me.refetch()} />;
   }
-  // The remembered basket is still being read, or could not be read: never start a second basket
-  // in the meantime (that would orphan the open one).
-  const basketUnknown = progress.basketId !== null && current.data === undefined;
+  if (namesError) {
+    // A family member's name could not be read: never register without knowing who is listed.
+    return <QueryErrorView error={namesError} onRetry={() => retryNames?.()} />;
+  }
   if (participants.length === 0) {
     return (
       <StateView
@@ -98,18 +160,53 @@ function IntentChooser({ offering }: { offering: Offering }) {
       />
     );
   }
+  if (options.data === undefined) {
+    if (options.error) {
+      return (
+        <QueryErrorView
+          error={options.error}
+          onRetry={() => void options.refetch()}
+          unavailable={{
+            title: 'Registration not available',
+            description: 'This activity cannot be registered for from your account.',
+          }}
+        />
+      );
+    }
+    return <StateView variant="loading" label="how you can register" />;
+  }
+  const registrationOptions = options.data;
+  // Open baskets are still being read, or could not be read: never start a second basket in the
+  // meantime (that would orphan the open one).
+  const basketUnknown = openBasket === undefined && lastBasket === null;
+  const addedHere = intent ? (added[intent] ?? []) : [];
+  /** Whether this participant can be added under the current intent (SPK-REG-002). */
+  const selectable = (personId: string) => {
+    if (!intent || !mayRegister(registrationOptions, personId)) return false;
+    if (addedHere.includes(personId)) return false;
+    const result = eligibilityOf(registrationOptions, personId, intent);
+    return result ? blockingEligibilityReasons(result).length === 0 : true;
+  };
+  const selected = selection.intent === intent ? selection.ids : [];
+  const pending = selected.filter(selectable);
 
   const toggle = (personId: string) =>
-    setSelected((list) =>
-      list.includes(personId) ? list.filter((id) => id !== personId) : [...list, personId],
-    );
+    setSelection({
+      intent,
+      ids: selected.includes(personId)
+        ? selected.filter((id) => id !== personId)
+        : [...selected, personId],
+    });
 
   const submit = async () => {
     if (!intent) return;
+    // Only people who can be added under this intent are ever sent (never a blocked one).
+    const toAdd = selected.filter(selectable);
+    if (toAdd.length === 0) return;
     setWorking(true);
     setFailure(null);
     try {
-      let basket: Basket | null = lastBasket ?? openBasket;
+      let basket: Basket | null = lastBasket ?? openBasket ?? null;
       if (!basket && basketUnknown) return;
       if (!basket) {
         // SPK-REG-004 proposed default; partial fulfillment is never offered (DEC-026).
@@ -117,10 +214,8 @@ function IntentChooser({ offering }: { offering: Offering }) {
           body: { fulfillmentMode: 'all_or_nothing', acceptPartialFulfillment: false },
         });
         setLastBasket(basket);
-        await update({ basketId: basket.id, quoteId: null });
       }
-      for (const personId of selected) {
-        if (added.includes(personId)) continue;
+      for (const personId of toAdd) {
         basket = await addLine.submit({
           path: { id: basket.id },
           body: {
@@ -132,7 +227,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
           },
         });
         setLastBasket(basket);
-        setAdded((list) => [...list, personId]);
+        setAdded((all) => ({ ...all, [intent]: [...(all[intent] ?? []), personId] }));
       }
       router.push(registrationRoutes.basket(basket.id));
     } catch (error) {
@@ -142,54 +237,116 @@ function IntentChooser({ offering }: { offering: Offering }) {
     }
   };
 
-  const basketIntent = intent !== null && INTENT_HANDLING[intent] === 'basket';
-  const pending = selected.filter((id) => !added.includes(id));
+  const handling = intent !== null ? INTENT_HANDLING[intent] : null;
+  const basketIntent = handling === 'basket' && intent !== null && switchKnownOn(intent);
+  const sessionIntent =
+    handling === 'session' && (intent === 'trial' || intent === 'pickup') && switchKnownOn(intent)
+      ? intent
+      : null;
+  const permissionsUnknown = intents.some((i) => switchOf(i) === undefined);
   return (
     <View>
       <Section title="How do you want to register?">
-        <View accessibilityRole="radiogroup">
-          {intents.map((option) => {
-            const handling = INTENT_HANDLING[option];
-            return (
-              <ChoiceRow
-                key={option}
-                mode="radio"
-                label={INTENT_LABELS[option].title}
-                detail={
-                  handling === 'basket'
-                    ? INTENT_LABELS[option].description
-                    : `${INTENT_LABELS[option].description} ${HANDLING_NOTE[handling]}`
-                }
-                checked={intent === option}
-                disabled={handling !== 'basket'}
-                onToggle={() => setIntent(option)}
-                testID={`intent-${option}`}
-              />
-            );
-          })}
-        </View>
         {intents.length === 0 ? (
           <Body>This activity cannot be registered for in the app.</Body>
+        ) : (
+          <View accessibilityRole="radiogroup">
+            {intents.map((option) => {
+              const optionHandling = INTENT_HANDLING[option];
+              const capability = INTENT_CAPABILITY[option];
+              const off = turnedOff(option);
+              const unknown = switchOf(option) === undefined;
+              const usable = switchKnownOn(option) && carried(option);
+              const detail =
+                off && capability
+                  ? `${INTENT_LABELS[option].description} ${turnedOffLabel(CAPABILITY_PRESENTATION[capability].label)} (${CAPABILITY_PRESENTATION[capability].decisions.join(', ')}).`
+                  : unknown && capability
+                    ? `${INTENT_LABELS[option].description} Checking whether ${CAPABILITY_PRESENTATION[capability].label.toLowerCase()} is turned on.`
+                    : optionHandling === 'basket' || optionHandling === 'session'
+                      ? INTENT_LABELS[option].description
+                      : `${INTENT_LABELS[option].description} ${HANDLING_NOTE[optionHandling]}`;
+              return (
+                <ChoiceRow
+                  key={option}
+                  mode="radio"
+                  label={INTENT_LABELS[option].title}
+                  detail={detail}
+                  checked={intent === option}
+                  disabled={!usable}
+                  onToggle={() => {
+                    setChosen(option);
+                    setFailure(null);
+                  }}
+                  testID={`intent-${option}`}
+                />
+              );
+            })}
+          </View>
+        )}
+        {permissionsUnknown && permissions.query.data === undefined && permissions.query.error ? (
+          // The switches could not be read: the gated intents stay unusable until they are.
+          <QueryErrorView
+            error={permissions.query.error}
+            onRetry={() => void permissions.query.refetch()}
+          />
+        ) : null}
+        {intents.some((i) => INTENT_HANDLING[i] === 'makeup') ? (
+          <Button
+            label="Open your makeup sessions"
+            variant="secondary"
+            onPress={() => router.push(moneyRoutes.credits())}
+          />
         ) : null}
       </Section>
+
+      {handling === 'booking' && intent !== null && switchKnownOn(intent) ? (
+        <ButtonRow>
+          <Button
+            label="Continue to booking"
+            onPress={() => router.push(packageGRoutes.newBooking(offering.id))}
+            disabled={offline}
+            accessibilityHint="Opens the booking for this activity: times, space and what you need"
+          />
+          {offline ? <Body muted>Booking needs a connection.</Body> : null}
+        </ButtonRow>
+      ) : null}
+
+      {sessionIntent ? (
+        <SessionBookingFlow
+          key={sessionIntent}
+          offering={offering}
+          intent={sessionIntent}
+          participants={participants}
+          options={registrationOptions}
+          permissions={permissions}
+        />
+      ) : null}
+
       {basketIntent ? (
         <Section title="Who are you registering?">
           {participants.map((p) => {
-            const allowed = canRegister(p);
-            const isAdded = added.includes(p.personId);
+            const allowed = mayRegister(registrationOptions, p.personId);
+            const isAdded = addedHere.includes(p.personId);
+            const result = intent ? eligibilityOf(registrationOptions, p.personId, intent) : null;
+            const messages = result ? eligibilityMessages(result) : null;
+            const detail = isAdded
+              ? 'Added to your basket'
+              : !allowed
+                ? 'Not available: your account can view this person but not register them.'
+                : result
+                  ? [
+                      eligibilityStatus(result).label,
+                      ...(messages?.reasons ?? []),
+                      ...(messages?.alternatives ?? []),
+                    ].join('. ')
+                  : undefined;
             return (
               <ChoiceRow
                 key={p.personId}
                 label={p.displayName}
-                detail={
-                  isAdded
-                    ? 'Added to your basket'
-                    : allowed
-                      ? undefined
-                      : 'Not available: your account can view this person but not register them.'
-                }
-                checked={selected.includes(p.personId)}
-                disabled={!allowed || isAdded}
+                detail={detail}
+                checked={selected.includes(p.personId) && selectable(p.personId)}
+                disabled={!selectable(p.personId)}
                 onToggle={() => toggle(p.personId)}
                 testID={`participant-${p.self ? 'self' : p.personId}`}
               />
@@ -197,21 +354,24 @@ function IntentChooser({ offering }: { offering: Offering }) {
           })}
         </Section>
       ) : null}
-      {basketUnknown && current.error ? (
-        <QueryErrorView error={current.error} onRetry={() => void current.refetch()} />
+      {basketIntent && openBasket === undefined && baskets.error ? (
+        <QueryErrorView error={baskets.error} onRetry={() => void baskets.refetch()} />
       ) : null}
-      <CommandError
-        error={failure}
-        onRetry={() => void submit()}
-        onReload={() => {
-          // STALE_REVISION: the basket changed elsewhere. Drop the basket this screen last saw and
-          // take the reloaded one, so the next attempt carries its revision (a new intent).
-          setLastBasket(null);
-          setFailure(null);
-          addLine.reset();
-          void current.refetch();
-        }}
-      />
+      {basketIntent ? (
+        <CommandError
+          error={failure}
+          onRetry={() => void submit()}
+          onReload={() => {
+            // STALE_REVISION: the basket changed elsewhere. Drop the basket this screen last saw
+            // and take the reloaded one, so the next attempt carries its revision (a new intent).
+            setLastBasket(null);
+            setFailure(null);
+            addLine.reset();
+            void baskets.refetch();
+            void options.refetch();
+          }}
+        />
+      ) : null}
       {basketIntent ? (
         <ButtonRow>
           <Button
@@ -221,10 +381,8 @@ function IntentChooser({ offering }: { offering: Offering }) {
                 : 'Add to your basket'
             }
             onPress={() => void submit()}
-            disabled={pending.length === 0 || offline || (basketUnknown && !current.error)}
-            busy={
-              working || (basketUnknown && !current.error && current.fetchStatus === 'fetching')
-            }
+            disabled={pending.length === 0 || offline || (basketUnknown && !baskets.error)}
+            busy={working || (basketUnknown && baskets.fetchStatus === 'fetching')}
           />
           {offline ? (
             <Body muted>Adding to your basket needs a connection. Your choices are kept.</Body>
