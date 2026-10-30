@@ -27,6 +27,8 @@ export const CONFLICT_WORDS: Readonly<Record<string, string>> = {
   BASKET_NOT_EMPTY: 'A booking is paid in a basket of its own.',
   CHECKOUT_IN_PROGRESS:
     'A checkout of this booking is in progress and a payment may be on its way, so nothing was canceled. Reload to see how the checkout ended.',
+  BOOKING_CONFIRMATION_PENDING:
+    'This booking was paid and its confirmation is still on its way, so nothing was canceled. Reload the booking; once it is confirmed, cancel it with its financial consequence.',
   CONSEQUENCE_ACCEPTANCE_REQUIRED:
     'The customer must accept the financial consequence before the cancellation is committed.',
   CONSEQUENCE_CHANGED:
