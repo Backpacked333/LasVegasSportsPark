@@ -49638,6 +49638,7 @@ export type components = {
             /** Format: uuid */
             authorPersonId: string;
             comments: string | null;
+            correctionReason: string | null;
             /** Format: uuid */
             correctsAssessmentId: string | null;
             /** Format: date-time */

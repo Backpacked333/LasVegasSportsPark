@@ -16,7 +16,7 @@ Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 
 SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
 **Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
-`0500` to `0509`; `0503` came from the review stage)
+`0500` to `0511`; `0503` came from the review stage, `0510` and `0511` from the stage-5 review)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
@@ -330,7 +330,7 @@ benefits, terms, deposits) are configuration in the catalog; nothing here suppli
 | `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506 | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
 | `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508       | `bookings.spec.ts`                                          |
 | `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508       | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
-| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509       | `youth-progression.spec.ts`                                 |
+| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511  | `youth-progression.spec.ts`                                 |
 
 Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
 `startCheckout`) re-checks every live line's capability before any payment attempt ("DEC-016:
@@ -393,9 +393,17 @@ mirrored by a database transition guard.
   value off the scale. Program managers, or a coach accepted on the offering (IF-34), author
   assessments of enrolled participants; a program manager other than the author approves them
   (`assessments_reviewer_differs`): family rows are published, staff-only rows recorded, both then
-  immutable (a correction is a new row). `GET /v1/me/youth-feedback` shows only published family
-  feedback and shared recommendations, never staff or review notes; one `youth_feedback` notice per
-  published assessment or shared recommendation carries no staff content.
+  immutable; while submitted, the content the reviewer approves is fixed too
+  (`assessments_submitted_content_fixed`, 0511). A correction is a new row
+  (`correctsAssessmentId`) that requires `reason` (§4.9; stored as `correctionReason`, refused by
+  `assessments_correction_reason` without one, and audited with the corrected id); an assessment
+  has at most one live correction (`assessments_one_live_correction_idx`, 409 `ALREADY_CORRECTED`),
+  so a later correction corrects the correction. `GET /v1/me/youth-feedback` shows only published
+  family feedback that no published or recorded correction replaces, and shared recommendations,
+  never staff or review notes; one `youth_feedback` notice per published assessment or shared
+  recommendation carries no staff content. A shared recommendation's content is fixed and a
+  withdrawn one never changes (`progression_recommendations_content_fixed`, 0511). **Verified**,
+  `__tests__/youth-progression.spec.ts`.
   `GET /v1/participants/{personId}/assessments` is the staff view: a program manager sees the
   offerings in their facility scope and gets an empty page when nothing is visible, whatever exists
   at other facilities; a coach sees offerings they are accepted on, and NOT_FOUND otherwise (§4.10).

@@ -471,6 +471,221 @@ describe('youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006)', () => {
     expect(withdrawn.body.status).toBe('withdrawn');
   });
 
+  it('§4.9 / §4.7 invariant 9 / SPK-YOUTH-005: a correction says why, is audited with what it corrects, and replaces the original in the family view', async () => {
+    const original = await draft(coach, 'family', { scaleValue: 1, comments: 'Emerging' });
+    const published = await post(t, `/v1/assessments/${original.id}/review`, reviewer.header, {
+      decision: 'approve',
+      expectedRevision: original.revision,
+    });
+    expect(published.body.status).toBe('published');
+    const correction = {
+      templateId,
+      participantPersonId: kid,
+      offeringId: setup.offeringId,
+      skillAreaKey: 'dribbling',
+      observedOn: '2026-11-12',
+      scaleValue: 3,
+      visibility: 'family',
+      comments: 'Secure',
+      correctsAssessmentId: original.id,
+    };
+    // No reason: refused.
+    const unexplained = await post(t, '/v1/assessments', coach.header, correction);
+    expect(unexplained.status).toBe(400);
+    expect(unexplained.body.code).toBe('VALIDATION_FAILED');
+    // With a reason: stored on the row and in the audit with the corrected id.
+    const corrected = await draft(coach, 'family', {
+      scaleValue: 3,
+      comments: 'Secure',
+      correctsAssessmentId: original.id,
+      reason: 'Scored on the wrong drill',
+    });
+    const staffView = await t.http.get(`/v1/participants/${kid}/assessments`).set(reviewer.header);
+    expect(staffView.body.items.find((a: { id: string }) => a.id === corrected.id)).toMatchObject({
+      correctsAssessmentId: original.id,
+      correctionReason: 'Scored on the wrong drill',
+    });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['reason', 'details'])
+      .where('action', '=', 'enrollment.author_assessment')
+      .where('target_id', '=', corrected.id)
+      .executeTakeFirstOrThrow();
+    expect(audit).toMatchObject({
+      reason: 'Scored on the wrong drill',
+      details: { correctsAssessmentId: original.id },
+    });
+    // Only one live correction: a second correction of the original is refused.
+    const second = await post(t, '/v1/assessments', coach.header, {
+      ...correction,
+      reason: 'Another idea',
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.details).toMatchObject({
+      code: 'ALREADY_CORRECTED',
+      correctedByAssessmentId: corrected.id,
+    });
+    // Until the correction is reviewed the original stands; afterwards only the correction does.
+    expect((await feedback()).assessments.map((a) => a.id)).toContain(original.id);
+    const approved = await post(t, `/v1/assessments/${corrected.id}/review`, reviewer.header, {
+      decision: 'approve',
+      expectedRevision: corrected.revision,
+    });
+    expect(approved.body.status).toBe('published');
+    const family = (await feedback()).assessments.map((a) => a.id);
+    expect(family).toContain(corrected.id);
+    expect(family).not.toContain(original.id);
+  });
+
+  it('§4.9: the database refuses a correction without a reason and a second live correction', async () => {
+    const original = await draft(coach, 'staff_only', { skillAreaKey: 'passing' });
+    await post(t, `/v1/assessments/${original.id}/review`, reviewer.header, {
+      decision: 'approve',
+      expectedRevision: original.revision,
+    });
+    const row = (overrides: Record<string, unknown>) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      template_id: templateId,
+      participant_person_id: kid,
+      offering_id: setup.offeringId,
+      skill_area_key: 'passing',
+      observed_on: '2026-11-12',
+      scale_value: 2,
+      visibility: 'staff_only' as const,
+      author_person_id: coach.personId,
+      author: json({ kind: 'system' }),
+      corrects_assessment_id: original.id,
+      ...overrides,
+    });
+    expect(
+      await rejectsWith(
+        t.db
+          .insertInto('assessments')
+          .values(row({}) as never)
+          .execute(),
+      ),
+    ).toBe('23514');
+    expect(
+      await rejectsWith(
+        t.db
+          .insertInto('assessments')
+          .values(
+            row({ corrects_assessment_id: null, correction_reason: 'Not a correction' }) as never,
+          )
+          .execute(),
+      ),
+    ).toBe('23514');
+    await t.db
+      .insertInto('assessments')
+      .values(row({ correction_reason: 'First' }) as never)
+      .execute();
+    expect(
+      await rejectsWith(
+        t.db
+          .insertInto('assessments')
+          .values(row({ correction_reason: 'Second' }) as never)
+          .execute(),
+      ),
+    ).toBe('23505');
+  });
+
+  it('§4.7 invariant 9 / SPK-YOUTH-006: the database refuses rewriting a shared recommendation, any change to a withdrawn one and a content edit of a submitted assessment', async () => {
+    const other = await offering(t, { kind: 'term', programId, basePriceMinor: 0 });
+    const created = await post(t, '/v1/progression-recommendations', coach.header, {
+      participantPersonId: kid,
+      fromOfferingId: setup.offeringId,
+      recommendedProgramId: programId,
+      suitability: 'Ready for match play.',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = created.body.id as string;
+    // A draft is still the author's to edit.
+    await t.db
+      .updateTable('progression_recommendations')
+      .set({ suitability: 'Ready for match play soon.' })
+      .where('id', '=', id)
+      .execute();
+    const shared = await post(t, `/v1/progression-recommendations/${id}/share`, coach.header, {
+      expectedRevision: created.body.revision,
+    });
+    expect(shared.status).toBe(200);
+    const rewrite = (set: Record<string, unknown>) =>
+      rejectsWith(
+        t.db
+          .updateTable('progression_recommendations')
+          .set(set as never)
+          .where('id', '=', id)
+          .execute(),
+      );
+    expect(await rewrite({ suitability: 'Different advice' })).toBe('23514');
+    expect(
+      await rewrite({ recommended_program_id: null, recommended_offering_id: other.offeringId }),
+    ).toBe('23514');
+    expect(await rewrite({ eligibility_snapshot: json({ eligible: true }) })).toBe('23514');
+    expect(await rewrite({ shared_at: new Date(t.clock.now().getTime() - 86_400_000) })).toBe(
+      '23514',
+    );
+    const withdrawn = await post(
+      t,
+      `/v1/progression-recommendations/${id}/withdraw`,
+      coach.header,
+      {
+        reason: 'Superseded',
+        expectedRevision: shared.body.revision,
+      },
+    );
+    expect(withdrawn.status, JSON.stringify(withdrawn.body)).toBe(200);
+    expect(await rewrite({ withdrawn_reason: 'Rewritten' })).toBe('23001');
+    const after = await t.db
+      .selectFrom('progression_recommendations')
+      .select(['suitability', 'recommended_program_id', 'withdrawn_reason'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(after).toEqual({
+      suitability: 'Ready for match play soon.',
+      recommended_program_id: programId,
+      withdrawn_reason: 'Superseded',
+    });
+
+    // A submitted assessment is approved as it stands: its content is fixed until returned.
+    const submitted = await draft(coach, 'family', { skillAreaKey: 'passing', scaleValue: 1 });
+    const edit = (set: Record<string, unknown>) =>
+      rejectsWith(
+        t.db
+          .updateTable('assessments')
+          .set(set as never)
+          .where('id', '=', submitted.id)
+          .execute(),
+      );
+    expect(await edit({ scale_value: 3 })).toBe('23514');
+    expect(await edit({ comments: 'Rewritten' })).toBe('23514');
+    expect(await edit({ visibility: 'staff_only' })).toBe('23514');
+    // Reviewing it moves it on; the review itself cannot change the content either.
+    expect(
+      await edit({
+        status: 'published',
+        scale_value: 3,
+        reviewer_person_id: reviewer.personId,
+        reviewed_at: t.clock.now(),
+      }),
+    ).toBe('23514');
+    const returned = await post(t, `/v1/assessments/${submitted.id}/review`, reviewer.header, {
+      decision: 'return',
+      note: 'Check the drill',
+      expectedRevision: submitted.revision,
+    });
+    expect(returned.body.status).toBe('returned');
+    // Returned to the author, it is editable again.
+    const fixed = await t.http
+      .patch(`/v1/assessments/${submitted.id}`)
+      .set(coach.header)
+      .set('Idempotency-Key', `k-${newId()}`)
+      .send({ scaleValue: 2, expectedRevision: returned.body.revision });
+    expect(fixed.status, JSON.stringify(fixed.body)).toBe(200);
+    expect(fixed.body.scaleValue).toBe(2);
+  });
+
   it('SPK-YOUTH-005: only staff of the offering author assessments', async () => {
     const outsiderCoach = await staff(t, ['coach']);
     const refused = await post(t, '/v1/assessments', outsiderCoach.header, {

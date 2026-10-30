@@ -28133,6 +28133,12 @@
             ],
             "format": "uuid"
           },
+          "correctionReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -28163,6 +28169,7 @@
           "reviewNote",
           "reviewedAt",
           "correctsAssessmentId",
+          "correctionReason",
           "revision",
           "createdAt",
           "updatedAt"

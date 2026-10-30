@@ -184,6 +184,8 @@ export interface AssessmentsTable {
   review_note: string | null;
   reviewed_at: NullableTimestamp;
   corrects_assessment_id: string | null;
+  /** Why a correction was made; set exactly when corrects_assessment_id is (0510). */
+  correction_reason: string | null;
   withdrawn_at: NullableTimestamp;
   withdrawn_reason: string | null;
   revision: Generated<number>;

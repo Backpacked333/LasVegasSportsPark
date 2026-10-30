@@ -17,7 +17,9 @@ import {
   type YouthFeedback,
 } from '@sportspark/contracts';
 import {
+  isUniqueViolation,
   json,
+  pgConstraintName,
   type AssessmentTemplatesTable,
   type AssessmentsTable,
   type Db,
@@ -138,10 +140,18 @@ export class YouthProgressionService {
       reviewNote: row.review_note,
       reviewedAt: isoOrNull(row.reviewed_at),
       correctsAssessmentId: row.corrects_assessment_id,
+      correctionReason: row.correction_reason,
       revision: row.revision,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
     };
+  }
+
+  private alreadyCorrected(correctedByAssessmentId: string | null): Error {
+    return errors.resourceConflict(
+      'This assessment already has a correction; correct that one, or withdraw it first.',
+      { code: 'ALREADY_CORRECTED', correctedByAssessmentId },
+    );
   }
 
   private toRecommendation(row: RecommendationRow): ProgressionRecommendation {
@@ -462,6 +472,21 @@ export class YouthProgressionService {
             path: 'correctsAssessmentId',
           });
         }
+        // One live correction per assessment (assessments_one_live_correction_idx, 0510), so
+        // which value stands is never ambiguous: a later correction corrects the correction.
+        const live = await trx
+          .selectFrom('assessments')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('corrects_assessment_id', '=', corrected.id)
+          .where('status', '<>', 'withdrawn')
+          .executeTakeFirst();
+        if (live) throw this.alreadyCorrected(live.id);
+      }
+      // §4.9: a correction says why (the contract requires it; the database refuses one without).
+      const correctionReason = input.correctsAssessmentId ? (input.reason ?? '').trim() : null;
+      if (correctionReason === '') {
+        throw errors.validation('A correction says why.', { path: 'reason' });
       }
       const id = newId();
       await trx
@@ -481,9 +506,17 @@ export class YouthProgressionService {
           author_person_id: principal.personId,
           author: json(actorSnapshot(principal)),
           corrects_assessment_id: input.correctsAssessmentId ?? null,
+          correction_reason: correctionReason,
         })
         .execute()
         .catch((error: unknown) => {
+          if (
+            isUniqueViolation(error) &&
+            pgConstraintName(error) === 'assessments_one_live_correction_idx'
+          ) {
+            // A concurrent correction of the same assessment won.
+            throw this.alreadyCorrected(null);
+          }
           if ((error as { code?: string }).code === '23514') {
             throw errors.validation(
               'The assessment must use an approved template, one of its skill areas and a value on its scale.',
@@ -499,11 +532,13 @@ export class YouthProgressionService {
         targetType: 'assessment',
         targetId: id,
         afterRevision: 1,
+        reason: input.reason ?? null,
         correlationId,
         details: {
           templateId: input.templateId,
           offeringId: input.offeringId,
           visibility: input.visibility,
+          correctsAssessmentId: input.correctsAssessmentId ?? null,
         },
       });
       return this.toAssessment((await this.loadAssessment(trx, organizationId, id))!);
@@ -936,6 +971,19 @@ export class YouthProgressionService {
       .where('assessments.participant_person_id', 'in', subjects)
       .where('assessments.status', '=', 'published')
       .where('assessments.visibility', '=', 'family')
+      // §4.7 invariant 9, SPK-YOUTH-005: a value a reviewed correction replaced no longer stands;
+      // the family sees the correction (when it is family-visible), never both.
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom('assessments as correction')
+              .select('correction.id')
+              .whereRef('correction.organization_id', '=', 'assessments.organization_id')
+              .whereRef('correction.corrects_assessment_id', '=', 'assessments.id')
+              .where('correction.status', 'in', ['published', 'recorded']),
+          ),
+        ),
+      )
       .orderBy('assessments.observed_on', 'desc')
       .orderBy('assessments.id', 'desc')
       .limit(200)
