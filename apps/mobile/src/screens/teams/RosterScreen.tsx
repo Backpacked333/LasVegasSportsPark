@@ -28,19 +28,28 @@
  * that retry finds the invitation already created (IDEMPOTENCY_SECRET_WITHHELD: its link was in
  * the lost first answer and is never returned again, §4.14), the recipient reads "Created, but the
  * link cannot be shown again", the open invitations are read again, and "Revoke and issue a new
- * link" revokes it and invites the recipient again under a new key (ui/SecretWithheld); "Send"
- * skips that recipient meanwhile, so no second invitation is attempted beside it.
+ * link" revokes it and invites the recipient again under a new key (ui/SecretWithheld). When the
+ * retry finds instead that the first attempt committed but its answer was lost
+ * (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the recipient reads "This may already have been done": the
+ * open invitations are read again and the invitation, if listed, is revoked there; "Start a new
+ * one" ends that recipient's intent once the captain has looked. "Send" skips that recipient
+ * meanwhile, so no second invitation is attempted beside it. An invitation accepted or declined
+ * meanwhile is no longer under "Open invitations": accepted, it is on the roster below.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { secretWithheldOf } from '../../api/command-outcome';
+import { mustNotCreateAgain } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay } from '../../features/teams/format';
-import { InvitationIssued, WITHHELD_REVOKE_REASON } from '../../features/teams/InvitationIssued';
+import {
+  answeredTeamInvitationAt,
+  InvitationIssued,
+  WITHHELD_REVOKE_REASON,
+} from '../../features/teams/InvitationIssued';
 import {
   notAvailableNow,
   rosterNames,
@@ -126,11 +135,12 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
         ...(message.trim() ? { message: message.trim() } : {}),
       },
     });
-  // Created already, its link lost (IDEMPOTENCY_SECRET_WITHHELD): revoked and issued again from
-  // its own notice, never sent again from here.
+  // Created already, its link lost (IDEMPOTENCY_SECRET_WITHHELD), or perhaps created with its
+  // answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE): handled from its own notice, never sent again
+  // from here.
   const withheld = (key: string) => {
     const state = invite.states[key];
-    return state?.status === 'failed' && secretWithheldOf(state.error) !== null;
+    return state?.status === 'failed' && mustNotCreateAgain(state.error);
   };
   const sendAll = async () => {
     setAttempted(true);
@@ -195,10 +205,12 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
                 error={state.error}
                 what="invitation"
                 listName="Open invitations"
+                answeredShownAt={answeredTeamInvitationAt('under "Roster" below')}
                 revokePath="/team-invitations/{id}/revoke"
                 revokeReason={WITHHELD_REVOKE_REASON}
                 invalidate={[WORKSPACE_KEY, ROSTER_KEY]}
                 onReissue={() => void sendOne(recipient)}
+                onStartOver={() => invite.forget(recipient.key)}
                 testID={`recipient-${index + 1}-withheld`}
               />
             ) : state?.status === 'failed' ? (

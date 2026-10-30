@@ -21,14 +21,19 @@
  * Do not pay again." on this line only). Without a definite answer to paying (a lost connection or
  * a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx) the line reads
  * "No answer yet: this may already have been recorded", the payment methods stay hidden and
- * "Check again" repeats the same request under the same key, so it is never paid twice.
+ * "Check again" repeats the same request under the same key, so it is never paid twice. When that
+ * check finds that the first attempt committed but its answer was lost
+ * (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the line reads "This may already have been done": the payment
+ * methods stay hidden, the payments and the request are read again (so an attempt the API recorded
+ * shows "Do not pay again"), and "Reload" reads them again; paying is not offered again on this
+ * visit.
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { mayHaveTakenEffect } from '../../api/command-outcome';
+import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { DEV_CONTRIBUTION_PAYMENT_METHODS } from '../../features/teams/dev';
@@ -156,16 +161,18 @@ function PayContribution({
       void queryClient.invalidateQueries({ queryKey: ['api', '/contribution-requests/{id}'] });
     }
   }, [settled, latest.data, queryClient]);
+  const rereadPayments = () => {
+    for (const queryKey of PAY_EFFECT_KEYS) void queryClient.invalidateQueries({ queryKey });
+  };
   const submit = () => {
     if (!token) return;
     void pay
       .submit({ path: { id: request.id }, body: { paymentMethodToken: token } })
       .catch((error: ApiError) => {
-        // The payment may have been made: read what the API knows, so an attempt it recorded is
-        // shown with "Do not pay again" even before "Check again" (SPK-PAY-007).
-        if (mayHaveTakenEffect(error)) {
-          for (const queryKey of PAY_EFFECT_KEYS) void queryClient.invalidateQueries({ queryKey });
-        }
+        // The payment may have been made (or was, its answer lost): read what the API knows, so
+        // an attempt it recorded is shown with "Do not pay again" even before "Check again"
+        // (SPK-PAY-007).
+        if (mayHaveTakenEffect(error) || tookEffectOutcomeLost(error)) rereadPayments();
       });
   };
   // What the API knows of a payment on its way for this line, shown in every build (SPK-PAY-007).
@@ -211,8 +218,10 @@ function PayContribution({
   // Without a definite answer (a lost connection or a timeout after sending, the same key still
   // running, a server failure, PAYMENT_OUTCOME_UNKNOWN) the method picker stays hidden: picking
   // another method would change the request and send it under a new key. "Check again" repeats
-  // the same request under the same key until the API answers with the attempt.
-  const unanswered = pay.error !== null && mayHaveTakenEffect(pay.error);
+  // the same request under the same key until the API answers with the attempt. An attempt that
+  // committed with its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) keeps them hidden too.
+  const unanswered =
+    pay.error !== null && (mayHaveTakenEffect(pay.error) || tookEffectOutcomeLost(pay.error));
   const locked =
     elsewhere !== null ||
     unanswered ||

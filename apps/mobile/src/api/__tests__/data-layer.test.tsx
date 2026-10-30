@@ -93,6 +93,47 @@ describe('useApiCommand after a definitive refusal (§4.9, the API replays store
     expect(app.fake.requests[1]?.body).toEqual({ expectedRevision: 4 });
   });
 
+  it('IDEMPOTENCY_OUTCOME_UNAVAILABLE keeps the key: the command committed, so the same press again is answered the same way instead of running under a new key', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'POST /baskets/{id}/hold': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(
+                409,
+                apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+                  nextAction: 'reload_current_state',
+                }),
+              )
+            : fakeResponse(200, { ok: true });
+        },
+      },
+    });
+    const { result } = renderHook(() => useApiCommand('post', '/baskets/{id}/hold'), {
+      wrapper: app.wrapper,
+    });
+    await act(async () => undefined);
+    const request = { path: { id: ASSIGNMENT }, body: { expectedRevision: 4 } };
+    await act(async () => {
+      await result.current.submit(request).catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error?.code).toBe('IDEMPOTENCY_OUTCOME_UNAVAILABLE'));
+    // ApiError.keepsIntent ends the intent here; the app keeps it (keepsIntentAfterFailure).
+    expect(result.current.error?.keepsIntent).toBe(false);
+    await act(async () => {
+      await result.current.submit(request);
+    });
+    const keys = app.fake.requests.map((r) => r.headers['idempotency-key']);
+    expect(keys).toEqual([keys[0], keys[0]]);
+    // A deliberate new start (reset) is a new intent.
+    act(() => result.current.reset());
+    await act(async () => {
+      await result.current.submit(request);
+    });
+    expect(app.fake.requests.map((r) => r.headers['idempotency-key'])[2]).not.toBe(keys[0]);
+  });
+
   it('a timeout keeps the key for the retry of the same intent', async () => {
     let calls = 0;
     const app = createTestApp({

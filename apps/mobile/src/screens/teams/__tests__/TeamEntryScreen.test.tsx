@@ -271,6 +271,87 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     await app.settle();
   });
 
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a suggested player whose invitation may already exist is not invited again until "Start a new one"', async () => {
+    let posts = 0;
+    const app = createTeamsTestApp({
+      routes: routes({
+        'GET /team-entries/{id}': { status: 200, body: prior },
+        'POST /team-entries': {
+          status: 201,
+          body: created({
+            renewedFromEntryId: IDS.priorEntry,
+            suggestedPlayers: [
+              {
+                personId: IDS.player2,
+                displayName: 'Pat Player',
+                lastStatus: 'active',
+                lastEffectiveTo: '2026-12-13T12:00:00.000Z',
+              },
+            ],
+          }),
+        },
+        'POST /team-entries/{id}/invitations': () => {
+          posts += 1;
+          return posts === 2
+            ? fakeResponse(
+                409,
+                apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+                  nextAction: 'reload_current_state',
+                }),
+              )
+            : fakeResponse(201, {
+                ...invitation({
+                  teamEntryId: IDS.newEntry,
+                  recipientContact: null,
+                  recipientPersonId: IDS.player2,
+                }),
+                token: 'tok_renewal_abcdefghijklmnop',
+                eligibilityPreview: null,
+              });
+        },
+      }),
+    });
+    dropAnswers(app, 'POST', /\/team-entries\/[^/]+\/invitations$/);
+    render(<TeamEntryScreen renewFrom={IDS.priorEntry} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Team: Desert Foxes')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Renew the team entry' }));
+    });
+    const suggestions = await screen.findByTestId('suggested-players');
+    await act(async () => {
+      fireEvent.press(within(suggestions).getByRole('button', { name: 'Invite Pat Player' }));
+    });
+    await act(async () => {
+      fireEvent.press(await within(suggestions).findByRole('button', { name: 'Check again' }));
+    });
+    expect(
+      await within(suggestions).findByLabelText('This may already have been done'),
+    ).toBeOnTheScreen();
+    expect(
+      within(suggestions).getByText(
+        `If it is still open, it is listed under "Open invitations on the team's roster": revoke it there. Once it is accepted or declined it no longer appears there.`,
+      ),
+    ).toBeOnTheScreen();
+    expect(within(suggestions).queryByLabelText('Not done')).toBeNull();
+    expect(within(suggestions).queryByRole('button', { name: 'Invite Pat Player' })).toBeNull();
+    expect(app.requestsTo('POST', '/team-entries/{id}/invitations')).toHaveLength(2);
+    await act(async () => {
+      fireEvent.press(within(suggestions).getByRole('button', { name: 'Start a new one' }));
+    });
+    await act(async () => {
+      fireEvent.press(
+        await within(suggestions).findByRole('button', { name: 'Invite Pat Player' }),
+      );
+    });
+    expect(await screen.findByText('Invitation for Pat Player.')).toBeOnTheScreen();
+    const keys = app.keysOf('POST', '/team-entries/{id}/invitations');
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    await app.settle();
+  });
+
   it('§4.10: a prior entry answered NOT_FOUND is generically not available, implying no team or captain', async () => {
     renderEntry(IDS.priorEntry, {
       'GET /team-entries/{id}': () =>

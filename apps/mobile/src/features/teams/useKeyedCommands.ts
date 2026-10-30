@@ -2,7 +2,8 @@
  * Several independent intents of the same command on one screen (§4.9): inviting several
  * recipients at once (SCR-C-23, partial completion permitted and shown per recipient) or inviting
  * suggested prior players after a renewal (SCR-C-27). Each item key has its own intent tracker, so
- * retrying one recipient reuses that recipient's idempotency key and never repeats another's.
+ * retrying one recipient reuses that recipient's idempotency key and never repeats another's. The
+ * key is kept or ended as in `useApiCommand` (`keepsIntentAfterFailure`).
  */
 import {
   ApiError,
@@ -13,6 +14,7 @@ import {
 } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
+import { keepsIntentAfterFailure } from '../../api/command-outcome';
 import type { CommandRequest } from '../../api/useApiCommand';
 import { useApi } from '../../providers/AppProviders';
 
@@ -62,7 +64,8 @@ export function useKeyedCommands<M extends CommandMethod, P extends PathsWithMet
                 nextAction: 'retry_or_contact_support',
                 correlationId: null,
               });
-        tracker.failed(apiError);
+        // As useApiCommand: IDEMPOTENCY_OUTCOME_UNAVAILABLE keeps the key, a new one would re-run it.
+        if (!keepsIntentAfterFailure(apiError)) tracker.complete();
         setStates((s) => ({ ...s, [key]: { status: 'failed', error: apiError } }));
         return false;
       }

@@ -18,7 +18,9 @@
  * the league bills the team, is SCR-C-14, not this screen. A suggested player whose invitation was
  * created but whose link was lost (IDEMPOTENCY_SECRET_WITHHELD after "Check again") is shown as
  * created, and "Revoke and issue a new link" revokes it and invites them again under a new key;
- * "Invite" is not offered again beside it (ui/SecretWithheld).
+ * one that may have been created with its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) reads "This
+ * may already have been done" and is looked for among the team's open invitations. "Invite" is not
+ * offered again beside either (ui/SecretWithheld) until "Start a new one".
  *
  * States: loading; empty (no open season; no prior team to renew); ready; validation failure
  * (team name rules, registration closed: the API's reasons); permission restriction (renewal only
@@ -30,11 +32,15 @@ import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { secretWithheldOf } from '../../api/command-outcome';
+import { mustNotCreateAgain } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateRange, formatInstant } from '../../features/teams/format';
-import { InvitationIssued, WITHHELD_REVOKE_REASON } from '../../features/teams/InvitationIssued';
+import {
+  answeredTeamInvitationAt,
+  InvitationIssued,
+  WITHHELD_REVOKE_REASON,
+} from '../../features/teams/InvitationIssued';
 import {
   hasManagementView,
   MY_TEAMS_KEY,
@@ -149,7 +155,7 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
       </Body>
       {created.suggestedPlayers.map((player) => {
         const state = invite.states[player.personId];
-        const withheld = state?.status === 'failed' && secretWithheldOf(state.error) !== null;
+        const withheld = state?.status === 'failed' && mustNotCreateAgain(state.error);
         return (
           <View key={player.personId} style={styles.suggestion}>
             {state?.status === 'succeeded' ? (
@@ -165,10 +171,12 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
                   error={state.error}
                   what="invitation"
                   listName="Open invitations on the team's roster"
+                  answeredShownAt={answeredTeamInvitationAt("on the new team's roster")}
                   revokePath="/team-invitations/{id}/revoke"
                   revokeReason={WITHHELD_REVOKE_REASON}
                   invalidate={[['api', '/team-entries/{id}']]}
                   onReissue={() => send(player.personId)}
+                  onStartOver={() => invite.forget(player.personId)}
                   testID={`suggested-${player.personId}-withheld`}
                 />
               </>

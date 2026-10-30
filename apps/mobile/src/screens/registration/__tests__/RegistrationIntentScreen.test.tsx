@@ -306,9 +306,14 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     });
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('checkbox', { name: 'Ada. Added to your basket' })).toBeDisabled();
+    // A 503 is no definite answer: the line may have been added (SPK-UX-008, §4.9).
+    expect(
+      screen.getByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
 
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });
     await waitFor(() =>
       expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${IDS.basket}`),

@@ -21,13 +21,17 @@
  * again" repeats the request under the same key, the API answers IDEMPOTENCY_SECRET_WITHHELD
  * naming the invitation it created: the form shows it as created (ui/SecretWithheld), reads
  * "Invitations you sent" again, and offers "Revoke and issue a new link", which revokes that
- * invitation and creates the same one again under a new key. "Create invitation" is held back
- * meanwhile, so a second pending invitation is never created beside one nobody has a link for.
+ * invitation and creates the same one again under a new key. When the API answers instead that
+ * the first attempt committed but its answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the form
+ * says the invitation may already have been created, reads "Invitations you sent" again ("Reload"),
+ * and points there to revoke it; "Start a new one" ends the intent once the sender has looked.
+ * "Create invitation" is held back meanwhile, so a second pending invitation is never created
+ * beside one nobody has a link for.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
-import { secretWithheldOf } from '../../api/command-outcome';
+import { mustNotCreateAgain, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { buildAppLink } from '../../links/link-targets';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
@@ -87,8 +91,10 @@ export function InviteAdultForm({
     invalidate: [INVITATION_KEYS.familyList],
   });
 
-  // The invitation was created but its link was lost: revoke and issue again, never a second one.
-  const withheld = invite.error !== null && secretWithheldOf(invite.error) !== null;
+  // The invitation was (or may have been) created but its link was lost: revoke and issue again,
+  // never a second one beside it.
+  const withheld = mustNotCreateAgain(invite.error);
+  const lost = invite.error !== null && tookEffectOutcomeLost(invite.error);
   const contactError = contactFormatError(contactKind, contactValue);
   const permissionsError =
     selected.length === 0 ? 'Choose at least one permission to pass on.' : null;
@@ -236,7 +242,9 @@ export function InviteAdultForm({
             offline
               ? 'Needs a connection'
               : withheld
-                ? 'The invitation was already created; revoke it and issue a new link below'
+                ? lost
+                  ? 'The invitation may already have been created; see below'
+                  : 'The invitation was already created; revoke it and issue a new link below'
                 : undefined
           }
         />
@@ -254,6 +262,7 @@ export function InviteAdultForm({
           revokeReason={WITHHELD_REVOKE_REASON}
           invalidate={[INVITATION_KEYS.familyList]}
           onReissue={() => void submit()}
+          onStartOver={() => invite.reset()}
         />
       ) : invite.error ? (
         <CommandError error={invite.error} onRetry={() => void submit()} />

@@ -16,8 +16,11 @@
  *   idempotency key per intent. "Payment processing" and "Payment outcome being confirmed. Do not
  *   pay again." are never shown as success or failure (SPK-PAY-007): no answer means the outcome
  *   is unknown, "Check again" repeats the same intent with the same key, and the API refuses a
- *   second payment while one is unresolved (PAYMENT_OUTCOME_UNKNOWN). A receipt is shown only
- *   when the API returns one.
+ *   second payment while one is unresolved (PAYMENT_OUTCOME_UNKNOWN). When "Check again" finds that
+ *   the first attempt committed but its answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), it reads
+ *   "This may already have been done": paying stays blocked and the balance and payments are read
+ *   again, so a recorded attempt shows as on its way. A receipt is shown only when the API returns
+ *   one.
  * - `liveAttempt` (FIN-01): a payment toward this balance that is still on its way or whose
  *   outcome is unknown, wherever it was started (another device, the front desk, an earlier visit),
  *   is shown with "Do not pay again" and paying is blocked until the API no longer reports it;
@@ -39,6 +42,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
+import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
@@ -170,16 +174,6 @@ function PaymentResult({
   );
 }
 
-/** Answers after which the payment may still go through (SPK-PAY-007, §4.9). */
-export function paymentMayHaveTakenEffect(error: ApiError): boolean {
-  return (
-    error.isOffline ||
-    error.code === 'IDEMPOTENCY_IN_PROGRESS' ||
-    error.code === 'INTERNAL_ERROR' ||
-    (error.status ?? 0) >= 500
-  );
-}
-
 function PaySection({
   obligation,
   onOutcome,
@@ -192,9 +186,15 @@ function PaySection({
 }) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
+  const queryClient = useQueryClient();
   const pay = useApiCommand('post', '/obligations/{id}/payments', {
     invalidate: PAYMENT_EFFECT_KEYS,
   });
+  // What a payment changes, read again when the payment may have been (or was) made without an
+  // answer: a recorded attempt then shows as on its way and blocks paying (SPK-PAY-007).
+  const reread = () => {
+    for (const queryKey of PAYMENT_EFFECT_KEYS) void queryClient.invalidateQueries({ queryKey });
+  };
   const [token, setToken] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const [sent, setSent] = useState<PayBody | null>(null);
@@ -207,17 +207,23 @@ function PaySection({
       onOutcome((await pay.submit({ path: { id: obligation.id }, body })) as PaymentOutcome);
       setToken(null);
     } catch (error) {
-      setFailure(error as ApiError);
+      const apiError = error as ApiError;
+      setFailure(apiError);
+      if (mayHaveTakenEffect(apiError) || tookEffectOutcomeLost(apiError)) reread();
     }
   };
 
-  // No definite answer: no response, still running under this key, or a server failure. The
-  // payment may still take effect, so it is never shown as a failure (SPK-PAY-007); "Check again"
-  // re-sends the same request under the same key.
-  const unknown = failure !== null && paymentMayHaveTakenEffect(failure);
+  // No definite answer (`mayHaveTakenEffect`): no response, still running under this key, or a
+  // server failure. The payment may still take effect, so it is never shown as a failure
+  // (SPK-PAY-007); "Check again" re-sends the same request under the same key.
+  const unknown =
+    failure !== null && mayHaveTakenEffect(failure) && failure.code !== 'PAYMENT_OUTCOME_UNKNOWN';
   // The API refused because a payment for this balance is unresolved (SPK-PAY-007).
   const inProgressElsewhere = failure?.code === 'PAYMENT_OUTCOME_UNKNOWN';
-  const disabled = !token || offline || blocked || unknown || inProgressElsewhere;
+  // An earlier attempt under this key committed and its answer was lost
+  // (IDEMPOTENCY_OUTCOME_UNAVAILABLE): the payment may have been made, so paying stays blocked.
+  const lost = failure !== null && tookEffectOutcomeLost(failure);
+  const disabled = !token || offline || blocked || unknown || inProgressElsewhere || lost;
 
   return (
     <Section title="Pay this balance" testID="pay-section">

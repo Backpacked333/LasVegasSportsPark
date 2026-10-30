@@ -398,6 +398,7 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
             what="the transfer preview"
             onRetry={() => void previewQuery.refetch()}
             onReload={reload}
+            read
           />
         ) : null}
       </Section>

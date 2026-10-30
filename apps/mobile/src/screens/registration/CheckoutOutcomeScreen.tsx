@@ -22,6 +22,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
@@ -56,16 +57,6 @@ export const OUTCOME_POLL_MS = 5_000;
 
 const TERMINAL: readonly Checkout['status'][] = ['completed', 'compensated', 'aborted'];
 
-/** Answers to a payment retry that mean the new attempt may still take effect (SPK-PAY-007). */
-export function retryOutcomeUnknown(error: ApiError): boolean {
-  return (
-    error.isOffline ||
-    error.code === 'IDEMPOTENCY_IN_PROGRESS' ||
-    error.code === 'PAYMENT_OUTCOME_UNKNOWN' ||
-    error.code === 'INTERNAL_ERROR'
-  );
-}
-
 function RetryPayment({
   checkout,
   confirming,
@@ -89,8 +80,11 @@ function RetryPayment({
       await retry.submit({ path: { id: checkout.id }, body: { paymentMethodToken: token } });
     } catch (error) {
       const apiError = error as ApiError;
-      if (retryOutcomeUnknown(apiError)) {
-        // Never shown as a failure: the new attempt may be processing or already captured.
+      // No definite answer (`mayHaveTakenEffect`, any 5xx included), or an earlier attempt under
+      // this key committed with its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE): never shown as
+      // a failure, the new attempt may be processing or already captured (SPK-PAY-007). The
+      // checkout is read until the API reports it; no other method is offered meanwhile.
+      if (mayHaveTakenEffect(apiError) || tookEffectOutcomeLost(apiError)) {
         onUnknown();
         return;
       }

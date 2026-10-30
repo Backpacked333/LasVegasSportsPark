@@ -177,6 +177,36 @@ describe('SCR-C-36 PreferencesScreen', () => {
     expect(keys).toEqual(['key-00000001', 'key-00000001']);
   });
 
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a save that committed with its answer lost is "This may already have been done" with "Reload", never "Something went wrong"', async () => {
+    const app = prefsApp({
+      'PATCH /me/communication-preferences': () =>
+        apiError(409, 'IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+          nextAction: 'reload_current_state',
+          correlationId: 'corr-prefs',
+        }),
+    });
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    fireEvent(
+      await screen.findByRole('switch', { name: 'Text messages (SMS) for essential notices' }),
+      'valueChange',
+      true,
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Save preferences' }));
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-prefs'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    const reads = () =>
+      app.fake.requests.filter(
+        (r) => r.method === 'GET' && r.route === '/me/communication-preferences',
+      ).length;
+    const before = reads();
+    fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    expect(app.fake.requests.filter((r) => r.method === 'PATCH')).toHaveLength(1);
+  });
+
   it('offline: switches and saving are disabled; nothing is queued', async () => {
     const app = prefsApp();
     render(<PreferencesScreen />, { wrapper: app.wrapper });
@@ -359,6 +389,59 @@ describe('SCR-C-36 calendar feeds (SPK-COMMS-008)', () => {
       message: 'http://api.test/v1/calendar-feeds/feed-token-value-9876543210.ics',
     });
     share.mockRestore();
+  });
+
+  it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: a same-key retry that finds the first attempt committed says the feed may already exist, lists the feeds again, and creates no second feed until "Start a new one"', async () => {
+    let posts = 0;
+    const app = prefsApp({
+      'POST /me/calendar-feeds': () => {
+        posts += 1;
+        return posts === 2
+          ? apiError(409, 'IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+              nextAction: 'reload_current_state',
+              correlationId: 'corr-fl',
+            })
+          : fakeResponse(201, {
+              ...FEED,
+              token: 'feed-token-value-9876543210',
+              path: '/v1/calendar-feeds/feed-token-value-9876543210.ics',
+            });
+      },
+    });
+    dropAnswers(app, 'POST', /\/me\/calendar-feeds$/);
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    fireEvent.changeText(await screen.findByLabelText('Feed name (optional)'), 'Family');
+    fireEvent.press(screen.getByRole('button', { name: 'Create calendar feed' }));
+    const feedReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/me/calendar-feeds')
+        .length;
+    const checkAgain = await screen.findByRole('button', { name: 'Check again' });
+    const readsBefore = feedReads();
+    fireEvent.press(checkAgain);
+    const lost = await screen.findByTestId('secret-withheld');
+    expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(within(lost).getByText(/may have created the calendar feed/)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create calendar feed' })).toBeDisabled();
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(readsBefore));
+    const afterAnswer = feedReads();
+    fireEvent.press(within(lost).getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(feedReads()).toBeGreaterThan(afterAnswer));
+    expect(
+      app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/me/calendar-feeds'),
+    ).toHaveLength(2);
+    fireEvent.press(within(lost).getByRole('button', { name: 'Start a new one' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Create calendar feed' })).toBeEnabled(),
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Create calendar feed' }));
+    expect(await screen.findByTestId('feed-created')).toBeOnTheScreen();
+    const keys = app.fake.requests
+      .filter((r) => r.method === 'POST' && r.route === '/me/calendar-feeds')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
   });
 
   it('builds the feed URL from the API origin', () => {

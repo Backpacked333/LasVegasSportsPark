@@ -13,14 +13,17 @@
  * "Check again" repeats the request under the same key, the API answers IDEMPOTENCY_SECRET_WITHHELD
  * naming the feed it created: the section shows it as created, lists the feeds again, and offers
  * "Revoke and issue a new link", which revokes that feed and creates the same one again under a
- * new key (ui/SecretWithheld). "Create calendar feed" is held back meanwhile, so no second feed is
- * created beside one nobody has the link for.
+ * new key (ui/SecretWithheld). When the API answers instead that the first attempt committed but
+ * its answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the section says the feed may already have
+ * been created, lists the feeds again ("Reload") and points there to revoke it; "Start a new one"
+ * ends the intent once the person has looked. "Create calendar feed" is held back meanwhile, so no
+ * second feed is created beside one nobody has the link for.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
-import { secretWithheldOf } from '../../api/command-outcome';
+import { mustNotCreateAgain, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
@@ -201,8 +204,10 @@ function CreateFeed() {
   const [people, setPeople] = useState<readonly string[]>([]);
   const create = useApiCommand('post', '/me/calendar-feeds', { invalidate: [FEEDS_KEY] });
   const viewable = (me.data?.authorities ?? []).filter((a) => a.permissions.includes('view'));
-  // The feed was created but its link was lost: revoke and issue again, never a second feed.
-  const withheld = create.error !== null && secretWithheldOf(create.error) !== null;
+  // The feed was (or may have been) created but its link was lost: revoke and issue again, never a
+  // second feed beside it.
+  const withheld = mustNotCreateAgain(create.error);
+  const lost = create.error !== null && tookEffectOutcomeLost(create.error);
   const labelError = label.trim().length > 100 ? 'Use 100 characters or fewer.' : null;
 
   const submit = async () => {
@@ -273,7 +278,9 @@ function CreateFeed() {
             offline
               ? 'Needs a connection'
               : withheld
-                ? 'The feed was already created; revoke it and issue a new link below'
+                ? lost
+                  ? 'The feed may already have been created; see below'
+                  : 'The feed was already created; revoke it and issue a new link below'
                 : undefined
           }
         />
@@ -287,6 +294,7 @@ function CreateFeed() {
           revokeReason={WITHHELD_REVOKE_REASON}
           invalidate={[FEEDS_KEY]}
           onReissue={() => void submit()}
+          onStartOver={() => create.reset()}
         />
       ) : create.error ? (
         <CommandError error={create.error} onRetry={() => void submit()} />

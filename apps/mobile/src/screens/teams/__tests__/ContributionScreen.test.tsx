@@ -166,6 +166,63 @@ describe('SCR-C-25 ContributionScreen', () => {
     await app.settle();
   });
 
+  it('SPK-PAY-007 IDEMPOTENCY_OUTCOME_UNAVAILABLE: when "Check again" finds the first attempt committed, the line reads "This may already have been done", paying stays locked and the payments are read again', async () => {
+    let posts = 0;
+    const app = renderContribution(
+      {
+        'POST /contribution-requests/{id}/pay': () => {
+          posts += 1;
+          return posts === 2
+            ? fakeResponse(
+                409,
+                apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+                  nextAction: 'reload_current_state',
+                  correlationId: 'corr-pay',
+                }),
+              )
+            : fakeResponse(201, outcome('processing'));
+        },
+        'GET /me/payments': { status: 200, body: { items: [], nextCursor: null } },
+      },
+      (created) => dropAnswers(created, 'POST', PAY_URL),
+    );
+    fireEvent.press(await screen.findByRole('radio', { name: 'Development payment: succeeds' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    await app.settle();
+    const readsBefore = app.requestsTo('GET', '/me/payments').length;
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-pay'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    // Picking another method would send a new key: never offered after a payment that committed.
+    expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+    await waitFor(() =>
+      expect(app.requestsTo('GET', '/me/payments').length).toBeGreaterThan(readsBefore),
+    );
+    await app.settle();
+    const afterAnswer = app.requestsTo('GET', '/me/payments').length;
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    });
+    await waitFor(() =>
+      expect(app.requestsTo('GET', '/me/payments').length).toBeGreaterThan(afterAnswer),
+    );
+    expect(app.keysOf('POST', '/contribution-requests/{id}/pay')).toEqual([
+      app.keysOf('POST', '/contribution-requests/{id}/pay')[0],
+      app.keysOf('POST', '/contribution-requests/{id}/pay')[0],
+    ]);
+    await app.settle();
+  });
+
   it.each([
     ['IDEMPOTENCY_IN_PROGRESS', 409, 'retry_later_with_same_key'],
     ['INTERNAL_ERROR', 500, 'retry_or_contact_support'],

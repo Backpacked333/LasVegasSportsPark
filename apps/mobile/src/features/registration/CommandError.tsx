@@ -7,14 +7,23 @@
  *   nothing says the record exists (§4.10, §4.14).
  * - No definite answer (`mayHaveTakenEffect`: no connection or no answer after sending,
  *   IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx): the command may or may not have taken
- *   effect, so "Try again" repeats the same intent with the same idempotency key (§4.9) and
- *   nothing happens twice. Payment uncertainty is shown by the payment screens themselves.
+ *   effect, so it reads "No answer yet: this may already have been recorded" (warning, never
+ *   "Something went wrong") and "Check again" repeats the same intent with the same idempotency
+ *   key (§4.9), so nothing happens twice. PAYMENT_OUTCOME_UNKNOWN reads "Payment outcome being
+ *   confirmed. Do not pay again." with the API's next action (await reconciliation); the payment
+ *   screens also show it themselves (SPK-PAY-007).
+ * - IDEMPOTENCY_OUTCOME_UNAVAILABLE (`tookEffectOutcomeLost`: an earlier attempt committed, its
+ *   answer lost): "This may already have been done" with "Reload" (`ui/OutcomeLost`: every API
+ *   record on screen is read again).
  * - ELIGIBILITY_FAILED lists the API's reasons and permitted alternatives (SPK-REG-002).
  */
 import { presentationForError, recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text, View } from 'react-native';
-import { mayHaveTakenEffect } from '../../api/command-outcome';
+import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import { Button } from '../../ui/Button';
+import { OutcomeLost } from '../../ui/OutcomeLost';
 import { StateView } from '../../ui/StateView';
+import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
 
 export interface CommandErrorProps {
@@ -67,7 +76,44 @@ export function CommandError({
       </View>
     );
   }
+  if (tookEffectOutcomeLost(error)) {
+    return (
+      <View testID={testID}>
+        <OutcomeLost error={error} />
+      </View>
+    );
+  }
   const recovery = recoveryActionFor(error);
+  if (mayHaveTakenEffect(error)) {
+    const payment = error.code === 'PAYMENT_OUTCOME_UNKNOWN';
+    return (
+      <View testID={testID}>
+        <View style={styles.box} accessibilityLiveRegion="polite" testID="command-no-answer">
+          <StatusBadge
+            tone="warning"
+            label={
+              payment
+                ? 'Payment outcome being confirmed. Do not pay again.'
+                : 'No answer yet: this may already have been recorded'
+            }
+          />
+          <Text style={styles.body}>
+            {payment
+              ? error.message
+              : 'There was no definite answer, so this may already have gone through. Checking again is safe: it sends the same request, so nothing happens twice.'}
+          </Text>
+          <Text style={styles.caption} selectable>
+            {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
+          </Text>
+          {recovery.retry && onRetry ? (
+            <Button label="Check again" onPress={onRetry} />
+          ) : (
+            <Text style={styles.body}>{recovery.label}</Text>
+          )}
+        </View>
+      </View>
+    );
+  }
   const action = (() => {
     switch (error.nextAction) {
       case 'reload_and_retry':
@@ -87,7 +133,6 @@ export function CommandError({
   const details = (error.details ?? {}) as ReasonDetails;
   const reasons = error.code === 'ELIGIBILITY_FAILED' ? messagesOf(details.reasons) : [];
   const alternatives = error.code === 'ELIGIBILITY_FAILED' ? messagesOf(details.alternatives) : [];
-  const mayHaveHappened = mayHaveTakenEffect(error) && error.code !== 'PAYMENT_OUTCOME_UNKNOWN';
   return (
     <View testID={testID}>
       <StateView
@@ -96,12 +141,6 @@ export function CommandError({
         onRetry={recovery.retry ? onRetry : undefined}
         onAction={recovery.retry ? undefined : action}
       />
-      {mayHaveHappened ? (
-        <Text style={styles.note}>
-          This may already have gone through. Trying again sends the same request, so nothing
-          happens twice.
-        </Text>
-      ) : null}
       {reasons.length > 0 ? (
         <View style={styles.list} accessibilityRole="list">
           {reasons.map((reason) => (
@@ -122,7 +161,9 @@ export function CommandError({
 }
 
 const styles = StyleSheet.create({
-  note: { ...type.caption, color: colors.textMuted, paddingHorizontal: spacing.lg },
+  box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
+  body: { ...type.body, color: colors.text },
+  caption: { ...type.caption, color: colors.textMuted },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.xs },
   label: { ...type.body, fontWeight: '600', color: colors.text },
   item: { ...type.body, color: colors.text },
