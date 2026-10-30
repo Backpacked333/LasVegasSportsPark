@@ -108,6 +108,9 @@ describe('team status vocabulary (journeys.md section 3)', () => {
 
   it('SPK-PAY-007: processing and unknown are never "paid" or "failed"', () => {
     expect(paymentStatus('processing').label).toBe('Payment processing');
+    // FIN-01: `created` waits like `processing`; only `action_required` asks the payer to act.
+    expect(paymentStatus('created')).toEqual(paymentStatus('processing'));
+    expect(paymentStatus('action_required').label).toBe('Payment needs your action');
     expect(paymentStatus('unknown').label).toBe(
       'Payment outcome being confirmed. Do not pay again.',
     );

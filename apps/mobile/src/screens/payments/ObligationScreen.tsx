@@ -18,6 +18,11 @@
  *   is unknown, "Check again" repeats the same intent with the same key, and the API refuses a
  *   second payment while one is unresolved (PAYMENT_OUTCOME_UNKNOWN). A receipt is shown only
  *   when the API returns one.
+ * - `liveAttempt` (FIN-01): a payment toward this balance that is still on its way or whose
+ *   outcome is unknown, wherever it was started (another device, the front desk, an earlier visit),
+ *   is shown with "Do not pay again" and paying is blocked until the API no longer reports it;
+ *   "Check again" reads the balance again and "Open the payment" shows the attempt when the
+ *   account's own payments list it (another payer's attempt says it may be someone else's).
  *
  * The payment provider and its card entry are not selected (DEC-019, Technical lead/account
  * owners): release builds show that pending decision instead of a payment method; development
@@ -31,7 +36,7 @@
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -39,16 +44,18 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
 import { DevPaymentMethodPicker } from '../../features/money/dev';
 import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
-import { useMe, useNameOf } from '../../features/money/people';
-import { param } from '../../features/money/routes';
+import {
+  liveAttemptStatus,
+  liveAttemptText,
+  type LiveAttempt,
+} from '../../features/money/payment-lists';
+import { PAYMENT_EFFECT_KEYS } from '../../features/money/payment-effects';
+import { moneyRoutes, param } from '../../features/money/routes';
 import { SecondaryRead } from '../../features/money/SecondaryRead';
 import {
-  installmentPlanStatus,
-  installmentStatus,
   obligationStatus,
   paymentIsUnresolved,
   paymentStatus,
-  type InstallmentPlan,
   type Obligation,
   type PaymentAttempt,
   type PaymentOutcome,
@@ -58,36 +65,14 @@ import { Body, ButtonRow, Caption, Field, Section } from '../../features/money/u
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
-import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
+import { StatusBadge } from '../../ui/StatusBadge';
+import { InstallmentsSection, OrderSection } from './OrderSections';
 
-type Order = Schema<'Order'>;
 type PayBody = Schema<'PayObligationRequest'>;
-
-const ORDER_PAYMENT: Record<Order['paymentStatus'], Pick<StatusBadgeProps, 'tone' | 'label'>> = {
-  awaiting_payment: { tone: 'warning', label: 'Payment needs your action' },
-  paid: { tone: 'success', label: 'Paid' },
-  canceled: { tone: 'neutral', label: 'Canceled' },
-};
-
-/** journeys.md: Checkout `recovery_required` and `compensated` wording on the order (§4.11). */
-const ORDER_FULFILLMENT: Record<
-  Order['fulfillmentStatus'],
-  Pick<StatusBadgeProps, 'tone' | 'label'>
-> = {
-  pending: { tone: 'pending', label: 'Registration being completed' },
-  fulfilled: { tone: 'success', label: 'Registration complete' },
-  recovery_required: {
-    tone: 'warning',
-    label: 'Payment received. We are completing your registration.',
-  },
-  compensated: { tone: 'neutral', label: 'Payment returned. Registration was not completed.' },
-  canceled: { tone: 'neutral', label: 'Canceled' },
-};
 
 function Totals({ obligation }: { obligation: Obligation }) {
   const now = useNow();
@@ -108,116 +93,6 @@ function Totals({ obligation }: { obligation: Obligation }) {
         </>
       ) : null}
       <Field label="Due" value={formatDay(obligation.dueAt)} />
-    </Section>
-  );
-}
-
-function OrderSection({ order }: { order: Order }) {
-  const nameOf = useNameOf();
-  return (
-    <Section title="Order">
-      <StatusBadge {...ORDER_PAYMENT[order.paymentStatus]} />
-      <StatusBadge {...ORDER_FULFILLMENT[order.fulfillmentStatus]} testID="order-fulfillment" />
-      <View accessibilityRole="list">
-        {order.lines.map((line) => (
-          <ListRow
-            key={line.id}
-            title={line.description}
-            detail={`${nameOf(line.participantPersonId)}. ${formatMoney(line.totalMinor, line.currency)}`}
-          />
-        ))}
-      </View>
-      <Field label="Order total" value={formatMoney(order.totalMinor, order.currency)} />
-      {order.creditsAppliedMinor > 0 ? (
-        <Field
-          label="Credits applied"
-          value={formatMoney(order.creditsAppliedMinor, order.currency)}
-        />
-      ) : null}
-      <Field label="Due at checkout" value={formatMoney(order.dueNowMinor, order.currency)} />
-      {order.paidAt ? <Field label="Paid" value={formatInstant(order.paidAt)} /> : null}
-    </Section>
-  );
-}
-
-/**
- * Who authorized the recurring charges, as recorded (SPK-PAY-006): "You" only when it was the
- * signed-in person; another known person by name; otherwise just the date (a staff-assisted
- * registration, or an unrecorded authorizer).
- */
-export function authorizationText(
-  plan: Pick<InstallmentPlan, 'authorization'>,
-  selfId: string | null,
-  nameOf: (personId: string) => string,
-): string {
-  const at = formatInstant(plan.authorization.authorizedAt);
-  const by = plan.authorization.authorizedByPersonId;
-  if (by && selfId && by === selfId) return `You authorized these installments on ${at}`;
-  if (by) {
-    const name = nameOf(by);
-    if (name !== 'Participant' && name !== 'Loading name…') {
-      return `${name} authorized these installments on ${at}`;
-    }
-  }
-  return `Authorized on ${at}`;
-}
-
-function InstallmentsSection({ plan }: { plan: InstallmentPlan }) {
-  const me = useMe();
-  const selfId = me.data?.person?.id ?? null;
-  const nameOf = useNameOf();
-  const failed = plan.installments.some((i) => i.status === 'failed');
-  return (
-    <Section title="Installments" testID="installments">
-      <StatusBadge {...installmentPlanStatus(plan)} />
-      <Field label="Plan total" value={formatMoney(plan.totalMinor, plan.currency)} />
-      <Field label="Still to pay" value={formatMoney(plan.outstandingMinor, plan.currency)} />
-      <Field label="Authorization" value={authorizationText(plan, selfId, nameOf)} />
-      <Field
-        label="Reminders"
-        value={`Sent ${plan.noticePolicy.daysBefore} ${plan.noticePolicy.daysBefore === 1 ? 'day' : 'days'} before each due date`}
-      />
-      <Field
-        label="If a payment fails"
-        value={`Tried up to ${plan.retryPolicy.maxAttempts} times, ${plan.retryPolicy.retryIntervalHours} hours apart`}
-      />
-      <Caption>
-        Installments do not change your enrollment: it stays confirmed while they are paid.
-      </Caption>
-      <View accessibilityRole="list">
-        {[...plan.installments]
-          .sort((a, b) => a.sequence - b.sequence)
-          .map((installment) => {
-            const details = [
-              `Due ${formatDay(installment.dueAt)}`,
-              installment.extensionCount > 0
-                ? `moved from ${formatDay(installment.originalDueAt)}`
-                : null,
-              installment.paidAt ? `paid ${formatInstant(installment.paidAt)}` : null,
-              installment.lastFailureReason
-                ? `last attempt: ${installment.lastFailureReason}`
-                : null,
-              installment.noticeSentAt
-                ? `reminder sent ${formatDay(installment.noticeSentAt)}`
-                : null,
-            ].filter(Boolean);
-            return (
-              <ListRow
-                key={installment.id}
-                title={`Installment ${installment.sequence}: ${formatMoney(installment.amountMinor, installment.currency)}`}
-                detail={details.join(', ')}
-                status={installmentStatus(installment)}
-                testID={`installment-${installment.sequence}`}
-              />
-            );
-          })}
-      </View>
-      {failed ? (
-        <Body>
-          Payment attention needed: contact the facility. Retrying a failed installment is done by
-          the facility, not in the app.
-        </Body>
-      ) : null}
     </Section>
   );
 }
@@ -266,13 +141,13 @@ function PaymentResult({
           {attempt.unknownSince ? ` (waiting since ${formatInstant(attempt.unknownSince)})` : ''}.
         </Body>
       ) : null}
-      {attempt.status === 'processing' ? (
+      {attempt.status === 'processing' || attempt.status === 'created' ? (
         <Body>The provider is still working on this payment. Do not pay again.</Body>
       ) : null}
       {attempt.status === 'failed' && attempt.failureReason ? (
         <Body>{attempt.failureReason}. Nothing was charged; you can try another payment.</Body>
       ) : null}
-      {attempt.status === 'action_required' || attempt.status === 'created' ? (
+      {attempt.status === 'action_required' ? (
         <StateView
           variant="pending-decision"
           subject="Completing the payment provider’s step in the app"
@@ -294,15 +169,6 @@ function PaymentResult({
     </Section>
   );
 }
-
-/** Everything a payment on an obligation can change: balances, installments, orders, credits. */
-const PAYMENT_EFFECT_KEYS: readonly (readonly unknown[])[] = [
-  ['api', '/obligations'],
-  ['api', '/obligations/{id}'],
-  ['api', '/installment-plans/{id}'],
-  ['api', '/orders/{id}'],
-  ['api', '/credits'],
-];
 
 /** Answers after which the payment may still go through (SPK-PAY-007, §4.9). */
 export function paymentMayHaveTakenEffect(error: ApiError): boolean {
@@ -414,7 +280,79 @@ function PaySection({
   );
 }
 
-function ObligationDetail({ obligation }: { obligation: Obligation }) {
+/**
+ * A payment toward this balance that the API reports as still on its way or unknown (FIN-01),
+ * wherever it was started. Paying again is blocked while it shows (SPK-PAY-007).
+ */
+function LiveAttemptSection({
+  live,
+  onCheck,
+  checking,
+}: {
+  live: LiveAttempt;
+  onCheck: () => void;
+  checking: boolean;
+}) {
+  const router = useRouter();
+  const { reachable } = useConnectivity();
+  // FIN-01: for an individual balance the API also reports the payment of someone else who pays
+  // for it (a co-guardian), which this account may not open (`GET /payments/{id}` needs `pay`
+  // over its payer). "Open the payment" is offered only for an attempt the account's own payments
+  // list; LiveAttempt names no payer and no "readable" flag (reported).
+  const mine = useApiQuery({
+    path: '/me/payments',
+    request: { query: { status: live.status, limit: 50 } },
+  });
+  const openable = mine.data?.items.some((attempt) => attempt.id === live.id) === true;
+  return (
+    <Section title="A payment is on its way" testID="live-attempt">
+      <StatusBadge {...liveAttemptStatus(live)} testID="live-attempt-status" />
+      <Body>{liveAttemptText(live)}</Body>
+      {mine.data !== undefined && !openable ? (
+        <Caption>
+          It may have been started by someone else who pays for this balance. It is shown here so
+          the balance is not paid twice.
+        </Caption>
+      ) : null}
+      {live.status === 'action_required' ? (
+        <StateView
+          variant="pending-decision"
+          subject="Completing the payment provider’s step in the app"
+          decisions={['DEC-019']}
+          owner="Technical lead/account owners"
+        />
+      ) : null}
+      <ButtonRow>
+        <Button
+          label="Check again"
+          variant="secondary"
+          onPress={onCheck}
+          busy={checking}
+          disabled={reachable === false}
+          accessibilityHint="Reads this balance again; it never pays"
+        />
+        {openable ? (
+          <Button
+            label="Open the payment"
+            variant="secondary"
+            onPress={() => router.push(moneyRoutes.payment(live.id))}
+          />
+        ) : null}
+      </ButtonRow>
+    </Section>
+  );
+}
+
+function ObligationDetail({
+  obligation,
+  onCheck,
+  checking,
+}: {
+  obligation: Obligation;
+  /** Reads the balance again (its `liveAttempt` with it). */
+  onCheck: () => void;
+  checking: boolean;
+}) {
   const order = useApiQuery({
     path: '/orders/{id}',
     request: { path: { id: obligation.orderId ?? '' } },
@@ -435,7 +373,10 @@ function ObligationDetail({ obligation }: { obligation: Obligation }) {
     staleTime: 0,
   });
   const attempt: PaymentAttempt | null = latest.data ?? outcome?.payment ?? null;
-  const blocked = attempt !== null && paymentIsUnresolved(attempt.status);
+  // The API's live attempt for this balance; the one paid from this screen is shown by its result.
+  const live = obligation.liveAttempt ?? null;
+  const liveElsewhere = live !== null && live.id !== attempt?.id ? live : null;
+  const blocked = (attempt !== null && paymentIsUnresolved(attempt.status)) || live !== null;
   const queryClient = useQueryClient();
   const latestStatus = latest.data?.status;
   // A re-read that settles the attempt (processing or unknown to succeeded or failed) changes the
@@ -451,6 +392,9 @@ function ObligationDetail({ obligation }: { obligation: Obligation }) {
   return (
     <View>
       <Totals obligation={obligation} />
+      {liveElsewhere ? (
+        <LiveAttemptSection live={liveElsewhere} onCheck={onCheck} checking={checking} />
+      ) : null}
       {outcome && attempt ? (
         <PaymentResult
           outcome={outcome}
@@ -490,7 +434,13 @@ export function ObligationScreen({ obligationId }: { obligationId: string }) {
           empty={{ title: 'Not available', description: '' }}
           unavailableOffline={['paying a balance']}
         >
-          {(data) => <ObligationDetail obligation={data} />}
+          {(data) => (
+            <ObligationDetail
+              obligation={data}
+              onCheck={() => void obligation.refetch()}
+              checking={obligation.fetchStatus === 'fetching'}
+            />
+          )}
         </QueryBoundary>
       </RequireSession>
     </Screen>

@@ -109,6 +109,19 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
     expect(screen.queryByText('Riley Requester')).toBeNull();
   });
 
+  it('SCR-C-25, SPK-PAY-004: a roster player opens the contributions asked of them', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me': { status: 200, body: me() },
+        'GET /team-entries/{id}': { status: 200, body: playerWorkspace() },
+      }),
+    });
+    render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Your contributions' }));
+    expect(mockRouter.push).toHaveBeenCalledWith('/team/contributions');
+    expect(screen.queryByText(/cannot list the contributions/)).toBeNull();
+  });
+
   it('shows the empty games state when nothing is scheduled yet', async () => {
     const app = createTestApp({
       routes: routes({

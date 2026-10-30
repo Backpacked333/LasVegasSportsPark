@@ -24,6 +24,14 @@ engineering proposal awaiting operator approval. **Pending decision** = needs an
 Route wiring is asserted in `__tests__/money-routes.test.tsx`; the vocabulary in
 `__tests__/status.test.ts`.
 
+SCR-C-34 and SCR-C-35 also read the stage-3 customer lists (`GET /me/payments`, `/me/receipts`,
+`/me/orders`, `/me/registration-checkouts`, `/me/contribution-requests`,
+`/me/package-entitlements`), a balance's `liveAttempt`, one payment (`/payments/attempt/{id}`)
+and one order (`/payments/order/{id}`); session packages are a third list next to credits and
+makeups. Those screens, their states and what stays open are in
+[`src/screens/payments/README.md`](../../screens/payments/README.md); their wording is in
+`payment-lists.ts` (`__tests__/payment-lists.test.ts`).
+
 ## Behaviour that is verified
 
 - Every money consequence (refund, credit, additional charge, none, review by the facility) is

@@ -1,7 +1,8 @@
 /**
  * SCR-C-35 Credits and makeup entitlements (SPK-PAY-009, SPK-YOUTH-004, SPK-UX-008, SPK-UX-010):
  * two different assets shown apart with their own vocabulary, separate empties, and each section's
- * own permission restriction.
+ * own permission restriction; credits in cursor pages; session packages (ENR-11, DEC-074) as a
+ * third, separate list behind their switch.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
@@ -13,6 +14,12 @@ import {
   makeup,
   page,
 } from '../../../features/money/testing/fixtures';
+import {
+  LIST_IDS,
+  packageEntitlement,
+  pageOf,
+} from '../../../features/money/testing/list-fixtures';
+import { mePermissions } from '../../../testing/test-app';
 import { formatDay } from '../../../features/money/format';
 import {
   createMoneyTestApp as createTestApp,
@@ -31,6 +38,7 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
     ...accountRoutes(),
     'GET /credits': page([credit()]),
     'GET /makeup-entitlements': { status: 200, body: [makeup()] },
+    'GET /me/package-entitlements': pageOf([]),
     ...overrides,
   };
 }
@@ -151,5 +159,50 @@ describe('SCR-C-35 CreditsScreen', () => {
     await screen.findByTestId(`makeup-${IDS.makeup}`);
     act(() => app.sources.setReachable(false));
     expect(screen.getByRole('button', { name: 'Book a makeup session' })).toBeDisabled();
+  });
+  it('§4.5: more credits load with the API cursor', async () => {
+    const SECOND = '0192f1a0-0000-7000-8000-000000000902';
+    const app = renderCredits({
+      'GET /credits': (req) =>
+        fakeResponse(
+          200,
+          req.query.cursor === 'k2'
+            ? { items: [credit({ id: SECOND, reason: null })], nextCursor: null }
+            : { items: [credit()], nextCursor: 'k2' },
+        ),
+    });
+    await screen.findByTestId(`credit-${IDS.credit}`);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Load more credits' }));
+    });
+    expect(await screen.findByTestId(`credit-${SECOND}`)).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.route === '/credits').at(-1)?.query.cursor).toBe('k2');
+  });
+
+  it('ENR-11, SPK-PAY-009: session packages are a third, separate list, never added to credits', async () => {
+    renderCredits({
+      'GET /me/permissions': mePermissions({ enabled: ['session_packages'] }),
+      'GET /me/package-entitlements': pageOf([packageEntitlement()]),
+    });
+    const section = await screen.findByTestId('packages-section');
+    expect(within(section).getByRole('header', { name: 'Session packages' })).toBeOnTheScreen();
+    expect(await within(section).findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
+    expect(
+      within(section).getByText(/It is not money and is never added to credits/),
+    ).toBeOnTheScreen();
+    expect(
+      within(screen.getByTestId('credits-section')).queryByTestId(`package-${LIST_IDS.package}`),
+    ).toBeNull();
+    expect(within(section).queryByTestId('state-turned-off')).toBeNull();
+  });
+
+  it('DEC-016, DEC-074: with the switch off, packages show the turned-off state and stay listed', async () => {
+    renderCredits({ 'GET /me/package-entitlements': pageOf([packageEntitlement()]) });
+    const section = await screen.findByTestId('packages-section');
+    expect(await within(section).findByLabelText('Session packages turned off')).toBeOnTheScreen();
+    expect(within(section).getByText(/\(DEC-016, DEC-074\)/)).toBeOnTheScreen();
+    expect(await within(section).findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
+    // Credits and makeups are not affected by the switch.
+    expect(screen.getByTestId(`credit-${IDS.credit}`)).toBeOnTheScreen();
   });
 });

@@ -305,12 +305,16 @@ export function contributionStatus(contribution: {
   }
 }
 
-/** PaymentAttempt states (journeys.md): processing and unknown are never "failed" or "paid". */
+/**
+ * PaymentAttempt states (journeys.md): processing and unknown are never "failed" or "paid".
+ * `created` waits like `processing` (the API's PaymentAttemptStatus, FIN-01); only
+ * `action_required` asks the payer to act (SPK-UX-010: the money screens use the same words).
+ */
 export function paymentStatus(status: Schema<'PaymentAttemptStatus'>): StatusBadgeProps {
   switch (status) {
-    case 'created':
     case 'action_required':
       return { tone: 'warning', label: 'Payment needs your action' };
+    case 'created':
     case 'processing':
       return { tone: 'pending', label: 'Payment processing' };
     case 'succeeded':

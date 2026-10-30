@@ -19,6 +19,7 @@ acceptance on signed builds and devices (§6.2), including VoiceOver, TalkBack a
 | `team/[entryId]/availability`              | `AvailabilityScreen`                   | SCR-C-24  |
 | `team/[entryId]/contributions`             | `TeamContributionsScreen` (team view)  | SCR-C-25  |
 | `team/contribution/[requestId]`            | `ContributionScreen` (a player's line) | SCR-C-25  |
+| `team/contributions`                       | `MyContributionsScreen` (own list)     | SCR-C-25  |
 | `team/[entryId]/roster-change`             | `RosterChangeScreen`                   | SCR-C-26  |
 | `team/new`, `team/new?renewFrom=<entryId>` | `TeamEntryScreen`                      | SCR-C-27  |
 | `team/[entryId]/standings`                 | `StandingsScreen`                      | SCR-C-28  |
@@ -37,7 +38,8 @@ else is "not available" and sends no request (§4.14). Shared pieces live in `sr
 | Roster with effective dates, pending rows and history (SPK-COMP-005); invitations per recipient, each its own idempotency key and outcome (partial completion); link shared once through the native share sheet; revoke; join requests. | **Verified**                                                              | `__tests__/RosterScreen.test.tsx`                        |
 | Availability counts per game, the person's own answer, answering for a child with `register`; never attendance or eligibility; a missing answer never blocks (SPK-CAP-003, SPK-READY-002).                                              | **Verified**                                                              | `__tests__/AvailabilityScreen.test.tsx`                  |
 | Team totals (total, received, allocated, remaining) together; excess kept visible; contributions with amount and status only; captain requests in minor units (SPK-PAY-004, SPK-PAY-005, SPK-AT-022).                                   | **Verified**                                                              | `__tests__/TeamContributionsScreen.test.tsx`             |
-| A player's own contribution and payment; processing and unknown outcomes never offer paying again (SPK-PAY-007).                                                                                                                        | **Verified** in development builds (fake provider)                        | `__tests__/ContributionScreen.test.tsx`                  |
+| A player's own contribution and payment; processing and unknown outcomes, and a payment on its way started elsewhere, never offer paying again (SPK-PAY-007).                                                                           | **Verified** in development builds (fake provider)                        | `__tests__/ContributionScreen.test.tsx`                  |
+| A player's own list of what was asked of them or of people they pay for, with a payment on its way on its line and a failed check for one named with its code (SPK-PAY-004, SCR-C-25).                                                  | **Verified**                                                              | `__tests__/MyContributionsScreen.test.tsx`               |
 | Roster change and substitute: eligibility explained by the API, a suspended substitute refused with its reasons (SPK-AT-013), league approval shown as pending, `expectedRevision` sent, stale roster reloaded.                         | **Verified**                                                              | `__tests__/RosterChangeScreen.test.tsx`                  |
 | Create or renew a team entry: renewal leaves the prior season untouched, charges nothing, suggested players invited, not added (SPK-CAP-005, SPK-AT-003).                                                                               | **Verified** client side; the prior-season invariant is the API's         | `__tests__/TeamEntryScreen.test.tsx`                     |
 | Official standings with rule set version and tiebreak explanations; results "Official", "Corrected on <date>", replaced results kept; published bracket (SPK-RESULT-001 to 004).                                                        | **Verified**                                                              | `__tests__/StandingsScreen.test.tsx`                     |
@@ -58,7 +60,6 @@ else is "not available" and sends no request (§4.14). Shared pieces live in `sr
 - Contacting the operating team: `POST /v1/cases` is staff only (SCR-C-22, SPK-CAP-001).
 - A captain's availability request or reminder to the roster (SCR-C-24).
 - The current availability answer of a child a guardian answers for (only the acting person's is returned).
-- A player's list of the contribution requests addressed to them (SCR-C-25).
 - A forms-outstanding readiness indicator in the workspace (SCR-C-22).
 - Recording a substitute or guest request for league approval when the rule set requires it (SCR-C-26).
 - A customer's preferred division on a team entry (SCR-C-27; only staff may place an entry).

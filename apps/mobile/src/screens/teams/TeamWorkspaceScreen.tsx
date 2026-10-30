@@ -12,7 +12,8 @@
  * features/teams/queries.ts); the API authorizes every command behind the captain tools.
  *
  * Not available from the API (reported): contacting the operating team (`POST /v1/cases` is staff
- * only), a forms-outstanding indicator, and a player's list of their own contribution requests.
+ * only) and a forms-outstanding indicator. A player's own contribution requests are listed by
+ * SCR-C-25 (`/team/contributions`, `GET /v1/me/contribution-requests`).
  * What captains may see beyond the API's indicators is DEC-012 (pending).
  *
  * States: loading; empty (no fixtures yet); ready; permission restriction (captain-only sections
@@ -227,12 +228,14 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
                 onPress={() => router.push(teamRoutes.availability(entryId))}
                 variant="secondary"
               />
+              {/* SCR-C-25: the player's own contribution requests (GET /v1/me/contribution-requests). */}
+              <Button
+                label="Your contributions"
+                onPress={() => router.push(teamRoutes.myContributions())}
+                variant="secondary"
+                accessibilityHint="Lists the team contributions asked of you, with your own payments only"
+              />
             </ButtonRow>
-            <StateView
-              variant="unavailable"
-              title="Your contributions"
-              description="The app cannot list the contributions requested from you yet. Ask your captain or the front desk."
-            />
           </Section>
           <ReducedRoster workspace={workspace} now={now} />
         </>

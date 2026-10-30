@@ -13,6 +13,8 @@ export const teamRoutes = {
   availability: (entryId: string) => `/team/${entryId}/availability` as const,
   /** SCR-C-25, team totals and requests */
   contributions: (entryId: string) => `/team/${entryId}/contributions` as const,
+  /** SCR-C-25, the contributions asked of the signed-in person or the people they pay for */
+  myContributions: () => '/team/contributions' as const,
   /** SCR-C-25, a player's own contribution */
   contribution: (requestId: string) => `/team/contribution/${requestId}` as const,
   /** SCR-C-26 */
