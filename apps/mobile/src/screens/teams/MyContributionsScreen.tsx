@@ -9,7 +9,8 @@
  *
  * A payment on its way for a line is found with `GET /v1/me/payments?purpose=contribution`
  * (the contribution request carries no `liveAttempt`; reported): "Payment processing" or
- * "Payment outcome being confirmed. Do not pay again." is shown on that line only.
+ * "Payment outcome being confirmed. Do not pay again." is shown on that line only. When that check
+ * fails, the list says so above the lines with the error code and "Try again" (SPK-UX-008).
  *
  * States: loading; empty (nothing asked of you: the team is billed another way, or nothing was
  * requested yet); ready; error with code and "Try again"; permission restriction: not applicable
@@ -20,18 +21,17 @@
  * Route: `/team/contributions` (app/team/contributions.tsx), from the team workspace's player view
  * and from Payments ("Team contributions").
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { Stack, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
-import { useApiQuery } from '../../api/useApiQuery';
+import { useLivePayments } from '../../features/money/live-payments';
 import { useNameOf } from '../../features/money/people';
-import { paymentIsUnresolved, type PaymentAttempt } from '../../features/money/status';
+import type { PaymentAttempt } from '../../features/money/status';
 import { formatMoney } from '../../features/teams/format';
 import { teamRoutes } from '../../features/teams/routes';
 import { contributionStatus, paymentStatus } from '../../features/teams/status';
-import { Section } from '../../features/teams/ui';
-import { useApp } from '../../providers/AppProviders';
+import { Body, CommandFailure, Section } from '../../features/teams/ui';
 import { RequireSession } from '../../session/RequireSession';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
@@ -39,53 +39,69 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 
 type ContributionRequest = Schema<'ContributionRequest'>;
+type LivePayments = ReturnType<typeof useLivePayments>;
 
-/** The contribution payments read: the newest 50 are enough to find one still on its way. */
-export const CONTRIBUTION_PAYMENTS_QUERY = { purpose: 'contribution', limit: 50 } as const;
+const byContribution = (attempt: PaymentAttempt) => attempt.contributionRequestId;
 
 /**
  * The unresolved payment of each contribution request, from the account's contribution payments
- * (newest first: an unresolved attempt blocks newer ones, so the first found is the live one).
+ * (`features/money/live-payments.ts`: the newest 50, the first unresolved one is the live one).
  */
 export function useContributionPayments(enabled = true) {
-  const { session } = useApp();
-  const payments = useApiQuery({
-    path: '/me/payments',
-    request: { query: CONTRIBUTION_PAYMENTS_QUERY },
-    enabled: enabled && session.status === 'signed_in',
-  });
-  const live = new Map<string, PaymentAttempt>();
-  for (const attempt of payments.data?.items ?? []) {
-    const requestId = attempt.contributionRequestId;
-    if (!requestId || live.has(requestId) || !paymentIsUnresolved(attempt.status)) continue;
-    live.set(requestId, attempt);
-  }
-  return { payments, live };
+  return useLivePayments('contribution', byContribution, enabled);
+}
+
+/**
+ * The check for payments on their way failed (SPK-UX-008): the lines below may read "Requested"
+ * although one is being paid, so the failure is said above them with its code and "Try again"
+ * (the same words as ContributionScreen). Offline and "not available" add nothing here: the
+ * offline banner and the list's own states cover them.
+ */
+export function PaymentsUnchecked({ payments }: { payments: LivePayments['payments'] }) {
+  const failed =
+    payments.data === undefined &&
+    payments.error !== null &&
+    presentationForError(payments.error) === 'error'
+      ? payments.error
+      : null;
+  if (!failed) return null;
+  return (
+    <View testID="contribution-payments-unchecked">
+      <Body muted>
+        We could not check for a payment already on its way. If you paid recently, check again
+        before paying: a second payment is refused while one is being confirmed.
+      </Body>
+      <CommandFailure error={failed} onRetry={() => void payments.refetch()} />
+    </View>
+  );
 }
 
 function ContributionRows({ items }: { items: readonly ContributionRequest[] }) {
   const router = useRouter();
   const nameOf = useNameOf();
-  const { live } = useContributionPayments();
+  const { live, payments } = useContributionPayments();
   return (
-    <View accessibilityRole="list">
-      {items.map((request) => {
-        const name = nameOf(request.requestedPersonId);
-        const whose = name === 'You' ? 'Your contribution' : `Contribution for ${name}`;
-        const attempt = request.status === 'requested' ? live.get(request.id) : undefined;
-        return (
-          <ListRow
-            key={request.id}
-            title={request.obligation.description}
-            detail={`${whose}: ${formatMoney(request.amountMinor, request.currency)}`}
-            status={attempt ? paymentStatus(attempt.status) : contributionStatus(request)}
-            onPress={() => router.push(teamRoutes.contribution(request.id))}
-            accessibilityHint="Opens the contribution with the team's totals and payment"
-            testID={`my-contribution-${request.id}`}
-          />
-        );
-      })}
-    </View>
+    <>
+      <PaymentsUnchecked payments={payments} />
+      <View accessibilityRole="list">
+        {items.map((request) => {
+          const name = nameOf(request.requestedPersonId);
+          const whose = name === 'You' ? 'Your contribution' : `Contribution for ${name}`;
+          const attempt = request.status === 'requested' ? live.get(request.id) : undefined;
+          return (
+            <ListRow
+              key={request.id}
+              title={request.obligation.description}
+              detail={`${whose}: ${formatMoney(request.amountMinor, request.currency)}`}
+              status={attempt ? paymentStatus(attempt.status) : contributionStatus(request)}
+              onPress={() => router.push(teamRoutes.contribution(request.id))}
+              accessibilityHint="Opens the contribution with the team's totals and payment"
+              testID={`my-contribution-${request.id}`}
+            />
+          );
+        })}
+      </View>
+    </>
   );
 }
 

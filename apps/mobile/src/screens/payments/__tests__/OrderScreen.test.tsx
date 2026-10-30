@@ -4,7 +4,7 @@
  * its way named on its row), the installments, and the not-available and error states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen, within } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   accountRoutes,
@@ -13,7 +13,12 @@ import {
   obligation,
   order,
 } from '../../../features/money/testing/fixtures';
-import { liveAttempt } from '../../../features/money/testing/list-fixtures';
+import {
+  LIST_IDS,
+  liveAttempt,
+  pageOf,
+  unknownPayment,
+} from '../../../features/money/testing/list-fixtures';
 import {
   createMoneyTestApp as createTestApp,
   settleApps,
@@ -99,6 +104,83 @@ describe('SCR-C-34 OrderScreen', () => {
     ).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Order total: $120.00')).toBeOnTheScreen();
+  });
+
+  it('an unpaid order reads "Not paid yet" and asks nothing of the payer', async () => {
+    const app = renderOrder({
+      'GET /orders/{id}': {
+        status: 200,
+        body: order({
+          paymentStatus: 'awaiting_payment',
+          fulfillmentStatus: 'pending',
+          paidAt: null,
+        }),
+      },
+      'GET /me/payments': pageOf([]),
+    });
+    expect(await screen.findByTestId('order-payment')).toHaveProp(
+      'accessibilityLabel',
+      'Not paid yet',
+    );
+    expect(screen.queryByLabelText('Payment needs your action')).toBeNull();
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.route === '/me/payments')?.query).toEqual({
+        purpose: 'checkout',
+        limit: '50',
+      }),
+    );
+    expect(screen.queryByTestId('order-live-payment')).toBeNull();
+  });
+
+  it('SPK-PAY-007: a checkout payment still being confirmed reads "Do not pay again" on the order and opens', async () => {
+    renderOrder({
+      'GET /orders/{id}': {
+        status: 200,
+        body: order({
+          paymentStatus: 'awaiting_payment',
+          fulfillmentStatus: 'pending',
+          paidAt: null,
+        }),
+      },
+      'GET /me/payments': pageOf([
+        unknownPayment({ purpose: 'checkout', checkoutId: LIST_IDS.checkout, orderId: IDS.order }),
+      ]),
+    });
+    expect(await screen.findByTestId('order-live-payment')).toBeOnTheScreen();
+    expect(screen.getByTestId('order-payment')).toHaveProp(
+      'accessibilityLabel',
+      'Payment outcome being confirmed. Do not pay again.',
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Open the payment' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/payments/attempt/${LIST_IDS.attemptUnknown}`);
+  });
+
+  it('SPK-UX-008: when the check for a payment on its way fails, the order says so with the code', async () => {
+    renderOrder({
+      'GET /orders/{id}': {
+        status: 200,
+        body: order({
+          paymentStatus: 'awaiting_payment',
+          fulfillmentStatus: 'pending',
+          paidAt: null,
+        }),
+      },
+      'GET /me/payments': () =>
+        fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-ord' })),
+    });
+    const notice = await screen.findByTestId('payments-unchecked');
+    expect(
+      within(notice).getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-ord/),
+    ).toBeOnTheScreen();
+    expect(within(notice).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Order total: $120.00')).toBeOnTheScreen();
+  });
+
+  it('a paid order does not look for a payment on its way', async () => {
+    const app = renderOrder();
+    expect(await screen.findByTestId('order-payment')).toHaveProp('accessibilityLabel', 'Paid');
+    await waitFor(() => expect(app.queryClient.isFetching()).toBe(0));
+    expect(app.fake.requests.filter((r) => r.route === '/me/payments')).toHaveLength(0);
   });
 
   it('§4.10: an order this account may not see reads "Not available"', async () => {

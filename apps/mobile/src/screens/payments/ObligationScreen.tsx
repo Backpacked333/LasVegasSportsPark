@@ -21,7 +21,8 @@
  * - `liveAttempt` (FIN-01): a payment toward this balance that is still on its way or whose
  *   outcome is unknown, wherever it was started (another device, the front desk, an earlier visit),
  *   is shown with "Do not pay again" and paying is blocked until the API no longer reports it;
- *   "Check again" reads the balance again and "Open the payment" shows the attempt.
+ *   "Check again" reads the balance again and "Open the payment" shows the attempt when the
+ *   account's own payments list it (another payer's attempt says it may be someone else's).
  *
  * The payment provider and its card entry are not selected (DEC-019, Technical lead/account
  * owners): release builds show that pending decision instead of a payment method; development
@@ -48,6 +49,7 @@ import {
   liveAttemptText,
   type LiveAttempt,
 } from '../../features/money/payment-lists';
+import { PAYMENT_EFFECT_KEYS } from '../../features/money/payment-effects';
 import { moneyRoutes, param } from '../../features/money/routes';
 import { SecondaryRead } from '../../features/money/SecondaryRead';
 import {
@@ -139,13 +141,13 @@ function PaymentResult({
           {attempt.unknownSince ? ` (waiting since ${formatInstant(attempt.unknownSince)})` : ''}.
         </Body>
       ) : null}
-      {attempt.status === 'processing' ? (
+      {attempt.status === 'processing' || attempt.status === 'created' ? (
         <Body>The provider is still working on this payment. Do not pay again.</Body>
       ) : null}
       {attempt.status === 'failed' && attempt.failureReason ? (
         <Body>{attempt.failureReason}. Nothing was charged; you can try another payment.</Body>
       ) : null}
-      {attempt.status === 'action_required' || attempt.status === 'created' ? (
+      {attempt.status === 'action_required' ? (
         <StateView
           variant="pending-decision"
           subject="Completing the payment provider’s step in the app"
@@ -167,18 +169,6 @@ function PaymentResult({
     </Section>
   );
 }
-
-/** Everything a payment on an obligation can change: balances, installments, orders, credits. */
-const PAYMENT_EFFECT_KEYS: readonly (readonly unknown[])[] = [
-  ['api', '/obligations'],
-  ['api', '/obligations/{id}'],
-  ['api', '/installment-plans/{id}'],
-  ['api', '/orders/{id}'],
-  ['api', '/credits'],
-  ['api', '/me/payments'],
-  ['api', '/me/receipts'],
-  ['api', '/me/orders'],
-];
 
 /** Answers after which the payment may still go through (SPK-PAY-007, §4.9). */
 export function paymentMayHaveTakenEffect(error: ApiError): boolean {
@@ -305,10 +295,25 @@ function LiveAttemptSection({
 }) {
   const router = useRouter();
   const { reachable } = useConnectivity();
+  // FIN-01: for an individual balance the API also reports the payment of someone else who pays
+  // for it (a co-guardian), which this account may not open (`GET /payments/{id}` needs `pay`
+  // over its payer). "Open the payment" is offered only for an attempt the account's own payments
+  // list; LiveAttempt names no payer and no "readable" flag (reported).
+  const mine = useApiQuery({
+    path: '/me/payments',
+    request: { query: { status: live.status, limit: 50 } },
+  });
+  const openable = mine.data?.items.some((attempt) => attempt.id === live.id) === true;
   return (
     <Section title="A payment is on its way" testID="live-attempt">
       <StatusBadge {...liveAttemptStatus(live)} testID="live-attempt-status" />
       <Body>{liveAttemptText(live)}</Body>
+      {mine.data !== undefined && !openable ? (
+        <Caption>
+          It may have been started by someone else who pays for this balance. It is shown here so
+          the balance is not paid twice.
+        </Caption>
+      ) : null}
       {live.status === 'action_required' ? (
         <StateView
           variant="pending-decision"
@@ -326,11 +331,13 @@ function LiveAttemptSection({
           disabled={reachable === false}
           accessibilityHint="Reads this balance again; it never pays"
         />
-        <Button
-          label="Open the payment"
-          variant="secondary"
-          onPress={() => router.push(moneyRoutes.payment(live.id))}
-        />
+        {openable ? (
+          <Button
+            label="Open the payment"
+            variant="secondary"
+            onPress={() => router.push(moneyRoutes.payment(live.id))}
+          />
+        ) : null}
       </ButtonRow>
     </Section>
   );

@@ -119,21 +119,71 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
     expect(within(refunds).getByText(/checked by the facility/)).toBeOnTheScreen();
   });
 
-  it('links a contribution payment to its contribution and a checkout payment to its registration', async () => {
+  it('SPK-PAY-004: a contribution payment links to the contribution, never to the team obligation a player may not read', async () => {
+    // The API always stores the team obligation on a contribution attempt (0600 check constraint).
     renderPayment({
       status: 200,
       body: paymentDetail({
         purpose: 'contribution',
-        obligationId: null,
+        obligationId: LIST_IDS.teamObligation,
         orderId: null,
         contributionRequestId: LIST_IDS.contribution,
-        checkoutId: LIST_IDS.checkout,
       }),
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Open the contribution' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/team/contribution/${LIST_IDS.contribution}`);
-    fireEvent.press(screen.getByRole('button', { name: 'Open the registration' }));
+    expect(screen.queryByRole('button', { name: 'Open the balance' })).toBeNull();
+  });
+
+  it('links a checkout payment to its registration and its order', async () => {
+    renderPayment({
+      status: 200,
+      body: paymentDetail({ purpose: 'checkout', checkoutId: LIST_IDS.checkout }),
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Open the registration' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/outcome/${LIST_IDS.checkout}`);
+    fireEvent.press(screen.getByRole('button', { name: 'Open the order' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/payments/order/${IDS.order}`);
+  });
+
+  it('SPK-UX-010: a created attempt reads "Payment processing" and asks nothing (no DEC-019 step)', async () => {
+    renderPayment({ status: 200, body: paymentDetail({ status: 'created', resolvedAt: null }) });
+    expect(await screen.findByTestId('payment-status')).toHaveProp(
+      'accessibilityLabel',
+      'Payment processing',
+    );
+    expect(screen.queryByLabelText('Payment needs your action')).toBeNull();
+    expect(screen.queryByText(/depends on DEC-019/)).toBeNull();
+    expect(
+      screen.getByText(/still working on this payment\. Do not pay again\./),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeOnTheScreen();
+  });
+
+  it('SPK-PAY-006, SPK-PAY-005: a payment settling here also reads the installments and credits again', async () => {
+    let status = 'unknown';
+    const app = renderPayment(() =>
+      fakeResponse(
+        200,
+        paymentDetail({ status, resolvedAt: status === 'unknown' ? null : inDays(0) }),
+      ),
+    );
+    const planKey = ['api', '/installment-plans/{id}', { id: IDS.plan }, null];
+    const creditsKey = ['api', '/credits', null, { ownerPersonId: IDS.self, limit: 50 }];
+    app.queryClient.setQueryData(planKey, { data: {} });
+    app.queryClient.setQueryData(creditsKey, { data: {} });
+    expect(
+      await screen.findByLabelText('Payment outcome being confirmed. Do not pay again.'),
+    ).toBeOnTheScreen();
+    await waitFor(() => expect(app.queryClient.isFetching()).toBe(0));
+    expect(app.queryClient.getQueryState(planKey)?.isInvalidated).toBe(false);
+    status = 'succeeded';
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Payment received')).toBeOnTheScreen();
+    await waitFor(() => expect(app.queryClient.getQueryState(planKey)?.isInvalidated).toBe(true));
+    expect(app.queryClient.getQueryState(creditsKey)?.isInvalidated).toBe(true);
   });
 
   it('§4.10: a payment this account may not see reads "Not available" with no detail', async () => {

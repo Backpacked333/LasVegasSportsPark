@@ -79,6 +79,50 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
     expect(screen.getByText('Receipt list')).toBeOnTheScreen();
   });
 
+  it('whenOff="notice": a failed permissions read shows its code above what the customer already has', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-n1' }))
+            : fakeResponse(200, fakePermissions({ enabled: [] }));
+        },
+      },
+    });
+    render(
+      <CapabilityGate capability="memberships" whenOff="notice">
+        <Content />
+      </CapabilityGate>,
+      { wrapper: app.wrapper },
+    );
+    expect(
+      await screen.findByText('Error code: INTEGRATION_UNAVAILABLE. Reference: c-n1'),
+    ).toBeOnTheScreen();
+    // Reads are never gated (§1.6): the children follow their own states under the unknown switch.
+    expect(screen.getByText('Your memberships')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByLabelText('Memberships turned off')).toBeOnTheScreen();
+    expect(screen.getByText('Your memberships')).toBeOnTheScreen();
+  });
+
+  it('whenOff="block" never renders the children while the switch is unknown', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': () => fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE')),
+      },
+    });
+    render(
+      <CapabilityGate capability="memberships">
+        <Content />
+      </CapabilityGate>,
+      { wrapper: app.wrapper },
+    );
+    expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.queryByText('Your memberships')).toBeNull();
+  });
+
   it('with several capabilities, renders the children when any one is on', async () => {
     const app = createTestApp({
       routes: { 'GET /me/permissions': mePermissions({ enabled: ['parties'] }) },

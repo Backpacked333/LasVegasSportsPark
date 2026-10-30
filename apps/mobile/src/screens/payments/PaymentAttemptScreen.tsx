@@ -3,11 +3,12 @@
  * Reads `GET /v1/payments/{id}` (the payer or the people who pay for them; anyone else gets the
  * protected NOT_FOUND, shown as "not available" without implying the payment exists):
  *
- * - the state in the journeys.md words: "Payment processing" and "Payment outcome being confirmed.
- *   Do not pay again." are never success or failure; "Check again" reads the attempt again and
- *   never pays; a step the provider asks for is the pending decision DEC-019;
- * - what it paid for, with links to the balance, the order, the team contribution or the
- *   registration outcome;
+ * - the state in the journeys.md words: "Payment processing" (`created` and `processing`) and
+ *   "Payment outcome being confirmed. Do not pay again." are never success or failure; "Check
+ *   again" reads the attempt again and never pays; a step the provider asks for
+ *   (`action_required` only) is the pending decision DEC-019;
+ * - what it paid for, with links to the balance, the order, the team contribution (never the
+ *   team obligation behind it, which a player may not read) or the registration outcome;
  * - its refunds (SPK-PAY-008), each with its own state; an unknown refund outcome is never
  *   "Refunded". What can still be refunded is a finance figure and is not shown to customers.
  *
@@ -28,6 +29,7 @@ import {
   refundStatus,
   type PaymentDetail,
 } from '../../features/money/payment-lists';
+import { PAYMENT_EFFECT_KEYS } from '../../features/money/payment-effects';
 import { useNameOf } from '../../features/money/people';
 import { moneyRoutes, param } from '../../features/money/routes';
 import { paymentIsUnresolved, paymentStatus } from '../../features/money/status';
@@ -44,23 +46,15 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 
-/** What a settled payment can change: balances, contributions, orders and the account lists. */
-export const PAYMENT_SETTLED_KEYS: readonly (readonly unknown[])[] = [
-  ['api', '/obligations'],
-  ['api', '/obligations/{id}'],
-  ['api', '/orders/{id}'],
-  ['api', '/contribution-requests/{id}'],
-  ['api', '/me/payments'],
-  ['api', '/me/receipts'],
-  ['api', '/me/orders'],
-  ['api', '/me/contribution-requests'],
-  ['api', '/me/registration-checkouts'],
-];
+/** What a settled payment can change (the same list as paying a balance). */
+export const PAYMENT_SETTLED_KEYS = PAYMENT_EFFECT_KEYS;
 
 function PaidFor({ payment }: { payment: PaymentDetail }) {
   const router = useRouter();
   const links: { label: string; href: string }[] = [];
-  if (payment.obligationId)
+  // A contribution payment always names the team obligation, which only its debtor, the captain
+  // and finance staff may read (SPK-PAY-004): the player is sent to their own contribution.
+  if (payment.obligationId && payment.purpose !== 'contribution')
     links.push({ label: 'Open the balance', href: moneyRoutes.obligation(payment.obligationId) });
   if (payment.orderId)
     links.push({ label: 'Open the order', href: moneyRoutes.order(payment.orderId) });
@@ -145,13 +139,13 @@ function PaymentDetailView({
             {payment.unknownSince ? ` (waiting since ${formatInstant(payment.unknownSince)})` : ''}.
           </Body>
         ) : null}
-        {payment.status === 'processing' ? (
+        {payment.status === 'processing' || payment.status === 'created' ? (
           <Body>The provider is still working on this payment. Do not pay again.</Body>
         ) : null}
         {payment.status === 'failed' && payment.failureReason ? (
           <Body>{`${payment.failureReason}. Nothing was charged.`}</Body>
         ) : null}
-        {payment.status === 'action_required' || payment.status === 'created' ? (
+        {payment.status === 'action_required' ? (
           <StateView
             variant="pending-decision"
             subject="Completing the payment provider’s step in the app"

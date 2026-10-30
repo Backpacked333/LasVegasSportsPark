@@ -8,9 +8,13 @@
  *   confirmed. Do not pay again." and `processing` "Payment processing", never success or failure.
  * - `GET /v1/me/receipts`: money received, with what was applied and any overpayment kept visible.
  * - `GET /v1/me/orders`: orders with their lines, credits applied, payment and fulfillment state.
+ *   An unpaid order reads "Not paid yet" (it asks nothing of the payer); while its checkout
+ *   payment is on its way (`GET /v1/me/payments?purpose=checkout`, the order carries no
+ *   `liveAttempt`; reported) that payment's state is shown instead, e.g. "Do not pay again".
  * - Needs attention: `GET /v1/me/payments?status=unknown` and
- *   `GET /v1/me/registration-checkouts?status=recovery_required`, so an interrupted payment or a
- *   registration the facility is completing is found again from the server, not from the device.
+ *   `GET /v1/me/registration-checkouts?status=recovery_required`, each in cursor pages, so an
+ *   interrupted payment or a registration the facility is completing is found again from the
+ *   server, not from the device, and none is cut off.
  *
  * States (each list on its own): loading; empty (with what would appear); ready; error with code
  * and "Try again"; permission restriction ("not available", nothing of another payer); stale or
@@ -23,8 +27,9 @@ import { presentationForError } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
-import { useApiQuery } from '../../api/useApiQuery';
 import { formatInstant, formatMoney } from '../../features/money/format';
+import { useOrderPayments } from '../../features/money/live-payments';
+import { PaymentCheckFailed } from '../../features/money/PaymentCheckFailed';
 import {
   RECEIPT_SOURCE_LABELS,
   checkoutRecoveryStatus,
@@ -134,8 +139,12 @@ export function MyReceiptsList() {
 export function MyOrdersList() {
   const router = useRouter();
   const orders = useApiPages({ path: '/me/orders', request: { query: { limit: PAGE } } });
+  // An order stays `awaiting_payment` while its checkout payment is on its way: that payment's
+  // state is shown on the row ("Do not pay again" for an unknown outcome, SPK-PAY-007).
+  const { live, payments } = useOrderPayments();
   return (
     <Section title="Orders" testID="my-orders">
+      <PaymentCheckFailed query={payments} what="these orders" />
       <QueryBoundary
         query={orders}
         label="your orders"
@@ -153,7 +162,7 @@ export function MyOrdersList() {
                 key={order.id}
                 title={orderTitle(order)}
                 detail={`${orderAmounts(order)}. Ordered ${formatInstant(order.createdAt)}`}
-                status={orderStatus(order)}
+                status={orderStatus(order, live.get(order.id))}
                 onPress={() => router.push(moneyRoutes.order(order.id))}
                 accessibilityHint="Opens the order with its balances and installments"
                 testID={`order-${order.id}`}
@@ -176,16 +185,17 @@ export function MyOrdersList() {
 export function NeedsAttention() {
   const router = useRouter();
   const nameOf = useNameOf();
-  const unknown = useApiQuery({
+  // Both in cursor pages with their own "Load more" (§4.5): nothing that needs attention is cut off.
+  const unknown = useApiPages({
     path: '/me/payments',
     request: { query: { status: 'unknown', limit: PAGE } },
   });
-  const recovery = useApiQuery({
+  const recovery = useApiPages({
     path: '/me/registration-checkouts',
     request: { query: { status: 'recovery_required', limit: PAGE } },
   });
-  const unknownItems = unknown.data?.items ?? [];
-  const recoveryItems = recovery.data?.items ?? [];
+  const unknownItems = unknown.data ?? [];
+  const recoveryItems = recovery.data ?? [];
   // Offline or "not available" says nothing here (the lists below show those states); a failure
   // shows its code, so a missing "needs attention" is never silent.
   const failed = [unknown, recovery].find(
@@ -220,6 +230,8 @@ export function NeedsAttention() {
           ))}
         </View>
       ) : null}
+      <LoadMore pages={unknown} label="payments being confirmed" />
+      <LoadMore pages={recovery} label="registrations being completed" />
       {unknownItems.length > 0 ? (
         <Caption>
           Do not pay again for a payment being confirmed: the facility confirms the outcome with the

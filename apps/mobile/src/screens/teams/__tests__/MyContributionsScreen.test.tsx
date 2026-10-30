@@ -5,7 +5,7 @@
  * a payment on its way shown on its line only, with the SPK-UX-008 states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   accountRoutes,
@@ -105,6 +105,36 @@ describe('SCR-C-25 MyContributionsScreen', () => {
         name: 'Fall 2026 team fee, Contribution for Sam: $50.00, Paid on Oct 23, 2026',
       }),
     ).toBeOnTheScreen();
+  });
+
+  it('SPK-UX-008: a failed check for payments on their way is said above the lines with its code and "Try again"', async () => {
+    let calls = 0;
+    const app = renderList({
+      'GET /me/payments': () => {
+        calls += 1;
+        return calls === 1
+          ? fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-mine' }))
+          : fakeResponse(200, { items: [], nextCursor: null });
+      },
+    });
+    const notice = await screen.findByTestId('contribution-payments-unchecked');
+    expect(
+      within(notice).getByText(/We could not check for a payment already on its way/),
+    ).toBeOnTheScreen();
+    expect(
+      within(notice).getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-mine/),
+    ).toBeOnTheScreen();
+    // The lines stay listed with their own status.
+    expect(
+      screen.getByRole('button', {
+        name: 'Fall 2026 team fee, Your contribution: $75.00, Requested',
+      }),
+    ).toBeOnTheScreen();
+    await act(async () => {
+      fireEvent.press(within(notice).getByRole('button', { name: 'Try again' }));
+    });
+    await waitFor(() => expect(screen.queryByTestId('contribution-payments-unchecked')).toBeNull());
+    expect(app.fake.requests.filter((r) => r.route === '/me/payments')).toHaveLength(2);
   });
 
   it('shows the empty state when nothing was asked', async () => {

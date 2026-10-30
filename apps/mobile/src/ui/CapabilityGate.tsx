@@ -4,6 +4,9 @@
  *
  * - While `GET /v1/me/permissions` loads: the loading state. If it fails with nothing cached: the
  *   error (code, "Try again"), "not available", or the offline state; never a guess either way.
+ *   With `whenOff="notice"` the children render under the loading, error and offline states too:
+ *   what the customer already has never depends on the switch, so it follows its own read states
+ *   (a refused permissions read, "not available", shows nothing else).
  * - Off: the "turned off" state naming the decisions that may turn it on (the same words as a
  *   command refused with CAPABILITY_DISABLED, and as the staff app). `whenOff="notice"` shows that
  *   state above the children instead of replacing them, for screens of what the customer already
@@ -54,25 +57,36 @@ export function CapabilityGate({
 
   if (query.data === undefined) {
     const retry = () => void query.refetch();
+    let unknown: ReactNode;
     if (query.error) {
       const presentation = presentationForError(query.error);
+      // The API refused this account its own permissions: nothing is shown under it.
       if (presentation === 'unavailable') return <StateView variant="unavailable" />;
-      if (presentation === 'offline') {
-        return (
+      unknown =
+        presentation === 'offline' ? (
           <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
+        ) : (
+          <StateView variant="error" error={query.error} onRetry={retry} />
         );
-      }
-      return <StateView variant="error" error={query.error} onRetry={retry} />;
-    }
-    if (query.fetchStatus === 'paused' || reachable === false) {
-      return (
+    } else if (query.fetchStatus === 'paused' || reachable === false) {
+      unknown = (
         <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
       );
+    } else {
+      unknown = (
+        <StateView variant="loading" label={`whether ${label.toLowerCase()} is turned on`} />
+      );
     }
-    return <StateView variant="loading" label={`whether ${label.toLowerCase()} is turned on`} />;
+    // What the customer already has is readable whatever the switch says (reads are never gated,
+    // §1.6): with `whenOff="notice"` it follows its own read states under the unknown switch.
+    return whenOff === 'notice' ? <Noticed notice={unknown}>{children}</Noticed> : unknown;
   }
 
-  if (ids.some((id) => permissions.isCapabilityEnabled(id) === true)) return <>{children}</>;
+  if (ids.some((id) => permissions.isCapabilityEnabled(id) === true)) {
+    // The same tree as the notice states, so the children are not mounted again (their reads and
+    // what the person was doing are kept) when the switch's state arrives or changes.
+    return whenOff === 'notice' ? <Noticed notice={null}>{children}</Noticed> : <>{children}</>;
+  }
 
   const turnedOff = (
     <StateView
@@ -83,13 +97,16 @@ export function CapabilityGate({
       stillAvailable={whenOff === 'notice' ? stillAvailable : undefined}
     />
   );
-  if (whenOff === 'notice') {
-    return (
-      <>
-        {turnedOff}
-        {children}
-      </>
-    );
-  }
+  if (whenOff === 'notice') return <Noticed notice={turnedOff}>{children}</Noticed>;
   return turnedOff;
+}
+
+/** A notice slot above the children, with the children always in the same place. */
+function Noticed({ notice, children }: { notice: ReactNode; children: ReactNode }) {
+  return (
+    <>
+      {notice}
+      {children}
+    </>
+  );
 }

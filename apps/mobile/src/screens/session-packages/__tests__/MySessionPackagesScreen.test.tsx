@@ -170,7 +170,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     expect(screen.queryByText(/Open skate/)).toBeNull();
   });
 
-  it('the permissions read error shows its code and "Try again", then the list', async () => {
+  it('packages already held stay listed while the permissions read fails (503), with its code and "Try again"', async () => {
     let calls = 0;
     renderPackages({
       'GET /me/permissions': () => {
@@ -186,8 +186,40 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     expect(
       await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-perm/),
     ).toBeOnTheScreen();
+    // The API serves the packages whatever the switch says: they follow their own read.
+    const card = await screen.findByTestId(`package-${LIST_IDS.package}`);
+    expect(within(card).getByLabelText('7 sessions left')).toBeOnTheScreen();
+    // While the switch is unknown nothing new is offered.
+    expect(
+      within(card).queryByRole('button', { name: 'Book a session with this package' }),
+    ).toBeNull();
+    expect(calls).toBe(1);
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(
+      await within(card).findByRole('button', { name: 'Book a session with this package' }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/INTEGRATION_UNAVAILABLE/)).toBeNull();
+    expect(screen.getByTestId(`package-${LIST_IDS.package}`)).toBe(card);
+  });
+
+  it('packages stay listed while the permissions read is still loading', async () => {
+    let answer: (response: ReturnType<typeof fakeResponse>) => void = () => undefined;
+    renderPackages({
+      'GET /me/permissions': () =>
+        new Promise<ReturnType<typeof fakeResponse>>((resolve) => {
+          answer = resolve;
+        }),
+    });
     expect(await screen.findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText('Loading whether session packages is turned on'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('state-turned-off')).toBeNull();
+    await act(async () => {
+      answer(fakeResponse(200, fakePermissions({ principalKind: 'customer' })));
+    });
+    expect(await screen.findByTestId('state-turned-off')).toBeOnTheScreen();
+    expect(screen.getByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
   });
 
   it('§4.5: more packages load with the API cursor', async () => {

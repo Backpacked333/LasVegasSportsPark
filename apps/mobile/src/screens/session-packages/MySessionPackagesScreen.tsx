@@ -17,18 +17,22 @@
  * Dates are in the facility's time zone when the package's offering states it
  * (`GET /v1/offerings/{id}` facility timezone, SPK-SCHED-008), otherwise the device's, named.
  *
- * Not built here: booking a session with a package credit (`POST /v1/session-bookings` with
- * `packageEntitlementId`) belongs to the session booking flow, which the app does not build yet;
- * package redemption and reversal terms are POL-039 and POL-007 (pending).
+ * Booking a session with a package credit (`POST /v1/session-bookings` with
+ * `packageEntitlementId`, ENR-11) opens in place on a package the API reports active with sessions
+ * left, while the switch is on (BookWithPackage.tsx). Package redemption and reversal terms are
+ * POL-039 and POL-007 (pending): the API applies them, the app states none.
  *
  * States: loading; empty ("No session packages"); ready; error with code and "Try again";
  * permission restriction (not available); offline or stale (cached with its age); turned off
- * (notice above the list).
+ * (notice above the list, and no "Book a session"); while the switch itself is unknown (its read
+ * loading, failed or offline) that state is shown above the list, which follows its own read.
  */
 import { StyleSheet, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import {
   packageHistory,
+  packageRedeemable,
   packageStatus,
   type PackageEntitlement,
 } from '../../features/money/payment-lists';
@@ -44,12 +48,23 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing } from '../../ui/theme';
+import { BookWithPackage } from './BookWithPackage';
 
 export const PACKAGES_STILL_AVAILABLE = 'Packages you already hold stay listed here.';
 
-function PackageCard({ pkg, zone }: { pkg: PackageEntitlement; zone: DisplayZone }) {
+function PackageCard({
+  pkg,
+  zone,
+  bookingOn,
+}: {
+  pkg: PackageEntitlement;
+  zone: DisplayZone;
+  /** The API reports `session_packages` on (booking is a new commitment, DEC-016, DEC-074). */
+  bookingOn: boolean;
+}) {
   const now = useNow();
   const nameOf = useNameOf();
+  const canBook = bookingOn && packageRedeemable(pkg, now);
   const at = (iso: string) => formatInstantIn(iso, zone.zone);
   const eligible = pkg.appliesTo.offeringIds.length + pkg.appliesTo.programIds.length;
   const history = packageHistory(pkg);
@@ -97,6 +112,7 @@ function PackageCard({ pkg, zone }: { pkg: PackageEntitlement; zone: DisplayZone
           {`Dates are in this device's time zone (${zoneAbbreviation(pkg.issuedAt, zone.zone)}): the facility's time zone is not available for this package.`}
         </Caption>
       )}
+      <BookWithPackage pkg={pkg} canStart={canBook} />
     </View>
   );
 }
@@ -108,6 +124,9 @@ export function SessionPackagesList() {
     request: { query: { limit: 20 } },
   });
   const zones = useOfferingZones((packages.data ?? []).map((p) => p.offeringId));
+  // Read here, next to the gate's own read, so the cards never start another permissions read.
+  // The API still refuses a booking with CAPABILITY_DISABLED if the switch changed meanwhile.
+  const bookingOn = usePermissions().isCapabilityEnabled('session_packages') === true;
   return (
     <>
       <QueryBoundary
@@ -125,7 +144,9 @@ export function SessionPackagesList() {
           <View accessibilityRole="list" style={styles.list}>
             {items.map((pkg) => {
               const zone = zones.get(pkg.offeringId);
-              return zone ? <PackageCard key={pkg.id} pkg={pkg} zone={zone} /> : null;
+              return zone ? (
+                <PackageCard key={pkg.id} pkg={pkg} zone={zone} bookingOn={bookingOn} />
+              ) : null;
             })}
           </View>
         )}

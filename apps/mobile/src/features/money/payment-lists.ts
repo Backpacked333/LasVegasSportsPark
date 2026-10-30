@@ -12,7 +12,7 @@
 import type { Schema } from '@sportspark/api-client';
 import type { StatusBadgeProps } from '../../ui/StatusBadge';
 import { formatInstant, formatMoney, hasPassed } from './format';
-import type { Obligation, PaymentAttempt, Receipt } from './status';
+import { paymentStatus, type Obligation, type PaymentAttempt, type Receipt } from './status';
 
 export type Order = Schema<'Order'>;
 export type Checkout = Schema<'Checkout'>;
@@ -59,15 +59,9 @@ export function paymentTitle(
  * to wait or not to pay again instead of finding out from a refused second payment (SPK-PAY-007).
  */
 export function liveAttemptStatus(live: LiveAttempt): Status {
-  switch (live.status) {
-    case 'unknown':
-      return { tone: 'warning', label: 'Payment outcome being confirmed. Do not pay again.' };
-    case 'processing':
-    case 'created':
-      return { tone: 'pending', label: 'Payment processing' };
-    case 'action_required':
-      return { tone: 'warning', label: 'Payment needs your action' };
-  }
+  // One vocabulary for an attempt wherever it is shown (SPK-UX-010): the balance row and the
+  // payment detail read the same words for the same state.
+  return paymentStatus(live.status);
 }
 
 /** The explanation under a live attempt, with the API's amount and times. */
@@ -101,12 +95,32 @@ export function receiptAmounts(receipt: Receipt): string {
   return parts.join('. ');
 }
 
-/** The order's payment state (journeys.md); `awaiting_payment` is never "paid". */
+/**
+ * The order's payment state (journeys.md); `awaiting_payment` is never "paid". It asks nothing of
+ * the payer: an order stays `awaiting_payment` until a payment succeeds, including while its
+ * checkout payment is processing or its outcome is unknown, and only an `action_required` attempt
+ * asks the payer to act (PaymentAttemptStatus, FIN-01). That payment, when the account's payments
+ * show one, is named instead (`orderPaymentStatus`).
+ */
 export const ORDER_PAYMENT_STATUS: Record<Order['paymentStatus'], Status> = {
-  awaiting_payment: { tone: 'warning', label: 'Payment needs your action' },
+  awaiting_payment: { tone: 'pending', label: 'Not paid yet' },
   paid: { tone: 'success', label: 'Paid' },
   canceled: { tone: 'neutral', label: 'Canceled' },
 };
+
+/**
+ * The order's payment state with its checkout payment still on its way, if any (SPK-PAY-007): an
+ * unknown outcome reads "Payment outcome being confirmed. Do not pay again." on the order too.
+ */
+export function orderPaymentStatus(
+  order: Pick<Order, 'paymentStatus'>,
+  livePayment?: Pick<PaymentAttempt, 'status'> | null,
+): Status {
+  if (order.paymentStatus === 'awaiting_payment' && livePayment) {
+    return paymentStatus(livePayment.status);
+  }
+  return ORDER_PAYMENT_STATUS[order.paymentStatus];
+}
 
 /** journeys.md: checkout `recovery_required` and `compensated` wording on the order (§4.11). */
 export const ORDER_FULFILLMENT_STATUS: Record<Order['fulfillmentStatus'], Status> = {
@@ -122,12 +136,16 @@ export const ORDER_FULFILLMENT_STATUS: Record<Order['fulfillmentStatus'], Status
 
 /**
  * One status for an order row: what the customer most needs to know. A fulfillment problem or
- * an unpaid order comes before "Registration complete".
+ * an unpaid order (with its payment on its way, when there is one) comes before "Registration
+ * complete".
  */
-export function orderStatus(order: Order): Status {
+export function orderStatus(
+  order: Order,
+  livePayment?: Pick<PaymentAttempt, 'status'> | null,
+): Status {
   if (order.fulfillmentStatus === 'recovery_required' || order.fulfillmentStatus === 'compensated')
     return ORDER_FULFILLMENT_STATUS[order.fulfillmentStatus];
-  if (order.paymentStatus !== 'paid') return ORDER_PAYMENT_STATUS[order.paymentStatus];
+  if (order.paymentStatus !== 'paid') return orderPaymentStatus(order, livePayment);
   return ORDER_FULFILLMENT_STATUS[order.fulfillmentStatus];
 }
 
@@ -197,6 +215,37 @@ export function packageStatus(pkg: PackageEntitlement, now: Date): Status {
     case 'revoked':
       return { tone: 'neutral', label: 'Revoked' };
   }
+}
+
+/**
+ * Whether the API's record still allows booking a session with the package (ENR-11): active,
+ * sessions left and not past an expiry the API states. The API decides on submit.
+ */
+export function packageRedeemable(pkg: PackageEntitlement, now: Date): boolean {
+  return (
+    pkg.status === 'active' &&
+    pkg.remainingCredits > 0 &&
+    !(pkg.expiresAt !== null && hasPassed(pkg.expiresAt, now))
+  );
+}
+
+/**
+ * Why the API refused a package booking, in the customer's words (ENR-11): RESOURCE_CONFLICT with
+ * `details.code` PACKAGE_CREDITS_EXHAUSTED (the last session was just used, e.g. by another
+ * guardian) or PACKAGE_NOT_REDEEMABLE (expired or revoked). Null for any other answer.
+ */
+export function packageRefusal(error: { code: string; details?: unknown }): string | null {
+  if (error.code !== 'RESOURCE_CONFLICT') return null;
+  const details = (error.details ?? {}) as { code?: unknown; status?: unknown };
+  if (details.code === 'PACKAGE_CREDITS_EXHAUSTED') {
+    return 'Not available: no sessions left on this package';
+  }
+  if (details.code === 'PACKAGE_NOT_REDEEMABLE') {
+    if (details.status === 'exhausted') return 'Not available: no sessions left on this package';
+    if (details.status === 'revoked') return 'Not available: this package was revoked';
+    return 'Not available: this package has expired';
+  }
+  return null;
 }
 
 /** Redemptions, newest first: a reversal returns the session credit and names its reason. */

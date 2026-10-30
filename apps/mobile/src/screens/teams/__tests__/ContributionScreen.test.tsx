@@ -5,7 +5,7 @@
  * not-available state for another person's request.
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import {
   IDS,
   contributionRequest,
@@ -238,7 +238,7 @@ describe('SCR-C-25 ContributionScreen', () => {
   });
 
   it('a settled earlier payment of another line never locks this one', async () => {
-    renderContribution({
+    const app = renderContribution({
       'GET /me/payments': {
         status: 200,
         body: {
@@ -253,7 +253,16 @@ describe('SCR-C-25 ContributionScreen', () => {
     expect(
       await screen.findByRole('radio', { name: 'Development payment: succeeds' }),
     ).toBeOnTheScreen();
+    // Paying is not gated on the payments read, so wait for that read before asserting what it
+    // decides: an unknown attempt of another line and a failed one of this line lock nothing.
+    await waitFor(() => expect(app.requestsTo('GET', '/me/payments')).toHaveLength(1));
+    await app.settle();
+    // TanStack delivers the answer to observers on the next tick: let it land inside act.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     expect(screen.queryByTestId('contribution-live-attempt')).toBeNull();
+    expect(screen.getByRole('radio', { name: 'Development payment: succeeds' })).toBeOnTheScreen();
   });
 
   it('when the payments cannot be checked it says so with the code, and the API still guards a second payment', async () => {

@@ -184,12 +184,17 @@ export function obligationStatus(obligation: Obligation, now: Date): Status {
   }
 }
 
-/** journeys.md: PaymentAttempt states. `unknown` is never shown as failure (SPK-PAY-007). */
+/**
+ * journeys.md: PaymentAttempt states. `unknown` is never shown as failure (SPK-PAY-007). The API's
+ * PaymentAttemptStatus (FIN-01) is authoritative: `created` is on its way like `processing` (the
+ * payer waits, `await_payment_confirmation`); only `action_required` asks the payer to act. The
+ * same words are used by `liveAttemptStatus` and the registration screens (SPK-UX-010).
+ */
 export function paymentStatus(status: PaymentAttempt['status']): Status {
   switch (status) {
-    case 'created':
     case 'action_required':
       return { tone: 'warning', label: 'Payment needs your action' };
+    case 'created':
     case 'processing':
       return { tone: 'pending', label: 'Payment processing' };
     case 'succeeded':

@@ -3,7 +3,10 @@
  * Reads `GET /v1/orders/{id}` (the payer or the people who pay for them; protected NOT_FOUND
  * otherwise, shown as "not available"): the lines per participant, the total, credits applied,
  * what was due at checkout, and the payment and fulfillment state ("Payment received. We are
- * completing your registration." for `recovery_required`). Below it, each balance the order
+ * completing your registration." for `recovery_required`). An unpaid order reads "Not paid yet"
+ * and asks nothing of the payer; while its checkout payment is on its way
+ * (`GET /v1/me/payments?purpose=checkout`) that payment's state replaces it ("Payment outcome being
+ * confirmed. Do not pay again." for `unknown`) and "Open the payment" shows it. Below it, each balance the order
  * created (`GET /v1/obligations/{id}` per `obligationIds`, each with its own state, and a payment
  * on its way named on its row) and the installment plan (`GET /v1/installment-plans/{id}`).
  *
@@ -15,22 +18,27 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
+import { formatInstant, formatMoney } from '../../features/money/format';
+import { useOrderPayments } from '../../features/money/live-payments';
 import {
   liveAttemptStatus,
   obligationAmounts,
   type Order,
 } from '../../features/money/payment-lists';
+import { PaymentCheckFailed } from '../../features/money/PaymentCheckFailed';
 import { useApiRecords } from '../../features/money/records';
 import { moneyRoutes, param } from '../../features/money/routes';
 import { SecondaryRead } from '../../features/money/SecondaryRead';
-import { obligationStatus } from '../../features/money/status';
-import { Section } from '../../features/money/ui';
+import { obligationStatus, paymentStatus, type PaymentAttempt } from '../../features/money/status';
+import { Body, ButtonRow, Section } from '../../features/money/ui';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { StatusBadge } from '../../ui/StatusBadge';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { InstallmentsSection, OrderSection } from './OrderSections';
 
@@ -71,6 +79,30 @@ function OrderBalances({ order }: { order: Order }) {
   );
 }
 
+/**
+ * The order's checkout payment that is still on its way (SPK-PAY-007): its state, the API's
+ * amount and start time, and the attempt itself (listed in the account's payments, so it opens).
+ */
+function OrderLivePayment({ payment }: { payment: PaymentAttempt }) {
+  const router = useRouter();
+  return (
+    <Section title="A payment is on its way" testID="order-live-payment">
+      <StatusBadge {...paymentStatus(payment.status)} />
+      <Body>
+        {`A payment of ${formatMoney(payment.amountMinor, payment.currency)} started ${formatInstant(payment.createdAt)} has no final outcome yet. Do not pay again.`}
+      </Body>
+      <ButtonRow>
+        <Button
+          label="Open the payment"
+          variant="secondary"
+          onPress={() => router.push(moneyRoutes.payment(payment.id))}
+          accessibilityHint="Shows the payment's state; it never pays again"
+        />
+      </ButtonRow>
+    </Section>
+  );
+}
+
 function OrderDetail({ order }: { order: Order }) {
   const planId = order.installmentPlanId;
   const plan = useApiQuery({
@@ -78,9 +110,16 @@ function OrderDetail({ order }: { order: Order }) {
     request: { path: { id: planId ?? '' } },
     enabled: planId !== null,
   });
+  // An order stays `awaiting_payment` until a payment succeeds; its checkout payment on its way is
+  // found in the account's payments (the order carries no `liveAttempt`; reported).
+  const unpaid = order.paymentStatus === 'awaiting_payment';
+  const { live, payments } = useOrderPayments(unpaid);
+  const livePayment = unpaid ? (live.get(order.id) ?? null) : null;
   return (
     <View>
-      <OrderSection order={order} />
+      <OrderSection order={order} livePayment={livePayment} />
+      {livePayment ? <OrderLivePayment payment={livePayment} /> : null}
+      {unpaid ? <PaymentCheckFailed query={payments} what="this order" /> : null}
       <OrderBalances order={order} />
       {planId !== null ? (
         <SecondaryRead query={plan} label="the installments" title="Installments">

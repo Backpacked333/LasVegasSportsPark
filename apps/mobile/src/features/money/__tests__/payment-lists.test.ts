@@ -8,13 +8,17 @@ import { TEST_NOW } from '../../../testing/test-app';
 import { inDays, obligation, receipt } from '../testing/fixtures';
 import { liveAttempt, myOrder, packageEntitlement } from '../testing/list-fixtures';
 import {
+  ORDER_PAYMENT_STATUS,
   liveAttemptStatus,
   liveAttemptText,
   obligationAmounts,
   orderAmounts,
+  orderPaymentStatus,
   orderStatus,
   orderTitle,
   packageHistory,
+  packageRedeemable,
+  packageRefusal,
   packageStatus,
   paymentTitle,
   receiptAmounts,
@@ -23,7 +27,7 @@ import {
   type Order,
   type PackageEntitlement,
 } from '../payment-lists';
-import type { Obligation, Receipt } from '../status';
+import { paymentStatus, type Obligation, type Receipt } from '../status';
 
 const live = (o: Record<string, unknown> = {}) => liveAttempt(o) as unknown as LiveAttempt;
 const anOrder = (o: Record<string, unknown> = {}) => myOrder(o) as unknown as Order;
@@ -84,13 +88,39 @@ describe('SCR-C-34 payment list wording', () => {
       'Payment received. We are completing your registration.',
     );
     expect(
-      orderStatus(anOrder({ paymentStatus: 'awaiting_payment', fulfillmentStatus: 'pending' }))
-        .label,
-    ).toBe('Payment needs your action');
+      orderStatus(anOrder({ paymentStatus: 'awaiting_payment', fulfillmentStatus: 'pending' })),
+    ).toEqual({ tone: 'pending', label: 'Not paid yet' });
     expect(orderStatus(anOrder()).label).toBe('Registration complete');
     expect(orderStatus(anOrder({ fulfillmentStatus: 'compensated' })).label).toBe(
       'Payment returned. Registration was not completed.',
     );
+  });
+
+  it('SPK-PAY-007: an unpaid order asks nothing of the payer; its payment on its way is named instead', () => {
+    const unpaid = anOrder({ paymentStatus: 'awaiting_payment', fulfillmentStatus: 'pending' });
+    expect(ORDER_PAYMENT_STATUS.awaiting_payment.label).toBe('Not paid yet');
+    expect(orderStatus(unpaid, { status: 'unknown' }).label).toBe(
+      'Payment outcome being confirmed. Do not pay again.',
+    );
+    expect(orderStatus(unpaid, { status: 'processing' }).label).toBe('Payment processing');
+    expect(orderStatus(unpaid, { status: 'created' }).label).toBe('Payment processing');
+    // Only the provider's own request asks the payer to act (PaymentAttemptStatus, FIN-01).
+    expect(orderStatus(unpaid, { status: 'action_required' }).label).toBe(
+      'Payment needs your action',
+    );
+    // A paid order is "Paid" whatever an older attempt says.
+    expect(orderPaymentStatus(anOrder(), { status: 'unknown' }).label).toBe('Paid');
+  });
+
+  it('SPK-UX-010: a live attempt reads exactly as the same attempt does on its payment detail', () => {
+    for (const status of ['created', 'action_required', 'processing', 'unknown'] as const) {
+      expect(liveAttemptStatus(live({ status }))).toEqual(paymentStatus(status));
+    }
+    expect(paymentStatus('created')).toEqual({ tone: 'pending', label: 'Payment processing' });
+    expect(paymentStatus('action_required')).toEqual({
+      tone: 'warning',
+      label: 'Payment needs your action',
+    });
   });
 
   it('summarizes an order by its first line and its amounts, credits named only when applied', () => {
@@ -137,6 +167,29 @@ describe('SCR-C-35 session package wording (ENR-11)', () => {
   it('an active package past its expiry reads "Expired"; one without an expiry never does', () => {
     expect(packageStatus(aPackage({ expiresAt: inDays(-1) }), TEST_NOW).label).toBe('Expired');
     expect(packageStatus(aPackage({ expiresAt: null }), TEST_NOW).label).toBe('7 sessions left');
+  });
+
+  it('ENR-11: a package can be booked only while active, with sessions left and before its expiry', () => {
+    expect(packageRedeemable(aPackage(), TEST_NOW)).toBe(true);
+    expect(packageRedeemable(aPackage({ expiresAt: null }), TEST_NOW)).toBe(true);
+    expect(packageRedeemable(aPackage({ remainingCredits: 0 }), TEST_NOW)).toBe(false);
+    expect(packageRedeemable(aPackage({ expiresAt: inDays(-1) }), TEST_NOW)).toBe(false);
+    expect(packageRedeemable(aPackage({ status: 'revoked' }), TEST_NOW)).toBe(false);
+  });
+
+  it('names why the API refused a package booking, and nothing for other answers', () => {
+    const conflict = (details: Record<string, unknown>) => ({ code: 'RESOURCE_CONFLICT', details });
+    expect(packageRefusal(conflict({ code: 'PACKAGE_CREDITS_EXHAUSTED' }))).toBe(
+      'Not available: no sessions left on this package',
+    );
+    expect(packageRefusal(conflict({ code: 'PACKAGE_NOT_REDEEMABLE', status: 'revoked' }))).toBe(
+      'Not available: this package was revoked',
+    );
+    expect(packageRefusal(conflict({ code: 'PACKAGE_NOT_REDEEMABLE', status: 'active' }))).toBe(
+      'Not available: this package has expired',
+    );
+    expect(packageRefusal({ code: 'ELIGIBILITY_FAILED', details: {} })).toBeNull();
+    expect(packageRefusal(conflict({ code: 'SOMETHING_ELSE' }))).toBeNull();
   });
 
   it('lists the redemption history newest first, reversals included', () => {

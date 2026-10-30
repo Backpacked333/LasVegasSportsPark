@@ -339,6 +339,66 @@ describe('SCR-C-34 PaymentsScreen', () => {
     expect(await screen.findByRole('header', { name: 'No payments yet' })).toBeOnTheScreen();
   });
 
+  it('§4.5: more payments load with the API cursor', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/payments': (req) =>
+          fakeResponse(
+            200,
+            req.query.status === 'unknown'
+              ? { items: [], nextCursor: null }
+              : req.query.cursor === 'p2'
+                ? {
+                    items: [paymentAttempt({ id: LIST_IDS.attemptProcessing, posSaleId: null })],
+                    nextCursor: null,
+                  }
+                : { items: [paymentAttempt({ posSaleId: null })], nextCursor: 'p2' },
+          ),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Payments');
+    await screen.findByTestId(`payment-${IDS.attempt}`);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Load more payments' }));
+    });
+    expect(await screen.findByTestId(`payment-${LIST_IDS.attemptProcessing}`)).toBeOnTheScreen();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/me/payments' && r.query.cursor).at(-1)?.query,
+    ).toEqual({ limit: '20', cursor: 'p2' });
+  });
+
+  it('§4.5, SPK-PAY-007: needs attention loads more unknown payments instead of cutting them off', async () => {
+    const SECOND = unknownPayment({ id: LIST_IDS.attemptProcessing });
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/payments': (req) =>
+          fakeResponse(
+            200,
+            req.query.status !== 'unknown'
+              ? { items: [], nextCursor: null }
+              : req.query.cursor === 'u2'
+                ? { items: [SECOND], nextCursor: null }
+                : { items: [unknownPayment()], nextCursor: 'u2' },
+          ),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    const section = await screen.findByTestId('needs-attention');
+    await within(section).findByTestId(`attention-payment-${LIST_IDS.attemptUnknown}`);
+    await act(async () => {
+      fireEvent.press(
+        within(section).getByRole('button', { name: 'Load more payments being confirmed' }),
+      );
+    });
+    expect(
+      await within(section).findByTestId(`attention-payment-${LIST_IDS.attemptProcessing}`),
+    ).toBeOnTheScreen();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/me/payments' && r.query.cursor).at(-1)?.query,
+    ).toEqual({ status: 'unknown', limit: '20', cursor: 'u2' });
+  });
+
   it('SPK-PAY-005: receipts show what was applied and keep an overpayment visible', async () => {
     const app = createTestApp({
       routes: routes({
@@ -374,6 +434,78 @@ describe('SCR-C-34 PaymentsScreen', () => {
     });
   });
 
+  it('receipts show their error code with "Try again"', async () => {
+    let fail = true;
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/receipts': () =>
+          fail
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-rcpt' }),
+              )
+            : fakeResponse(200, { items: [receipt()], nextCursor: null }),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Receipts');
+    const list = await screen.findByTestId('my-receipts');
+    expect(
+      await within(list).findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-rcpt/),
+    ).toBeOnTheScreen();
+    fail = false;
+    fireEvent.press(within(list).getByRole('button', { name: 'Try again' }));
+    expect(await within(list).findByTestId(`receipt-${IDS.booking}`)).toBeOnTheScreen();
+  });
+
+  it('§4.10: a refused receipts read is "not available", nothing of another payer', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/receipts': () => fakeResponse(403, apiErrorBody('ACCESS_DENIED')),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Receipts');
+    const list = await screen.findByTestId('my-receipts');
+    expect(await within(list).findByLabelText('Not available')).toBeOnTheScreen();
+    expect(within(list).queryByText(/ACCESS_DENIED|Received/)).toBeNull();
+  });
+
+  it('§4.5: more receipts load with the API cursor', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/receipts': (req) =>
+          fakeResponse(
+            200,
+            req.query.cursor === 'r2'
+              ? {
+                  items: [
+                    receipt({
+                      id: LIST_IDS.receiptCash,
+                      sourceKind: 'cash_tender',
+                      paymentAttemptId: null,
+                      cashTenderId: IDS.policy,
+                    }),
+                  ],
+                  nextCursor: null,
+                }
+              : { items: [receipt()], nextCursor: 'r2' },
+          ),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Receipts');
+    await screen.findByTestId(`receipt-${IDS.booking}`);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Load more receipts' }));
+    });
+    expect(await screen.findByTestId(`receipt-${LIST_IDS.receiptCash}`)).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.route === '/me/receipts').at(-1)?.query).toEqual({
+      limit: '20',
+      cursor: 'r2',
+    });
+  });
+
   it('receipts show their own empty state', async () => {
     const app = createTestApp({ routes: routes({ 'GET /me/receipts': pageOf([]) }) });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
@@ -394,6 +526,96 @@ describe('SCR-C-34 PaymentsScreen', () => {
     });
     fireEvent.press(row);
     expect(mockRouter.push).toHaveBeenCalledWith(`/payments/order/${IDS.order}`);
+  });
+
+  it('SPK-PAY-007: an unpaid order reads "Not paid yet"; one whose checkout payment is unknown says not to pay again', async () => {
+    const UNPAID = order({ paymentStatus: 'awaiting_payment', fulfillmentStatus: 'pending' });
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/orders': pageOf([UNPAID]),
+        'GET /me/payments': (req) =>
+          fakeResponse(200, {
+            items:
+              req.query.purpose === 'checkout'
+                ? [unknownPayment({ purpose: 'checkout', orderId: IDS.order })]
+                : [],
+            nextCursor: null,
+          }),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Orders');
+    expect(
+      await screen.findByRole('button', {
+        name: /^Autumn U10 League, .*, Payment outcome being confirmed\. Do not pay again\.$/,
+      }),
+    ).toBeOnTheScreen();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/me/payments').map((r) => r.query),
+    ).toContainEqual({ purpose: 'checkout', limit: '50' });
+  });
+
+  it('an unpaid order with no payment on its way asks nothing of the payer', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/orders': pageOf([
+          order({ paymentStatus: 'awaiting_payment', fulfillmentStatus: 'pending' }),
+        ]),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Orders');
+    expect(
+      await screen.findByRole('button', { name: /^Autumn U10 League, .*, Not paid yet$/ }),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/Payment needs your action/)).toBeNull();
+  });
+
+  it('the orders view shows its error code with "Try again"', async () => {
+    let fail = true;
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/orders': () =>
+          fail
+            ? fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { correlationId: 'c-ord' }))
+            : fakeResponse(200, { items: [order()], nextCursor: null }),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Orders');
+    const list = await screen.findByTestId('my-orders');
+    expect(
+      await within(list).findByText(/Error code: INTERNAL_ERROR\. Reference: c-ord/),
+    ).toBeOnTheScreen();
+    fail = false;
+    fireEvent.press(within(list).getByRole('button', { name: 'Try again' }));
+    expect(await within(list).findByTestId(`order-${IDS.order}`)).toBeOnTheScreen();
+  });
+
+  it('§4.5: more orders load with the API cursor', async () => {
+    const SECOND = order({ id: IDS.enrollmentB });
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/orders': (req) =>
+          fakeResponse(
+            200,
+            req.query.cursor === 'o2'
+              ? { items: [SECOND], nextCursor: null }
+              : { items: [order()], nextCursor: 'o2' },
+          ),
+      }),
+    });
+    render(<PaymentsScreen />, { wrapper: app.wrapper });
+    await show('Orders');
+    await screen.findByTestId(`order-${IDS.order}`);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Load more orders' }));
+    });
+    expect(await screen.findByTestId(`order-${IDS.enrollmentB}`)).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.route === '/me/orders').at(-1)?.query).toEqual({
+      limit: '20',
+      cursor: 'o2',
+    });
   });
 
   it('§4.10: a refused orders read is "not available", never the other payer’s records', async () => {

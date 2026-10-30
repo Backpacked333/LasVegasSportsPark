@@ -8,7 +8,7 @@ import { View } from 'react-native';
 import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
 import {
   ORDER_FULFILLMENT_STATUS,
-  ORDER_PAYMENT_STATUS,
+  orderPaymentStatus,
   type Order,
 } from '../../features/money/payment-lists';
 import { useMe, useNameOf } from '../../features/money/people';
@@ -16,16 +16,24 @@ import {
   installmentPlanStatus,
   installmentStatus,
   type InstallmentPlan,
+  type PaymentAttempt,
 } from '../../features/money/status';
 import { Body, Caption, Field, Section } from '../../features/money/ui';
 import { ListRow } from '../../ui/ListRow';
 import { StatusBadge } from '../../ui/StatusBadge';
 
-export function OrderSection({ order }: { order: Order }) {
+export function OrderSection({
+  order,
+  livePayment = null,
+}: {
+  order: Order;
+  /** The order's checkout payment still on its way, when known: its state replaces "Not paid yet". */
+  livePayment?: PaymentAttempt | null;
+}) {
   const nameOf = useNameOf();
   return (
     <Section title="Order">
-      <StatusBadge {...ORDER_PAYMENT_STATUS[order.paymentStatus]} />
+      <StatusBadge {...orderPaymentStatus(order, livePayment)} testID="order-payment" />
       <StatusBadge
         {...ORDER_FULFILLMENT_STATUS[order.fulfillmentStatus]}
         testID="order-fulfillment"
