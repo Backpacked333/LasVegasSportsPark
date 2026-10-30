@@ -1,6 +1,8 @@
 /**
- * SCR-S-07 Resource inventory and configurations (SPK-SCHED-001, SPK-SCHED-002, SPK-SCHED-003;
- * DEC-001 pending). The facility's pitches, subdivisions, rooms and other spaces with dimensions,
+ * SCR-S-07 Resource inventory and configurations (SPK-SCHED-001, SPK-SCHED-002, SPK-SCHED-003,
+ * SPK-SCHED-008; DEC-001 pending). The facility itself as the facility directory states it
+ * (`GET /v1/facilities`: name, IANA time zone, status, address as configured); its pitches,
+ * subdivisions, rooms and other spaces with dimensions,
  * compatible formats, setup and cleanup buffers, required equipment and staffing constraints; the
  * whole-space and subdivision relationships; the conflict units the API derives (a whole pitch
  * occupies every subdivision's unit); physical arrangements (configurations); operating hours.
@@ -23,7 +25,9 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
 import {
+  FACILITY_STATUS_BADGE,
   FacilityGate,
+  useFacilityDirectory,
   type FacilityContext,
 } from '../../features/schedule-facilities/facility-scope';
 import {
@@ -36,6 +40,7 @@ import {
   RESOURCE_KIND_LABEL,
   WEEKDAY_LABEL,
 } from '../../features/schedule-facilities/labels';
+import { NotAvailableToYou, useActionAllowed } from '../../features/schedule-facilities/permission';
 import { ResourceChecklist } from '../../features/schedule-facilities/ResourceChecklist';
 
 type Resource = Schema<'Resource'>;
@@ -277,11 +282,13 @@ function ResourceCard({
   depth,
   all,
   units,
+  canManage,
 }: {
   resource: Resource;
   depth: number;
   all: readonly Resource[];
   units: ReadonlyMap<string, string>;
+  canManage: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const names = resourceNames(all);
@@ -327,7 +334,7 @@ function ResourceCard({
         </span>
       </div>
       <StatusBadge tone={badge.tone} label={`Inventory status: ${badge.label}`} />
-      {editing ? (
+      {!canManage ? null : editing ? (
         <ResourceEditor resource={resource} onDone={() => setEditing(false)} />
       ) : (
         <Button
@@ -471,9 +478,11 @@ function NewResourceForm({
 function Configurations({
   facility,
   resources,
+  canManage,
 }: {
   facility: FacilityContext;
   resources: readonly Resource[];
+  canManage: boolean;
 }) {
   const { online } = useApp();
   const configurations = useApiQuery({
@@ -548,17 +557,19 @@ function Configurations({
                   tone={c.active ? 'success' : 'neutral'}
                   label={c.active ? 'active' : 'inactive'}
                 />
-                <Button
-                  variant="secondary"
-                  disabled={!online}
-                  busy={toggle.isProcessing}
-                  aria-label={`${c.active ? 'Deactivate' : 'Activate'} ${c.name}`}
-                  onClick={() =>
-                    sendToggle({ id: c.id, expectedRevision: c.revision, active: !c.active })
-                  }
-                >
-                  {c.active ? 'Deactivate' : 'Activate'}
-                </Button>
+                {canManage ? (
+                  <Button
+                    variant="secondary"
+                    disabled={!online}
+                    busy={toggle.isProcessing}
+                    aria-label={`${c.active ? 'Deactivate' : 'Activate'} ${c.name}`}
+                    onClick={() =>
+                      sendToggle({ id: c.id, expectedRevision: c.revision, active: !c.active })
+                    }
+                  >
+                    {c.active ? 'Deactivate' : 'Activate'}
+                  </Button>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -574,33 +585,35 @@ function Configurations({
           action="Changing the arrangement"
         />
       ) : null}
-      <form className="form" onSubmit={submit} aria-label="Add an arrangement" noValidate>
-        <label htmlFor="configuration-name">Arrangement name</label>
-        <input
-          id="configuration-name"
-          value={name}
-          maxLength={200}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <ResourceChecklist
-          legend="Spaces used together"
-          resources={resources}
-          value={members}
-          onChange={setMembers}
-          error={attempted && members.length === 0 ? 'Choose at least one space.' : null}
-        />
-        {attempted && !name.trim() ? <span className="error-text">Enter a name.</span> : null}
-        <Button type="submit" busy={create.isProcessing} disabled={!online}>
-          Add arrangement
-        </Button>
-        {create.error ? (
-          <CommandError
-            error={create.error}
-            onRetry={() => submit()}
-            action="Adding an arrangement"
+      {canManage ? (
+        <form className="form" onSubmit={submit} aria-label="Add an arrangement" noValidate>
+          <label htmlFor="configuration-name">Arrangement name</label>
+          <input
+            id="configuration-name"
+            value={name}
+            maxLength={200}
+            onChange={(e) => setName(e.target.value)}
           />
-        ) : null}
-      </form>
+          <ResourceChecklist
+            legend="Spaces used together"
+            resources={resources}
+            value={members}
+            onChange={setMembers}
+            error={attempted && members.length === 0 ? 'Choose at least one space.' : null}
+          />
+          {attempted && !name.trim() ? <span className="error-text">Enter a name.</span> : null}
+          <Button type="submit" busy={create.isProcessing} disabled={!online}>
+            Add arrangement
+          </Button>
+          {create.error ? (
+            <CommandError
+              error={create.error}
+              onRetry={() => submit()}
+              action="Adding an arrangement"
+            />
+          ) : null}
+        </form>
+      ) : null}
     </section>
   );
 }
@@ -608,9 +621,11 @@ function Configurations({
 function OperatingHours({
   facility,
   resources,
+  canManage,
 }: {
   facility: FacilityContext;
   resources: readonly Resource[];
+  canManage: boolean;
 }) {
   const { online } = useApp();
   const hours = useApiQuery({
@@ -680,14 +695,16 @@ function OperatingHours({
                 return (
                   <li key={h.id}>
                     <span>{label}</span>
-                    <Button
-                      variant="secondary"
-                      disabled={!online}
-                      aria-label={`Remove ${label}`}
-                      onClick={() => sendRemove(h.id)}
-                    >
-                      Remove
-                    </Button>
+                    {canManage ? (
+                      <Button
+                        variant="secondary"
+                        disabled={!online}
+                        aria-label={`Remove ${label}`}
+                        onClick={() => sendRemove(h.id)}
+                      >
+                        Remove
+                      </Button>
+                    ) : null}
                   </li>
                 );
               })}
@@ -703,56 +720,111 @@ function OperatingHours({
           action="Removing the window"
         />
       ) : null}
-      <form className="form" onSubmit={submit} aria-label="Add operating hours" noValidate>
-        <label htmlFor="hours-scope">Applies to</label>
-        <select id="hours-scope" value={resourceId} onChange={(e) => setResourceId(e.target.value)}>
-          <option value="">Whole facility</option>
-          {resources.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="hours-day">Day</label>
-        <select id="hours-day" value={weekday} onChange={(e) => setWeekday(e.target.value)}>
-          <option value="">Choose…</option>
-          {WEEKDAY_LABEL.map((d, i) => (
-            <option key={d} value={i}>
-              {d}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="hours-opens">Opens (HH:MM)</label>
-        <input
-          id="hours-opens"
-          value={opensAt}
-          placeholder="08:00"
-          onChange={(e) => setOpensAt(e.target.value)}
-        />
-        <label htmlFor="hours-closes">Closes (HH:MM)</label>
-        <input
-          id="hours-closes"
-          value={closesAt}
-          placeholder="22:00"
-          onChange={(e) => setClosesAt(e.target.value)}
-        />
-        {attempted && problem ? <span className="error-text">{problem}</span> : null}
-        <Button type="submit" busy={add.isProcessing} disabled={!online}>
-          Add hours
-        </Button>
-        {add.error ? (
-          <CommandError
-            error={add.error}
-            onRetry={() => submit()}
-            action="Adding operating hours"
+      {canManage ? (
+        <form className="form" onSubmit={submit} aria-label="Add operating hours" noValidate>
+          <label htmlFor="hours-scope">Applies to</label>
+          <select
+            id="hours-scope"
+            value={resourceId}
+            onChange={(e) => setResourceId(e.target.value)}
+          >
+            <option value="">Whole facility</option>
+            {resources.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="hours-day">Day</label>
+          <select id="hours-day" value={weekday} onChange={(e) => setWeekday(e.target.value)}>
+            <option value="">Choose…</option>
+            {WEEKDAY_LABEL.map((d, i) => (
+              <option key={d} value={i}>
+                {d}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="hours-opens">Opens (HH:MM)</label>
+          <input
+            id="hours-opens"
+            value={opensAt}
+            placeholder="08:00"
+            onChange={(e) => setOpensAt(e.target.value)}
           />
-        ) : null}
-      </form>
+          <label htmlFor="hours-closes">Closes (HH:MM)</label>
+          <input
+            id="hours-closes"
+            value={closesAt}
+            placeholder="22:00"
+            onChange={(e) => setClosesAt(e.target.value)}
+          />
+          {attempted && problem ? <span className="error-text">{problem}</span> : null}
+          <Button type="submit" busy={add.isProcessing} disabled={!online}>
+            Add hours
+          </Button>
+          {add.error ? (
+            <CommandError
+              error={add.error}
+              onRetry={() => submit()}
+              action="Adding operating hours"
+            />
+          ) : null}
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+/** The facility as the directory states it (K-04); nothing here is a client default. */
+function FacilityFacts({ facility }: { facility: FacilityContext }) {
+  const directory = useFacilityDirectory();
+  const entry = directory.data?.items.find((f) => f.id === facility.id);
+  return (
+    <section aria-labelledby="facility-facts-title">
+      <h4 id="facility-facts-title">Facility</h4>
+      {entry ? (
+        <dl className="facts">
+          <dt>Name</dt>
+          <dd>{entry.name}</dd>
+          <dt>Time zone</dt>
+          <dd>{entry.timezone} (every facility-local time on these screens)</dd>
+          <dt>Status</dt>
+          <dd>
+            <StatusBadge
+              tone={FACILITY_STATUS_BADGE[entry.status].tone}
+              label={FACILITY_STATUS_BADGE[entry.status].label}
+            />
+          </dd>
+          <dt>Address</dt>
+          <dd>
+            {entry.address && Object.keys(entry.address).length > 0
+              ? Object.values(entry.address)
+                  .filter((v) => typeof v === 'string' || typeof v === 'number')
+                  .join(', ')
+              : 'Not set yet'}
+          </dd>
+        </dl>
+      ) : directory.error ? (
+        <StateView
+          variant="error"
+          error={directory.error}
+          onRetry={() => void directory.refetch()}
+        />
+      ) : directory.data ? (
+        <StateView variant="unavailable" description="This facility is not in the directory." />
+      ) : (
+        <StateView variant="loading" label="the facility" />
+      )}
+      <p className="caption">
+        Facility details cannot be changed here: the API has no facility settings command yet
+        (proposed), and the actual facilities and hours are DEC-001.
+      </p>
     </section>
   );
 }
 
 function Inventory({ facility }: { facility: FacilityContext }) {
+  const canManage = useActionAllowed('scheduling.manage_inventory', facility.id);
   const resources = useApiQuery({
     path: '/resources',
     request: { query: { facilityId: facility.id } },
@@ -771,6 +843,7 @@ function Inventory({ facility }: { facility: FacilityContext }) {
         owner="Operations"
       />
       <p className="caption">What is shown here is what has been entered, not an assumed layout.</p>
+      <FacilityFacts facility={facility} />
       <QueryBoundary
         query={resources}
         label="the resource inventory"
@@ -791,14 +864,22 @@ function Inventory({ facility }: { facility: FacilityContext }) {
                 depth={depth}
                 all={list}
                 units={unitNames}
+                canManage={canManage}
               />
             ))}
           </ul>
         )}
       </QueryBoundary>
-      <NewResourceForm facility={facility} resources={resources.data ?? []} />
-      <Configurations facility={facility} resources={resources.data ?? []} />
-      <OperatingHours facility={facility} resources={resources.data ?? []} />
+      {canManage ? (
+        <NewResourceForm facility={facility} resources={resources.data ?? []} />
+      ) : (
+        <NotAvailableToYou
+          what="Changing the resource inventory"
+          action="scheduling.manage_inventory"
+        />
+      )}
+      <Configurations facility={facility} resources={resources.data ?? []} canManage={canManage} />
+      <OperatingHours facility={facility} resources={resources.data ?? []} canManage={canManage} />
     </div>
   );
 }

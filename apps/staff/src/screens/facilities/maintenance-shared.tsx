@@ -1,8 +1,8 @@
 /**
  * Shared pieces of the facilities screens (SCR-S-41, SCR-S-42): names for assets and spaces, the
- * viewer's own person id (for "Assign to me"; the API has no staff directory to choose another
- * owner from), and the evidence reference editor (SPK-FAC-002 "supporting evidence" is stored by
- * reference; file upload waits on a storage provider, §5.2).
+ * viewer's own person id (for "Assign to me"; other owners are chosen from the staff directory,
+ * `features/schedule-facilities/staff-owner.tsx`), and the evidence reference editor (SPK-FAC-002
+ * "supporting evidence" is stored by reference; file upload waits on a storage provider, §5.2).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useApiQuery } from '../../api/useApiQuery';

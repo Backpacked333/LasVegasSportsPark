@@ -2,7 +2,8 @@
  * SCR-S-42 Operating restrictions and release to service: SPK-FAC-003 (an approved restriction
  * affects availability for a whole pitch or a subdivision), SPK-FAC-004 (authorized release; a
  * required inspection gates it), SPK-AT-021 (turf restriction closes a subdivision; authorized
- * reopening), SPK-SCHED-009 (open closure resolution as recovery required), DEC-001 pending.
+ * reopening), SPK-SCHED-009 (open closure resolution as recovery required), FAC-01 withdrawal of a
+ * restriction that never took effect, DEC-001 pending.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -376,5 +377,215 @@ describe('SCR-S-42 RestrictionDetailScreen', () => {
     });
     render(app.at('/facilities/restrictions/r-1'));
     expect(await screen.findByTestId('state-unavailable')).toBeInTheDocument();
+  });
+});
+
+describe('SCR-S-42 restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
+  const PROPOSED = restriction({
+    id: 'r-2',
+    status: 'proposed',
+    revision: 1,
+    approvedAt: null,
+    schedulingClosureId: null,
+    taskId: null,
+  });
+
+  it('withdraws a proposed restriction with a reason and the expected revision', async () => {
+    const user = userEvent.setup();
+    const withdrawn = {
+      ...PROPOSED,
+      status: 'withdrawn' as const,
+      revision: 2,
+      withdrawnAt: '2026-10-24T12:05:00.000Z',
+      withdrawnBy: PROPOSED.approvedBy,
+      withdrawalReason: 'Repair postponed',
+    };
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: PROPOSED },
+        'POST /maintenance-restrictions/{id}/withdraw': () => {
+          app.fake.set('GET /maintenance-restrictions/{id}', { status: 200, body: withdrawn });
+          return fakeResponse(200, withdrawn);
+        },
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-2'));
+    await user.click(await screen.findByRole('button', { name: 'Withdraw restriction' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Enter the reason for withdrawing the restriction.',
+    );
+    expect(
+      app.fake.requests.some((r) => r.route === '/maintenance-restrictions/{id}/withdraw'),
+    ).toBe(false);
+    await user.type(screen.getByLabelText('Reason for withdrawing'), 'Repair postponed');
+    await user.click(screen.getByRole('button', { name: 'Withdraw restriction' }));
+    expect(await screen.findByTestId('restriction-withdrawn')).toHaveTextContent(
+      'withdrawn before it took effect',
+    );
+    const request = app.fake.requests.find(
+      (r) => r.route === '/maintenance-restrictions/{id}/withdraw',
+    );
+    expect(request?.body).toEqual({ reason: 'Repair postponed', expectedRevision: 1 });
+    expect(request?.headers['idempotency-key']).toMatch(/^key-\d{8}$/);
+    expect(screen.getByText('withdrawn: never took effect')).toBeInTheDocument();
+    expect(screen.getByText(/by Facilities lead: Repair postponed$/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve and make effective' })).toBeNull();
+  });
+
+  it('an approved restriction is withdrawn together with its pending closure', async () => {
+    const approved = restriction({
+      id: 'r-3',
+      status: 'approved',
+      revision: 2,
+      schedulingClosureId: 'c-9',
+      taskId: null,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: approved },
+        'GET /closures/{id}': {
+          status: 200,
+          body: closure({ id: 'c-9', source: 'maintenance', status: 'pending' }),
+        },
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-3'));
+    expect(
+      await screen.findByText(/before it takes effect, together with its planned closure/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Withdraw restriction' })).toBeEnabled();
+  });
+
+  it('an approved restriction whose closure is already applied offers resume and release, not withdrawal', async () => {
+    const approved = restriction({
+      id: 'r-3',
+      status: 'approved',
+      revision: 2,
+      schedulingClosureId: 'c-9',
+      taskId: null,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: approved },
+        'GET /closures/{id}': {
+          status: 200,
+          body: closure({ id: 'c-9', source: 'maintenance', status: 'active' }),
+        },
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-3'));
+    expect(await screen.findByTestId('withdraw-not-offered')).toHaveTextContent(
+      'Its closure is already applied, so this restriction can no longer be withdrawn. Resume activation above, then release it to return the area to service.',
+    );
+    expect(screen.getByRole('button', { name: 'Resume activation' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Withdraw restriction' })).toBeNull();
+    expect(screen.queryByLabelText('Reason for withdrawing')).toBeNull();
+  });
+
+  it('INVALID_TRANSITION on an approved restriction says to resume activation, then release it', async () => {
+    const user = userEvent.setup();
+    const approved = restriction({
+      id: 'r-3',
+      status: 'approved',
+      revision: 2,
+      schedulingClosureId: 'c-9',
+      taskId: null,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: approved },
+        // The read still says pending; the closure was applied in the meantime.
+        'GET /closures/{id}': {
+          status: 200,
+          body: closure({ id: 'c-9', source: 'maintenance', status: 'pending' }),
+        },
+        'POST /maintenance-restrictions/{id}/withdraw': () =>
+          fakeResponse(409, apiErrorBody('INVALID_TRANSITION', { nextAction: 'reload_and_retry' })),
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-3'));
+    await user.type(await screen.findByLabelText('Reason for withdrawing'), 'Not needed');
+    await user.click(screen.getByRole('button', { name: 'Withdraw restriction' }));
+    const banner = await screen.findByTestId('withdraw-took-effect');
+    expect(banner).toHaveTextContent('Already in effect: resume activation, then release it');
+    expect(banner).not.toHaveTextContent('release it instead');
+    expect(within(banner).getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+  });
+
+  it('already in effect (INVALID_TRANSITION): says to release it instead, with Reload', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: PROPOSED },
+        'POST /maintenance-restrictions/{id}/withdraw': () =>
+          fakeResponse(409, apiErrorBody('INVALID_TRANSITION', { nextAction: 'reload_and_retry' })),
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-2'));
+    await user.type(await screen.findByLabelText('Reason for withdrawing'), 'Not needed');
+    await user.click(screen.getByRole('button', { name: 'Withdraw restriction' }));
+    const banner = await screen.findByTestId('withdraw-took-effect');
+    expect(banner).toHaveTextContent('Already in effect: release it instead');
+    const reads = app.fake.requests.filter(
+      (r) => r.route === '/maintenance-restrictions/{id}',
+    ).length;
+    await user.click(within(banner).getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/maintenance-restrictions/{id}').length,
+      ).toBeGreaterThan(reads),
+    );
+    expect(screen.queryByTestId('withdraw-took-effect')).toBeNull();
+  });
+
+  it('withdraw refused for lack of authority names the permission', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: PROPOSED },
+        'POST /maintenance-restrictions/{id}/withdraw': () =>
+          fakeResponse(
+            403,
+            apiErrorBody('ACCESS_DENIED', { details: { action: 'facilities.apply_restriction' } }),
+          ),
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-2'));
+    await user.type(await screen.findByLabelText('Reason for withdrawing'), 'Not needed');
+    await user.click(screen.getByRole('button', { name: 'Withdraw restriction' }));
+    expect(
+      await screen.findByText(
+        /Withdrawing the restriction is not available to you\. Your role does not include the permission facilities\.apply_restriction/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('an active restriction offers release, not withdrawal', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(app.at('/facilities/restrictions/r-1'));
+    expect(await screen.findByRole('button', { name: 'Release to service' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Withdraw restriction' })).toBeNull();
+  });
+
+  it('lists a withdrawn restriction with its reason', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions': {
+          status: 200,
+          body: [
+            restriction({
+              id: 'r-4',
+              status: 'withdrawn',
+              withdrawnAt: '2026-10-24T12:05:00.000Z',
+              withdrawalReason: 'Repair postponed',
+            }),
+          ],
+        },
+      }),
+    });
+    render(app.at('/facilities/restrictions'));
+    const list = await screen.findByRole('list', { name: 'Restrictions' });
+    expect(list).toHaveTextContent('withdrawn: Repair postponed');
+    expect(within(list).getByText('withdrawn: never took effect')).toBeInTheDocument();
   });
 });

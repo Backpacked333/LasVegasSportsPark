@@ -33,6 +33,7 @@ import {
   useFacilityById,
   type FacilityContext,
 } from '../../features/schedule-facilities/facility-scope';
+import { NotAvailableToYou, useActionAllowed } from '../../features/schedule-facilities/permission';
 import { resourceNames } from '../../features/schedule-facilities/inventory';
 import { OPERATION_BADGE, draftBadge } from '../../features/schedule-facilities/labels';
 import { formatInstant, localTimeOf } from '../../features/schedule-facilities/time';
@@ -243,6 +244,8 @@ function DraftPublished({ draft, facility }: { draft: ScheduleDraft; facility: F
 }
 
 function Review({ draft, facility }: { draft: ScheduleDraft; facility: FacilityContext }) {
+  // The role view at the draft's facility (GET /v1/me/permissions); the command still decides.
+  const allowed = useActionAllowed('scheduling.publish_schedule', draft.facilityId);
   const { online } = useApp();
   const queryClient = useQueryClient();
   const tz = facility.timezone;
@@ -431,9 +434,17 @@ function Review({ draft, facility }: { draft: ScheduleDraft; facility: FacilityC
             Publishing… the operation is running.
           </p>
         ) : null}
-        <Button busy={publish.isProcessing} disabled={!online || !canPublish} onClick={runPublish}>
-          Publish {draft.changes.length} change{draft.changes.length === 1 ? '' : 's'}
-        </Button>
+        {allowed ? (
+          <Button
+            busy={publish.isProcessing}
+            disabled={!online || !canPublish}
+            onClick={runPublish}
+          >
+            Publish {draft.changes.length} change{draft.changes.length === 1 ? '' : 's'}
+          </Button>
+        ) : (
+          <NotAvailableToYou what="Publishing schedules" action="scheduling.publish_schedule" />
+        )}
         {!online ? <p className="caption">Publishing needs a connection.</p> : null}
         {!PUBLISHABLE.has(draft.status) ? (
           <p className="caption">A {draft.status} draft cannot be published.</p>
