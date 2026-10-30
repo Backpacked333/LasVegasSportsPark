@@ -1,15 +1,15 @@
 /**
- * SCR-S-52 Parties (Package G, conditional; SPK-COND-003, §3.16), inside the Schedule area (its
- * sub-navigation and heading come from ScheduleArea). Route: `/schedule/parties/*`.
- *
- * Placeholder until the parties screen group builds it: behind `CapabilityGate` for the `parties`
- * switch (DEC-016, DEC-077; off until a system administrator turns it on), it marks the screen as
- * not built and names what stays pending. Replace this file (and `meta.ts`, `__tests__/`) with the
- * screen; nested pages go under this route with their own `<Routes>`.
+ * SCR-S-52 Parties (Package G, conditional; SPK-COND-003, ENR-13, §3.16 Parties), inside the
+ * Schedule area (its sub-navigation and heading come from ScheduleArea). Route:
+ * `/schedule/parties/*`. Space, staff (the host), equipment and guests reserved together; the
+ * bookings list and detail, request-mode approval and decline, the staffing state
+ * (`awaiting_staff` until the host accepts), cancellation with its bound consequence, booking for a
+ * customer, and the party packages' terms and definitions, behind `CapabilityGate` for `parties`
+ * (DEC-016, DEC-077). See `../bookings/BookingsArea.tsx`.
  */
-import { PackageGPlaceholder } from '../PackageGPlaceholder';
+import { BookingsArea } from '../bookings/BookingsArea';
 import { PARTIES } from './meta';
 
 export function PartiesScreen() {
-  return <PackageGPlaceholder screen={PARTIES} headingLevel={3} />;
+  return <BookingsArea kind="party" meta={PARTIES} />;
 }
