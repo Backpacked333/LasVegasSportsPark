@@ -14,6 +14,7 @@ import {
   HALF_B,
   INVENTORY,
   PITCH,
+  ROOM,
   closure,
   event,
   facilityDirectory,
@@ -416,6 +417,87 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     expect(screen.queryByTestId('events-truncated')).toBeNull();
     expect(screen.queryByTestId('schedule-changed')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Load more events' })).toBeNull();
+  });
+
+  it('a held-back change keeps "more exist" with the events shown: no space reads as free until the latest is shown', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': page([GAME], 'page-2'),
+        'GET /closures': { status: 200, body: [] },
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    expect(await screen.findByTestId('events-truncated')).toBeInTheDocument();
+    // A refresh in the background changes page 1, and the range now fits on one page.
+    app.fake.set(
+      'GET /events',
+      page([{ ...GAME, revision: 2, publishedRevision: 2, title: 'U12 Red v Blue (moved)' }]),
+    );
+    await app.queryClient.invalidateQueries({ queryKey: ['api', '/events'] });
+    expect(await screen.findByTestId('schedule-changed')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Load more events' })).toBeNull(),
+    );
+    expect(screen.getByText('U12 Red v Blue')).toBeInTheDocument();
+    expect(screen.getByTestId('events-truncated')).toHaveTextContent(
+      'Show the latest schedule above to see them.',
+    );
+    expect(screen.getByTestId(`calendar-resource-${ROOM}`)).not.toHaveTextContent(
+      'Free for the whole range.',
+    );
+    await user.click(screen.getByRole('button', { name: 'Show the latest' }));
+    expect(await screen.findByText('U12 Red v Blue (moved)')).toBeInTheDocument();
+    expect(screen.queryByTestId('events-truncated')).toBeNull();
+    expect(screen.getByTestId(`calendar-resource-${ROOM}`)).toHaveTextContent(
+      'Free for the whole range.',
+    );
+  });
+
+  it('"Load more events" while a change is held back shows the latest, then its next page: a space booked only on that page never reads as free', async () => {
+    const user = userEvent.setup();
+    const PARTY = event({
+      id: 'e-party',
+      title: 'Birthday party',
+      resourceIds: [ROOM],
+      scheduledStart: '2026-10-24T20:00:00.000Z',
+      scheduledEnd: '2026-10-24T22:00:00.000Z',
+    });
+    let moved = false;
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': (request) =>
+          request.query.cursor === 'page-2'
+            ? fakeResponse(200, { items: [PARTY], nextCursor: null })
+            : fakeResponse(200, {
+                items: [
+                  moved
+                    ? {
+                        ...GAME,
+                        revision: 2,
+                        publishedRevision: 2,
+                        title: 'U12 Red v Blue (moved)',
+                      }
+                    : GAME,
+                ],
+                nextCursor: 'page-2',
+              }),
+        'GET /closures': { status: 200, body: [] },
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    expect(await screen.findByTestId('events-truncated')).toBeInTheDocument();
+    moved = true;
+    await app.queryClient.invalidateQueries({ queryKey: ['api', '/events'] });
+    expect(await screen.findByTestId('schedule-changed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Load more events' }));
+    expect(await screen.findByTestId('calendar-event-e-party')).toHaveTextContent('Birthday party');
+    expect(screen.getByTestId(`calendar-resource-${ROOM}`)).not.toHaveTextContent(
+      'Free for the whole range.',
+    );
+    expect(screen.getByText('U12 Red v Blue (moved)')).toBeInTheDocument();
+    expect(screen.queryByTestId('schedule-changed')).toBeNull();
+    expect(screen.queryByTestId('events-truncated')).toBeNull();
   });
 
   it('CAT-01: lists the program sessions at the facility in the same window, in the facility zone', async () => {

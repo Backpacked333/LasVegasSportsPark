@@ -39,7 +39,9 @@ approval. **Pending decision** = needs an operator answer; the screen shows the 
 - **Calendar paging (SPK-UX-008, §4.5).** Events load in cursor pages of 200 with "Load more
   events"; while more exist, the screen says how many are loaded and no space reads as free. A
   loaded page is added without a "Schedule changed" banner; a refresh that changes a published
-  revision still shows the banner.
+  revision still shows the banner. Whether more exist is kept with the events shown, so while a
+  changed refresh is held back no space reads as free on the strength of the newer read; "Load
+  more events" during a held-back change shows the latest first, then adds its next page.
 - **Program sessions (CAT-01).** The sessions at the facility in the calendar's window are listed
   with the offering, sequence or title, the time in the zone the API states and their state, with
   "Load more sessions" and a link to the offering. Without catalog.read_catalog the section says
@@ -78,17 +80,27 @@ approval. **Pending decision** = needs an operator answer; the screen shows the 
 - **Restrictions (SPK-FAC-003, SPK-FAC-004, SPK-AT-021).** The affected area is chosen from the
   inventory; release requires a reason and is refused by the API without a passed inspection when
   one is required; the screen explains the gate. A proposed restriction, or an approved one whose
-  closure is still pending, is withdrawn with a reason (with its closure, in one command); one that
-  already took effect answers INVALID_TRANSITION and reads "Already in effect: release it instead".
-  An open closure resolution reads "Recovery required" and links to the closure.
+  closure is still pending, is withdrawn with a reason (with its closure, in one command). An
+  approved restriction whose closure is already applied (a stalled activation) offers no
+  withdrawal and says to resume activation, then release it. A withdrawal the API refuses with
+  INVALID_TRANSITION reads "Already in effect: release it instead" for a proposed restriction and
+  "Already in effect: resume activation, then release it" for an approved one. An open closure
+  resolution reads "Recovery required" and links to the closure.
 - **Task owners (SPK-FAC-002).** An owner is chosen from the staff directory of the task's facility
   (`GET /v1/staff-directory`, names and roles only, cursor pages and a name-prefix search) or with
-  "Assign to me"; owners are named through `GET /v1/person-names`, and a name the API will not show
-  reads "assigned (name not available)". Without the staff directory permission, only "Assign to
-  me" is offered. Tasks load in cursor pages with "Load more tasks".
+  "Assign to me". A new search clears the choice, so "Assign to the chosen staff member" sends only
+  the person shown as chosen. Owners are named from the same staff directory, which the facilities
+  operator may read (identity.read_person, behind `GET /v1/person-names`, is not theirs); only an
+  owner the loaded directory does not list is read through `GET /v1/person-names` (see API issue
+  8). A name the API leaves out reads "assigned (name not available)"; a failed read reads "name
+  could not be loaded", and on the task with its code and "Try again". Without the staff directory
+  permission, only "Assign to me" is offered (no assign command for a choice not offered). Tasks
+  load in cursor pages with "Load more tasks".
 - **Authorization.** Commands are offered from the role view of `GET /v1/me/permissions` at the
   record's facility (`features/schedule-facilities/permission.tsx`): an action the roles do not
-  include reads "Not available to you" and names the permission; records stay readable. While the
+  include reads "Not available to you" and names the permission; records stay readable, and the
+  per-row commands go with the form (asset Edit and Retire with facilities.manage_asset;
+  preventive generate, pause, resume and end with facilities.schedule_preventive_maintenance). While the
   permission read is unknown or failed nothing is hidden, and the command's own ACCESS_DENIED still
   decides. NOT_FOUND reads "not available" without implying the record exists; CAPABILITY_DISABLED
   reads as turned off.
@@ -128,6 +140,10 @@ defaults (proposed, pending operations decisions); the screens never state their
 6. `ReportMaintenanceTaskBody` takes no owner, so an owner is chosen after reporting.
 7. `GET /v1/closures` (stage 3 kept it unpaged) and `GET /v1/maintenance-restrictions` are
    bounded arrays without cursors.
+8. `MaintenanceTask` carries only `assignedOwnerPersonId`, and `GET /v1/staff-directory` has no
+   lookup by person id. Owners are named from the loaded directory pages of the facility; an owner
+   it does not list (a former staff member, or one on a page not loaded) is named only where
+   `GET /v1/person-names` allows, which for a facilities operator is nobody else.
 
 Closed since the previous version: the API no longer re-captures base revisions on autosave; the
 facility directory exists (`GET /v1/facilities`); the closure impact lists customers, obligations

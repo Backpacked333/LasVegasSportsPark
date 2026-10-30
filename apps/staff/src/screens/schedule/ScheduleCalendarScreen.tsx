@@ -11,9 +11,11 @@
  * States: loading; empty (no events in range; no resources: first setup); permission restriction
  * (facility scope) as not available; stale version (a refresh brought a changed published
  * revision: banner, the shown data stays until the user asks for the latest); offline (cached,
- * read-only, with its age); errors with code and retry. While more events exist than are loaded,
- * no space reads as free. The bars are a visual aid only and hidden from assistive technology; each
- * space's list carries the same information as text.
+ * read-only, with its age); errors with code and retry. While more events exist than are shown,
+ * no space reads as free: whether more exist is kept with the events shown, so a held-back refresh
+ * never makes the shown list look complete, and "Load more events" during a held-back change
+ * shows the latest first, then continues it. The bars are a visual aid only and hidden from
+ * assistive technology; each space's list carries the same information as text.
  */
 import { idOf, mergePages, pagesReceivedAt, type Schema } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
@@ -58,15 +60,27 @@ type Closure = Schema<'Closure'>;
 /** Events per page (`GET /v1/events` takes at most 200). */
 const EVENT_PAGE = 200;
 
-function eventSignature(items: readonly Event[]): string {
-  return items
+/**
+ * The events shown and whether more exist after them in the range. `more` is kept with the events
+ * it belongs to: while a changed refresh is held back, the shown events (and not the latest read)
+ * decide whether a space may read as free.
+ */
+interface ShownEvents {
+  items: Event[];
+  more: boolean;
+}
+
+function eventSignature(shown: ShownEvents): string {
+  return shown.items
     .map((e) => `${e.id}:${e.revision}:${e.status}:${e.publishedRevision ?? ''}`)
     .join('|');
 }
 
 /** What `refetch` of the paged event read resolves with (TanStack infinite query result). */
 interface EventPagesRefetch {
-  data?: { pages: { data: { items: Event[] }; receivedAt: Date }[] };
+  data?: {
+    pages: { data: { items: Event[]; nextCursor: string | null }; receivedAt: Date }[];
+  };
 }
 
 /** Whether a closure covers a resource: the whole facility, the resource, or shared space. */
@@ -344,24 +358,32 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
     path: '/closures',
     request: { query: { facilityId: facility.id } },
   });
+  const latest = useMemo<ShownEvents | undefined>(
+    () => (eventPages.data ? { items: eventPages.data, more: eventPages.hasNextPage } : undefined),
+    [eventPages.data, eventPages.hasNextPage],
+  );
   const pinned = usePinnedData(
-    eventPages.data,
+    latest,
     eventPages.updatedAt,
     `${facility.id}|${range.start}|${range.end}`,
     eventSignature,
   );
-  const events = { ...eventPages, data: pinned.data, updatedAt: pinned.updatedAt };
-  const truncated = eventPages.hasNextPage;
+  const events = { ...eventPages, data: pinned.data?.items, updatedAt: pinned.updatedAt };
+  // From the events shown: a held-back refresh never makes the shown list look complete.
+  const truncated = pinned.data?.more ?? false;
   const refresh = () => {
     // Pin what this refresh returned (the closure's own data would be the old pages).
     void Promise.resolve(eventPages.refetch()).then((result) => {
       const pages = (result as EventPagesRefetch).data?.pages;
       if (pages)
         pinned.pin(
-          mergePages(
-            pages.map((p) => p.data),
-            idOf,
-          ),
+          {
+            items: mergePages(
+              pages.map((p) => p.data),
+              idOf,
+            ),
+            more: (pages.at(-1)?.data.nextCursor ?? null) !== null,
+          },
           pagesReceivedAt(pages),
         );
     });
@@ -483,8 +505,10 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                   {truncated ? (
                     <p className="caption" role="status" data-testid="events-truncated">
                       Showing the {items.length} events loaded so far; more exist in this range and
-                      are not shown yet, so a space may look free when it is not. Load more events
-                      below.
+                      are not shown yet, so a space may look free when it is not.{' '}
+                      {pinned.changed && !eventPages.hasNextPage
+                        ? 'Show the latest schedule above to see them.'
+                        : 'Load more events below.'}
                     </p>
                   ) : null}
                   {span === 1 ? <TrackLegend /> : null}
@@ -512,6 +536,9 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                     pages={{
                       ...eventPages,
                       loadMore: () => {
+                        // The next page continues the latest read, so a held-back change is
+                        // shown first: held and new pages are never mixed.
+                        if (pinned.changed) pinned.showLatest();
                         pinned.extend();
                         eventPages.loadMore();
                       },

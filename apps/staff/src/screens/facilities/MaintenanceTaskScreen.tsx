@@ -11,7 +11,8 @@
  * (open → assigned → in_progress → resolved → closed); whether the viewer may do it is the API's
  * answer (ACCESS_DENIED names the missing permission). Closing a task never returns its area to
  * service: unreleased restrictions are listed with the release they still need (SPK-FAC-004).
- * The owner's name comes from `GET /v1/person-names` (names only).
+ * The owner is named from the facility's staff directory, else `GET /v1/person-names` (names
+ * only); a failed name read shows its code with "Try again".
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -48,8 +49,8 @@ import {
   type LocalDateTime,
 } from '../../features/schedule-facilities/LocalDateTimeField';
 import {
+  OwnerName,
   OwnerPicker,
-  ownerLabel,
   useOwnerNames,
 } from '../../features/schedule-facilities/staff-owner';
 import { formatInstant, formatRange } from '../../features/schedule-facilities/time';
@@ -82,8 +83,6 @@ function Lifecycle({ task, me }: { task: Task; me: string | null }) {
     invalidate: [TASKS_KEY, TASK_KEY, RESTRICTIONS_KEY],
   });
   const [last, setLast] = useState<Omit<UpdateBody, 'expectedRevision'> | null>(null);
-  const [owner, setOwner] = useState('');
-  const [ownerAttempted, setOwnerAttempted] = useState(false);
   const send = (body: Omit<UpdateBody, 'expectedRevision'>) => {
     setLast(body);
     void update
@@ -160,26 +159,11 @@ function Lifecycle({ task, me }: { task: Task; me: string | null }) {
       </div>
       <OwnerPicker
         facilityId={task.facilityId}
-        value={owner}
-        onChange={setOwner}
+        currentOwnerId={task.assignedOwnerPersonId}
+        onAssign={(personId) => send({ assignedOwnerPersonId: personId })}
         disabled={disabled}
         label="Assign to"
       />
-      <Button
-        variant="secondary"
-        disabled={disabled}
-        onClick={() => {
-          setOwnerAttempted(true);
-          if (owner && owner !== task.assignedOwnerPersonId) send({ assignedOwnerPersonId: owner });
-        }}
-      >
-        Assign to the chosen staff member
-      </Button>
-      {ownerAttempted && (!owner || owner === task.assignedOwnerPersonId) ? (
-        <span className="error-text" role="alert">
-          {owner ? 'This person already owns the task.' : 'Choose a staff member to assign.'}
-        </span>
-      ) : null}
       <label htmlFor="task-resolution">
         Resolution summary{task.resolution ? ' (replaces the recorded one)' : ''}
       </label>
@@ -489,7 +473,7 @@ function TaskView({ task, facility }: { task: Task; facility: FacilityContext })
   const now = useNow();
   const me = useMyPersonId();
   const { assetNames, resourceNames } = useFacilityNames(task.facilityId);
-  const ownerNames = useOwnerNames([task.assignedOwnerPersonId], me);
+  const ownerNames = useOwnerNames([task.assignedOwnerPersonId], me, task.facilityId);
   const sev = SEVERITY_BADGE[task.severity];
   const st = TASK_BADGE[task.status];
   return (
@@ -515,7 +499,9 @@ function TaskView({ task, facility }: { task: Task; facility: FacilityContext })
           {task.reporter.actorLabel || 'staff'}, {formatInstant(task.reportedAt, facility.timezone)}
         </dd>
         <dt>Owner</dt>
-        <dd data-testid="task-owner">{ownerLabel(task.assignedOwnerPersonId, me, ownerNames)}</dd>
+        <dd data-testid="task-owner">
+          <OwnerName personId={task.assignedOwnerPersonId} me={me} names={ownerNames} />
+        </dd>
         <dt>Due</dt>
         <dd>{task.dueAt ? formatInstant(task.dueAt, facility.timezone) : 'No due date'}</dd>
         <dt>Evidence</dt>

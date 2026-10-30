@@ -14,8 +14,10 @@
  * - Withdraw a proposed restriction, or an approved one whose closure is still pending
  *   (`POST .../withdraw`, a reason is required, `expectedRevision`; FAC-01, SPK-FAC-004): it never
  *   took effect, and its pending scheduling closure is withdrawn with it in the same command. An
- *   active restriction is released instead; the API answers INVALID_TRANSITION and the screen
- *   says so.
+ *   approved restriction whose closure is already applied (a stalled activation) is not offered
+ *   withdrawal: the screen says to resume activation, then release it. An active restriction is
+ *   released instead; a withdrawal the API refuses with INVALID_TRANSITION says which of the two
+ *   applies.
  * - Recovery required: affected events of the closure that are still unresolved link to SCR-S-06.
  */
 import type { Schema } from '@sportspark/api-client';
@@ -175,7 +177,35 @@ function ClosureFollowUp({ closureId }: { closureId: string }) {
   );
 }
 
-/** FAC-01 (SPK-FAC-004): withdraw a restriction that never took effect, with its reason. */
+/**
+ * FAC-01 (SPK-FAC-004): withdraw a restriction that never took effect, with its reason. For an
+ * approved restriction it is offered only while its closure has not been applied (the closure the
+ * booking impact also reads); an applied closure ends only through resume and release.
+ */
+function Withdrawal({ restriction, onReload }: { restriction: Restriction; onReload: () => void }) {
+  const closureId = restriction.status === 'approved' ? restriction.schedulingClosureId : null;
+  const closure = useApiQuery({
+    path: '/closures/{id}',
+    request: { path: { id: closureId ?? '' } },
+    enabled: closureId !== null,
+  });
+  if (closureId !== null && closure.data === undefined && closure.error === null) return null;
+  // A closure that cannot be read hides nothing: the API's answer decides.
+  const applied = closure.data?.status === 'active' || closure.data?.status === 'lifted';
+  if (closureId !== null && applied) {
+    return (
+      <section aria-labelledby="withdraw-restriction-title">
+        <h4 id="withdraw-restriction-title">Withdraw</h4>
+        <p data-testid="withdraw-not-offered">
+          Its closure is already applied, so this restriction can no longer be withdrawn. Resume
+          activation above, then release it to return the area to service.
+        </p>
+      </section>
+    );
+  }
+  return <WithdrawRestriction restriction={restriction} onReload={onReload} />;
+}
+
 function WithdrawRestriction({
   restriction,
   onReload,
@@ -230,12 +260,28 @@ function WithdrawRestriction({
       {!online ? <p className="caption">Withdrawing needs a connection.</p> : null}
       {withdraw.error?.code === 'INVALID_TRANSITION' ? (
         <div role="alert" className="banner" data-testid="withdraw-took-effect">
-          <StatusBadge tone="warning" label="Already in effect: release it instead" />
-          <span>
-            The restriction or its closure has already taken effect, so it can no longer be
-            withdrawn. Reload to see its current state; the area returns to service by an authorized
-            release.
-          </span>
+          {restriction.status === 'approved' ? (
+            <>
+              <StatusBadge
+                tone="warning"
+                label="Already in effect: resume activation, then release it"
+              />
+              <span>
+                Its closure has already been applied, so the restriction can no longer be withdrawn.
+                Resume activation, then release it to return the area to service. Reload to see its
+                current state.
+              </span>
+            </>
+          ) : (
+            <>
+              <StatusBadge tone="warning" label="Already in effect: release it instead" />
+              <span>
+                The restriction or its closure has already taken effect, so it can no longer be
+                withdrawn. Reload to see its current state; the area returns to service by an
+                authorized release.
+              </span>
+            </>
+          )}
           <Button variant="secondary" onClick={reload}>
             Reload
           </Button>
@@ -354,7 +400,7 @@ function Actions({ restriction }: { restriction: Restriction }) {
             />
           ) : null}
         </section>
-        <WithdrawRestriction restriction={restriction} onReload={reload} />
+        <Withdrawal restriction={restriction} onReload={reload} />
       </>
     );
   }

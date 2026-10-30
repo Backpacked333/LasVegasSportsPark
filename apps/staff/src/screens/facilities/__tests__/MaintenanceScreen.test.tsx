@@ -17,7 +17,7 @@ import {
   page,
   task,
 } from '../../../features/schedule-facilities/test-fixtures';
-import { FACILITY_A, createTestApp } from '../../../testing/test-app';
+import { FACILITY_A, createTestApp, staffMe } from '../../../testing/test-app';
 
 const GOAL = asset({ id: 'as-1', name: 'North goal', resourceId: HALF_A, revision: 3 });
 const OVERDUE = task({
@@ -77,7 +77,7 @@ describe('SCR-S-41 MaintenanceScreen', () => {
     });
   });
 
-  it('names an owner other than the viewer through GET /v1/person-names, and loads more tasks with the API cursor', async () => {
+  it('names an owner the staff directory does not list through GET /v1/person-names, and loads more tasks with the API cursor', async () => {
     const user = userEvent.setup();
     const OWNER = '0192f1a0-0000-7000-8000-0000000000e1';
     const OTHERS = task({
@@ -119,6 +119,65 @@ describe('SCR-S-41 MaintenanceScreen', () => {
       app.fake.requests.filter((r) => r.route === '/maintenance-tasks').at(-1)?.query,
     ).toMatchObject({ facilityId: FACILITY_A, cursor: 'tasks-2' });
     expect(screen.queryByRole('button', { name: 'Load more tasks' })).toBeNull();
+  });
+
+  it('SPK-FAC-002: owners are named from the staff directory of the facility, which a facilities operator may read', async () => {
+    const OWNER = '0192f1a0-0000-7000-8000-0000000000e1';
+    const OTHERS = task({
+      id: 't-3',
+      issue: 'Divider jammed',
+      status: 'assigned',
+      assignedOwnerPersonId: OWNER,
+    });
+    const me = staffMe([FACILITY_A]);
+    const app = createTestApp({
+      routes: routes({
+        'GET /me': {
+          ...me,
+          body: {
+            ...me.body,
+            principal: { ...me.body.principal, staffRoles: ['facilities_operator'] },
+          },
+        },
+        'GET /maintenance-tasks': page([OTHERS]),
+        'GET /staff-directory': page([
+          {
+            personId: OWNER,
+            displayName: 'Jo Park',
+            roles: ['facilities_operator'],
+            facilityIds: [FACILITY_A],
+            scopes: [{ role: 'facilities_operator', facilityIds: [FACILITY_A] }],
+          },
+        ]),
+        // identity.read_person is not a facilities operator's: other staff names are left out.
+        'GET /person-names': { status: 200, body: { items: [] } },
+      }),
+    });
+    render(app.at('/facilities/maintenance'));
+    const row = await screen.findByTestId('task-t-3');
+    expect(await within(row).findByText(/Owner: Jo Park/)).toBeInTheDocument();
+    expect(row).not.toHaveTextContent('name not available');
+    expect(app.fake.requests.find((r) => r.route === '/staff-directory')?.query).toMatchObject({
+      facilityId: FACILITY_A,
+    });
+  });
+
+  it('an owner whose name read failed reads "name could not be loaded", not "not available"', async () => {
+    const OWNER = '0192f1a0-0000-7000-8000-0000000000e1';
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-tasks': page([
+          task({ id: 't-3', issue: 'Divider jammed', assignedOwnerPersonId: OWNER }),
+        ]),
+        'GET /staff-directory': page([]),
+        'GET /person-names': () => fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
+      }),
+    });
+    render(app.at('/facilities/maintenance'));
+    const row = await screen.findByTestId('task-t-3');
+    expect(
+      await within(row).findByText(/Owner: assigned \(name could not be loaded\)/),
+    ).toBeInTheDocument();
   });
 
   it('filters overdue tasks by sending only overdue=true', async () => {

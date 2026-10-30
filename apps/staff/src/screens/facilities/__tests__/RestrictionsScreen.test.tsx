@@ -456,6 +456,62 @@ describe('SCR-S-42 restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
     expect(screen.getByRole('button', { name: 'Withdraw restriction' })).toBeEnabled();
   });
 
+  it('an approved restriction whose closure is already applied offers resume and release, not withdrawal', async () => {
+    const approved = restriction({
+      id: 'r-3',
+      status: 'approved',
+      revision: 2,
+      schedulingClosureId: 'c-9',
+      taskId: null,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: approved },
+        'GET /closures/{id}': {
+          status: 200,
+          body: closure({ id: 'c-9', source: 'maintenance', status: 'active' }),
+        },
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-3'));
+    expect(await screen.findByTestId('withdraw-not-offered')).toHaveTextContent(
+      'Its closure is already applied, so this restriction can no longer be withdrawn. Resume activation above, then release it to return the area to service.',
+    );
+    expect(screen.getByRole('button', { name: 'Resume activation' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Withdraw restriction' })).toBeNull();
+    expect(screen.queryByLabelText('Reason for withdrawing')).toBeNull();
+  });
+
+  it('INVALID_TRANSITION on an approved restriction says to resume activation, then release it', async () => {
+    const user = userEvent.setup();
+    const approved = restriction({
+      id: 'r-3',
+      status: 'approved',
+      revision: 2,
+      schedulingClosureId: 'c-9',
+      taskId: null,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-restrictions/{id}': { status: 200, body: approved },
+        // The read still says pending; the closure was applied in the meantime.
+        'GET /closures/{id}': {
+          status: 200,
+          body: closure({ id: 'c-9', source: 'maintenance', status: 'pending' }),
+        },
+        'POST /maintenance-restrictions/{id}/withdraw': () =>
+          fakeResponse(409, apiErrorBody('INVALID_TRANSITION', { nextAction: 'reload_and_retry' })),
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-3'));
+    await user.type(await screen.findByLabelText('Reason for withdrawing'), 'Not needed');
+    await user.click(screen.getByRole('button', { name: 'Withdraw restriction' }));
+    const banner = await screen.findByTestId('withdraw-took-effect');
+    expect(banner).toHaveTextContent('Already in effect: resume activation, then release it');
+    expect(banner).not.toHaveTextContent('release it instead');
+    expect(within(banner).getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+  });
+
   it('already in effect (INVALID_TRANSITION): says to release it instead, with Reload', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
