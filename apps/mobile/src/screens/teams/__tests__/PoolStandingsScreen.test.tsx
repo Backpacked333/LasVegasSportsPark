@@ -5,7 +5,7 @@
  * error and not-available states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { IDS, baseRoutes, pool, poolStandings } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { mePermissions } from '../../../testing/test-app';
@@ -77,6 +77,33 @@ describe('SCR-C-28 PoolStandingsScreen', () => {
     expect(screen.getByText(/DEC-078/)).toBeOnTheScreen();
     expect(screen.getByText('Pool tables already published stay readable here.')).toBeOnTheScreen();
     expect(await screen.findByRole('header', { name: 'Pool A: Fall 2026' })).toBeOnTheScreen();
+  });
+
+  it('a failed permissions read never hides the published pool table', async () => {
+    // Reading a pool is never gated: only an answer that tournaments are off adds the notice.
+    const app = renderPool({
+      'GET /me/permissions': () =>
+        fakeResponse(
+          500,
+          apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+        ),
+    });
+    expect(await screen.findByRole('header', { name: 'Pool A: Fall 2026' })).toBeOnTheScreen();
+    expect(
+      await screen.findByLabelText(/^2nd: Desert Foxes \(your team\), 9 points/),
+    ).toBeOnTheScreen();
+    await waitFor(() => expect(app.requestsTo('GET', '/me/permissions').length).toBeGreaterThan(0));
+    await app.settle();
+    expect(screen.queryByText(/INTERNAL_ERROR/)).toBeNull();
+    expect(screen.queryByText(/DEC-078/)).toBeNull();
+    expect(screen.queryByText('Pool tables already published stay readable here.')).toBeNull();
+  });
+
+  it('with tournaments on no turned-off notice is shown', async () => {
+    const app = renderPool();
+    expect(await screen.findByRole('header', { name: 'Pool A: Fall 2026' })).toBeOnTheScreen();
+    await app.settle();
+    expect(screen.queryByText(/DEC-078/)).toBeNull();
   });
 
   it('§4.10: a pool the person may not see is "not available"', async () => {

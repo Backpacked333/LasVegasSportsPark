@@ -4,8 +4,10 @@
  * `teamEntryId`); the API checks that the caller captains the entry and routes the request by
  * category. The answer is the request's status only, never notes, owner or queue (§4.14); its
  * progress is on Support (SCR-C-38). How quickly the operating team answers is DEC-015 (pending),
- * so no response time is promised here. A roster player who is not a captain is pointed to Support,
- * where a request is about themselves.
+ * so no response time is promised here. The form is shown only when the workspace says the viewer
+ * acts as captain (`viewer.actingAsCaptain`, the API's team role `captain`); a roster player, and a
+ * co-captain the rule set does not let act as captain, are pointed to Support, where a request is
+ * about themselves.
  *
  * States: ready (the form); validation failure (title and description required, the API's field
  * issues); permission restriction (not the captain: "not available"); offline (sending disabled,

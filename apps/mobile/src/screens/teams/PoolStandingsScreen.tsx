@@ -4,8 +4,11 @@
  * the pool (`GET /v1/pools/{id}`: its entries and seeds) and its standings
  * (`GET /v1/pools/{id}/standings`): the pool's official results among its entries, ordered by the
  * season rule set, with every tiebreak explained and the games still without an official result
- * counted (bracket seeding waits for none). Reading a pool is never gated; while the organization
- * has tournaments turned off the screen says so above what was already published.
+ * counted (bracket seeding waits for none). Reading a pool is never gated, so the pool reads are
+ * not placed behind CapabilityGate: they keep their own SPK-UX-008 states whatever happens to
+ * `GET /v1/me/permissions`. Only once that read answers that tournaments are turned off does the
+ * screen say so, above what was already published (TournamentsOffNotice); while it loads, fails or
+ * is offline nothing is said about the switch.
  *
  * The API does not yet name the pool a team plays in (no pool list for a division or an entry,
  * reported), so this screen opens from a route that carries the pool's id only (§4.14).
@@ -15,18 +18,19 @@
  * <time>", refetch on focus); offline (cached with age); turned off (notice, the table kept);
  * processing, success, partial completion and recovery: not applicable (read only).
  */
-import type { Schema } from '@sportspark/api-client';
+import { CAPABILITY_PRESENTATION, type Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatInstant, plural } from '../../features/teams/format';
 import type { Workspace } from '../../features/teams/queries';
 import { idParam } from '../../features/teams/routes';
 import { TeamFrame } from '../../features/teams/TeamFrame';
 import { Body, Section, Title } from '../../features/teams/ui';
-import { CapabilityGate } from '../../ui/CapabilityGate';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { StandingsTable, TiebreakList } from './StandingsScreen';
@@ -103,30 +107,45 @@ function PoolTable({ poolId, entryId }: { poolId: string; entryId: string }) {
   );
 }
 
+/**
+ * The turned-off notice only (DEC-016, DEC-078): shown when `GET /v1/me/permissions` says
+ * tournaments are off, and nothing otherwise (on, loading, failed or offline), so an unrelated read
+ * never hides published pool tables.
+ */
+export function TournamentsOffNotice() {
+  const tournaments = usePermissions().isCapabilityEnabled('tournaments');
+  if (tournaments !== false) return null;
+  const presentation = CAPABILITY_PRESENTATION.tournaments;
+  return (
+    <StateView
+      variant="turned-off"
+      subject={presentation.label}
+      decisions={presentation.decisions}
+      owner={presentation.owner}
+      stillAvailable="Pool tables already published stay readable here."
+    />
+  );
+}
+
 function PoolContent({ workspace, poolId }: { workspace: Workspace; poolId: string }) {
   const pool = useApiQuery({ path: '/pools/{id}', request: { path: { id: poolId } } });
   const entryId = workspace.entry.id;
   return (
     <View>
-      <CapabilityGate
-        capability="tournaments"
-        whenOff="notice"
-        stillAvailable="Pool tables already published stay readable here."
+      <TournamentsOffNotice />
+      <QueryBoundary
+        query={pool}
+        label="the tournament pool"
+        empty={{ title: 'No pool', description: 'This pool has nothing to show.' }}
       >
-        <QueryBoundary
-          query={pool}
-          label="the tournament pool"
-          empty={{ title: 'No pool', description: 'This pool has nothing to show.' }}
-        >
-          {(p) => (
-            <View>
-              <Title>{`${p.name}: ${workspace.season.name}`}</Title>
-              <PoolEntries pool={p} entryId={entryId} />
-              <PoolTable poolId={poolId} entryId={entryId} />
-            </View>
-          )}
-        </QueryBoundary>
-      </CapabilityGate>
+        {(p) => (
+          <View>
+            <Title>{`${p.name}: ${workspace.season.name}`}</Title>
+            <PoolEntries pool={p} entryId={entryId} />
+            <PoolTable poolId={poolId} entryId={entryId} />
+          </View>
+        )}
+      </QueryBoundary>
     </View>
   );
 }

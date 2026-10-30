@@ -13,9 +13,16 @@
  * `viewer.availableActions`; the API still authorizes every command behind them.
  *
  * The captain contacts the operating team about the team with `POST /v1/me/support-requests`
- * (features/teams/ContactOperations.tsx, SPK-SUPPORT-002); players are pointed to Support. A
- * forms-outstanding indicator is not built: stage 3 left it pending DEC-002 and DEC-028.
- * What captains may see beyond the API's indicators is DEC-012 (pending).
+ * (features/teams/ContactOperations.tsx, SPK-SUPPORT-002). The API allows that to the captain only
+ * (team role `captain`, which a co-captain holds only when the rule set lets co-captains act as
+ * captain), so the form follows `viewer.actingAsCaptain`; everyone else, a co-captain who may not
+ * act as captain included, is pointed to Support. A forms-outstanding indicator is not built:
+ * stage 3 left it pending DEC-002 and DEC-028. What captains may see beyond the API's indicators
+ * is DEC-012 (pending).
+ *
+ * Upcoming game times are in the facility's time zone (SPK-SCHED-008): each game's
+ * `GET /v1/fixtures/{id}` (the read SCR-C-24 makes for the same games, so it is shared) gives
+ * `venue.timezone`; while it loads or if it fails the device's zone is used, always named.
  *
  * States: loading; empty (no fixtures yet); ready; permission restriction (captain-only sections
  * hidden for players; NOT_FOUND is "not available"); stale (refetch on focus, "Updated <time>");
@@ -60,6 +67,35 @@ function upcomingDetail(game: Upcoming, viewer: Viewer): string {
       ? `. Your answer: ${rsvpStatus(game.myResponse).label}`
       : '';
   return `${where}${round}${answers}`;
+}
+
+/**
+ * One upcoming game. The status names the start in the venue's zone from `GET /v1/fixtures/{id}`
+ * (SPK-SCHED-008); a game without a venue yet, or whose read failed, uses the device's zone, named.
+ */
+function UpcomingGameRow({
+  game,
+  viewer,
+  onPress,
+}: {
+  game: Upcoming;
+  viewer: Viewer;
+  onPress: () => void;
+}) {
+  const detail = useApiQuery({
+    path: '/fixtures/{id}',
+    request: { path: { id: game.fixture.id } },
+  });
+  return (
+    <ListRow
+      title={upcomingTitle(game)}
+      detail={upcomingDetail(game, viewer)}
+      status={fixtureStatus(game.fixture, detail.data?.venue?.timezone)}
+      onPress={onPress}
+      accessibilityHint="Opens availability for this team's games"
+      testID={`upcoming-${game.fixture.id}`}
+    />
+  );
 }
 
 function StandingSummary({ workspace }: { workspace: Workspace }) {
@@ -168,14 +204,11 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
         ) : (
           <View accessibilityRole="list">
             {games.map((game) => (
-              <ListRow
+              <UpcomingGameRow
                 key={game.fixture.id}
-                title={upcomingTitle(game)}
-                detail={upcomingDetail(game, viewer)}
-                status={fixtureStatus(game.fixture)}
+                game={game}
+                viewer={viewer}
                 onPress={() => router.push(teamRoutes.availability(entryId))}
-                accessibilityHint="Opens availability for this team's games"
-                testID={`upcoming-${game.fixture.id}`}
               />
             ))}
           </View>
@@ -250,7 +283,8 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
       )}
 
       <Section title="Contact the operating team">
-        {viewer.captainView ? (
+        {/* SUP-01: the API allows a team request to the captain only (see the header). */}
+        {viewer.actingAsCaptain ? (
           <ContactOperations workspace={workspace} />
         ) : (
           <ContactThroughSupport />

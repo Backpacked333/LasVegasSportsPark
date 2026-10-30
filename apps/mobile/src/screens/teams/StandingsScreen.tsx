@@ -2,8 +2,9 @@
  * SCR-C-28 Standings and results (SPK-RESULT-001, SPK-RESULT-002, SPK-RESULT-003,
  * SPK-RESULT-004, SPK-DISC-004, POL-025, POL-027). Official standings from official results only
  * (`GET /v1/seasons/{id}/standings`), with the versioned rule set they were calculated with and
- * the explanation of every tiebreak; this team's games (`GET /v1/seasons/{id}/fixtures`) open
- * their result revisions (FixtureResultsScreen: "Official", "Corrected on <date>"); the published
+ * the explanation of every tiebreak; this team's games (`GET /v1/seasons/{id}/fixtures`, each
+ * dated in its venue's zone from `GET /v1/fixtures/{id}`, SPK-SCHED-008) open their result
+ * revisions (FixtureResultsScreen: "Official", "Corrected on <date>"); the published
  * bracket where the season has one (`GET /v1/seasons/{id}/bracket-nodes`). Restricted incident
  * narratives are never requested or shown (SPK-DISC-004). Sharing standings publicly depends on
  * the public information policy (DEC-012, pending) and is not offered.
@@ -191,8 +192,36 @@ function opponentName(fixture: Fixture, entryId: string, names: Map<string, stri
   return `vs ${names.get(other) ?? 'Opponent'}`;
 }
 
-function Results({ workspace, names }: { workspace: Workspace; names: Map<string, string> }) {
+/**
+ * One played game. Its day is the facility's (SPK-SCHED-008): `GET /v1/fixtures/{id}` gives
+ * `venue.timezone` (the read SCR-C-28's result screen makes too, so it is shared); while it loads
+ * or if it fails the device's zone is used.
+ */
+function ResultRow({
+  fixture,
+  entryId,
+  names,
+}: {
+  fixture: Fixture;
+  entryId: string;
+  names: Map<string, string>;
+}) {
   const router = useRouter();
+  const detail = useApiQuery({ path: '/fixtures/{id}', request: { path: { id: fixture.id } } });
+  const timeZone = detail.data?.venue?.timezone;
+  return (
+    <ListRow
+      title={opponentName(fixture, entryId, names)}
+      detail={fixture.scheduledStart ? formatDay(fixture.scheduledStart, timeZone) : undefined}
+      status={fixtureStatus(fixture, timeZone)}
+      onPress={() => router.push(teamRoutes.result(entryId, fixture.id))}
+      accessibilityHint="Opens the official result and its history"
+      testID={`result-${fixture.id}`}
+    />
+  );
+}
+
+function Results({ workspace, names }: { workspace: Workspace; names: Map<string, string> }) {
   const entryId = workspace.entry.id;
   const fixtures = useApiQuery({
     path: '/seasons/{id}/fixtures',
@@ -211,15 +240,7 @@ function Results({ workspace, names }: { workspace: Workspace; names: Map<string
             {page.items
               .filter((f) => PLAYED.has(f.status))
               .map((f) => (
-                <ListRow
-                  key={f.id}
-                  title={opponentName(f, entryId, names)}
-                  detail={f.scheduledStart ? formatDay(f.scheduledStart) : undefined}
-                  status={fixtureStatus(f)}
-                  onPress={() => router.push(teamRoutes.result(entryId, f.id))}
-                  accessibilityHint="Opens the official result and its history"
-                  testID={`result-${f.id}`}
-                />
+                <ResultRow key={f.id} fixture={f} entryId={entryId} names={names} />
               ))}
           </View>
         )}

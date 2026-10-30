@@ -5,8 +5,9 @@
  * captain or co-captain role (CMP-13), tools offered only when the API lists them (CMP-02), and
  * the permission, stale and offline states.
  */
+import { DEFAULT_TIMEOUT_MS } from '@sportspark/api-client';
 import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Share } from 'react-native';
 import {
   CAPTAIN_ACTIONS,
@@ -18,7 +19,10 @@ import {
   playerWorkspace,
   workspace,
 } from '../../../features/teams/testing/fixtures';
-import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
+import {
+  createTeamsTestApp,
+  withholdAnswers,
+} from '../../../features/teams/testing/teams-test-app';
 import { REVOKE_REASON, RosterScreen } from '../RosterScreen';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -488,9 +492,109 @@ describe('SCR-C-23 RosterScreen', () => {
       expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
       const reads = app.requestsTo('GET', '/team-entries/{id}').length;
       fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
-      await screen.findByTestId('role-handover');
-      expect(app.requestsTo('GET', '/team-entries/{id}').length).toBeGreaterThan(reads);
+      // Wait for the workspace read the reload sends ('role-handover' never leaves the screen).
+      await waitFor(() =>
+        expect(app.requestsTo('GET', '/team-entries/{id}').length).toBeGreaterThan(reads),
+      );
+      expect(screen.queryByLabelText('This changed since you opened it')).toBeNull();
       await app.settle();
+    });
+
+    it('CMP-13: a handover rule the API refuses (VALIDATION_FAILED) shows its message and both codes, with no retry', async () => {
+      const app = renderRoster({
+        routes: routes({
+          'POST /team-entries/{id}/roles/handover': () =>
+            fakeResponse(
+              422,
+              apiErrorBody('VALIDATION_FAILED', {
+                message: 'A team captain must be an adult.',
+                nextAction: 'correct_input',
+                correlationId: 'corr-23',
+                details: { code: 'CAPTAIN_MUST_BE_ADULT' },
+              }),
+            ),
+        }),
+      });
+      const section = await screen.findByTestId('role-handover');
+      fireEvent.press(within(section).getByRole('radio', { name: 'Captain, held by you' }));
+      // The app does not pre-decide the adult-captain rule: a child roster member is offered.
+      fireEvent.press(within(section).getByRole('radio', { name: 'Kim Junior' }));
+      fireEvent.changeText(within(section).getByLabelText('Reason'), 'Stepping down');
+      fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
+      fireEvent.press(within(section).getByRole('button', { name: 'Hand over to Kim Junior' }));
+      expect(await screen.findByText('A team captain must be an adult.')).toBeOnTheScreen();
+      expect(
+        screen.getByText(
+          'Error code: VALIDATION_FAILED (CAPTAIN_MUST_BE_ADULT). Reference: corr-23',
+        ),
+      ).toBeOnTheScreen();
+      expect(screen.getByLabelText('Not done')).toBeOnTheScreen();
+      expect(screen.getByText('Review your entries')).toBeOnTheScreen();
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      expect(screen.queryByTestId('handover-done')).toBeNull();
+      expect(app.requestsTo('POST', '/team-entries/{id}/roles/handover')).toHaveLength(1);
+    });
+
+    it('§4.9: a failed handover is retried under the same idempotency key', async () => {
+      let attempt = 0;
+      const app = renderRoster({
+        routes: routes({
+          'POST /team-entries/{id}/roles/handover': () => {
+            attempt += 1;
+            return attempt === 1
+              ? fakeResponse(
+                  503,
+                  apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+                )
+              : fakeResponse(200, handover());
+          },
+        }),
+      });
+      await chooseCaptainToPat();
+      expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+      expect(screen.queryByTestId('handover-done')).toBeNull();
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      expect(await screen.findByTestId('handover-done')).toBeOnTheScreen();
+      const keys = app.keysOf('POST', '/team-entries/{id}/roles/handover');
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).toBe(keys[0]);
+      expect(app.bodiesOf('POST', '/team-entries/{id}/roles/handover')[1]).toEqual(
+        app.bodiesOf('POST', '/team-entries/{id}/roles/handover')[0],
+      );
+      await app.settle();
+    });
+
+    describe('an unknown outcome (no answer before the client gives up)', () => {
+      beforeEach(() => jest.useFakeTimers());
+      afterEach(() => jest.useRealTimers());
+
+      it('is never shown as done, and the retry reuses the same key', async () => {
+        const app = createTeamsTestApp({
+          routes: routes({
+            'POST /team-entries/{id}/roles/handover': { status: 200, body: handover() },
+          }),
+        });
+        withholdAnswers(app, 'POST', /\/roles\/handover$/);
+        render(<RosterScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+        await chooseCaptainToPat();
+        await waitFor(() =>
+          expect(app.requestsTo('POST', '/team-entries/{id}/roles/handover')).toHaveLength(1),
+        );
+        await act(async () => {
+          jest.advanceTimersByTime(DEFAULT_TIMEOUT_MS);
+        });
+        expect(
+          await screen.findByLabelText('No answer yet: this may already have been recorded'),
+        ).toBeOnTheScreen();
+        expect(screen.getByText(/Error code: TIMEOUT/)).toBeOnTheScreen();
+        expect(screen.queryByTestId('handover-done')).toBeNull();
+        expect(screen.queryByLabelText(/is captain from/)).toBeNull();
+        fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+        expect(await screen.findByTestId('handover-done')).toBeOnTheScreen();
+        const [first, second] = app.keysOf('POST', '/team-entries/{id}/roles/handover');
+        expect(second).toBe(first);
+        await app.settle();
+      });
     });
 
     it('a refused handover is "not available"', async () => {

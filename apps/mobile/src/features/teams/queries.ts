@@ -99,6 +99,13 @@ export interface Viewer {
    * managers see (`pendingInvitations` is null for everyone else).
    */
   captainView: boolean;
+  /**
+   * The API says the viewer acts as captain (`viewer.actingAsCaptain`): the captain, or a
+   * co-captain only when the rule set lets co-captains act as captain. A co-captain who may not
+   * still gets the management view (the API fills its lists for co-captains), but not what the API
+   * allows the captain only, such as contacting the operating team about the team (SUP-01).
+   */
+  actingAsCaptain: boolean;
   /** This person is on the effective roster. */
   onRoster: boolean;
   /** The kernel allows this action on the entry now (`viewer.availableActions`). */
@@ -112,18 +119,33 @@ function effective(record: { effectiveFrom: string; effectiveTo: string | null }
   );
 }
 
+/** The management view (`Viewer.captainView`) from the workspace alone. */
+export function hasManagementView(workspace: Workspace): boolean {
+  return workspace.viewer.actingAsCaptain || workspace.pendingInvitations !== null;
+}
+
+/**
+ * Shown when the management view is on but the API does not list the action now. The API names
+ * no reason (a season that ended, an entry not approved yet, a co-captain the rule set does not
+ * let act as captain), so neither does the app.
+ */
+export function notAvailableNow(what: string): string {
+  return `${what} is not available for this team now.`;
+}
+
 export function viewerOf(workspace: Workspace, personId: string | null, now: Date): Viewer {
   const allowed = new Set(workspace.viewer.availableActions);
   const can = (action: TeamActionId) => allowed.has(action);
-  const captainView = workspace.viewer.actingAsCaptain || workspace.pendingInvitations !== null;
-  if (!personId) return { personId: null, captainView, onRoster: false, can };
+  const actingAsCaptain = workspace.viewer.actingAsCaptain;
+  const captainView = hasManagementView(workspace);
+  if (!personId) return { personId: null, captainView, actingAsCaptain, onRoster: false, can };
   const onRoster = workspace.roster.some(
     (m) =>
       m.personId === personId &&
       (m.status === 'active' || m.status === 'guest' || m.status === 'substitute') &&
       effective(m, now),
   );
-  return { personId, captainView, onRoster, can };
+  return { personId, captainView, actingAsCaptain, onRoster, can };
 }
 
 /** Current captain and co-captain role records (effective now), captain first. */

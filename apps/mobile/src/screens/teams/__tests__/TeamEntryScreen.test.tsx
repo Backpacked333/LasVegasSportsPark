@@ -219,6 +219,9 @@ describe('SCR-C-27 TeamEntryScreen', () => {
         status: 200,
         body: {
           ...prior,
+          // A roster player: no management lists, no workspace action.
+          pendingInvitations: null,
+          pendingJoinRequests: null,
           viewer: { roles: ['member'], actingAsCaptain: false, availableActions: [] },
         },
       },
@@ -228,6 +231,32 @@ describe('SCR-C-27 TeamEntryScreen', () => {
         'Renewing this team is not available to you. Only a captain of the prior entry can renew it.',
       ),
     ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Renew the team entry' })).toBeNull();
+    expect(app.requestsTo('GET', '/seasons')).toHaveLength(0);
+  });
+
+  it('CMP-02: a captain whose entry the API does not list renewal for is given no invented reason', async () => {
+    // The captain of an entry still awaiting approval: the API lists renewal for approved entries
+    // only and says nothing about why, so the app names no reason either.
+    const app = renderEntry(IDS.priorEntry, {
+      'GET /team-entries/{id}': {
+        status: 200,
+        body: {
+          ...prior,
+          entry: teamEntry({ id: IDS.priorEntry, seasonId: IDS.priorSeason, status: 'applied' }),
+          viewer: {
+            roles: ['captain'],
+            actingAsCaptain: true,
+            availableActions: ['competition.manage_team', 'competition.invite_player'],
+          },
+        },
+      },
+    });
+    expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
+    expect(
+      screen.getByText('Renewing this team is not available for this team now.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/Only a captain/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Renew the team entry' })).toBeNull();
     expect(app.requestsTo('GET', '/seasons')).toHaveLength(0);
   });

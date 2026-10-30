@@ -116,6 +116,34 @@ describe('SCR-C-28 StandingsScreen', () => {
     });
   });
 
+  it('SPK-SCHED-008: a played game is dated in the facility’s zone from its fixture read', async () => {
+    // 05:00 UTC on Oct 18 is 10 PM on Oct 17 in Las Vegas: the facility's day is shown.
+    const late = fixture({
+      id: IDS.playedFixture,
+      status: 'played',
+      scheduledStart: '2026-10-18T05:00:00.000Z',
+      scheduledEnd: '2026-10-18T06:00:00.000Z',
+    });
+    const app = createTeamsTestApp({
+      routes: routes({
+        'GET /seasons/{id}/fixtures': { status: 200, body: { items: [late], nextCursor: null } },
+        'GET /fixtures/{id}': {
+          status: 200,
+          body: fixtureDetail({
+            scheduledStart: late.scheduledStart,
+            scheduledEnd: late.scheduledEnd,
+            venue: venue(),
+          }),
+        },
+      }),
+    });
+    render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    const row = await screen.findByTestId(`result-${IDS.playedFixture}`);
+    expect(await within(row).findByText('Oct 17, 2026')).toBeOnTheScreen();
+    expect(app.requestsTo('GET', '/fixtures/{id}')[0]?.params).toEqual({ id: IDS.playedFixture });
+    await app.settle();
+  });
+
   it('shows the published bracket where the season has one', async () => {
     const app = createTeamsTestApp({
       routes: routes({

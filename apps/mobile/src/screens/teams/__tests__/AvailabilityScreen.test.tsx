@@ -302,6 +302,32 @@ describe('SCR-C-24 AvailabilityScreen', () => {
       await app.settle();
     });
 
+    it('§4.9: a failed request is retried under the same idempotency key', async () => {
+      let attempt = 0;
+      const app = renderAvailability({
+        'POST /fixtures/{id}/availability-requests': () => {
+          attempt += 1;
+          return attempt === 1
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(201, availabilityRequest({ recipientCount: 1 }));
+        },
+      });
+      fireEvent.press(
+        await screen.findByRole('button', { name: 'Send a reminder to players without an answer' }),
+      );
+      expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+      expect(screen.queryByLabelText(/^Asked /)).toBeNull();
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      expect(await screen.findByLabelText('Asked 1 person without an answer')).toBeOnTheScreen();
+      const keys = app.keysOf('POST', '/fixtures/{id}/availability-requests');
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).toBe(keys[0]);
+      await app.settle();
+    });
+
     it('a request after kickoff is refused and said so', async () => {
       renderAvailability({ 'POST /fixtures/{id}/availability-requests': closed });
       fireEvent.press(

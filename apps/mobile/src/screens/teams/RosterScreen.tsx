@@ -36,6 +36,7 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay } from '../../features/teams/format';
 import { InvitationIssued } from '../../features/teams/InvitationIssued';
 import {
+  notAvailableNow,
   rosterNames,
   TEAM_ACTIONS,
   WORKSPACE_KEY,
@@ -449,7 +450,7 @@ function RosterContent({
         <InviteForm workspace={workspace} />
       ) : (
         <Section title="Invite players">
-          <Body>Inviting players is not available for this team now.</Body>
+          <Body>{notAvailableNow('Inviting players')}</Body>
         </Section>
       )}
       <Section title="Open invitations">

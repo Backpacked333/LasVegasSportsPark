@@ -6,7 +6,7 @@
  * pending-appeal states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { formatInstant } from '../../../features/teams/format';
 import {
   IDS,
@@ -261,6 +261,41 @@ describe('SCR-C-29 DisputeScreen', () => {
       await app.settle();
     });
 
+    it('§4.9: a failed withdrawal is retried under the same idempotency key', async () => {
+      let attempt = 0;
+      const app = renderDispute({
+        ...open(),
+        'POST /disputes/{id}/withdraw': () => {
+          attempt += 1;
+          return attempt === 1
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+              )
+            : fakeResponse(200, dispute({ status: 'withdrawn', revision: 2 }));
+        },
+      });
+      fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this dispute' }));
+      fireEvent.changeText(screen.getByLabelText('Reason for withdrawing'), 'Settled.');
+      fireEvent.press(screen.getByRole('button', { name: 'Withdraw the dispute' }));
+      expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+      expect(screen.queryByText(/You withdrew this dispute/)).toBeNull();
+      // The reason is kept for the retry.
+      expect(screen.getByLabelText('Reason for withdrawing').props.value).toBe('Settled.');
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+      expect(
+        await screen.findByText('You withdrew this dispute. The league no longer reviews it.'),
+      ).toBeOnTheScreen();
+      const keys = app.keysOf('POST', '/disputes/{id}/withdraw');
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).toBe(keys[0]);
+      expect(app.bodiesOf('POST', '/disputes/{id}/withdraw')).toEqual([
+        { reason: 'Settled.', expectedRevision: 1 },
+        { reason: 'Settled.', expectedRevision: 1 },
+      ]);
+      await app.settle();
+    });
+
     it('a decided dispute offers no withdrawal', async () => {
       renderDispute({
         'GET /fixtures/{id}/disputes': {
@@ -288,8 +323,13 @@ describe('SCR-C-29 DisputeScreen', () => {
       expect(screen.getByText(/Error code: INVALID_TRANSITION/)).toBeOnTheScreen();
       const reads = app.requestsTo('GET', '/fixtures/{id}/disputes').length;
       fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
-      await screen.findByRole('button', { name: 'Withdraw this dispute' });
-      expect(app.requestsTo('GET', '/fixtures/{id}/disputes').length).toBeGreaterThan(reads);
+      // Wait for the read the reload sends, not only for the button the reset brings back.
+      await waitFor(() =>
+        expect(app.requestsTo('GET', '/fixtures/{id}/disputes').length).toBeGreaterThan(reads),
+      );
+      expect(
+        await screen.findByRole('button', { name: 'Withdraw this dispute' }),
+      ).toBeOnTheScreen();
       await app.settle();
     });
 

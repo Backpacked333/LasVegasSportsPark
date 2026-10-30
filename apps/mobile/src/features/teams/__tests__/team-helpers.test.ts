@@ -206,10 +206,15 @@ describe('viewer (presentation only, SPK-CAP-002, CMP-02)', () => {
   it('follows the workspace’s viewer and the roster for the signed-in person', () => {
     const ws = workspace();
     const captain = viewerOf(ws, IDS.me, NOW);
-    expect(captain).toMatchObject({ personId: IDS.me, captainView: true, onRoster: true });
+    expect(captain).toMatchObject({
+      personId: IDS.me,
+      captainView: true,
+      actingAsCaptain: true,
+      onRoster: true,
+    });
     expect(captain.can(TEAM_ACTIONS.handoverRole)).toBe(true);
     const player = viewerOf(playerWorkspace(), IDS.player2, NOW);
-    expect(player).toMatchObject({ captainView: false, onRoster: true });
+    expect(player).toMatchObject({ captainView: false, actingAsCaptain: false, onRoster: true });
     expect(player.can(TEAM_ACTIONS.invite)).toBe(false);
     // A pending join request is not on the roster.
     expect(viewerOf(ws, IDS.player3, NOW).onRoster).toBe(false);
@@ -228,6 +233,8 @@ describe('viewer (presentation only, SPK-CAP-002, CMP-02)', () => {
       viewer: { roles: ['co_captain'], actingAsCaptain: false, availableActions: [] },
     });
     expect(viewerOf(coCaptain, IDS.me, NOW).captainView).toBe(true);
+    // ...but does not act as captain: what the API allows the captain only is not offered.
+    expect(viewerOf(coCaptain, IDS.me, NOW).actingAsCaptain).toBe(false);
     expect(viewerOf(coCaptain, IDS.me, NOW).can(TEAM_ACTIONS.manageRoster)).toBe(false);
   });
 

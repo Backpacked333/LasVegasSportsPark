@@ -7,7 +7,8 @@
  * Team invitations still open for the person (`GET /v1/me/team-invitations`, CMP-03) are listed
  * with the invitation's own detail (SCR-C-17) and can be declined here
  * (`POST /v1/team-invitations/{id}/decline`, the revision read sent). Creating a team entry is
- * SCR-C-27; renewing starts from last season's team (SCR-C-22).
+ * SCR-C-27; renewing starts from last season's team (SCR-C-22), which is why approved entries of
+ * past seasons stay listed (each card names its season); this is a choice, not an API limit.
  *
  * The API decides which teams and which people each viewer sees (§4.10, SPK-CAP-002); family
  * members are named through `GET /v1/person-names` (given names only, §4.14) and never put in a
@@ -246,6 +247,8 @@ function InvitationItem({
           status: invitation.effectiveStatus,
           expiresAt: invitation.expiresAt,
         })}
+        // The id only (§4.14). The detail reads it without a token once SCR-C-17's tokenless
+        // `GET /v1/team-invitations/{id}` read (stage4-m-account) is merged; see the README.
         onPress={() => router.push(teamInvitationRoute(invitation.id))}
         accessibilityHint="Opens the invitation, where you can accept it from the link you received"
       />

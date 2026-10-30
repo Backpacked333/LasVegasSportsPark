@@ -1,13 +1,19 @@
 /**
- * SCR-C-24 Availability request and responses (SPK-CAP-001, SPK-CAP-003, SPK-READY-002, DEC-064).
- * For each upcoming game of the team (`GET /v1/team-entries/{id}`): the roster's answers counted
- * per state; the answers this person may give, read from the game (`GET /v1/fixtures/{id}`,
- * CMP-04 `responses`: their own and those of every rostered child they hold `register` over, with
- * each answer's revision); and, for the captain, the request to the players without an answer
+ * SCR-C-24 Availability request and responses (SPK-CAP-001, SPK-CAP-003, SPK-READY-002, DEC-064,
+ * DEC-090). For each upcoming game of the team (`GET /v1/team-entries/{id}`): the roster's answers
+ * counted per state; the answers this person may give, read from the game (`GET /v1/fixtures/{id}`,
+ * CMP-04 `responses`, with each answer's revision); and, for the captain, the request to the
+ * players without an answer
  * (features/teams/AvailabilityRequests.tsx, CMP-14). An answer is recorded with
  * `POST /v1/fixtures/{id}/availability`, sending the revision read (`expectedRevision`) when an
  * answer exists. Availability is never shown as attendance or eligibility, and a missing answer
  * never blocks a game. Times are in the facility's time zone from the game's venue (SPK-SCHED-008).
+ *
+ * Answering for a child: which permission allows it is DEC-090 (**Pending decision**). The API
+ * lists in `responses` the person's own answer and those of every rostered child they hold
+ * `register` over, its proposed rule; the screen offers exactly what the API lists and holds no
+ * default of its own, so it follows the decision when the API does. SCR-C-20's RSVP control
+ * answers for the signed-in person only and does not read `responses` (see the teams README).
  *
  * "Tentative" is offered only once DEC-064 (Product and operations) decides to enable it: until
  * then it is not offered, and an existing tentative answer is still shown as such. When answers

@@ -3,9 +3,10 @@
  * the API in integer minor units with their currency (SPK-PAY-001) and are never computed here;
  * instants are the server's.
  *
- * Times are shown in the facility's time zone where the API gives one (a fixture's `venue.timezone`,
- * CMP-04, SPK-SCHED-008), and otherwise in the device's time zone; the zone is always named. The
- * workspace's upcoming games carry no venue (reported), so they use the device's zone.
+ * Times are shown in the facility's time zone where the API gives one (a fixture's `venue.timezone`
+ * from `GET /v1/fixtures/{id}`, CMP-04; `MyTeamEntry.nextFixture.venue`; SPK-SCHED-008), and
+ * otherwise (while that read loads or when it fails) in the device's time zone; the zone is always
+ * named.
  */
 
 /** Minor-unit digits of an ISO 4217 currency from the platform's Intl data (USD 2, JPY 0). */
@@ -90,15 +91,22 @@ export function formatInstant(iso: string, timeZone?: string | null): string {
   return new Intl.DateTimeFormat('en-US', options).format(date);
 }
 
-/** An instant's calendar day as "Oct 24, 2026" in the device's time zone. */
-export function formatDay(iso: string): string {
+/**
+ * An instant's calendar day as "Oct 24, 2026", in the facility's IANA zone when given
+ * (SPK-SCHED-008) and the device's zone otherwise (also for a zone the platform does not know).
+ */
+export function formatDay(iso: string, timeZone?: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(date);
+  const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat('en-US', { ...options, timeZone }).format(date);
+    } catch {
+      // RangeError for a zone the platform does not know: the device's zone, below.
+    }
+  }
+  return new Intl.DateTimeFormat('en-US', options).format(date);
 }
 
 /** "1st", "2nd", "3rd", "11th", "22nd" for a standings position. */

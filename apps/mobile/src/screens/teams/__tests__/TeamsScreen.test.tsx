@@ -5,7 +5,7 @@
  * declinable here with its revision; empty, error, not-available, offline and signed-out states.
  */
 import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   baseRoutes,
@@ -294,8 +294,14 @@ describe('SCR-C-21 TeamsScreen', () => {
       expect(await screen.findByLabelText('This changed since you opened it')).toBeOnTheScreen();
       const reads = app.requestsTo('GET', '/me/team-invitations').length;
       fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
-      await screen.findByRole('button', { name: 'Decline the invitation to join Canyon Hawks' });
-      expect(app.requestsTo('GET', '/me/team-invitations').length).toBeGreaterThan(reads);
+      // Wait for the read the reload sends, not for a button that never left the screen.
+      await waitFor(() =>
+        expect(app.requestsTo('GET', '/me/team-invitations').length).toBeGreaterThan(reads),
+      );
+      expect(
+        await screen.findByRole('button', { name: 'Decline the invitation to join Canyon Hawks' }),
+      ).toBeOnTheScreen();
+      expect(screen.queryByLabelText('This changed since you opened it')).toBeNull();
       await app.settle();
     });
 

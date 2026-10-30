@@ -5,8 +5,10 @@
  * end and start at one instant, kept as history. Offered only when the workspace lists
  * `competition.handover_team_role` for this viewer (CMP-02). The new holder must be an active
  * roster member; the API also checks eligibility (ELIGIBILITY_FAILED with reasons) and its other
- * rules (ROLE_NOT_HELD, ROLE_ALREADY_HELD, NOT_ON_ROSTER, and an adult captain, a proposed default
- * the API applies), which are shown with their code and never pre-decided here.
+ * rules (ROLE_NOT_HELD, ROLE_ALREADY_HELD, NOT_ON_ROSTER, and CAPTAIN_MUST_BE_ADULT, a proposed
+ * default the API applies), sent as VALIDATION_FAILED with the rule in `details.code`: the API's
+ * message is shown with both codes ("Error code: VALIDATION_FAILED (CAPTAIN_MUST_BE_ADULT)", see
+ * CommandFailure) and nothing is pre-decided here.
  *
  * States: ready; validation failure (no role, holder or reason chosen; the API's reasons);
  * permission restriction ("not available"); stale version (the entry changed: reload); offline

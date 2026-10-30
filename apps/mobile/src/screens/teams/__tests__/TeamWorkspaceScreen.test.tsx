@@ -6,7 +6,8 @@
  * available, offline with age).
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { formatInstant } from '../../../features/teams/format';
 import {
   CAPTAIN_ACTIONS,
   IDS,
@@ -15,6 +16,7 @@ import {
   me,
   playerWorkspace,
   standings,
+  upcomingFixtureDetail,
   workspace,
 } from '../../../features/teams/testing/fixtures';
 import { createTestApp } from '../../../testing/test-app';
@@ -25,6 +27,11 @@ jest.mock('expo-router', () => ({
   ...jest.requireActual('expo-router'),
   useRouter: () => mockRouter,
 }));
+
+/** A string as a literal inside a regular expression. */
+function literal(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function routes(overrides = {}) {
   return baseRoutes({
@@ -109,6 +116,43 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
     expect(screen.queryByText(/Not eligible/)).toBeNull();
     // A pending join request is not a teammate.
     expect(screen.queryByText('Riley Requester')).toBeNull();
+  });
+
+  it('SPK-SCHED-008: an upcoming game’s time is in the facility’s zone from its fixture read', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /fixtures/{id}': { status: 200, body: upcomingFixtureDetail() } }),
+    });
+    render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    // 17:00 UTC is 10:00 in Las Vegas (America/Los_Angeles, PDT), named.
+    expect(
+      await screen.findByRole('button', { name: /vs Canyon Hawks.*Sat, Oct 31, 10:00\sAM PDT/ }),
+    ).toBeOnTheScreen();
+    const read = app.fake.requests.find((r) => r.route === '/fixtures/{id}');
+    expect(read?.params).toEqual({ id: IDS.fixture });
+  });
+
+  it('SPK-SCHED-008: when the fixture read fails the time is in the device’s zone, still named', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /fixtures/{id}': () =>
+          fakeResponse(
+            500,
+            apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+          ),
+      }),
+    });
+    render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/fixtures/{id}').length).toBeGreaterThan(
+        0,
+      ),
+    );
+    const device = formatInstant('2026-10-31T17:00:00.000Z');
+    expect(
+      await screen.findByRole('button', {
+        name: new RegExp(`vs Canyon Hawks.*${literal(device)}`),
+      }),
+    ).toBeOnTheScreen();
   });
 
   it('shows the empty games state when nothing is scheduled yet', async () => {
@@ -246,6 +290,34 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
         screen.getByLabelText('Contacting the operating team needs a connection'),
       ).toBeOnTheScreen();
       expect(screen.getByLabelText('Title').props.value).toBe('Lights');
+    });
+
+    it('a co-captain the rule set does not let act as captain is pointed to Support, not given the form', async () => {
+      // The API fills the management lists for every co-captain, but the support request takes
+      // the captain role, which this co-captain does not act in (actingAsCaptain false).
+      const app = createTestApp({
+        routes: routes({
+          'GET /team-entries/{id}': {
+            status: 200,
+            body: workspace({
+              viewer: {
+                roles: ['co_captain'],
+                actingAsCaptain: false,
+                availableActions: ['competition.invite_player'],
+              },
+            }),
+          },
+        }),
+      });
+      render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+      // The management view stays (the API filled its lists for this viewer)...
+      expect(await screen.findByTestId('captain-readiness')).toBeOnTheScreen();
+      // ...but contacting the operating team about the team is not offered.
+      expect(screen.queryByTestId('contact-operations')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Send to the operating team' })).toBeNull();
+      fireEvent.press(screen.getByRole('button', { name: 'Open Support' }));
+      expect(mockRouter.push).toHaveBeenCalledWith('/support');
+      expect(app.fake.requests.filter((r) => r.route === '/me/support-requests')).toHaveLength(0);
     });
 
     it('a roster player is pointed to Support instead', async () => {
