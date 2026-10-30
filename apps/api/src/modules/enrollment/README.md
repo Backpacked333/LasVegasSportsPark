@@ -219,8 +219,10 @@ Payloads carry identifiers only (§4.14).
   other household's application blocks while it is under review or has a pending or confirmed
   enrollment; an accepted one whose line was released, removed or abandoned does not (the one
   entitlement is guaranteed by `enrollments_equivalent_active_idx`: the first hold wins). A
-  household reuses its own accepted application (its approval or override). **Verified**,
-  `__tests__/registration-integrity.spec.ts`.
+  household reuses its own accepted application (its approval or override). Trial participations
+  hide a customer registrant the same way (`registeredBy` redacted, `assistedByPersonId` null) on
+  `GET /me/trial-participations`, `GET /trial-participations/{id}` and the command responses.
+  **Verified**, `__tests__/registration-integrity.spec.ts`, `__tests__/customer-lists.spec.ts`.
 - **Checkout ownership (§4.11, SPK-PAY-007):** while a basket is `checking_out`, `release` and
   the cancel of its pending enrollments answer 409 `CHECKOUT_IN_PROGRESS` (with the `orderRef`);
   finance ends it through `finishCheckout('abandoned')` once no attempt can still capture.
