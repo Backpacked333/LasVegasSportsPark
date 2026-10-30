@@ -20,10 +20,13 @@ export const RAISE_OVERDUE_TASK_EXCEPTIONS_JOB = 'facilities.raise_overdue_task_
  *   in its own transaction at the runner's clock instant. Every open task of an escalating
  *   severity whose due instant has passed gets the `facilities.maintenance_task_overdue`
  *   exception; its dedupe key (`maintenance_task:<id>:overdue`) keeps one open exception per
- *   task, so a replay or a later run raises nothing new. The outbox due timer
- *   (`facilities.maintenance_task_due_reached` → escalateIfOverdue) is unchanged: the sweep
- *   covers tasks whose timer was lost, re-dated or written before the timer existed. Which
- *   severities escalate is the proposed FACILITIES_POLICY default (pending, DEC-001).
+ *   task, so a replay or a later run raises nothing new. The tasks are locked FOR UPDATE SKIP
+ *   LOCKED, and the task command settles the exception once the task is no longer overdue
+ *   (ASYNC-09), so a sweep racing a resolution leaves no open exception behind. The outbox due
+ *   timer (`facilities.maintenance_task_due_reached` → escalateIfOverdue, which reads the task
+ *   row locked) still fires: the sweep covers tasks whose timer was lost, re-dated or written
+ *   before the timer existed. Which severities escalate is the proposed FACILITIES_POLICY default
+ *   (pending, DEC-001).
  *
  * A repeatedly failing run is owned by the facilities operator queue.
  */
