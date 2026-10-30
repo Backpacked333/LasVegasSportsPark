@@ -3,7 +3,7 @@
  * SPK-UX-008, SPK-UX-009, §4.10, §4.14).
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   BOOKING_ITEM,
   calendar,
@@ -266,6 +266,30 @@ describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility 
         "Times are in this device's time zone (PDT). The facility's time zone was not given for this.",
       ),
     ).toBeOnTheScreen();
+  });
+
+  it('§4.15: the age shown covers the fixtures and team reads too, not only the calendar', async () => {
+    let now = new Date('2026-10-24T12:00:00.000Z');
+    let teamReads = 0;
+    const app = createTestApp({
+      now: () => now,
+      routes: routes({
+        'GET /me/fixtures': ok([fixtureDetail()]),
+        'GET /me/team-entries': () => {
+          teamReads += 1;
+          return fakeResponse(200, [myTeamEntry({ members: [CHILD] })]);
+        },
+      }),
+    });
+    render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByTestId('family-calendar')).toBeOnTheScreen();
+    await waitFor(() => expect(teamReads).toBe(1));
+    // Forty minutes later the calendar alone is read again; the fixtures and teams are not.
+    now = new Date('2026-10-24T12:40:00.000Z');
+    await act(async () => {
+      await app.queryClient.refetchQueries({ queryKey: ['api', '/me/family-calendar'] });
+    });
+    expect(await screen.findByText(/40 minutes ago/)).toBeOnTheScreen();
   });
 
   it('a team fixture read that fails shows its code; the calendar stays', async () => {

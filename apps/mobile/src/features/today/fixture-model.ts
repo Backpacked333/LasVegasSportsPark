@@ -15,7 +15,7 @@ import type { Schema } from '@sportspark/api-client';
 import type { ActivityCardModel } from './NextActivityCard';
 import type { ScheduleChange } from './notices';
 import { UNNAMED_PERSON } from './queries';
-import { fixtureStatus } from './status';
+import { fixtureAcceptsRsvp, fixtureStatus } from './status';
 import { zoneOf } from './time';
 
 type FixtureDetail = Schema<'FixtureDetail'>;
@@ -93,12 +93,35 @@ export function viewerOnRoster(fixture: FixtureDetail): boolean | null {
   return fixture.rosterStatus !== null;
 }
 
+/** SCR-C-04 "required action" for an open availability request the viewer has not answered. */
+export const AVAILABILITY_REQUEST_ACTION = 'Answer the availability request for this fixture.';
+
+/**
+ * The card's required action (SCR-C-04, SPK-UX-003 "actions required before participation"): an
+ * open `availability_request` notice about the fixture (COM-06) while the fixture still takes
+ * answers and the viewer, on a roster, has not answered. A viewer the fixture read places on no
+ * roster (a guardian; answering for a child is DEC-090) is told so by the RSVP control instead.
+ */
+export function fixtureRequiredAction(
+  fixture: FixtureDetail,
+  viewerId: string | null | undefined,
+  request: { kind: string } | null,
+): string | null {
+  if (!request || !fixtureAcceptsRsvp(fixture.status)) return null;
+  if (viewerOnRoster(fixture) === false) return null;
+  const answer = ownResponse(fixture, viewerId)?.state ?? fixture.myResponse ?? null;
+  if (answer && answer !== 'no_response') return null;
+  return AVAILABILITY_REQUEST_ACTION;
+}
+
 export interface FixtureCardInput {
   fixture: FixtureDetail;
   teams: readonly MyTeamEntry[] | undefined;
   names: Map<string, string>;
   /** The newest schedule notice about the fixture's event, for old and new details. */
   change: ScheduleChange | null;
+  /** From `fixtureRequiredAction`; none when absent. */
+  requiredAction?: string | null;
 }
 
 /** The SCR-C-04 card of a fixture: whose it is, opponent, venue, time on the facility clock. */
@@ -107,6 +130,7 @@ export function fixtureCardModel({
   teams,
   names,
   change,
+  requiredAction = null,
 }: FixtureCardInput): ActivityCardModel {
   const mine = mySide(fixture, teams);
   const away = awayOf(fixture);
@@ -135,6 +159,6 @@ export function fixtureCardModel({
     zone: zoneOf(after?.timezone, change?.before?.timezone, venue?.timezone),
     status: fixtureStatus(fixture.status),
     change,
-    requiredAction: null,
+    requiredAction,
   };
 }

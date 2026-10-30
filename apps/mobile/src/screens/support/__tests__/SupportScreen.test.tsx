@@ -20,6 +20,9 @@ import {
   myTeamEntry,
   names,
   ok,
+  SELF,
+  SELF_CAPTAIN,
+  teamWorkspace,
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { SupportCaseScreen } from '../SupportCaseScreen';
@@ -250,6 +253,7 @@ describe('SCR-C-38 SupportScreen: opening a request (POST /v1/me/support-request
           ],
         },
       ]),
+      'GET /team-entries/{id}': ok(teamWorkspace('Lions', SELF_CAPTAIN)),
     });
     const form = await screen.findByTestId('support-request');
     fireEvent.press(await within(form).findByRole('radio', { name: 'Your team Lions, Fall 2026' }));
@@ -268,6 +272,113 @@ describe('SCR-C-38 SupportScreen: opening a request (POST /v1/me/support-request
       teamEntryId: HOME_ENTRY,
       relatedRecords: [],
     });
+  });
+
+  it("SPK-CAP-001: a co-captain is offered the team only when the API says they act as captain (the rule set's choice)", async () => {
+    const coCaptain = {
+      ...myTeamEntry(),
+      members: [{ personId: SELF, roles: ['co_captain'], rosterStatus: 'active' }],
+    };
+    const workspace = (actingAsCaptain: boolean) => {
+      const base = teamWorkspace('Lions');
+      return { ...base, viewer: { roles: ['co_captain'], actingAsCaptain, availableActions: [] } };
+    };
+    const app = renderSupport({
+      'GET /me/team-entries': ok([coCaptain]),
+      'GET /team-entries/{id}': ok(workspace(false)),
+    });
+    const form = await screen.findByTestId('support-request');
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.route === '/team-entries/{id}')?.params.id).toBe(
+        HOME_ENTRY,
+      ),
+    );
+    expect(await within(form).findByRole('radio', { name: 'Sam' })).toBeOnTheScreen();
+    expect(within(form).queryByRole('radio', { name: /^Your team Lions/ })).toBeNull();
+
+    screen.unmount();
+    renderSupport({
+      'GET /me/team-entries': ok([coCaptain]),
+      'GET /team-entries/{id}': ok(workspace(true)),
+    });
+    expect(
+      await screen.findByRole('radio', { name: 'Your team Lions, Fall 2026' }),
+    ).toBeOnTheScreen();
+
+    screen.unmount();
+    // A workspace the API does not serve offers nothing, without the code.
+    renderSupport({
+      'GET /me/team-entries': ok([coCaptain]),
+      'GET /team-entries/{id}': fail(404, 'NOT_FOUND'),
+    });
+    expect(await screen.findByRole('radio', { name: 'Sam' })).toBeOnTheScreen();
+    expect(screen.queryByRole('radio', { name: /^Your team Lions/ })).toBeNull();
+    expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
+  });
+
+  it('a registration chosen and then left by changing what the request is about is not sent', async () => {
+    const app = renderSupport({
+      'GET /enrollments': (req) =>
+        fakeResponse(200, {
+          items: req.query.participantPersonId === CHILD ? [enrollment()] : [],
+          nextCursor: null,
+        }),
+    });
+    const form = await fillDraft('Registration');
+    fireEvent.press(await within(form).findByRole('radio', { name: 'Junior Skills, Confirmed' }));
+    fireEvent.press(within(form).getByRole('radio', { name: 'A schedule or activity' }));
+    // Nothing linked stays hidden: no registration list and no linked record is left on screen.
+    expect(within(form).queryByRole('radio', { name: 'Junior Skills, Confirmed' })).toBeNull();
+    expect(within(form).queryByTestId('support-about')).toBeNull();
+    fireEvent.press(within(form).getByRole('button', { name: 'Send request' }));
+    await screen.findByLabelText('Request sent');
+    expect(sent(app)[0]?.body).toEqual(
+      expect.objectContaining({ category: 'schedule', relatedRecords: [] }),
+    );
+  });
+
+  it('a registration chosen and then left by naming a team instead is not sent', async () => {
+    const app = renderSupport({
+      'GET /enrollments': (req) =>
+        fakeResponse(200, {
+          items: req.query.participantPersonId === CHILD ? [enrollment()] : [],
+          nextCursor: null,
+        }),
+      'GET /me/team-entries': ok([
+        {
+          ...myTeamEntry(),
+          members: [{ personId: SELF, roles: ['captain'], rosterStatus: 'active' }],
+        },
+      ]),
+      'GET /team-entries/{id}': ok(teamWorkspace('Lions', SELF_CAPTAIN)),
+    });
+    const form = await fillDraft('Registration');
+    fireEvent.press(await within(form).findByRole('radio', { name: 'Junior Skills, Confirmed' }));
+    fireEvent.press(await within(form).findByRole('radio', { name: 'Your team Lions, Fall 2026' }));
+    fireEvent.press(within(form).getByRole('button', { name: 'Send request' }));
+    await screen.findByLabelText('Request sent');
+    expect(sent(app)[0]?.body).toEqual(
+      expect.objectContaining({ category: 'team', teamEntryId: HOME_ENTRY, relatedRecords: [] }),
+    );
+  });
+
+  it('a registration a link named stays on screen with "Do not link it" whatever the request is about', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<SupportScreen linked={{ type: 'enrollment', id: ENROLLMENT }} />, {
+      wrapper: app.wrapper,
+    });
+    const form = await screen.findByTestId('support-request');
+    fireEvent.press(await within(form).findByRole('radio', { name: 'A schedule or activity' }));
+    expect(
+      within(form).getByText('About this registration (from the link you followed).'),
+    ).toBeOnTheScreen();
+    fireEvent.press(within(form).getByRole('button', { name: 'Do not link it' }));
+    expect(within(form).queryByTestId('support-about')).toBeNull();
+    fireEvent.changeText(within(form).getByLabelText('Title'), 'Moved session');
+    fireEvent.changeText(within(form).getByLabelText('What do you need?'), 'Which pitch?');
+    fireEvent.press(within(form).getByRole('button', { name: 'Send request' }));
+    await screen.findByLabelText('Request sent');
+    expect(sent(app)[0]?.body).toEqual(expect.objectContaining({ relatedRecords: [] }));
   });
 
   it('§4.15: offline, sending is disabled and the draft stays', async () => {

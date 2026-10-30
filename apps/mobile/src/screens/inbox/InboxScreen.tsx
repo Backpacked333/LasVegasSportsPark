@@ -174,10 +174,12 @@ function NoticeDetail({
         />
       ) : null}
       {canAcknowledge ? (
+        // Waits for the read just sent: it bumps the revision, so acknowledging now would send
+        // the old one and answer STALE_REVISION (§4.9).
         <Button
           label="Acknowledge"
-          busy={acknowledge.isProcessing}
-          disabled={offline}
+          busy={acknowledge.isProcessing || read.isProcessing}
+          disabled={offline || read.isProcessing}
           accessibilityHint="Records that you have seen this notice"
           onPress={acknowledgeNow}
           testID={`notice-ack-${item.attemptId}`}

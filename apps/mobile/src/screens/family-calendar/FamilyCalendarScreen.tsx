@@ -48,7 +48,7 @@ import {
   usePersonNames,
   useSignedIn,
 } from '../../features/today/queries';
-import { Caption, Section, SectionQueryState } from '../../features/today/Section';
+import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
 import { sessionHref } from '../../features/today/session-activity';
 import { calendarItemStatus, fixtureStatus } from '../../features/today/status';
 import {
@@ -275,7 +275,15 @@ function FamilyCalendarContent() {
 
   return (
     <View testID="family-calendar">
-      <LastUpdated at={calendar.updatedAt} now={now} />
+      {/* §4.15: the age of the oldest read shown (calendar, fixtures and whose team each is). */}
+      <LastUpdated
+        at={oldestUpdate([
+          calendar.updatedAt,
+          fixturesHidden ? null : fixturesRead.updatedAt,
+          teams.updatedAt,
+        ])}
+        now={now}
+      />
       {navigation}
       {notice ? <Caption>{notice}</Caption> : null}
       {people.length <= 1 ? (

@@ -155,6 +155,9 @@ export function useSessionActivity(
         basket.data,
         order.data,
         basket.error !== null || order.error !== null,
+        // A read still to answer is "checking", never "payment outstanding" (SPK-PAY-007).
+        (e.status === 'pending' && !!e.basketId && basket.data === undefined) ||
+          (!!basket.data?.orderRef && order.data === undefined),
       ),
       placement: placement.data ?? null,
       teamName: team.data?.team.name ?? null,

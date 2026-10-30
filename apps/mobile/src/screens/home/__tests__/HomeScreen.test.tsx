@@ -33,6 +33,8 @@ import {
   DENVER,
   FIXTURE,
   fixtureDetail,
+  HOME_ENTRY,
+  LA,
   myTeamEntry,
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
@@ -583,8 +585,263 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     fireEvent.press(row);
     expect(mockPush).toHaveBeenLastCalledWith(`/registration/outcome/${CHECKOUT}`);
     expect(order(['home-recovery', 'home-next'])).toEqual(['home-recovery', 'home-next']);
+    // FIN-01 `status` filter: only checkouts in recovery, however many others the payer has.
     expect(app.fake.requests.find((r) => r.route === '/me/registration-checkouts')?.query).toEqual({
+      status: 'recovery_required',
       limit: '20',
     });
+  });
+
+  it('§4.11: more checkouts in recovery than one page are offered with "Load more", never cut off', async () => {
+    const page = (n: number) =>
+      Array.from({ length: 20 }, (_, i) => ({
+        id: `0192f1a0-0000-7000-8000-0000000e${String(n * 100 + i).padStart(4, '0')}`,
+        status: 'recovery_required',
+        enrollmentIds: [`0192f1a0-0000-7000-8000-0000000d${String(n * 100 + i).padStart(4, '0')}`],
+        payerPersonId: SELF,
+      }));
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/registration-checkouts': (req) =>
+          fakeResponse(
+            200,
+            req.query.cursor === 'c2'
+              ? { items: page(1).slice(0, 1), nextCursor: null }
+              : { items: page(0), nextCursor: 'c2' },
+          ),
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    const pinned = await screen.findByTestId('home-recovery');
+    fireEvent.press(
+      await within(pinned).findByRole('button', {
+        name: 'Load more registrations being completed',
+      }),
+    );
+    const last = page(1)[0]?.id as string;
+    expect(await within(pinned).findByTestId(`home-recovery-checkout-${last}`)).toBeOnTheScreen();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/me/registration-checkouts').at(-1)?.query,
+    ).toEqual({ status: 'recovery_required', limit: '20', cursor: 'c2' });
+  });
+
+  it('§4.11: a failed read of checkouts in recovery shows its code and "Try again", and Home is not called empty', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([], { participants: [SELF] })),
+        'GET /me/registration-checkouts': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(
+                500,
+                apiErrorBody('INTERNAL_ERROR', {
+                  message: 'Checkouts failed.',
+                  correlationId: 'corr-co',
+                  nextAction: 'retry_or_contact_support',
+                }),
+              )
+            : fakeResponse(200, { items: [], nextCursor: null });
+        },
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    const failed = await screen.findByTestId('home-recovery-error');
+    expect(
+      within(failed).getByText(/Error code: INTERNAL_ERROR\. Reference: corr-co/),
+    ).toBeOnTheScreen();
+    // Nothing is called empty while it is not known whether a payment is being completed.
+    expect(screen.queryByRole('header', { name: 'Nothing scheduled yet' })).toBeNull();
+    fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('header', { name: 'Nothing scheduled yet' })).toBeOnTheScreen();
+    expect(screen.queryByTestId('home-recovery-error')).toBeNull();
+  });
+
+  it('§4.11: Home is not called empty before the checkouts in recovery have answered', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([], { participants: [SELF] })),
+        // Never answers.
+        'GET /me/registration-checkouts': () => new Promise<Response>(() => undefined),
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByTestId('home-next')).toBeOnTheScreen();
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/me/registration-checkouts')).toBe(true),
+    );
+    expect(screen.queryByRole('header', { name: 'Nothing scheduled yet' })).toBeNull();
+  });
+
+  it('SPK-PAY-007: a payment reason whose basket cannot be read, or is still being read, never says "payment outstanding"', async () => {
+    const waiting = enrollment({
+      id: ENROLLMENT_PENDING,
+      status: 'pending',
+      basketId: BASKET,
+      pendingReason: 'payment',
+    });
+    const withBasket = (basket: FakeHandler) =>
+      createTestApp({
+        routes: routes({
+          'GET /enrollments': (req) =>
+            fakeResponse(200, {
+              items: req.query.participantPersonId === CHILD ? [waiting] : [],
+              nextCursor: null,
+            }),
+          'GET /baskets/{id}': basket,
+        }),
+      });
+    const failed = withBasket(fail(503, 'INTEGRATION_UNAVAILABLE'));
+    render(<HomeScreen />, { wrapper: failed.wrapper });
+    const section = await screen.findByTestId('home-in-progress');
+    expect(
+      await within(section).findByLabelText(
+        'Registration pending: payment status could not be checked',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/payment outstanding/)).toBeNull();
+    expect(screen.queryByTestId('home-actions')).toBeNull();
+
+    screen.unmount();
+    const pending = withBasket(() => new Promise<Response>(() => undefined));
+    render(<HomeScreen />, { wrapper: pending.wrapper });
+    const checking = await screen.findByTestId('home-in-progress');
+    expect(
+      await within(checking).findByLabelText('Registration pending: checking payment status'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/payment outstanding/)).toBeNull();
+    expect(screen.queryByTestId('home-actions')).toBeNull();
+
+    screen.unmount();
+    // Read, held and not checking out: now it is outstanding, and an action.
+    const held = withBasket(ok(checkoutBasket('held', null)));
+    render(<HomeScreen />, { wrapper: held.wrapper });
+    const actions = await screen.findByTestId('home-actions');
+    expect(
+      await within(actions).findByLabelText('Registration pending: payment outstanding'),
+    ).toBeOnTheScreen();
+  });
+
+  it('CMP-04: when the next activity becomes another fixture, its card shows its own answer, not the last one', async () => {
+    const OTHER = '0192f1a0-0000-7000-8000-00000000f109';
+    const first = fixtureDetail({
+      responses: [
+        { personId: SELF, state: 'unavailable', revision: 2, respondedAt: '2026-10-23T12:00:00Z' },
+      ],
+    });
+    const second = fixtureDetail({
+      id: OTHER,
+      scheduledStart: '2026-10-26T17:00:00.000Z',
+      scheduledEnd: '2026-10-26T18:30:00.000Z',
+      away: { ...fixtureDetail().away, teamName: 'Bears' },
+      responses: [],
+    });
+    let answered = false;
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([])),
+        // After the answer the first fixture is postponed, so the next one is the second.
+        'GET /me/fixtures': () =>
+          fakeResponse(
+            200,
+            answered ? [{ ...first, status: 'postponed' }, second] : [first, second],
+          ),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [SELF] })]),
+        'POST /fixtures/{id}/availability': (req) => {
+          answered = true;
+          return fakeResponse(200, {
+            id: '0192f1a0-0000-7000-8000-00000000fa01',
+            fixtureId: req.params.id,
+            teamEntryId: HOME_ENTRY,
+            personId: SELF,
+            state: 'available',
+            respondedAt: '2026-10-24T12:00:00.000Z',
+            note: null,
+            revision: 3,
+          });
+        },
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId('next-activity-card');
+    expect(await within(card).findByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
+    fireEvent.press(within(card).getByRole('radio', { name: 'Available' }));
+    // The answer reloads the list; the first fixture is postponed, so the second is next.
+    expect(await screen.findByRole('header', { name: 'Lions vs Bears' })).toBeOnTheScreen();
+    const next = screen.getByTestId('next-activity-card');
+    expect(within(next).getByTestId('rsvp-current')).toHaveProp(
+      'accessibilityLabel',
+      'No response',
+    );
+    expect(within(next).queryByTestId('rsvp-recorded')).toBeNull();
+    fireEvent.press(within(next).getByRole('radio', { name: 'Available' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.filter((r) => r.route === '/fixtures/{id}/availability'),
+      ).toHaveLength(2),
+    );
+    const posts = app.fake.requests.filter((r) => r.route === '/fixtures/{id}/availability');
+    expect(posts[1]?.params.id).toBe(OTHER);
+    // The second fixture has no answer yet: no revision of the first is sent with it.
+    expect(posts[1]?.body).toEqual({ state: 'available' });
+  });
+
+  it('COM-06, SPK-UX-003: an availability request is an action required, and the card says so, until answered', async () => {
+    const request = notice({
+      kind: 'availability_request',
+      title: 'Lions: are you available?',
+      body: 'Lions plays Sun, Oct 25, 10:00 AM PDT at Main Park. Please answer the availability request in the app.',
+      subject: { type: 'fixture', id: FIXTURE },
+      detailsAfter: {
+        fixtureId: FIXTURE,
+        scheduledStart: '2026-10-25T17:00:00.000Z',
+        timezone: LA,
+      },
+      subjectPersonIds: [SELF],
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([])),
+        'GET /me/inbox': inboxPage([request]),
+        'GET /me/fixtures': ok([fixtureDetail()]),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [SELF] })]),
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    const actions = await screen.findByTestId('home-actions');
+    expect(
+      await within(actions).findByRole('button', {
+        name: /^Lions: are you available\?, For: You\./,
+      }),
+    ).toBeOnTheScreen();
+    const card = await screen.findByTestId('next-activity-card');
+    expect(
+      within(card).getByLabelText(
+        'Action needed: Answer the availability request for this fixture.',
+      ),
+    ).toBeOnTheScreen();
+
+    screen.unmount();
+    // Answered: no longer an action, and the card asks for nothing.
+    const done = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([])),
+        'GET /me/inbox': inboxPage([request]),
+        'GET /me/fixtures': ok([
+          fixtureDetail({
+            responses: [{ personId: SELF, state: 'available', revision: 1, respondedAt: null }],
+          }),
+        ]),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [SELF] })]),
+      }),
+    });
+    render(<HomeScreen />, { wrapper: done.wrapper });
+    const answeredCard = await screen.findByTestId('next-activity-card');
+    expect(within(answeredCard).getByTestId('rsvp-current')).toHaveProp(
+      'accessibilityLabel',
+      'Available',
+    );
+    expect(screen.queryByTestId('home-actions')).toBeNull();
+    expect(within(answeredCard).queryByLabelText(/^Action needed/)).toBeNull();
   });
 });

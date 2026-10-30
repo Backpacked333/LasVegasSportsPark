@@ -58,6 +58,11 @@ export function fixtureEntry(fixture: FixtureDetail): TodayEntry | null {
   };
 }
 
+/** Milliseconds since the epoch of an ISO 8601 instant with offset (contracts `Instant`). */
+export function instant(iso: string): number {
+  return Date.parse(iso);
+}
+
 /** Sessions and fixtures in time order, each once (windows may overlap at their edges). */
 export function mergeEntries(
   items: readonly FamilyCalendarItem[],
@@ -69,8 +74,10 @@ export function mergeEntries(
     const entry = fixtureEntry(fixture);
     if (entry) byId.set(entry.id, entry);
   }
+  // Instants are compared as times, not strings: the API's `Instant` allows offsets and optional
+  // fractions, so "…T17:30:00Z" and "…T17:30:00.000Z" are the same moment.
   return [...byId.values()].sort(
-    (a, b) => a.start.localeCompare(b.start) || a.id.localeCompare(b.id),
+    (a, b) => instant(a.start) - instant(b.start) || a.id.localeCompare(b.id),
   );
 }
 
@@ -138,7 +145,7 @@ export function fixtureOverlaps(
     for (let j = i + 1; j < entries.length; j += 1) {
       const b = entries[j] as TodayEntry;
       if (a.type === 'session' && b.type === 'session') continue;
-      if (!(a.start < b.end && b.start < a.end)) continue;
+      if (!(instant(a.start) < instant(b.end) && instant(b.start) < instant(a.end))) continue;
       const people = entryPersonIds(b, teams);
       const shared = entryPersonIds(a, teams).filter((p) => people.includes(p));
       if (shared.length > 0) out.push({ ids: [a.id, b.id], personIds: shared });

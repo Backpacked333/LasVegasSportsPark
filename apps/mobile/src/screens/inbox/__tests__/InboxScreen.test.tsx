@@ -323,6 +323,82 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
     expect(ack?.body).toEqual({ expectedRevision: 3 });
   });
 
+  it('§4.9: STALE_REVISION on reading (read on another device) reads the list again and shows the notice as it is now', async () => {
+    const item = unread({ title: 'Pitch closed', revision: 2 });
+    let listed: Record<string, unknown> = { ...item };
+    const app = createTestApp({
+      routes: {
+        'GET /me/inbox': () => fakeResponse(200, { items: [listed], nextCursor: null }),
+        'POST /me/inbox/{id}/read': () => {
+          // Another device read it meanwhile: the revision moved on.
+          listed = { ...item, readAt: '2026-10-24T11:50:00.000Z', revision: 3 };
+          return fakeResponse(
+            409,
+            apiErrorBody('STALE_REVISION', {
+              nextAction: 'reload_and_retry',
+              correlationId: 'corr-r',
+            }),
+          );
+        },
+      },
+    });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Pitch closed, Unread' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/inbox').length).toBeGreaterThan(1),
+    );
+    expect(await screen.findByRole('button', { name: 'Pitch closed, Read' })).toBeOnTheScreen();
+    expect(app.fake.requests.find((r) => r.route === '/me/inbox/{id}/read')?.body).toEqual({
+      expectedRevision: 2,
+    });
+    // A stale read is not an error the person must act on.
+    expect(screen.queryByText(/STALE_REVISION/)).toBeNull();
+  });
+
+  it('§4.9: "Acknowledge" waits for the read just sent, so it never sends the revision the read replaced', async () => {
+    const item = unread({ title: 'Bring water', revision: 5 });
+    let current: Record<string, unknown> = { ...item };
+    let answerRead: () => void = () => undefined;
+    const app = createTestApp({
+      routes: {
+        'GET /me/inbox': () => fakeResponse(200, { items: [current], nextCursor: null }),
+        'POST /me/inbox/{id}/read': () =>
+          new Promise<Response>((resolve) => {
+            answerRead = () => {
+              current = { ...current, readAt: '2026-10-24T12:00:00.000Z', revision: 6 };
+              resolve(fakeResponse(200, current));
+            };
+          }),
+        'POST /me/inbox/{id}/acknowledge': () => {
+          current = { ...current, acknowledgedAt: '2026-10-24T12:01:00.000Z', revision: 7 };
+          return fakeResponse(200, current);
+        },
+      },
+    });
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Bring water, Unread' }));
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/me/inbox/{id}/read')).toBe(true),
+    );
+    const button = await screen.findByRole('button', { name: 'Acknowledge' });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(button).toHaveProp('accessibilityState', expect.objectContaining({ busy: true }));
+    fireEvent.press(button);
+    expect(app.fake.requests.some((r) => r.route === '/me/inbox/{id}/acknowledge')).toBe(false);
+
+    await act(async () => answerRead());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Acknowledge' })).not.toBeDisabled(),
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Acknowledge' }));
+    expect(
+      await screen.findByRole('button', { name: 'Bring water, Acknowledged' }),
+    ).toBeOnTheScreen();
+    expect(app.fake.requests.find((r) => r.route === '/me/inbox/{id}/acknowledge')?.body).toEqual({
+      expectedRevision: 6,
+    });
+  });
+
   it('STALE_REVISION on acknowledging (changed elsewhere) shows the code and "Reload", which reads the list again', async () => {
     const item = unread({ title: 'Gate change', readAt: '2026-10-24T11:30:00.000Z', revision: 2 });
     const app = createTestApp({

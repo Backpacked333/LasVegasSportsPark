@@ -1,8 +1,9 @@
 /**
  * SCR-C-18 Schedule (SPK-UX-002, SPK-SCHED-006, SPK-SCHED-007, SPK-SCHED-008, SPK-COMMS-005,
- * SPK-UX-008, SPK-UX-009): the signed-in person's activities and those of family members the API
- * lets them view, day by day, with the next-activity card (SCR-C-04) on top and published changes
- * and cancellations shown as old and new details.
+ * SPK-UX-008, SPK-UX-009, SPK-CAP-003): the signed-in person's activities and those of family
+ * members the API lets them view, day by day, with the next-activity card (SCR-C-04) on top, with
+ * the RSVP for a fixture as on Home (`POST /v1/fixtures/{id}/availability` with the answer's
+ * revision), and published changes and cancellations shown as old and new details.
  *
  * - `GET /v1/me/family-calendar` (`from`, `to`) is the source of sessions and bookings; the API
  *   includes only people the caller currently holds `view` over, so a child without that grant is
@@ -29,9 +30,19 @@ import {
   nextEntry,
   type TodayEntry,
 } from '../../features/today/entries';
-import { fixtureCardModel, fixtureTitle } from '../../features/today/fixture-model';
+import {
+  fixtureCardModel,
+  fixtureRequiredAction,
+  fixtureTitle,
+  ownResponse,
+  viewerOnRoster,
+} from '../../features/today/fixture-model';
 import { NextActivityCard } from '../../features/today/NextActivityCard';
-import { latestChangeForEvent, upcomingScheduleChanges } from '../../features/today/notices';
+import {
+  latestChangeForEvent,
+  openAvailabilityRequest,
+  upcomingScheduleChanges,
+} from '../../features/today/notices';
 import {
   SCHEDULE_WINDOW_DAYS,
   nameOf,
@@ -43,6 +54,7 @@ import {
   usePersonNames,
   useSignedIn,
 } from '../../features/today/queries';
+import { RsvpControl } from '../../features/today/RsvpControl';
 import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
 import { sessionHref, useSessionActivity } from '../../features/today/session-activity';
 import { calendarItemStatus, fixtureStatus } from '../../features/today/status';
@@ -67,6 +79,7 @@ import { colors, spacing, type } from '../../ui/theme';
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
 type FixtureDetail = Schema<'FixtureDetail'>;
 type MyTeamEntry = Schema<'MyTeamEntry'>;
+type Me = Schema<'Me'>;
 
 /**
  * How many windows Schedule loads at most: about a year ahead. A display limit, not a policy;
@@ -94,24 +107,53 @@ function NextCard({ item, participant }: { item: FamilyCalendarItem; participant
   );
 }
 
+/** SCR-C-04 for the next fixture, as on Home: whose it is, opponent, venue, clock and RSVP. */
 function NextFixtureCard({
   fixture,
   teams,
   names,
+  me,
+  onReload,
 }: {
   fixture: FixtureDetail;
   teams: readonly MyTeamEntry[] | undefined;
   names: Map<string, string>;
+  me: Me | undefined;
+  onReload: () => void;
 }) {
   const router = useRouter();
   const inbox = useInbox();
   const latest = latestChangeForEvent(inbox.data?.items ?? [], fixture.schedulingEventId);
-  const model = fixtureCardModel({ fixture, teams, names, change: latest?.change ?? null });
+  const viewerId = me?.principal.personId ?? null;
+  const model = fixtureCardModel({
+    fixture,
+    teams,
+    names,
+    change: latest?.change ?? null,
+    requiredAction: fixtureRequiredAction(
+      fixture,
+      viewerId,
+      openAvailabilityRequest(inbox.data?.items ?? [], fixture.id),
+    ),
+  });
+  const own = ownResponse(fixture, viewerId);
   const notice = zoneNotice(model.zone, model.start ?? fixture.createdAt);
   return (
     <>
       <NextActivityCard
         model={model}
+        rsvp={
+          // Keyed by fixture so one fixture's answer and revision never show on another (CMP-04).
+          <RsvpControl
+            key={fixture.id}
+            fixtureId={fixture.id}
+            fixtureStatus={fixture.status}
+            myResponse={own?.state ?? fixture.myResponse ?? null}
+            responseRevision={own?.revision ?? null}
+            onRoster={viewerOnRoster(fixture)}
+            onReload={onReload}
+          />
+        }
         onOpen={() =>
           router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
         }
@@ -259,7 +301,13 @@ function ScheduleContent() {
           {next.type === 'session' ? (
             <NextCard item={next.item} participant={nameOf(names, next.item.personId)} />
           ) : (
-            <NextFixtureCard fixture={next.fixture} teams={teams.data} names={names} />
+            <NextFixtureCard
+              fixture={next.fixture}
+              teams={teams.data}
+              names={names}
+              me={me.data}
+              onReload={() => fixtureReads.forEach((r) => r.refetch())}
+            />
           )}
         </Section>
       ) : null}

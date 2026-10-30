@@ -145,6 +145,25 @@ describe('SCR-C-37 YouthFeedbackScreen', () => {
     expect(await screen.findByTestId(`assessment-${ASSESSMENT.id}`)).toBeOnTheScreen();
   });
 
+  it('the record is never gated: it shows while the switch is unknown, and a failed permissions read hides nothing', async () => {
+    // GET /v1/me/permissions never answers: the record still shows, with no turned-off notice.
+    renderScreen({ 'GET /me/permissions': () => new Promise<Response>(() => undefined) });
+    expect(await screen.findByTestId(`assessment-${ASSESSMENT.id}`)).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/turned off$/)).toBeNull();
+
+    screen.unmount();
+    // A failed or refused permissions read neither replaces the record nor claims it is off.
+    renderScreen({ 'GET /me/permissions': fail(500, 'INTERNAL_ERROR') });
+    expect(await screen.findByTestId(`assessment-${ASSESSMENT.id}`)).toBeOnTheScreen();
+    expect(screen.queryByText(/INTERNAL_ERROR/)).toBeNull();
+    expect(screen.queryByLabelText(/turned off$/)).toBeNull();
+
+    screen.unmount();
+    renderScreen({ 'GET /me/permissions': fail(403, 'ACCESS_DENIED') });
+    expect(await screen.findByTestId(`assessment-${ASSESSMENT.id}`)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Not available')).toBeNull();
+  });
+
   it('§4.15: offline, keeps the record with its age', async () => {
     let now = new Date('2026-10-24T12:00:00.000Z');
     const app = createTestApp({ routes: routes(), now: () => now });

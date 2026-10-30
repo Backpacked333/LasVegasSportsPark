@@ -503,6 +503,69 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
   });
 
+  it("CMP-04: until GET /v1/me answers, the viewer's own answer is never labelled a family member's; a failed read shows its code", async () => {
+    const own = {
+      personId: SELF,
+      state: 'unavailable',
+      revision: 4,
+      respondedAt: '2026-10-23T12:00:00.000Z',
+    };
+    let answerMe: () => void = () => undefined;
+    renderFixture({
+      'GET /fixtures/{id}': ok(fixtureDetail({ responses: [own] })),
+      'GET /me': () =>
+        new Promise<Response>((resolve) => {
+          answerMe = () => resolve(fakeResponse(200, me()));
+        }),
+    });
+    const card = await screen.findByTestId('fixture-card');
+    const answers = await screen.findByTestId('fixture-family-answers');
+    expect(within(answers).getByRole('progressbar')).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Family member: /)).toBeNull();
+
+    await act(async () => answerMe());
+    // Known now: the answer is the viewer's own, shown in the RSVP control, and no family list.
+    await waitFor(() => expect(screen.queryByTestId('fixture-family-answers')).toBeNull());
+    expect(within(card).getByTestId('rsvp-current')).toHaveProp(
+      'accessibilityLabel',
+      'Unavailable',
+    );
+
+    screen.unmount();
+    renderFixture({
+      'GET /fixtures/{id}': ok(fixtureDetail({ responses: [own] })),
+      'GET /me': fail(503, 'INTEGRATION_UNAVAILABLE', 'Accounts are unavailable.'),
+    });
+    const failed = await screen.findByTestId('fixture-family-answers');
+    expect(
+      await within(failed).findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-1/),
+    ).toBeOnTheScreen();
+    expect(within(failed).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Family member: /)).toBeNull();
+  });
+
+  it("COM-06: an open availability request the viewer has not answered is the card's required action", async () => {
+    renderFixture({
+      'GET /me/inbox': inboxPage([
+        MOVED,
+        {
+          ...scheduleChange(),
+          kind: 'availability_request',
+          title: 'Lions: are you available?',
+          subject: { type: 'fixture', id: FIXTURE },
+          detailsBefore: null,
+          detailsAfter: { fixtureId: FIXTURE, scheduledStart: '2026-10-25T17:00:00.000Z' },
+        },
+      ]),
+    });
+    const card = await screen.findByTestId('fixture-card');
+    expect(
+      await within(card).findByLabelText(
+        'Action needed: Answer the availability request for this fixture.',
+      ),
+    ).toBeOnTheScreen();
+  });
+
   it('a player who does not act as captain is not offered a dispute', async () => {
     renderFixture({
       'GET /fixtures/{id}/results': ok([result()]),

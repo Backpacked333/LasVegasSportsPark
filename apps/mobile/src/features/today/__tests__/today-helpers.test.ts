@@ -22,16 +22,27 @@ import {
   nextEntry,
   sessionEntry,
 } from '../entries';
-import { joinNames, mySide, ownResponse, venueLocation, viewerOnRoster } from '../fixture-model';
 import {
+  AVAILABILITY_REQUEST_ACTION,
+  fixtureRequiredAction,
+  joinNames,
+  mySide,
+  ownResponse,
+  venueLocation,
+  viewerOnRoster,
+} from '../fixture-model';
+import {
+  availabilityRequestOf,
   latestChangeForEvent,
   noticeSection,
+  openAvailabilityRequest,
   parseEventDetails,
   scheduleChangeOf,
   upcomingScheduleChanges,
 } from '../notices';
 import {
   calendarItemStatus,
+  checkoutStateOf,
   currentResult,
   enrollmentStatus,
   fixtureAcceptsRsvp,
@@ -60,6 +71,7 @@ import {
   CHILD,
   DENVER,
   EVENT,
+  FIXTURE,
   fixtureDetail,
   HOME_ENTRY,
   myTeamEntry,
@@ -177,9 +189,10 @@ describe('SPK-UX-004 status vocabulary (journeys.md section 3)', () => {
     expect(enrollmentStatus({ status: 'pending', pendingReason: 'approval' }).label).toBe(
       'Registration pending: awaiting approval',
     );
-    expect(enrollmentStatus({ status: 'pending', pendingReason: 'payment' }).label).toBe(
-      'Registration pending: payment outstanding',
-    );
+    // "Payment outstanding" only once the basket and order were read and no checkout runs.
+    expect(
+      enrollmentStatus({ status: 'pending', pendingReason: 'payment' }, { checkout: null }).label,
+    ).toBe('Registration pending: payment outstanding');
     expect(enrollmentStatus({ status: 'pending', pendingReason: 'forms' }).label).toBe(
       'Registration pending: a form to complete',
     );
@@ -199,6 +212,34 @@ describe('SPK-UX-004 status vocabulary (journeys.md section 3)', () => {
         { placement: { status: 'assigned' }, teamName: 'Lions' },
       ).label,
     ).toBe('Confirmed: Lions');
+  });
+
+  it('SPK-PAY-007: a payment reason never reads "outstanding" while the checkout is unread, being read or unreadable', () => {
+    const payment = { status: 'pending' as const, pendingReason: 'payment' as const };
+    // The API's `payment` also covers a basket already checking out (a payment running).
+    expect(enrollmentStatus(payment, { checkout: 'processing' }).label).toBe('Payment processing');
+    expect(enrollmentStatus(payment, { checkout: 'checking' })).toEqual({
+      tone: 'pending',
+      label: 'Registration pending: checking payment status',
+    });
+    expect(enrollmentStatus(payment, { checkout: 'unknown' })).toEqual({
+      tone: 'pending',
+      label: 'Registration pending: payment status could not be checked',
+    });
+    // A caller that did not read the basket says nothing about payment.
+    expect(enrollmentStatus(payment).label).toBe('Registration pending');
+    // Other reasons do not depend on the checkout read.
+    expect(
+      enrollmentStatus({ status: 'pending', pendingReason: 'forms' }, { checkout: 'checking' })
+        .label,
+    ).toBe('Registration pending: a form to complete');
+    // The basket's state: a read still to answer is "checking", a failed one "unknown".
+    expect(checkoutStateOf(undefined, undefined, false, true)).toBe('checking');
+    expect(checkoutStateOf(undefined, undefined, true, true)).toBe('unknown');
+    expect(checkoutStateOf({ status: 'held', orderRef: null }, undefined, false, false)).toBeNull();
+    expect(
+      checkoutStateOf({ status: 'checking_out', orderRef: null }, undefined, false, true),
+    ).toBe('processing');
   });
 
   it('labels calendar items, RSVP, readiness and results with their own words', () => {
@@ -255,6 +296,30 @@ describe('SPK-UX-003 notices on Home', () => {
     expect(section({ kind: 'renewal_opportunity', category: 'promotional' })).toBeNull();
     expect(section({ kind: 'payment_attention', acknowledgedAt: 'x' })).toBeNull();
     expect(section({ kind: 'payment_attention', supersededByNotificationId: 'n' })).toBeNull();
+  });
+
+  it('COM-06, SPK-UX-003: an availability request is an action until its fixture starts', () => {
+    const request = asItem(
+      notice({
+        kind: 'availability_request',
+        title: 'Lions: are you available?',
+        subject: { type: 'fixture', id: FIXTURE },
+        detailsAfter: {
+          fixtureId: FIXTURE,
+          scheduledStart: '2026-10-25T17:00:00.000Z',
+          timezone: LA,
+        },
+      }),
+    );
+    expect(noticeSection(request, NOW)).toBe('actions');
+    expect(availabilityRequestOf(request)).toEqual({
+      fixtureId: FIXTURE,
+      scheduledStart: '2026-10-25T17:00:00.000Z',
+    });
+    expect(noticeSection(request, new Date('2026-10-25T17:00:00.000Z'))).toBeNull();
+    expect(openAvailabilityRequest([request], FIXTURE)).toBe(request);
+    expect(openAvailabilityRequest([{ ...request, acknowledgedAt: 'x' }], FIXTURE)).toBeNull();
+    expect(availabilityRequestOf(asItem(notice()))).toBeNull();
   });
 
   it('drops a change to something already over from the urgent list', () => {
@@ -389,6 +454,38 @@ describe('CMP-02 / SPK-SCHED-008 sessions and fixtures in one list', () => {
     ]);
   });
 
+  it('compares instants as times, not strings (contracts Instant: offsets and optional fractions)', () => {
+    // The session ends at 18:00Z, written with fractions; the fixture starts then, written
+    // without them and as an offset: it touches the session, it does not overlap it.
+    const touching = asFixture(
+      fixtureDetail({
+        scheduledStart: '2026-10-24T11:00:00-07:00',
+        scheduledEnd: '2026-10-24T19:00:00Z',
+      }),
+    );
+    const entries = mergeEntries([item], [touching]);
+    expect(entries.map((e) => e.type)).toEqual(['session', 'fixture']);
+    expect(fixtureOverlaps(entries, teams)).toEqual([]);
+    // 18:20 at +01:00 is 17:20Z: it comes before 17:45Z although its string sorts after.
+    const early = asFixture(
+      fixtureDetail({
+        id: '0192f1a0-0000-7000-8000-00000000f102',
+        scheduledStart: '2026-10-24T18:20:00+01:00',
+        scheduledEnd: '2026-10-24T18:40:00+01:00',
+      }),
+    );
+    const later = asFixture(
+      fixtureDetail({
+        scheduledStart: '2026-10-24T17:45:00Z',
+        scheduledEnd: '2026-10-24T18:30:00Z',
+      }),
+    );
+    expect(mergeEntries([], [later, early]).map((e) => e.start)).toEqual([
+      '2026-10-24T18:20:00+01:00',
+      '2026-10-24T17:45:00Z',
+    ]);
+  });
+
   it('SPK-YOUTH-007: marks a fixture overlapping another commitment of the same person only', () => {
     const entries = mergeEntries([item], [game]);
     expect(fixtureOverlaps(entries, teams)).toEqual([
@@ -429,5 +526,26 @@ describe('SCR-C-04 fixture card helpers (CMP-02, CMP-04)', () => {
     expect(viewerOnRoster(asFixture({ ...fixtureDetail(), rosterStatus: undefined }))).toBeNull();
     expect(joinNames(['You'])).toBe('You');
     expect(joinNames(['You', 'Sam', 'Jo'])).toBe('You, Sam and Jo');
+  });
+
+  it('SCR-C-04 required action: an open availability request the viewer on a roster has not answered', () => {
+    const request = { kind: 'availability_request' };
+    const unanswered = asFixture(fixtureDetail());
+    expect(fixtureRequiredAction(unanswered, SELF, request)).toBe(AVAILABILITY_REQUEST_ACTION);
+    expect(fixtureRequiredAction(unanswered, SELF, null)).toBeNull();
+    const answered = asFixture(
+      fixtureDetail({
+        responses: [{ personId: SELF, state: 'available', revision: 2, respondedAt: null }],
+      }),
+    );
+    expect(fixtureRequiredAction(answered, SELF, request)).toBeNull();
+    // A guardian on no roster is told by the RSVP control instead (DEC-090).
+    expect(
+      fixtureRequiredAction(asFixture(fixtureDetail({ rosterStatus: null })), SELF, request),
+    ).toBeNull();
+    // A fixture that takes no answers asks for nothing.
+    expect(
+      fixtureRequiredAction(asFixture(fixtureDetail({ status: 'played' })), SELF, request),
+    ).toBeNull();
   });
 });

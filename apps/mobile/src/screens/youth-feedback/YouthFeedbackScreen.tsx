@@ -22,9 +22,10 @@
  *   stale with the age of what is shown; not available (NOT_FOUND, ACCESS_DENIED); turned off.
  *   Given names only (§4.14); nothing is logged and no id of a child is put in a route.
  */
-import type { Schema } from '@sportspark/api-client';
+import { CAPABILITY_PRESENTATION, type Schema } from '@sportspark/api-client';
 import { Stack, useRouter, type Href } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { registrationRoutes } from '../../features/registration/routes';
 import { Caption, Section } from '../../features/today/Section';
@@ -38,9 +39,9 @@ import {
 import { displayZone, formatWhen } from '../../features/today/time';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
-import { CapabilityGate } from '../../ui/CapabilityGate';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
 
@@ -207,28 +208,43 @@ function FeedbackRecord({ feedback }: { feedback: YouthFeedback }) {
   );
 }
 
+/**
+ * DEC-016: the turned-off notice while `youth_progression` is off. The record itself is never
+ * gated (the API serves it whatever the switch), so nothing is shown while the switch is unknown
+ * (`GET /v1/me/permissions` loading, failing or offline) and the record stays readable.
+ */
+function TurnedOffNotice() {
+  const permissions = usePermissions();
+  if (permissions.isCapabilityEnabled('youth_progression') !== false) return null;
+  const presentation = CAPABILITY_PRESENTATION.youth_progression;
+  return (
+    <StateView
+      variant="turned-off"
+      subject={presentation.label}
+      decisions={presentation.decisions}
+      owner={presentation.owner}
+      stillAvailable="Feedback and recommendations already shared with you stay here."
+    />
+  );
+}
+
 function YouthFeedbackContent() {
   const feedback = useApiQuery({ path: '/me/youth-feedback', enabled: useSignedIn() });
   return (
     <View>
-      <CapabilityGate
-        capability="youth_progression"
-        whenOff="notice"
-        stillAvailable="Feedback and recommendations already shared with you stay here."
+      <TurnedOffNotice />
+      <QueryBoundary
+        query={feedback}
+        label="feedback and development records"
+        isEmpty={(f) => f.assessments.length === 0 && f.recommendations.length === 0}
+        empty={{
+          title: 'No feedback yet',
+          description:
+            'Feedback a coach shares about a child you are authorized to see, after it is reviewed, will appear here, with any recommendation for a next group or program.',
+        }}
       >
-        <QueryBoundary
-          query={feedback}
-          label="feedback and development records"
-          isEmpty={(f) => f.assessments.length === 0 && f.recommendations.length === 0}
-          empty={{
-            title: 'No feedback yet',
-            description:
-              'Feedback a coach shares about a child you are authorized to see, after it is reviewed, will appear here, with any recommendation for a next group or program.',
-          }}
-        >
-          {(f) => <FeedbackRecord feedback={f} />}
-        </QueryBoundary>
-      </CapabilityGate>
+        {(f) => <FeedbackRecord feedback={f} />}
+      </QueryBoundary>
       <Section title="About this record">
         <Caption>
           Only feedback a reviewer approved for families is shown. Private coaching notes never

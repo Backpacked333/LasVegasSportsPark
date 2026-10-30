@@ -419,6 +419,29 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
     expect(screen.getByRole('button', { name: 'Get my pass' })).toBeOnTheScreen();
   });
 
+  it('a withdrawn pass shows only "Withdrawn", never also "Active", even when the list cannot be read again', async () => {
+    let calls = 0;
+    setup({
+      'GET /me': ok(me()),
+      'GET /me/passes': () => {
+        calls += 1;
+        // The re-read after the withdrawal fails (for example the connection dropped).
+        return calls === 1
+          ? fakeResponse(200, [listed(PASS_ONE, { revision: 4 })])
+          : fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE'));
+      },
+      'POST /passes/{id}/revoke': () =>
+        fakeResponse(200, { ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' }),
+    });
+    const row = await screen.findByTestId(`pass-other-${PASS_ONE}`);
+    expect(within(row).getByLabelText('Active')).toBeOnTheScreen();
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw this pass' }));
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw' }));
+    expect(await within(row).findByLabelText('Withdrawn')).toBeOnTheScreen();
+    await waitFor(() => expect(calls).toBeGreaterThan(1));
+    expect(within(row).queryByLabelText('Active')).toBeNull();
+  });
+
   it('a withdrawal answered STALE_REVISION shows the code with "Reload", which reads the list again', async () => {
     const { app } = setup({
       'GET /me': ok(me()),

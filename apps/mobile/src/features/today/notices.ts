@@ -47,6 +47,13 @@ export function noticeSection(item: InboxItem, now: Date): NoticeSection | null 
     case 'payment_attention':
     case 'registration_outcome':
       return 'actions';
+    case 'availability_request': {
+      // COM-06: a captain asked the roster for answers before a fixture (SPK-CAP-001); once the
+      // fixture has started the request is over.
+      const start = availabilityRequestOf(item)?.scheduledStart ?? null;
+      if (start && new Date(start).getTime() <= now.getTime()) return null;
+      return 'actions';
+    }
     case 'team_invitation':
     case 'waitlist_offer':
     case 'placement':
@@ -125,6 +132,42 @@ export function latestChangeForEvent(
     if (change) return { item, change };
   }
   return null;
+}
+
+/**
+ * The fixture an availability request notice asks about (COM-06: subject `fixture`, details with
+ * the fixture start in the facility's zone), or null for other notices.
+ */
+export function availabilityRequestOf(
+  item: InboxItem,
+): { fixtureId: string; scheduledStart: string | null } | null {
+  if (item.kind !== 'availability_request') return null;
+  const details = isRecord(item.detailsAfter) ? item.detailsAfter : null;
+  const fixtureId =
+    item.subject?.type === 'fixture'
+      ? item.subject.id
+      : typeof details?.fixtureId === 'string'
+        ? details.fixtureId
+        : null;
+  if (!fixtureId) return null;
+  const scheduledStart =
+    typeof details?.scheduledStart === 'string' ? details.scheduledStart : null;
+  return { fixtureId, scheduledStart };
+}
+
+/** The newest availability request about `fixtureId` still open (not acknowledged or replaced). */
+export function openAvailabilityRequest(
+  items: readonly InboxItem[],
+  fixtureId: string,
+): InboxItem | null {
+  return (
+    items.find(
+      (item) =>
+        !item.acknowledgedAt &&
+        !item.supersededByNotificationId &&
+        availabilityRequestOf(item)?.fixtureId === fixtureId,
+    ) ?? null
+  );
 }
 
 /** Schedule changes and cancellations still ahead, newest first (Schedule's changes list). */

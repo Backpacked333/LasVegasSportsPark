@@ -273,6 +273,72 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
     );
   });
 
+  it("SCR-C-04, SPK-CAP-003: the next fixture's card on Schedule carries the RSVP, sent with the answer's revision", async () => {
+    const answered = fixtureDetail({
+      responses: [
+        { personId: SELF, state: 'unavailable', revision: 2, respondedAt: '2026-10-23T12:00:00Z' },
+      ],
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([])),
+        'GET /me/fixtures': (req) =>
+          fakeResponse(200, req.query.from === '2026-10-24T07:00:00.000Z' ? [answered] : []),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [SELF] })]),
+        'POST /fixtures/{id}/availability': ok({
+          id: '0192f1a0-0000-7000-8000-00000000fa01',
+          fixtureId: FIXTURE,
+          teamEntryId: '0192f1a0-0000-7000-8000-00000000f201',
+          personId: SELF,
+          state: 'available',
+          respondedAt: '2026-10-24T12:00:00.000Z',
+          note: null,
+          revision: 3,
+        }),
+      }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId('schedule-next');
+    // A named radio group (a container, so the radios stay focusable).
+    expect(within(card).getByLabelText('Your availability for this fixture')).toHaveProp(
+      'accessibilityRole',
+      'radiogroup',
+    );
+    expect(within(card).getByTestId('rsvp-current')).toHaveProp(
+      'accessibilityLabel',
+      'Unavailable',
+    );
+    const reads = app.fake.requests.filter((r) => r.route === '/me/fixtures').length;
+    fireEvent.press(within(card).getByRole('radio', { name: 'Available' }));
+    expect(await within(card).findByTestId('rsvp-recorded')).toBeOnTheScreen();
+    const post = app.fake.requests.find((r) => r.route === '/fixtures/{id}/availability');
+    expect(post?.body).toEqual({ state: 'available', expectedRevision: 2 });
+    expect(post?.headers['idempotency-key']).toMatch(/^key-/);
+    // The list that carries the answer is read again.
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/fixtures').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+  });
+
+  it('SCR-C-04: on Schedule, an RSVP refused with ACCESS_DENIED is "not available", not an error', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([])),
+        'GET /me/fixtures': (req) =>
+          fakeResponse(200, req.query.from === '2026-10-24T07:00:00.000Z' ? [fixtureDetail()] : []),
+        'GET /me/team-entries': ok([myTeamEntry({ members: [SELF] })]),
+        'POST /fixtures/{id}/availability': fail(403, 'ACCESS_DENIED'),
+      }),
+    });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId('schedule-next');
+    fireEvent.press(within(card).getByRole('radio', { name: 'Available' }));
+    expect(await within(card).findByText('You cannot answer for this fixture.')).toBeOnTheScreen();
+    expect(screen.queryByText(/ACCESS_DENIED/)).toBeNull();
+  });
+
   it('a fixture read that fails shows its code and "Try again"; the calendar stays', async () => {
     const app = createTestApp({
       routes: routes({ 'GET /me/fixtures': fail(503, 'INTEGRATION_UNAVAILABLE') }),

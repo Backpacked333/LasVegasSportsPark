@@ -490,7 +490,7 @@ function OtherPass({
   return (
     <View style={styles.other} testID={`pass-other-${pass.id}`}>
       <Text style={styles.body}>Pass issued {formatWhen(pass.issuedAt, zone)}</Text>
-      <StatusBadge tone="success" label="Active" />
+      {withdraw.status !== 'success' ? <StatusBadge tone="success" label="Active" /> : null}
       {withdraw.status === 'success' ? (
         <View accessibilityLiveRegion="polite">
           <StatusBadge tone="neutral" label="Withdrawn" />

@@ -14,10 +14,15 @@
  * notice names the participants it concerns, `subjectPersonIds`), `GET /v1/enrollments?status=
  * pending` per participant with `pendingReason` (what is outstanding, ENR-02) and
  * `GET /v1/operations/{id}` (registrations needing something), and `GET /v1/me/registration-
- * checkouts` (FIN-01), so a checkout in `recovery_required` the person paid for is pinned even
- * when its enrollment is not listed (another participant, a reinstall), with its outcome screen
- * (SCR-C-15; SCR-C-40 "interrupted payment found on refresh"). Each section has its own state; the
- * page states the age of what it shows (§4.15) and the SCR-C-40 banner covers connectivity.
+ * checkouts?status=recovery_required` (FIN-01, every page through "Load more"), so a checkout in
+ * `recovery_required` the person paid for is pinned even when its enrollment is not listed
+ * (another participant, a reinstall), with its outcome screen (SCR-C-15; SCR-C-40 "interrupted
+ * payment found on refresh"); a failed read of it shows its code where it would be pinned, and
+ * Home is never called empty before it answers. "Payment outstanding" is said only once the
+ * basket was read and no checkout runs (SPK-PAY-007). An `availability_request` notice (COM-06)
+ * is an action until its fixture starts or everyone it is for has answered; the fixture card
+ * names it as its required action. Each section has its own state; the page states the age of
+ * what it shows (§4.15) and the SCR-C-40 banner covers connectivity.
  * A fixture read that is not available (NOT_FOUND, ACCESS_DENIED) leaves fixtures out silently;
  * any other failure is shown in the next-activity section with its code and "Try again".
  */
@@ -26,11 +31,18 @@ import { useRouter, type Href } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { calendarWindowQuery } from '../../features/today/calendar';
 import { mergeEntries, nextEntry } from '../../features/today/entries';
-import { fixtureCardModel, ownResponse, viewerOnRoster } from '../../features/today/fixture-model';
+import {
+  fixtureCardModel,
+  fixtureRequiredAction,
+  ownResponse,
+  viewerOnRoster,
+} from '../../features/today/fixture-model';
 import { NextActivityCard } from '../../features/today/NextActivityCard';
 import {
+  availabilityRequestOf,
   latestChangeForEvent,
   noticeSection,
+  openAvailabilityRequest,
   type NoticeSection,
 } from '../../features/today/notices';
 import {
@@ -51,12 +63,13 @@ import { Caption, oldestUpdate, Section, SectionQueryState } from '../../feature
 import { sessionHref, useSessionActivity } from '../../features/today/session-activity';
 import { enrollmentStatus, noticeStatus, RECOVERY_PHRASE } from '../../features/today/status';
 import { displayZone, zoneNotice } from '../../features/today/time';
-import { useApiQuery } from '../../api/useApiQuery';
+import { useApiPages } from '../../api/useApiPages';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { ListRow } from '../../ui/ListRow';
+import { LoadMore } from '../../ui/LoadMore';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -70,7 +83,7 @@ type MyTeamEntry = Schema<'MyTeamEntry'>;
 type Me = Schema<'Me'>;
 type Checkout = Schema<'Checkout'>;
 
-/** The first page of the payer's checkouts, newest first (the same read the registration screens make). */
+/** Checkouts in `recovery_required` per page (FIN-01 `status` filter); "Load more" follows the cursor. */
 const CHECKOUTS_PAGE = 20;
 
 /**
@@ -86,6 +99,29 @@ export function recoveryCheckouts(
       c.status === 'recovery_required' &&
       !c.enrollmentIds.some((id) => pinnedEnrollmentIds.has(id)),
   );
+}
+
+/**
+ * Whether an availability request (COM-06) is already answered: every person it is for has an
+ * answer in the fixture read's `responses` (the viewer's own, and those the API lists for people
+ * they hold `register` over). A fixture not loaded, or an answer not listed, keeps it an action.
+ */
+export function availabilityRequestAnswered(
+  item: InboxItem,
+  fixtures: readonly FixtureDetail[],
+  selfId: string | null,
+): boolean {
+  const request = availabilityRequestOf(item);
+  if (!request) return false;
+  const fixture = fixtures.find((f) => f.id === request.fixtureId);
+  if (!fixture) return false;
+  const people = (item.subjectPersonIds ?? []).length > 0 ? item.subjectPersonIds : [selfId];
+  return people.every((personId) => {
+    if (!personId) return false;
+    const listed = (fixture.responses ?? []).find((r) => r.personId === personId)?.state;
+    const state = listed ?? (personId === selfId ? fixture.myResponse : null) ?? null;
+    return state !== null && state !== 'no_response';
+  });
 }
 
 /** How many notices each Home section shows before "See all in notifications". */
@@ -212,15 +248,30 @@ function NextFixtureSection({
   const router = useRouter();
   const inbox = useInbox();
   const latest = latestChangeForEvent(inbox.data?.items ?? [], fixture.schedulingEventId);
-  const model = fixtureCardModel({ fixture, teams, names, change: latest?.change ?? null });
-  const own = ownResponse(fixture, me?.principal.personId);
+  const viewerId = me?.principal.personId ?? null;
+  const requiredAction = fixtureRequiredAction(
+    fixture,
+    viewerId,
+    openAvailabilityRequest(inbox.data?.items ?? [], fixture.id),
+  );
+  const model = fixtureCardModel({
+    fixture,
+    teams,
+    names,
+    change: latest?.change ?? null,
+    requiredAction,
+  });
+  const own = ownResponse(fixture, viewerId);
   const notice = zoneNotice(model.zone, model.start ?? fixture.createdAt);
   return (
     <>
       <NextActivityCard
         model={model}
         rsvp={
+          // Keyed by fixture: when the next activity becomes another fixture, its answer and
+          // revision never carry over from the previous one (CMP-04, §4.9).
           <RsvpControl
+            key={fixture.id}
             fixtureId={fixture.id}
             fixtureStatus={fixture.status}
             myResponse={own?.state ?? fixture.myResponse ?? null}
@@ -249,9 +300,11 @@ function HomeContent() {
   const fixtures = useMyFixtures(calendarWindowQuery(now, 0, SCHEDULE_WINDOW_DAYS, zone.zone));
   const teams = useMyTeams();
   const registrations = usePendingRegistrations(me.data);
-  const checkouts = useApiQuery({
+  // §4.11, SCR-C-40: only checkouts in recovery, every page of them, so none is missed however
+  // many other checkouts the payer has.
+  const checkouts = useApiPages({
     path: '/me/registration-checkouts',
-    request: { query: { limit: CHECKOUTS_PAGE } },
+    request: { query: { status: 'recovery_required', limit: CHECKOUTS_PAGE } },
     enabled: me.data !== undefined,
   });
 
@@ -304,21 +357,33 @@ function HomeContent() {
     );
   }
 
+  const selfId = me.data.principal.personId ?? null;
   const bySection = new Map<NoticeSection, InboxItem[]>();
   for (const item of inbox.data?.items ?? []) {
     const section = noticeSection(item, now);
     if (!section) continue;
+    if (section === 'actions' && availabilityRequestAnswered(item, fixtureList, selfId)) continue;
     bySection.set(section, [...(bySection.get(section) ?? []), item]);
   }
   const unpinnedRecovery = recoveryCheckouts(
-    checkouts.data?.items ?? [],
+    checkouts.data ?? [],
     new Set(registrations.recovery.map((r) => r.enrollment.id)),
   );
+  const checkoutsSettled = checkouts.data !== undefined || checkouts.error !== null;
+  // A failed read of checkouts in recovery is shown where they would be pinned (§4.11).
+  const checkoutsFailed =
+    checkouts.data === undefined &&
+    checkouts.error !== null &&
+    presentationForError(checkouts.error) !== 'unavailable'
+      ? checkouts
+      : null;
   const urgent = bySection.get('urgent') ?? [];
   const nothingAtAll =
     calendar.data !== undefined &&
     inbox.data !== undefined &&
     fixturesSettled &&
+    checkoutsSettled &&
+    !checkoutsFailed &&
     !registrations.loading &&
     !next &&
     allRegistrations.length === 0 &&
@@ -331,6 +396,7 @@ function HomeContent() {
     calendar.updatedAt,
     fixturesHidden ? null : fixtures.updatedAt,
     registrations.updatedAt,
+    checkouts.updatedAt,
   ]);
   const fixturesFailed =
     fixtures.error !== null && !fixturesHidden && fixtures.data === undefined ? fixtures : null;
@@ -366,6 +432,13 @@ function HomeContent() {
               ))}
             </View>
           ) : null}
+          <LoadMore pages={checkouts} label="registrations being completed" />
+        </Section>
+      ) : null}
+      {checkoutsFailed ? (
+        <Section title="Registration being completed" testID="home-recovery-error">
+          <Caption>Registrations whose payment is being completed could not be checked.</Caption>
+          <SectionQueryState read={checkoutsFailed} label="registrations being completed" />
         </Section>
       ) : null}
 

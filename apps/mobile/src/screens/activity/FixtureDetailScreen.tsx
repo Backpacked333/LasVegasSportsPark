@@ -33,6 +33,7 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { teamRoutes } from '../../features/teams/routes';
 import {
   awayOf,
+  fixtureRequiredAction,
   fixtureTitle,
   otherResponses,
   ownResponse,
@@ -41,7 +42,7 @@ import {
   viewerOnRoster,
 } from '../../features/today/fixture-model';
 import { NextActivityCard, type ActivityCardModel } from '../../features/today/NextActivityCard';
-import { latestChangeForEvent } from '../../features/today/notices';
+import { latestChangeForEvent, openAvailabilityRequest } from '../../features/today/notices';
 import { nameOf, useInbox, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { RsvpControl } from '../../features/today/RsvpControl';
 import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
@@ -165,7 +166,10 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
   const inbox = useInbox();
   const me = useMe();
   const viewerId = me.data?.principal.personId ?? me.data?.person?.id ?? null;
-  const othersAnswers = fixture.data ? otherResponses(fixture.data, viewerId) : [];
+  // Whose answer is whose is known only once `GET /v1/me` answers: until then no answer is
+  // labelled as a family member's, and the viewer's own revision is not guessed (CMP-04).
+  const viewerKnown = me.data !== undefined;
+  const othersAnswers = fixture.data && viewerKnown ? otherResponses(fixture.data, viewerId) : [];
   const names = usePersonNames(
     othersAnswers.map((r) => r.personId),
     me.data,
@@ -227,7 +231,14 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
     zone,
     status: fixtureStatus(detail.status),
     change: latest?.change ?? null,
-    requiredAction: null,
+    // COM-06: an open availability request the viewer has not answered.
+    requiredAction: viewerKnown
+      ? fixtureRequiredAction(
+          detail,
+          viewerId,
+          openAvailabilityRequest(inbox.data?.items ?? [], detail.id),
+        )
+      : null,
   };
   const notice = zoneNotice(zone, detail.scheduledStart ?? now);
   const result = results.data ? currentResult(results.data) : null;
@@ -261,6 +272,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
           testID="fixture-card"
           rsvp={
             <RsvpControl
+              key={detail.id}
               fixtureId={detail.id}
               fixtureStatus={detail.status}
               myResponse={(own?.state ?? detail.myResponse ?? null) as RsvpState | null}
@@ -273,6 +285,15 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         {notice ? <Caption>{notice}</Caption> : null}
       </Section>
 
+      {!viewerKnown && (detail.responses ?? []).length > 0 ? (
+        <Section title="Family answers" testID="fixture-family-answers">
+          <SectionQueryState
+            read={me}
+            label="the family answers"
+            unavailable={{ description: 'The family answers are not available to you.' }}
+          />
+        </Section>
+      ) : null}
       {othersAnswers.length > 0 ? (
         <Section title="Family answers" testID="fixture-family-answers">
           <View accessibilityRole="list" style={styles.pad}>

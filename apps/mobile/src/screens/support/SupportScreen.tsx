@@ -4,8 +4,12 @@
  *
  * - "Contact the operating team": `POST /v1/me/support-requests` opens a request about the
  *   signed-in person, someone they hold `view` over (from `GET /v1/me`), or a team they captain
- *   (from `GET /v1/me/team-entries`), with a category, a title, a description and, optionally, the
- *   registrations or the record a link pointed at (`relatedRecords`). The API decides: a person or
+ *   (from `GET /v1/me/team-entries`, offered only where `GET /v1/team-entries/{id}` says
+ *   `viewer.actingAsCaptain`, so a co-captain the rule set does not let act as captain is not
+ *   offered the team), with a category, a title, a description and, optionally, the
+ *   registrations or the record a link pointed at (`relatedRecords`). Every linked record is on
+ *   screen (a chosen registration is dropped when the request stops being about a registration)
+ *   and can be left out with "Do not link it". The API decides: a person or
  *   record of another household is NOT_FOUND and is shown as "not available" with no hint that it
  *   exists (§4.10); a team the person does not captain is ACCESS_DENIED. One idempotency key per
  *   request intent: "Try again" after no answer resends the same request (§4.9); the draft is kept
@@ -30,7 +34,7 @@
  */
 import type { ApiError } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
@@ -48,6 +52,7 @@ import {
 } from '../../features/money/ui';
 import {
   nameOf,
+  useApiReads,
   useMe,
   useMyTeams,
   usePersonNames,
@@ -151,6 +156,7 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
   const people = viewablePersonIds(me.data);
   const names = usePersonNames(people, me.data);
   const teams = useMyTeams();
+  const signedIn = useSignedIn();
   const [draft, setDraft] = useState<SupportDraft>(() => ({
     ...EMPTY_DRAFT,
     related: linked ? [linked] : [],
@@ -164,12 +170,27 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
     request: { query: { participantPersonId: subject ?? '', limit: ENROLLMENT_CHOICES } },
     enabled: !!subject && draft.category === 'registration',
   });
-  // Teams the person holds a captain role on, as the API lists them; the API checks again.
-  const captainOf = (teams.data ?? []).filter((t) =>
-    t.members.some(
-      (m) =>
-        m.personId === selfId && (m.roles.includes('captain') || m.roles.includes('co_captain')),
-    ),
+  // SPK-CAP-001: a team is offered only where the API says the person acts as its captain
+  // (`GET /v1/team-entries/{id}` `viewer.actingAsCaptain`: the captain, and a co-captain only when
+  // the rule set lets one act as captain). The teams read only narrows which entries to ask about.
+  const captainCandidates = useMemo(
+    () =>
+      (teams.data ?? []).filter((t) =>
+        t.members.some(
+          (m) =>
+            m.personId === selfId &&
+            (m.roles.includes('captain') || m.roles.includes('co_captain')),
+        ),
+      ),
+    [teams.data, selfId],
+  );
+  const workspaceRequests = useMemo(
+    () => captainCandidates.map((t) => ({ path: { id: t.teamEntry.id } })),
+    [captainCandidates],
+  );
+  const workspaces = useApiReads('/team-entries/{id}', workspaceRequests, signedIn);
+  const captainOf = captainCandidates.filter(
+    (_, index) => workspaces[index]?.data?.viewer.actingAsCaptain === true,
   );
   const update = (patch: Partial<SupportDraft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -177,6 +198,19 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
   };
   const enrollmentRelated = draft.related.find((r) => r.type === 'enrollment')?.id ?? null;
   const otherRelated = draft.related.filter((r) => r.type !== 'enrollment');
+  const isLinked = (r: { type: RelatedType; id: string }) =>
+    linked !== null && r.type === linked.type && r.id === linked.id;
+  // A registration chosen below is dropped when the request stops being about a registration (or
+  // becomes about a team), so nothing is sent that the screen no longer shows; the record a link
+  // named stays listed with "Do not link it".
+  const withoutChosenRegistrations = (related: SupportDraft['related']) =>
+    related.filter((r) => r.type !== 'enrollment' || isLinked(r));
+  // Every linked record is on screen: in the registration list when it is listed there, else below.
+  const shownInPicker = (r: { type: RelatedType; id: string }) =>
+    r.type === 'enrollment' &&
+    draft.category === 'registration' &&
+    (registrations.data?.items ?? []).some((e) => e.id === r.id);
+  const listedRelated = draft.related.filter((r) => !shownInPicker(r));
 
   const submit = () => {
     const found = draftErrors(draft);
@@ -233,7 +267,12 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
             detail={team.seasonName}
             checked={draft.teamEntryId === team.teamEntry.id}
             onPress={() =>
-              update({ teamEntryId: team.teamEntry.id, subjectPersonId: null, category: 'team' })
+              update({
+                teamEntryId: team.teamEntry.id,
+                subjectPersonId: null,
+                category: 'team',
+                related: withoutChosenRegistrations(draft.related),
+              })
             }
           />
         ))}
@@ -247,7 +286,13 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
             mode="radio"
             label={CATEGORY_LABELS[category]}
             checked={draft.category === category}
-            onPress={() => update({ category })}
+            onPress={() =>
+              update(
+                category === 'registration'
+                  ? { category }
+                  : { category, related: withoutChosenRegistrations(draft.related) },
+              )
+            }
             testID={`support-category-${category}`}
           />
         ))}
@@ -294,9 +339,12 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
         </View>
       ) : null}
 
-      {otherRelated.map((r) => (
+      {listedRelated.map((r) => (
         <View key={`${r.type}:${r.id}`} style={styles.gap} testID="support-about">
-          <Body>About {RELATED_TYPE_LABELS[r.type]} (from the link you followed).</Body>
+          <Body>
+            About {RELATED_TYPE_LABELS[r.type]}
+            {isLinked(r) ? ' (from the link you followed)' : ''}.
+          </Body>
           <Button
             label="Do not link it"
             variant="secondary"

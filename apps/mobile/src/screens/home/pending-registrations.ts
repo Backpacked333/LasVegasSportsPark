@@ -27,7 +27,7 @@ export interface PendingRegistrations {
   recovery: PendingRegistration[];
   /** Pending and waiting on the customer (no checkout running): "Actions required". */
   pending: PendingRegistration[];
-  /** A checkout is running, was reversed, or its state could not be read: not an action. */
+  /** Not an action: a checkout running, reversed, still being read, or unreadable. */
   inProgress: PendingRegistration[];
   /** A failure other than "not available" (shown with its code). */
   error: ApiError | null;
@@ -83,10 +83,12 @@ export function usePendingRegistrations(me: Schema<'Me'> | undefined): PendingRe
   const baskets = useApiReads('/baskets/{id}', basketRequests, me !== undefined);
   const basketById = new Map<string, { status: string; orderRef: string | null }>();
   const basketFailed = new Set<string>();
+  const basketPending = new Set<string>();
   basketRequests.forEach((r, i) => {
     const read = baskets[i];
     if (read?.data) basketById.set(r.path.id, read.data);
     else if (read?.error) basketFailed.add(r.path.id);
+    else basketPending.add(r.path.id);
   });
   const orderKey = [
     ...new Set([...basketById.values()].flatMap((b) => (b.orderRef ? [b.orderRef] : []))),
@@ -102,10 +104,12 @@ export function usePendingRegistrations(me: Schema<'Me'> | undefined): PendingRe
   const orders = useApiReads('/orders/{id}', orderRequests, me !== undefined);
   const orderById = new Map<string, { fulfillmentStatus: string }>();
   const orderFailed = new Set<string>();
+  const orderPending = new Set<string>();
   orderRequests.forEach((r, i) => {
     const read = orders[i];
     if (read?.data) orderById.set(r.path.id, read.data);
     else if (read?.error) orderFailed.add(r.path.id);
+    else orderPending.add(r.path.id);
   });
 
   const recovery: PendingRegistration[] = [];
@@ -122,9 +126,13 @@ export function usePendingRegistrations(me: Schema<'Me'> | undefined): PendingRe
       orderId ? orderById.get(orderId) : undefined,
       (enrollment.basketId !== null && basketFailed.has(enrollment.basketId)) ||
         (orderId !== null && orderFailed.has(orderId)),
+      (enrollment.basketId !== null && basketPending.has(enrollment.basketId)) ||
+        (orderId !== null && orderPending.has(orderId)),
     );
     const row = { enrollment, operation, checkout };
     if (needsRecovery(operation) || checkout === 'recovery_required') recovery.push(row);
+    // Only a registration whose checkout was read and is not running waits on the customer; one
+    // still being checked, running, reversed or unreadable is not an action (§4.11).
     else if (checkout === null) pending.push(row);
     else inProgress.push(row);
   }

@@ -20,19 +20,19 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
 
 ## Screens
 
-| Screen                               | Route                                                             | API                                                                                                                                                                                                                  | Status                                                                                                                                        | Tests                                                                             |
-| ------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| SCR-C-03 Home                        | `/` (tab)                                                         | `GET /me`, `/me/family-calendar`, `/me/fixtures`, `/me/team-entries`, `/me/inbox`, `/enrollments?status=pending`, `/operations/{id}`, `/baskets/{id}`, `/orders/{id}`, `/me/registration-checkouts`, `/person-names` | **Verified**                                                                                                                                  | `src/screens/home/__tests__/HomeScreen.test.tsx`                                  |
-| SCR-C-04 Next-activity card          | on Home, Schedule, detail                                         | the above, plus `GET /offerings/{id}`, `/offerings/{id}/sessions`, `/facilities/{id}`, `POST /fixtures/{id}/availability`                                                                                            | **Verified**; arrival guidance **Pending decision** POL-046                                                                                   | `HomeScreen.test.tsx`, `__tests__/today-helpers.test.ts`                          |
-| SCR-C-05 Facility pass               | `/pass`                                                           | `POST /passes`, `GET /me/passes`, `POST /passes/{id}/revoke`                                                                                                                                                         | **Verified**; scannable symbol **Pending decision** DEC-023                                                                                   | `src/screens/pass/__tests__/PassScreen.test.tsx`                                  |
-| SCR-C-06 Notification inbox          | `/inbox`, `/inbox?open=<attemptId>`                               | `GET /me/inbox`, `POST /me/inbox/{id}/read`, `POST /me/inbox/{id}/acknowledge`, `GET /person-names`                                                                                                                  | **Verified**                                                                                                                                  | `src/screens/inbox/__tests__/InboxScreen.test.tsx`                                |
-| SCR-C-18 Schedule                    | `/schedule` (tab)                                                 | `GET /me/family-calendar`, `/me/fixtures` (same windows), `/me/team-entries`, `/me/inbox`                                                                                                                            | **Verified**                                                                                                                                  | `src/screens/schedule/__tests__/ScheduleScreen.test.tsx`                          |
-| SCR-C-19 Family calendar             | `/family-calendar`                                                | `GET /me/family-calendar`, `/me/fixtures`, `/me/team-entries`, `/offerings/{id}` (pickup label), `/me/permissions` (`pickup_sessions`)                                                                               | **Verified**; pickup arrangements **Pending decision** DEC-075, DEC-005                                                                       | `src/screens/family-calendar/__tests__/FamilyCalendarScreen.test.tsx`             |
-| SCR-C-20 Fixture detail              | `/fixtures/[id]`                                                  | `GET /fixtures/{id}` (venue, roster status, responses), `/readiness`, `/results`, `/team-entries/{id}`, `POST /fixtures/{id}/availability`                                                                           | **Verified**; "Tentative" **Pending decision** DEC-064; RSVP for a child **Pending decision** DEC-090; arrival guidance POL-046               | `src/screens/activity/__tests__/FixtureDetailScreen.test.tsx`                     |
-| SCR-C-20 Activity detail             | `/sessions/[sessionId]?enrollmentId=` or `?bookingId=`            | `GET /enrollments/{id}` or `/session-bookings/{id}`, `/offerings/{id}`, `/offerings/{id}/sessions`, `/facilities/{id}`                                                                                               | **Verified**; arrival guidance **Pending decision** POL-046                                                                                   | `src/screens/activity/__tests__/SessionDetailScreen.test.tsx`                     |
-| SCR-C-37 Youth feedback              | `/youth-feedback`                                                 | `GET /me/youth-feedback`, `/person-names`, `/offerings/{id}`, `/me/permissions` (`youth_progression`)                                                                                                                | **Verified**; what is parent-visible and what a recommendation may use **Pending decision** DEC-054, DEC-055 (the API decides what it serves) | `src/screens/youth-feedback/__tests__/YouthFeedbackScreen.test.tsx`               |
-| SCR-C-38 Support request and history | `/support` (`?aboutType=&aboutId=` optional), `/support/[caseId]` | `POST /me/support-requests`, `GET /me/cases` (paged), `GET /me/cases/{id}`, `GET /me`, `/me/team-entries`, `/enrollments?participantPersonId=`                                                                       | **Verified**; contact details and service levels **Pending decision** DEC-015 unless configured                                               | `src/screens/support/__tests__/SupportScreen.test.tsx`, `support-routes.test.tsx` |
-| SCR-C-40 Connectivity banner         | every screen                                                      | the query cache; recovery found on refresh is pinned on Home                                                                                                                                                         | **Verified**; stale threshold **Pending decision** DEC-032, DEC-033 (unset: age shown, never called stale)                                    | `src/connectivity/__tests__/ConnectivityBanner.test.tsx`                          |
+| Screen                               | Route                                                             | API                                                                                                                                                                                                                                                   | Status                                                                                                                                        | Tests                                                                               |
+| ------------------------------------ | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| SCR-C-03 Home                        | `/` (tab)                                                         | `GET /me`, `/me/family-calendar`, `/me/fixtures`, `/me/team-entries`, `/me/inbox`, `/enrollments?status=pending`, `/operations/{id}`, `/baskets/{id}`, `/orders/{id}`, `/me/registration-checkouts?status=recovery_required` (paged), `/person-names` | **Verified**                                                                                                                                  | `src/screens/home/__tests__/HomeScreen.test.tsx`                                    |
+| SCR-C-04 Next-activity card          | on Home, Schedule, detail (RSVP on all three)                     | the above, plus `GET /offerings/{id}`, `/offerings/{id}/sessions`, `/facilities/{id}`, `POST /fixtures/{id}/availability`                                                                                                                             | **Verified**; arrival guidance **Pending decision** POL-046                                                                                   | `HomeScreen.test.tsx`, `ScheduleScreen.test.tsx`, `__tests__/today-helpers.test.ts` |
+| SCR-C-05 Facility pass               | `/pass`                                                           | `POST /passes`, `GET /me/passes`, `POST /passes/{id}/revoke`                                                                                                                                                                                          | **Verified**; scannable symbol **Pending decision** DEC-023                                                                                   | `src/screens/pass/__tests__/PassScreen.test.tsx`                                    |
+| SCR-C-06 Notification inbox          | `/inbox`, `/inbox?open=<attemptId>`                               | `GET /me/inbox`, `POST /me/inbox/{id}/read`, `POST /me/inbox/{id}/acknowledge`, `GET /person-names`                                                                                                                                                   | **Verified**                                                                                                                                  | `src/screens/inbox/__tests__/InboxScreen.test.tsx`                                  |
+| SCR-C-18 Schedule                    | `/schedule` (tab)                                                 | `GET /me/family-calendar`, `/me/fixtures` (same windows), `/me/team-entries`, `/me/inbox`                                                                                                                                                             | **Verified**                                                                                                                                  | `src/screens/schedule/__tests__/ScheduleScreen.test.tsx`                            |
+| SCR-C-19 Family calendar             | `/family-calendar`                                                | `GET /me/family-calendar`, `/me/fixtures`, `/me/team-entries`, `/offerings/{id}` (pickup label), `/me/permissions` (`pickup_sessions`)                                                                                                                | **Verified**; pickup arrangements **Pending decision** DEC-075, DEC-005                                                                       | `src/screens/family-calendar/__tests__/FamilyCalendarScreen.test.tsx`               |
+| SCR-C-20 Fixture detail              | `/fixtures/[id]`                                                  | `GET /fixtures/{id}` (venue, roster status, responses), `/readiness`, `/results`, `/team-entries/{id}`, `POST /fixtures/{id}/availability`                                                                                                            | **Verified**; "Tentative" **Pending decision** DEC-064; RSVP for a child **Pending decision** DEC-090; arrival guidance POL-046               | `src/screens/activity/__tests__/FixtureDetailScreen.test.tsx`                       |
+| SCR-C-20 Activity detail             | `/sessions/[sessionId]?enrollmentId=` or `?bookingId=`            | `GET /enrollments/{id}` or `/session-bookings/{id}`, `/offerings/{id}`, `/offerings/{id}/sessions`, `/facilities/{id}`                                                                                                                                | **Verified**; arrival guidance **Pending decision** POL-046                                                                                   | `src/screens/activity/__tests__/SessionDetailScreen.test.tsx`                       |
+| SCR-C-37 Youth feedback              | `/youth-feedback`                                                 | `GET /me/youth-feedback`, `/person-names`, `/offerings/{id}`, `/me/permissions` (`youth_progression`)                                                                                                                                                 | **Verified**; what is parent-visible and what a recommendation may use **Pending decision** DEC-054, DEC-055 (the API decides what it serves) | `src/screens/youth-feedback/__tests__/YouthFeedbackScreen.test.tsx`                 |
+| SCR-C-38 Support request and history | `/support` (`?aboutType=&aboutId=` optional), `/support/[caseId]` | `POST /me/support-requests`, `GET /me/cases` (paged), `GET /me/cases/{id}`, `GET /me`, `/me/team-entries`, `/team-entries/{id}` (`viewer.actingAsCaptain`), `/enrollments?participantPersonId=`                                                       | **Verified**; contact details and service levels **Pending decision** DEC-015 unless configured                                               | `src/screens/support/__tests__/SupportScreen.test.tsx`, `support-routes.test.tsx`   |
+| SCR-C-40 Connectivity banner         | every screen                                                      | the query cache; recovery found on refresh is pinned on Home                                                                                                                                                                                          | **Verified**; stale threshold **Pending decision** DEC-032, DEC-033 (unset: age shown, never called stale)                                    | `src/connectivity/__tests__/ConnectivityBanner.test.tsx`                            |
 
 ## Behaviour that is verified
 
@@ -55,34 +55,57 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   sends that revision (then the one the last answer returned) as `expectedRevision`; STALE_REVISION
   offers "Reload"; `INVALID_TRANSITION` with `details.code: AVAILABILITY_CLOSED` reads
   "Availability closed at kickoff". A viewer whose `rosterStatus` is null is not offered choices.
-  Answers the API lists for children are shown read-only (answering for a child is DEC-090).
+  Answers the API lists for children are shown read-only (answering for a child is DEC-090), and
+  only once `GET /v1/me` says who the viewer is (never the viewer's own answer as a family
+  member's). The control is keyed by fixture, so when the next activity becomes another fixture
+  its answer and revision never carry over. The RSVP is on the card on Home, Schedule and the
+  fixture detail.
+- **Availability requests (COM-06, SPK-CAP-001).** An `availability_request` notice is under
+  "Actions required" on Home until its fixture starts or everyone it is for has an answer in the
+  fixture's `responses`; the fixture's card names it as its required action while the viewer, on a
+  roster, has not answered.
 - **Pass (ENT-01).** `GET /v1/me/passes` tells whether the pass on the device is active, revoked
   (its reference is no longer offered; "Get a new pass" issues one without revoking anything) or not
   listed ("Not confirmed"). Active passes whose reference is not on the device (a reinstall) are
-  listed and can be withdrawn with a reason and the listed revision. Replacing uses the revision
+  listed and can be withdrawn with a reason and the listed revision; once withdrawn the row says
+  only "Withdrawn", even if the list cannot be read again. Replacing uses the revision
   the API lists now. Offline: the last known state with its age and "may refuse it if it was
   revoked". The reference is never sent anywhere and never shown again by the API.
 - **Inbox (SPK-COMMS-004).** Read and acknowledge send the attempt's `revision` (the newest the
   screen knows); a stale read reloads the list; a stale acknowledgment shows the code with
-  "Reload". Each notice names the participants it concerns (`subjectPersonIds`), also on Home.
+  "Reload". "Acknowledge" waits while the read just sent is in flight (it bumps the revision).
+  Each notice names the participants it concerns (`subjectPersonIds`), also on Home.
 - **Registrations on Home (ENR-02, FIN-01).** A pending registration says what is outstanding
-  ("Registration pending: a form to complete", approval, payment, placement); a checkout in
-  `recovery_required` from `GET /v1/me/registration-checkouts` is pinned first with "Do not pay
-  again" and opens its outcome screen (SCR-C-15).
+  ("Registration pending: a form to complete", approval, payment, placement). "Payment
+  outstanding" is said only once the basket and order were read and no checkout runs: the API's
+  `payment` reason also covers a basket already checking out, so while the basket is being read
+  the row says "checking payment status", and when it cannot be read "payment status could not be
+  checked", never inviting a second payment (SPK-PAY-007). Checkouts in `recovery_required` come
+  from `GET /v1/me/registration-checkouts?status=recovery_required`, every page ("Load more"), are
+  pinned first with "Do not pay again" and open their outcome screen (SCR-C-15); a failed read
+  shows its code with "Try again" there, and Home is not called empty before it answers.
 - **Pickup sessions (SPK-PLACE-004, DEC-082).** Booked pickup sessions are on the family calendar,
   labelled from their offering's kind. "Find pickup sessions" is offered only while
   `pickup_sessions` is on; while it is off the section shows the turned-off state and booked ones
   stay listed.
 - **Youth feedback (ENR-14).** Exactly what `GET /v1/me/youth-feedback` serves, by participant:
   skill area, observation date, "Level 3 of 5: Confident" from the template, comments, offering,
-  when shared; recommendations as offers that never register or charge. Turned off while
-  `youth_progression` is off, with what was shared still readable.
-- **Support (SUP-01).** A request about the person, a child they view or a team they captain,
-  with category, title and description checked next to each field before sending, optional
-  registrations of that person or the record a link named; one idempotency key per request intent;
+  when shared; recommendations as offers that never register or charge. While `youth_progression`
+  is off a turned-off notice is shown above the record; the record itself is never gated, so it
+  shows while `GET /v1/me/permissions` loads, fails or is offline.
+- **Support (SUP-01).** A request about the person, a child they view or a team they act as
+  captain of (`GET /v1/team-entries/{id}` `viewer.actingAsCaptain`: a co-captain only when the rule
+  set allows), with category, title and description checked next to each field before sending,
+  optional registrations of that person or the record a link named (every linked record is on
+  screen; a chosen registration is dropped when the request stops being about a registration or
+  names a team); one idempotency key per request intent;
   NOT_FOUND and ACCESS_DENIED shown as not available without the code; the draft is kept on every
   failure and offline. History from `GET /v1/me/cases` with "Load more requests"; one request from
   `GET /v1/me/cases/{id}` (re-read on return to the app). No notes, owner or queue is shown.
+- **Data age (§4.15).** Each screen states the age of the oldest read it shows: the family
+  calendar includes its fixtures and team reads, as Home and Schedule do.
+- **Times compared as instants.** Ordering and fixture overlaps compare `Date.parse` values, not
+  strings (the API's `Instant` allows offsets and optional fractions).
 - **Names (§4.14).** Every participant name comes from `GET /v1/person-names` (names only, never a
   date of birth or contact): "You" for the signed-in person, given names for others, "Family
   member" when the API leaves someone out.
@@ -116,3 +139,10 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   although reading twice is otherwise not an error; the app re-reads the list.
 - `POST /v1/fixtures/{id}/availability` accepts a child's `personId` with `register` while DEC-090
   is pending; the app does not offer it.
+- `Enrollment.pendingReason: payment` covers both a held basket and one already checking out (a
+  payment running); the app reads the basket and order to tell them apart and never says "payment
+  outstanding" before it has.
+- An `availability_request` notice does not say whether it has been answered; Home treats it as
+  answered once everyone it is for has an answer in the fixture's `responses`.
+- `activity_reminder` notices stay in the inbox only: the activity they remind of is already the
+  next-activity card on Home.
