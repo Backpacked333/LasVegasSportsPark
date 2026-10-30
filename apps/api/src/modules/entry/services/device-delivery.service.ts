@@ -102,15 +102,20 @@ export class DeviceDeliveryService {
   /**
    * One pass of `entry.deliver_device_commands` (ASYNC-02; §3.16 a revocation reaches every
    * device, §4.12). A command is due when it is undelivered, its device is active, and it was never
-   * attempted or its retry time has come: the first retry goes out on the next run, the retry after
-   * attempt n (n ≥ 2) waits ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS·2^(n−2), at most
+   * attempted or its retry time has come. The first retry has no delay: it goes out on the next
+   * pass that reaches the command, which is a later pass of the same run when the run makes more
+   * than one pass (`remaining` > 0), otherwise the next run. The retry after attempt n (n ≥ 2)
+   * waits ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS·2^(n−2), at most
    * ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS. Due commands are taken fairly: each device's commands
    * take turns (never attempted first, then the least recently attempted, then the oldest), and a
    * pass takes every device's first turn before any device's second, so an unreachable device
    * with a long backlog can never keep another device's commands from being sent. `remaining`
-   * counts the due commands this pass could not take. A command is sent at most twice in one run
-   * (its attempt and the immediate first retry); after that it is not due again before its
-   * backoff, so later passes reach other commands instead of re-sending the same ones.
+   * counts the due commands this pass could not take. After its second attempt a command is not
+   * due again before its backoff, so later passes reach other commands instead of re-sending the
+   * same ones. Each pass reads the clock afresh (`context.now`), so "at most twice in one run"
+   * holds only while the run's passes finish within ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS; a
+   * slower run (an adapter waiting out its timeout on a dead door) can reach a command's next
+   * retry in the same run.
    */
   async deliverDue(context: PeriodicJobContext): Promise<PeriodicJobResult> {
     const now = context.now;

@@ -259,10 +259,13 @@ synchronization supersedes an undelivered older one (`supersede`, an engineering
 ENT-05 plan so a retried older sync never overwrites a newer policy, **proposed**). A revoked pass
 is queued for every active device (passes carry no facility), and only its reference hash is sent.
 Delivery runs outside transactions; failed and unknown commands retry with a backoff (the first
-retry on the next run, the retry after attempt n ≥ 2 after `ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS`
-·2^(n−2), at most `ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS`), and due commands are taken in turns per
-device (never-attempted first), so an unreachable device with any backlog never keeps another
-device's revocations from being sent and is not re-sent every pass (ASYNC-02); after
+retry has no delay and goes out on the next pass that reaches it, which is a later pass of the same
+run when the run makes more than one pass, otherwise the next run; the retry after attempt n ≥ 2
+waits `ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS`·2^(n−2) seconds, at most
+`ENTRY_DEVICE_COMMAND_RETRY_MAX_SECONDS`; every pass reads the clock afresh, so a run whose passes
+take longer than the base delay can send a command a third time), and due commands are taken in
+turns per device (never-attempted first), so an unreachable device with any backlog never keeps
+another device's revocations from being sent and is not re-sent every pass (ASYNC-02); after
 `ENTRY_DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS` undelivered attempts (technical setting, default 3)
 one `entry.device_command_undelivered` exception is raised and resolved when the command is later
 delivered; a receipt settles a pending or unknown command once. Heartbeats mark a device online;

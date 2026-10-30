@@ -343,8 +343,9 @@ describe('device command delivery, receipts and outages (ENT-05)', () => {
   it('§4.11 / IF-38: a failed command retries; a lost answer stays unknown until the receipt settles it once; undelivered commands escalate once', async () => {
     const lost = await h.register(operator, { providerDeviceRef: 'door-1' });
     const [command] = await h.commands(lost.body.id);
-    // Three attempts with no answer. The first retry goes out on the next run; the next one waits
-    // for the backoff (ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS, technical default 30, ASYNC-02).
+    // Three attempts with no answer. The first retry has no delay (here the next run: one pass took
+    // everything due); the next one waits for the backoff (ENTRY_DEVICE_COMMAND_RETRY_BASE_SECONDS,
+    // technical default 30, ASYNC-02).
     h.fake().scriptCommands('timeout', 'timeout', 'timeout');
     const attemptsOf = async () => (await h.commands(lost.body.id))[0];
     await h.deliver();
@@ -544,7 +545,9 @@ describe('ASYNC-02: device command delivery is fair across devices and backs off
         expect.objectContaining({ kind: 'revoke_credential', status: 'delivered', attempts: 1 }),
       ]),
     );
-    // Every backlog command was tried, and retried once at most in the run: 124 sends, not 500.
+    // Every backlog command was tried, and its first retry (no delay) came in a later pass of the
+    // same run; the fixed clock does not move within the run, so no command is due a third time:
+    // 124 sends, not 500.
     expect((await backlog()).map((c) => [c.status, c.attempts])).toEqual(
       Array.from({ length: 62 }, () => ['unknown', 2]),
     );
