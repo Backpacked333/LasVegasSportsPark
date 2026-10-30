@@ -69,7 +69,9 @@ carry `revision` and `touch_updated_at`.
   debtor; one checkout per quote and one live checkout per basket; one live payment attempt per
   checkout, per installment and per payer and obligation; one live checkout or installment charge
   per obligation (`0601`: the checkout charge names the obligation it pays, so the installment
-  worker can never charge the same debt beside it); one succeeded attempt per checkout; one
+  worker can never charge the same debt beside it; `0611`: one live checkout, installment or
+  direct-payment charge per obligation, so a collection and a payer's own payment of the same
+  installment cannot both charge, MONEY-07); one succeeded attempt per checkout; one
   credit per source fact (an in-process caller may name the source of an adjustment credit —
   migration passes the imported balance's mapping id — and a second credit for it is refused with
   `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
@@ -182,10 +184,17 @@ contribution's amount and status, never a player's payment or method.
   transaction (`PaymentsService.execute` refuses). A decline leaves the checkout awaiting payment
   for a retry while the hold lasts; after the hold expires with no live payment the timer aborts it
   and reverses every financial effect (obligations, credit redemptions, discount redemptions,
-  installments, basket).
+  installments, basket). While a checkout awaits payment its order's obligations are paid only
+  through it: a direct payment, a cash tender or a credit redemption into them is refused with
+  `CHECKOUT_PAYMENT_PENDING` naming the checkout (MONEY-01). Money that reached such an order by
+  another path is never charged again (a retry answers `CHECKOUT_MONEY_RECEIVED`) and an abort with
+  it raises the critical exception `finance.aborted_order_money_received` for the finance
+  operator.
 - **Payment uncertainty (SPK-PAY-007):** a timeout is `unknown` with a critical exception owned by
   the finance operator; retries and aborts are refused until a webhook, staff reconciliation or the
-  worker sweep resolves it. A record the provider has is applied at once; "no provider record" is
+  worker sweep resolves it. A direct payment, a cash or external tender and a credit redemption
+  into an obligation are refused (`PAYMENT_OUTCOME_UNKNOWN`) while a checkout, installment or
+  direct-payment charge of that obligation is in flight or unknown (MONEY-06). A record the provider has is applied at once; "no provider record" is
   authoritative absence only for an attempt never handed to the provider (decided under the row
   lock) or one submitted or gone unknown at least the reconciliation threshold ago, also when staff
   force the reconciliation. Every live attempt, an unsubmitted `created` one included, blocks abort
@@ -229,7 +238,12 @@ contribution's amount and status, never a player's payment or method.
   evaluated separately, POL-017); extensions reset the attempts and the notice, which goes out the
   plan's lead time before the new date; nothing is collected while the checkout's own payment is
   pending or its registration is not fulfilled; retry and notice terms come from the policy the
-  quote recorded.
+  quote recorded. Once every registration the order made is canceled, nothing more is collected:
+  the worker skips the plan and raises `finance.installment_registration_canceled` (one per plan,
+  finance operator), and a staff collection answers `INSTALLMENT_REGISTRATION_CANCELED`; whether
+  the remaining installments are owed follows the cancellation policy (DEC-009 **Pending
+  decision**). Collection and extension lock the obligation before its installment, the order the
+  capture path uses (MONEY-04, MONEY-07).
 - **Cash (SPK-PAY-012):** permitted staff only, facility-scoped, with evidence; against an existing
   obligation or through the checkout (holds and capacity apply); reconciled per cash drawer.
 - **Reconciliation (SPK-PAY-010/011):** balances are computed from journal entries; the report
@@ -478,7 +492,8 @@ outcome recording and reconciliation are never gated.
   an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
   DEC-056), so it is never a pass or a block until the policy is approved.
 - The money side of transfers and cancellations is answered (consequence) but not executed
-  automatically (no automatic refund, credit or charge from enrollment's commands).
+  automatically (no automatic refund, credit or charge from enrollment's commands); a plan whose
+  registrations were all canceled stops collecting and waits for the finance operator (DEC-009).
 - Point of sale and accounting export: see [Stage 3](#stage-3-fin-01fin-07) for their own gaps.
 
 ## Kernel limitations worked around here

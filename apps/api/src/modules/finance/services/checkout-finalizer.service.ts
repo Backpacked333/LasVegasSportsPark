@@ -969,6 +969,39 @@ export class CheckoutFinalizer {
       .where('id', '=', order.id)
       .execute();
     await this.cancelOrderPlanInTrx(trx, organizationId, order.id, reason, actor, correlationId);
+    // §4.11, SPK-PAY-005 (MONEY-01): money received against the order outside its checkout (before
+    // the payability guard existed, or by a path that bypassed it) is never kept silently on a
+    // canceled order: the finance operator owns returning or applying it.
+    const received = await trx
+      .selectFrom('receipts')
+      .select(['id', 'amount_minor', 'currency'])
+      .where('organization_id', '=', organizationId)
+      .where('order_id', '=', order.id)
+      .orderBy('received_at')
+      .orderBy('id')
+      .execute();
+    if (received.length > 0) {
+      await this.exceptions.raise(trx, {
+        organizationId,
+        category: 'finance.aborted_order_money_received',
+        severity: 'critical',
+        title:
+          'A checkout was aborted although money was received for its order; refund or apply it',
+        affectedType: 'checkout',
+        affectedId: checkout.id,
+        ownerQueue: 'finance_operator',
+        dedupeKey: `aborted-order-money:${checkout.id}`,
+        details: {
+          orderId: order.id,
+          reason,
+          receipts: received.map((r) => ({
+            receiptId: r.id,
+            amountMinor: r.amount_minor,
+            currency: r.currency,
+          })),
+        },
+      });
+    }
     const redemptions = await trx
       .selectFrom('credit_redemptions')
       .select('id')
