@@ -1,6 +1,10 @@
 /**
  * SCR-S-57 Accounting export batches: what the screen is, where it lives and what stays pending (Package G, §3.16).
  * Owned by the accounting export batches screen group: edit only this directory.
+ *
+ * `pending` is what the built screen still cannot decide once the switch is on: the accounting
+ * system, its connection and export format (DEC-022). Only the API's deterministic fake
+ * connection exists; revenue recognition is not done.
  */
 import type { PackageGScreen } from '../registry';
 
