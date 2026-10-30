@@ -483,6 +483,90 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     }
   });
 
+  it('§4.11, SPK-PAY-007: a held booking is not cancelled as a hold while its checkout runs or once its basket is paid', async () => {
+    const setup = await rental({ price: 2_500 });
+    const customer = await booker(setup);
+    const booked = await post(t, '/v1/bookings', customer.header, {
+      offeringId: setup.offeringId,
+      start: start(25).toISOString(),
+      end: new Date(start(25).getTime() + HOUR).toISOString(),
+      resourceIds: [fields[1]],
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    expect(booked.body.status).toBe('held');
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    const finance = systemPrincipal(t.organizationId, 'finance.checkout');
+    const cancel = () =>
+      post(t, `/v1/bookings/${booked.body.id as string}/cancel`, customer.header, {
+        reason: 'plans changed',
+        expectedRevision: booked.body.revision,
+      });
+    const unchanged = async () => {
+      expect(
+        await t.db
+          .selectFrom('bookings')
+          .select(['status', 'revision'])
+          .where('id', '=', row.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ status: 'held', revision: row.revision });
+      const events = await t.db
+        .selectFrom('events')
+        .select('status')
+        .where('source_id', '=', row.id)
+        .execute();
+      expect(events.map((e) => e.status)).not.toContain('canceled');
+    };
+
+    // While finance's checkout runs the basket is finance's: the customer cancels the checkout.
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        t.app
+          .get<BasketPort>(BASKET_PORT)
+          .startCheckout(trx, t.organizationId, row.basket_id!, 'order-held-booking', finance),
+      );
+    const during = await cancel();
+    expect(during.status).toBe(409);
+    expect(during.body.code).toBe('RESOURCE_CONFLICT');
+    expect(during.body.details).toMatchObject({
+      code: 'CHECKOUT_IN_PROGRESS',
+      orderRef: 'order-held-booking',
+    });
+    await unchanged();
+
+    // Paid, before the enrollment confirmation moves the booking on: still not a hold to drop.
+    await t.app.get(UnitOfWork).run(async ({ trx }) => {
+      await t.app
+        .get<EnrollmentPort>(ENROLLMENT_PORT)
+        .confirmEnrollment(trx, t.organizationId, row.enrollment_id!, {
+          actor: finance,
+          orderRef: 'order-held-booking',
+        });
+      await t.app
+        .get<BasketPort>(BASKET_PORT)
+        .finishCheckout(trx, t.organizationId, row.basket_id!, 'fulfilled', finance);
+    });
+    const paid = await cancel();
+    expect(paid.status).toBe(409);
+    expect(paid.body.details.code).toBe('BOOKING_CONFIRMATION_PENDING');
+    await unchanged();
+    const basket = await t.db
+      .selectFrom('baskets')
+      .select('status')
+      .where('id', '=', row.basket_id!)
+      .executeTakeFirstOrThrow();
+    expect(basket.status).toBe('fulfilled');
+
+    // Once confirmed, the booking moves on and is cancelled through its enrollment.
+    await drain(t);
+    const confirmed = await t.http.get(`/v1/bookings/${row.id}`).set(customer.header);
+    expect(confirmed.body.status).toBe('confirmed');
+  });
+
   it('SPK-REG-006, POL-004: an unpaid held booking expires with its hold and releases its events', async () => {
     const setup = await rental({ price: 3_000 });
     const customer = await booker(setup);

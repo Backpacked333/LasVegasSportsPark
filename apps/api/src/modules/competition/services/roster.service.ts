@@ -600,7 +600,9 @@ export class RosterService implements RosterPort {
 
   /**
    * `GET /v1/me/team-invitations`: invitations addressed to the acting person or to one of their
-   * verified contact points (the rule acceptance applies), newest first.
+   * verified contact points (the rule acceptance applies), newest first. `status` filters on the
+   * effective status, as `GET /v1/me/invitations` does: a pending invitation past `expires_at`
+   * that the sweep has not recorded yet is listed under `expired`, never under `pending`.
    */
   async listMyInvitations(
     principal: Principal,
@@ -618,11 +620,21 @@ export class RosterService implements RosterPort {
     const contacts = await this.verifiedContacts(db, organizationId, personId);
     const cursor = decodeCursor(query.cursor, InvitationCursor);
     if (query.cursor && !cursor) throw errors.validation('The cursor is not valid.');
+    const now = this.clock.now();
     let q = db
       .selectFrom('team_invitations')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('status', '=', query.status)
+      .where((eb) =>
+        query.status === 'pending'
+          ? eb.and([eb('status', '=', 'pending'), eb('expires_at', '>', now)])
+          : query.status === 'expired'
+            ? eb.or([
+                eb('status', '=', 'expired'),
+                eb.and([eb('status', '=', 'pending'), eb('expires_at', '<=', now)]),
+              ])
+            : eb('status', '=', query.status),
+      )
       .where((eb) =>
         eb.or([
           eb('recipient_person_id', '=', personId),
@@ -691,6 +703,8 @@ export class RosterService implements RosterPort {
         subjectPersonIds: [subject],
         protected: true,
       });
+      // §4.9: a decline made against a stale read is refused, not applied silently.
+      assertExpectedRevision(input.expectedRevision, invitation.revision);
       if (invitation.status === 'pending' && new Date(invitation.expires_at) <= now) {
         // Past its expiry: the sweep (or the next acceptance attempt) records the expiry.
         throw errors.invalidTransition('TeamInvitation', 'expired', 'decline');
