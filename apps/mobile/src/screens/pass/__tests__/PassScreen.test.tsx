@@ -505,15 +505,13 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
   });
 
   it('SPK-UX-008 / §4.9: a withdrawal whose answer was lost reads "No answer yet"; "Check again" resends it under the same key', async () => {
-    let passes: unknown[] = [listed(PASS_ONE, { revision: 4 })];
     const { app } = setup(
       {
         'GET /me': ok(me()),
-        'GET /me/passes': () => fakeResponse(200, passes),
-        'POST /passes/{id}/revoke': () => {
-          passes = [listed(PASS_ONE, { status: 'revoked', revision: 5 })];
-          return fakeResponse(200, { ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' });
-        },
+        // The list keeps the pass, so its row stays to show the outcome of "Check again".
+        'GET /me/passes': myPasses(listed(PASS_ONE, { revision: 4 })),
+        'POST /passes/{id}/revoke': () =>
+          fakeResponse(200, { ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' }),
       },
       { drop: { method: 'POST', url: /\/revoke$/ } },
     );
@@ -525,7 +523,7 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
     ).toBeOnTheScreen();
     expect(within(row).queryByLabelText('Something went wrong')).toBeNull();
     fireEvent.press(within(row).getByRole('button', { name: 'Check again' }));
-    await waitFor(() => expect(screen.queryByTestId('pass-others')).toBeNull());
+    expect(await within(row).findByLabelText('Withdrawn')).toBeOnTheScreen();
     const revokes = app.fake.requests.filter((r) => r.route === '/passes/{id}/revoke');
     expect(revokes.map((r) => r.headers['idempotency-key'])).toEqual([
       'key-00000001',
