@@ -25,7 +25,7 @@ import {
   scheduleChange,
   teamWorkspace,
 } from '../../../features/today/__tests__/fixtures';
-import { createTestApp, dropAnswers } from '../../../testing/test-app';
+import { createTestApp, dropAnswers, waitForAbsent } from '../../../testing/test-app';
 import { FixtureDetailScreen } from '../FixtureDetailScreen';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
@@ -393,7 +393,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     // notifier, so wait for the re-render instead of assuming it lands within one act() flush.
     await waitFor(() => expect(reads).toBe(before + 1));
     // The stale answer is cleared with the reload (no lingering "Something went wrong").
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull());
+    await waitForAbsent(() => screen.queryByRole('button', { name: 'Reload' }), 'Reload');
     expect(screen.queryByText(/Error code: INVALID_TRANSITION/)).toBeNull();
   });
 
@@ -556,13 +556,18 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       revision: 4,
       respondedAt: '2026-10-23T12:00:00.000Z',
     };
+    // The answer is held back until the test releases it. The gate exists before rendering, so
+    // releasing it never depends on when the screen sends GET /me (deterministic, CLAUDE.md).
     let answerMe: () => void = () => undefined;
+    const meReleased = new Promise<void>((resolve) => {
+      answerMe = resolve;
+    });
     renderFixture({
       'GET /fixtures/{id}': ok(fixtureDetail({ responses: [own] })),
-      'GET /me': () =>
-        new Promise<Response>((resolve) => {
-          answerMe = () => resolve(fakeResponse(200, me()));
-        }),
+      'GET /me': async () => {
+        await meReleased;
+        return fakeResponse(200, me());
+      },
     });
     const card = await screen.findByTestId('fixture-card');
     const answers = await screen.findByTestId('fixture-family-answers');
@@ -571,7 +576,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
 
     await act(async () => answerMe());
     // Known now: the answer is the viewer's own, shown in the RSVP control, and no family list.
-    await waitFor(() => expect(screen.queryByTestId('fixture-family-answers')).toBeNull());
+    await waitForAbsent(() => screen.queryByTestId('fixture-family-answers'), 'Family answers');
     expect(within(card).getByTestId('rsvp-current')).toHaveProp(
       'accessibilityLabel',
       'Unavailable',

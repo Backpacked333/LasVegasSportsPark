@@ -15,6 +15,7 @@ import {
   type FakePermissionsOptions,
 } from '@sportspark/api-client/testing';
 import { QueryClient, focusManager, onlineManager } from '@tanstack/react-query';
+import { waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import type { AppConfig } from '../config/app-config';
 import { createManualSources, type Reachability } from '../connectivity/sources';
@@ -115,4 +116,17 @@ export function dropAnswers(
     }
     return answer(input, init);
   };
+}
+
+/**
+ * Waits until `query()` finds nothing (`screen.queryByTestId(...)`, `within(row).queryByRole(...)`).
+ * Use it instead of `waitFor(() => expect(query()).toBeNull())`: every failing poll of that
+ * assertion prints the element it found, React fiber included, which on a full screen takes seconds
+ * per poll, so the wait can outlast its limit on a loaded machine although the screen is correct.
+ * This fails each poll with a short message instead.
+ */
+export async function waitForAbsent(query: () => unknown, what = 'The element'): Promise<void> {
+  await waitFor(() => {
+    if (query() !== null) throw new Error(`${what} is still shown.`);
+  });
 }

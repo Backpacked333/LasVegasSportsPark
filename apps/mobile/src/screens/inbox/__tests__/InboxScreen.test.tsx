@@ -15,7 +15,7 @@ import {
   scheduleChange,
   SELF,
 } from '../../../features/today/__tests__/fixtures';
-import { createTestApp, dropAnswers } from '../../../testing/test-app';
+import { createTestApp, dropAnswers, waitForAbsent } from '../../../testing/test-app';
 import { InboxScreen, inboxStatus } from '../InboxScreen';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
@@ -464,7 +464,7 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
         reads,
       ),
     );
-    await waitFor(() => expect(screen.queryByText(/STALE_REVISION/)).toBeNull());
+    await waitForAbsent(() => screen.queryByText(/STALE_REVISION/), 'The STALE_REVISION answer');
   });
 
   it('SPK-UX-003: each notice names the participants it concerns, by given name, from the names-only read', async () => {
