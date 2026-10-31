@@ -216,7 +216,7 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
   `unknown` while POL-017/DEC-056 are pending — default `unknown`; and, optionally,
   `entryFinancialStatus` for one entry — `none`, `clear`, `outstanding` or `unknown` — which the
   captain workspace reports; an implementation without it, or that fails, is reported `unknown`,
-  never clear; finance does not implement it yet, R2-JOURNEYS-05), `CHANGE_NOTICE_CHECK_PORT`
+  never clear; finance implements it from the entry's obligations, R2-JOURNEYS-05), `CHANGE_NOTICE_CHECK_PORT`
   (communications: delivery of the notice that describes the fixture's current time — default
   `unknown`). **Verified** in the assembled application
   (`apps/api/src/__tests__/cross-module-ports.spec.ts`).
@@ -589,9 +589,11 @@ built, waiting on a decision or another module.
   application without finance the action is unknown and nobody sees details.
 - Finance records the obligation reference through `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`
   (`__tests__/team-entry-finance.spec.ts`, with a deterministic finance double and finance's real
-  action definitions). **Pending** (R2-JOURNEYS-05, finance's part): calling
-  `recordFinancialStatusRef` when finance creates a team-entry obligation, and implementing
-  `entryFinancialStatus`; until then, in the assembled application, the workspace reports the
-  financial status as `unknown` and the reference stays null. **Pending** (staff dashboard): the
+  action definitions). **Verified** in the assembled application (R2-JOURNEYS-05, finance's part):
+  `POST /v1/obligations` for a team entry records the reference in finance's transaction, and
+  finance's `entryFinancialStatus` answers from the entry's obligations, so the workspace shows
+  `team_obligation_outstanding` until the contributions settle the obligation and no financial
+  issue after (`finance/__tests__/obligations.spec.ts` "R2-JOURNEYS-05 / SPK-COMP-004 /
+  SPK-CAP-002"). **Pending** (staff dashboard): the
   entry review screen shows `financialStatusRef` as a neutral reference badge from the entry list,
   which carries no status; it should show the workspace's financial issue instead.

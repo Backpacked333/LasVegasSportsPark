@@ -5,6 +5,7 @@ import type {
   ConditionFinding,
   FinancialConditionsPort,
   FixtureConditionContext,
+  TeamEntryFinancialStatus,
 } from '../../competition';
 import { FinancialStandingService } from './financial-standing.service';
 
@@ -28,6 +29,8 @@ export type ParticipationStanding =
  *   competition's FINANCIAL_CONDITIONS_IMPL: no open obligation of a competing team entry is
  *   satisfied; an open one is reported `unknown`, never a block and never a pass, because whether
  *   an open team balance affects play is pending POL-017 / DEC-056.
+ * - Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004): none, clear or outstanding from
+ *   the obligations that name the entry as debtor, shown on the team entry workspace.
  * - Arrival standing (SPK-ENTRY-004): delegated to FinancialStandingService, which finance
  *   registers as entry's FINANCIAL_STANDING_IMPL (FIN-03). Entry decides what a balance does
  *   (informational by default, DEC-056).
@@ -90,6 +93,46 @@ export class ParticipationStandingService implements FinancialConditionsPort {
       });
     }
     return findings;
+  }
+
+  /**
+   * R2-JOURNEYS-05 (SPK-COMP-004, SPK-CAP-002): the team entry's financial status from the
+   * obligations that name it as debtor, leaving out canceled ones. No such obligation is `none`;
+   * any open one is `outstanding` with the count of open obligations, the remaining amount per
+   * currency in minor units (SPK-PAY-001) and the earliest open due date; otherwise every one is
+   * settled or written off and the entry is `clear`.
+   */
+  async entryFinancialStatus(
+    organizationId: string,
+    teamEntryId: string,
+    trx?: Trx,
+  ): Promise<TeamEntryFinancialStatus> {
+    const rows = await (trx ?? executorFor(this.db))
+      .selectFrom('obligations')
+      .select(['status', 'amount_minor', 'allocated_minor', 'currency', 'due_at'])
+      .where('organization_id', '=', organizationId)
+      .where('debtor_kind', '=', 'team_entry')
+      .where('debtor_team_entry_id', '=', teamEntryId)
+      .where('status', '<>', 'canceled')
+      .orderBy('due_at')
+      .orderBy('id')
+      .execute();
+    if (rows.length === 0) return { status: 'none' };
+    const open = rows.filter((r) => r.status === 'open');
+    if (open.length === 0) return { status: 'clear' };
+    const totals = new Map<string, number>();
+    for (const row of open) {
+      const remaining = Number(row.amount_minor) - Number(row.allocated_minor);
+      totals.set(row.currency, (totals.get(row.currency) ?? 0) + remaining);
+    }
+    return {
+      status: 'outstanding',
+      openObligations: open.length,
+      outstanding: [...totals]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([currency, amountMinor]) => ({ amountMinor, currency })),
+      nextDueAt: new Date(open[0]!.due_at).toISOString(),
+    };
   }
 
   /**

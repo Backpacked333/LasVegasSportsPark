@@ -476,4 +476,68 @@ describe('obligations and team billing (SPK-PAY-004/005, SPK-AT-022)', () => {
     const after = await t.http.get(`/v1/obligations/${obligation.id}`).set(captain.header);
     expect(after.body.totals).toMatchObject({ allocatedMinor: 10_000, remainingMinor: 60_000 });
   });
+  it('R2-JOURNEYS-05 / SPK-COMP-004 / SPK-CAP-002: a team obligation is the entry\'s financial status reference, outstanding until its contributions settle it, then clear', async () => {
+    const { captain, teamEntryId, roster } = await team(2);
+    const workspace = async () => {
+      const res = await t.http.get(`/v1/team-entries/${teamEntryId}`).set(captain.header);
+      expect(res.status).toBe(200);
+      const readiness = res.body.readiness as {
+        financialStatusRef: string | null;
+        issues: Array<{ code: string; severity: string; message: string }>;
+      };
+      return {
+        ref: readiness.financialStatusRef,
+        financial: readiness.issues.filter(
+          (i) => i.code === 'financial_status_unknown' || i.code === 'team_obligation_outstanding',
+        ),
+      };
+    };
+    // before finance bills the team: no obligation, so the status cannot be confirmed
+    const before = await workspace();
+    expect(before.ref).toBeNull();
+    expect(before.financial.map((i) => i.code)).toEqual(['financial_status_unknown']);
+
+    const obligation = await teamObligation(teamEntryId, 60_000);
+    const billed = await workspace();
+    expect(billed.ref).toBe(obligation.id);
+    expect(billed.financial).toEqual([
+      expect.objectContaining({ code: 'team_obligation_outstanding', severity: 'warning' }),
+    ]);
+    expect(billed.financial[0]?.message).toContain('$600.00');
+    // the reference was written in finance's transaction, with competition's audit record
+    const audits = await t.db
+      .selectFrom('audit_records')
+      .select(['details'])
+      .where('target_type', '=', 'team_entry')
+      .where('target_id', '=', teamEntryId)
+      .where('action', '=', 'competition.record_financial_status')
+      .execute();
+    expect(audits).toEqual([
+      expect.objectContaining({
+        details: expect.objectContaining({ financialStatusRef: obligation.id }),
+      }),
+    ]);
+
+    for (const player of roster) {
+      const requested = await post(
+        t,
+        `/v1/obligations/${obligation.id}/contribution-requests`,
+        captain.header,
+        { requestedPersonId: player.personId, amountMinor: 30_000 },
+      );
+      expect(requested.status).toBe(201);
+      const paid = await post(
+        t,
+        `/v1/contribution-requests/${requested.body.id as string}/pay`,
+        player.header,
+        { paymentMethodToken: FakePaymentTokens.succeed },
+      );
+      expect(paid.status).toBe(201);
+    }
+    const settled = await t.http.get(`/v1/obligations/${obligation.id}`).set(captain.header);
+    expect(settled.body.status).toBe('settled');
+    const after = await workspace();
+    expect(after.ref).toBe(obligation.id);
+    expect(after.financial).toEqual([]);
+  });
 });

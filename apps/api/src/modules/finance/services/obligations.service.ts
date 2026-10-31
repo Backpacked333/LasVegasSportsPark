@@ -328,6 +328,18 @@ export class ObligationsService {
         }
         throw error;
       }
+      if (debtorTeamEntryId) {
+        // R2-JOURNEYS-05 (SPK-COMP-004): the team entry names the latest obligation finance
+        // recorded for it, in this transaction, so the workspace reference and the obligation
+        // commit together. The status itself is read through FINANCIAL_CONDITIONS_PORT.
+        await this.teamEntries.recordFinancialStatusRef(trx, {
+          organizationId,
+          teamEntryId: debtorTeamEntryId,
+          obligationId: row.id,
+          actor: principal,
+          correlationId,
+        });
+      }
       await this.audit.record(trx, {
         organizationId,
         actor: principal,

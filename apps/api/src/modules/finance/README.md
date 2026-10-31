@@ -572,6 +572,13 @@ outcome recording and reconciliation are never gated.
 - `FINANCIAL_CONDITIONS_IMPL` (competition match readiness, `ParticipationStandingService`) reports
   an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
   DEC-056), so it is never a pass or a block until the policy is approved.
+- Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002) — **Verified**:
+  `POST /v1/obligations` for a team entry records the obligation as the entry's
+  `financialStatusRef` through competition's `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`, in
+  the same transaction (competition audits it), and `ParticipationStandingService
+  .entryFinancialStatus` answers `none`, `clear` or `outstanding` (open count, remaining amount per
+  currency in minor units, earliest open due date) from the entry's obligations that are not
+  canceled. The captain workspace shows it (`__tests__/obligations.spec.ts` "R2-JOURNEYS-05").
 - The money side of transfers and cancellations is answered (consequence) but not executed
   automatically (no automatic refund, credit or charge from enrollment's commands); a plan whose
   registrations were all canceled is held (no collection, no notice) and waits for the finance
