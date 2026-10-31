@@ -339,20 +339,26 @@ Tests: `__tests__/session-scheduling-follow.spec.ts` (assembled application, PGl
   items and `GET /v1/sessions`; entry's check-in window reads the same session rows through
   `SessionsService.list`). Canceled sessions and draft events are left alone;
   a change that leaves the times as they are changes nothing.
-- **Pending in other modules** (they copy session times or audiences and are not catalog's to
-  change): enrollment retimes `session_bookings` on `catalog.session_retimed` and hides bookings of
-  canceled sessions from the family calendar; workforce retimes `session`-target assignments on
-  it; enrollment's `SessionParticipants` leaves the families of a canceled session out of the
-  audience of an event that stays published for another session (`kept_shared`). Until then a
-  booked session's booking row, and a coach assigned to the session, keep the old time.
-- **Pending: no cancellation notice when the event is kept.** In the `kept_shared` and
-  `kept_owned_elsewhere` outcomes the session is canceled but its event stays published, so
-  scheduling sends no "Canceled" notice, and nothing consumes `catalog.session_canceled` to tell the
-  families (only entry and workforce consume it). Those families are not told the session is
-  canceled (SPK-COMMS-002) and keep receiving the surviving event's reminders and change notices
-  until the audience item above lands. Closing it needs a `catalog.session_canceled` consumer in
-  communications (a family notice, with the customer-safe text, never the staff reason), or the
-  outcome carried on the event so communications can tell those families.
+- **Followed by the modules that copy session times or audiences** (stage-6 integration,
+  **Verified**): enrollment's `enrollment.follow_session_retimed` moves the session's live
+  `session_bookings` to the session's current times (`enrollment/__tests__/session-retimed.spec.ts`,
+  family calendar `session_booking` item and replay included), and the family calendar skips
+  bookings of sessions that are not scheduled; workforce's `workforce.follow_session_retimed`
+  retimes live `session`-target assignments through its usual retime, access window included
+  (`workforce/__tests__/access-follow-ups.spec.ts` "R2-JOURNEYS-03"); enrollment's
+  `SessionParticipants` leaves the participants of a canceled session out of the audience of an
+  event another linked session still holds (`kept_shared`), so they get none of its later change
+  notices or reminders (this file, "R2-JOURNEYS-02 / SPK-COMMS-002 (kept_shared)").
+- **Who is told of a cancellation.** Enrollment consumes `catalog.session_canceled`
+  (`enrollment.follow_session_canceled`) and tells each family whose session booking it cancels
+  (`enrollment.notify_session_booking_canceled`, with the catalog's customer-safe reason on the
+  booking, never the staff one). **Pending:** in the `kept_shared` and `kept_owned_elsewhere`
+  outcomes the event stays published, so scheduling sends no "Canceled" notice, and the families
+  enrolled in the offering (not booked into the session) are not told the session is canceled
+  (SPK-COMMS-002). In `kept_owned_elsewhere` (a fixture's or booking's event) they also stay in
+  that event's audience. Closing it needs a `catalog.session_canceled` consumer in communications
+  (a family notice with the customer-safe text, never the staff reason), or the outcome carried on
+  the event so communications can tell those families.
 
 ## Stage-3 integration fixes — verified 2026-10-29
 

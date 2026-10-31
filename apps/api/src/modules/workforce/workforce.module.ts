@@ -196,6 +196,16 @@ export class WorkforceModule implements OnModuleInit {
       },
       { failureOwner: 'program_manager' },
     );
+    // R2-JOURNEYS-03 (SPK-AT-009, SPK-STAFF-003): a session moved with its scheduling event moves
+    // its live assignments, checked again at the new time.
+    this.registry.on<EventPayload<typeof CatalogEvents.sessionRetimed>>(
+      CatalogEvents.sessionRetimed.type,
+      'workforce.follow_session_retimed',
+      async (event, ctx) => {
+        await this.assignments.onSessionRetimed(event, ctx);
+      },
+      { failureOwner: 'program_manager' },
+    );
     // WRK-04, SPK-COMMS-002 (offer, schedule change, cancellation), SPK-COMMS-005, IF-22: this
     // module's own notices to assignees.
     this.registry.on<EventPayload<typeof WorkforceEvents.assignmentChanged>>(

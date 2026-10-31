@@ -511,6 +511,81 @@ describe('temporary access after follow-up changes (SPK-STAFF-004, §4.14, §4.7
     expect((await me(coach)).kind).toBe('customer');
   });
 
+  it("R2-JOURNEYS-03 / SPK-STAFF-003 / SPK-STAFF-004: an accepted session assignment follows its session when the session's scheduling event moves, access window included", async () => {
+    const pm = await staffMember(t, ['program_manager']);
+    const programId = await createProgramFixture(t);
+    const offering = await createOfferingFixture(t, {
+      programId,
+      responsibleManagerPersonId: pm.personId,
+    });
+    const event = await createScheduledEvent(t.app.get(EventsService), {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      kind: 'session',
+      title: 'Skills clinic',
+      start: at('2027-04-19', '16:00'),
+      end: at('2027-04-19', '17:00'),
+      resourceIds: [world.pitch.northHalfId],
+      sourceType: 'catalog.session',
+    });
+    const session = await post(t, `/v1/offerings/${offering.offeringId}/sessions`, pm, {
+      scheduledStart: at('2027-04-19', '16:00'),
+      scheduledEnd: at('2027-04-19', '17:00'),
+      schedulingEventId: event.id,
+    });
+    expect(session.status, JSON.stringify(session.body)).toBe(201);
+    const coach = await adultCustomer(t);
+    const created = await post(t, '/v1/assignments', pm, {
+      personId: coach.personId,
+      kind: 'coach',
+      targetType: 'session',
+      targetId: session.body.id,
+      offeringId: offering.offeringId,
+      role: 'instructor',
+      engagement: 'temporary',
+      offer: true,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const accepted = await post(
+      t,
+      `/v1/assignments/${created.body.assignment.id}/accept`,
+      coach,
+      {},
+    );
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    const trail =
+      new Date(accepted.body.assignment.access.until).getTime() -
+      new Date(accepted.body.assignment.scheduledEnd).getTime();
+    await drainOutbox(t);
+
+    await t.app.get(EventsService).moveEvent(systemPrincipal(t.organizationId, 'tests'), event.id, {
+      scheduledStart: at('2027-04-19', '18:00'),
+      scheduledEnd: at('2027-04-19', '19:00'),
+      reason: 'Pitch needed for a match',
+    });
+    await drainOutbox(t);
+
+    const after = await t.http
+      .get(`/v1/assignments/${created.body.assignment.id}`)
+      .set(coach.header);
+    const until = new Date(new Date(at('2027-04-19', '19:00')).getTime() + trail).toISOString();
+    expect(after.body).toMatchObject({
+      status: 'accepted',
+      scheduledStart: at('2027-04-19', '18:00'),
+      scheduledEnd: at('2027-04-19', '19:00'),
+      access: { status: 'granted', until },
+    });
+    const membership = await membershipOf(accepted.body.assignment.access.staffMembershipId);
+    expect(new Date(membership.effective_to as Date).toISOString()).toBe(until);
+    const retimed = await t.db
+      .selectFrom('audit_records')
+      .select(['details'])
+      .where('target_id', '=', created.body.assignment.id)
+      .where('action', '=', 'workforce.assignment_retimed')
+      .execute();
+    expect(retimed).toHaveLength(1);
+  });
+
   it('SPK-STAFF-004: a reschedule into a conflict withdraws the substitute and ends the access', async () => {
     const sub = await adultCustomer(t);
     const x = await scheduleFixture(t, world, {

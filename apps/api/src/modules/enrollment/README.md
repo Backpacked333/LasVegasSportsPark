@@ -178,13 +178,29 @@ expiresAt`): expires an active hold once due, gives the place back, emits
   in depth for that read-then-commit window; it applies once the session has pools, which every
   booked session has). **Verified**, `__tests__/session-canceled.spec.ts` (PGlite and
   `TEST_DATABASE_URL`).
+  The canceled bookings carry the catalog's customer-safe reason (`SESSION_CANCELED_EVENT_REASON`),
+  never the staff-only reason of the catalog cancel, because a booking's `cancelReason` is shown to
+  the family (§4.14; `__tests__/session-canceled.spec.ts`, first test).
+- `enrollment.follow_session_retimed` on `catalog.session_retimed` (R2-JOURNEYS-03, SPK-AT-009,
+  SPK-COMMS-005): the session's pending and confirmed session bookings take the session's current
+  times, read in the handler's transaction (never the payload), with a revision bump and an
+  `enrollment.follow_session_retimed` audit record each; a booking already at those times, a
+  canceled booking and a session that is no longer scheduled are left alone, so a replay or a late
+  delivery writes nothing (`__tests__/session-retimed.spec.ts`). **Pending (POL-039):** a
+  membership booking keeps the membership period it was counted in when its session moves into
+  another period.
+- `SessionParticipants` (SESSION_AUDIENCE_IMPL) leaves the participants of a canceled session out of
+  the audience of a scheduling event another linked session still holds (R2-JOURNEYS-02
+  `kept_shared`; catalog `session-scheduling-follow.spec.ts` "kept_shared"); while no linked session
+  is scheduled any more they are still the event's audience, so its cancellation reaches them.
 - `enrollment.notify_session_booking_canceled` on `enrollment.session_booking_changed` (stage-6
   rework of R2-JOURNEYS-01; SPK-AT-009, SPK-COMMS-002): a booking canceled with
   `cancel_cause = 'session_canceled'` composes one `cancellation` notice ("Session canceled", the
   local date and time, and what happened to the package credit, membership session or makeup:
   given back, or reviewed by staff) for the participant and the holders of `receive_messages`. A
-  session canceled in the catalog emits no scheduling change, so this is how its booked families
-  hear of it; on the closure path communications' "Canceled:" notice reaches them as well, because
+  session canceled in the catalog whose event is kept (no event, or `kept_shared` /
+  `kept_owned_elsewhere`) emits no scheduling change, so this is how its booked families hear of
+  it; when the catalog cancel also cancels the event (R2-JOURNEYS-02), or on the closure path communications' "Canceled:" notice reaches them as well, because
   `SessionParticipants.participantsOfSchedulingEvent` keeps the bookings canceled with the session
   whichever follow-up commits first (ASYNC-01 for session bookings), never one the family canceled
   itself. One notice per change event (`notifications_source_event_idx`). **Verified**,

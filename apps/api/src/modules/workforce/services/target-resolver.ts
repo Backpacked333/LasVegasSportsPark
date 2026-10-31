@@ -166,6 +166,24 @@ export class TargetResolver {
   }
 
   /**
+   * R2-JOURNEYS-03: the catalog session's latest committed times, read through the handler's
+   * transaction from the sessions of its scheduling event, or null when the session is not linked
+   * to that event any more. Follow-ups apply this rather than a `catalog.session_retimed` payload,
+   * which can be delivered after a newer move (§4.12, §4.6).
+   */
+  async currentSession(
+    trx: Trx,
+    organizationId: string,
+    schedulingEventId: string,
+    sessionId: string,
+  ): Promise<{ status: string; scheduledStart: string; scheduledEnd: string } | null> {
+    const sessions = await this.sessions.sessionsOfSchedulingEvents(trx, organizationId, [
+      schedulingEventId,
+    ]);
+    return sessions.find((s) => s.id === sessionId) ?? null;
+  }
+
+  /**
    * The scheduling event's latest committed state, read through the active transaction (a
    * follow-up handler's), or null when it is not found. Follow-ups apply this rather than an
    * event payload, because deliveries can arrive late and out of order (§4.12, §4.6).

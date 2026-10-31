@@ -267,6 +267,56 @@ describe('catalog sessions follow their scheduling events (assembled application
     await linkedSession(offering.offeringId, replacement.eventIds[0] as string, DAY, 2);
   });
 
+  it('R2-JOURNEYS-02 / SPK-COMMS-002 (kept_shared): when one of two sessions sharing an event is canceled, its family hears nothing more about that event; the other family is still told of its change', async () => {
+    const pitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch R2-02 audience',
+    });
+    const first = await youthOffering();
+    const second = await youthOffering();
+    const series = await weeklyEvents(first.offeringId, pitch.northHalfId, 1);
+    const eventId = series.eventIds[0] as string;
+    const canceledSession = await linkedSession(first.offeringId, eventId, DAY, 1);
+    await linkedSession(second.offeringId, eventId, DAY, 1);
+    const leaving = await enrolledFamily(first.offeringId);
+    const staying = await enrolledFamily(second.offeringId);
+    await drain(t);
+    await ok(
+      post(t, `/v1/sessions/${canceledSession.id}/cancel`, manager.header, {
+        reason: 'Merged into the other group',
+        expectedRevision: canceledSession.revision,
+      }),
+    );
+    await drain(t);
+    expect((await eventRow(eventId)).status).toBe('published');
+
+    // the shared event moves: only the family of the session that still uses it is told
+    const revision = (
+      await t.db
+        .selectFrom('event_series')
+        .select('revision')
+        .where('id', '=', series.id)
+        .executeTakeFirstOrThrow()
+    ).revision;
+    await ok(
+      post(t, `/v1/event-series/${series.id}/edits`, scheduler.header, {
+        scope: 'one',
+        occurrenceIndex: 0,
+        changes: { localStartTime: '12:00' },
+        expectedRevision: revision,
+        reason: 'Pitch needed for a tournament',
+      }),
+    );
+    await drain(t);
+    const changed = async (family: { header: Record<string, string> }) =>
+      (
+        await ok<{ items: Array<{ title: string }> }>(get(t, '/v1/me/inbox', family.header))
+      ).items.filter((n) => n.title.startsWith('Schedule changed: U10 clinic'));
+    expect(await changed(staying)).toHaveLength(1);
+    expect(await changed(leaving)).toEqual([]);
+  });
+
   it('R2-JOURNEYS-02: sessions sharing one event keep it until the last is canceled, also when both are canceled at once', async () => {
     const pitch = await seedPitchWithHalves(t.db, {
       organizationId: t.organizationId,

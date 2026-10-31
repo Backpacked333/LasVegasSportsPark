@@ -60,7 +60,17 @@ export class SessionParticipants {
     options: AudienceOptions = { endedBySessionCancel: false },
   ): Promise<SessionParticipant[]> {
     const booked = await this.bookersOf(db, organizationId, eventIds, bookingStatuses);
-    const sessions = await this.sessions.sessionsOfSchedulingEvents(db, organizationId, eventIds);
+    const linked = await this.sessions.sessionsOfSchedulingEvents(db, organizationId, eventIds);
+    // R2-JOURNEYS-02 (`kept_shared`): an event several sessions share stays published when one of
+    // them is canceled. The canceled session's participants are no longer part of that event, so
+    // they hear nothing more about it (its later changes and reminders); while no linked session
+    // is scheduled any more (the event was canceled with them) they are still its audience.
+    const live = new Set(
+      linked.filter((s) => s.status === 'scheduled').map((s) => s.schedulingEventId),
+    );
+    const sessions = linked.filter(
+      (s) => s.status !== 'canceled' || !live.has(s.schedulingEventId),
+    );
     if (sessions.length === 0) return booked;
     const offeringIds = [...new Set(sessions.map((s) => s.offeringId))];
     const enrollments = await db

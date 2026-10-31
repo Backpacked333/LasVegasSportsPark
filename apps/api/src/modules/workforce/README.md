@@ -52,7 +52,10 @@ PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** u
   (`scheduling.event_changed` for event targets: the event's current state, read in the
   handler's transaction, decides — canceled → withdrawn, otherwise retimed to its current times —
   so a late or reordered delivery never retimes back to an older time, §4.12, §4.6),
-  `workforce.follow_session` (`catalog.session_canceled` → withdrawn). A retime of an accepted
+  `workforce.follow_session` (`catalog.session_canceled` → withdrawn),
+  `workforce.follow_session_retimed` (`catalog.session_retimed`, R2-JOURNEYS-03: live `session`
+  assignments take the session's current times read in the handler's transaction, through the same
+  retime, access window included; `__tests__/access-follow-ups.spec.ts` "R2-JOURNEYS-03"). A retime of an accepted
   assignment is checked against every commitment of the person (accepted or completed
   assignments, and person commitments held in scheduling); a conflict withdraws the moved
   assignment with the activity's new time recorded on it and escalates the slot as uncovered

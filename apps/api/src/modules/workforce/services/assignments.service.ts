@@ -1034,6 +1034,37 @@ export class AssignmentsService {
     );
   }
 
+  /**
+   * catalog.session_retimed (R2-JOURNEYS-03, SPK-STAFF-003, SPK-STAFF-004): live assignments of
+   * the session follow it to its new time, read from the session as it is now (never the
+   * payload), through the same retime as a moved fixture or event, so the commitment and overlap
+   * checks run at the real time and granted access follows. A session that is no longer scheduled
+   * moves nothing (its cancellation withdraws them through `onSessionCanceled`).
+   */
+  async onSessionRetimed(
+    event: DomainEvent<EventPayload<typeof CatalogEvents.sessionRetimed>>,
+    ctx: HandlerContext,
+  ): Promise<void> {
+    const p = event.payload;
+    const rows = await this.liveFor(ctx.trx, event.organizationId, 'session', p.sessionId);
+    if (rows.length === 0) return;
+    const current = await this.targets.currentSession(
+      ctx.trx,
+      event.organizationId,
+      p.schedulingEventId,
+      p.sessionId,
+    );
+    if (!current || current.status !== 'scheduled') return;
+    await this.retime(
+      ctx.trx,
+      rows,
+      new Date(current.scheduledStart),
+      new Date(current.scheduledEnd),
+      p.schedulingEventId,
+      event,
+    );
+  }
+
   private async liveFor(
     trx: Trx,
     organizationId: string,

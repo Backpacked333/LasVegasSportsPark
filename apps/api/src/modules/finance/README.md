@@ -576,7 +576,7 @@ outcome recording and reconciliation are never gated.
   `POST /v1/obligations` for a team entry records the obligation as the entry's
   `financialStatusRef` through competition's `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`, in
   the same transaction (competition audits it), and `ParticipationStandingService
-  .entryFinancialStatus` answers `none`, `clear` or `outstanding` (open count, remaining amount per
+.entryFinancialStatus` answers `none`, `clear` or `outstanding` (open count, remaining amount per
   currency in minor units, earliest open due date) from the entry's obligations that are not
   canceled. The captain workspace shows it (`__tests__/obligations.spec.ts` "R2-JOURNEYS-05").
 - The money side of transfers and cancellations is answered (consequence) but not executed

@@ -76,6 +76,7 @@ import { PackageEntitlementsService } from './services/package-entitlements.serv
 import { RegistrationEvaluator } from './services/registration-evaluator';
 import { SessionBookingsService } from './services/session-bookings.service';
 import { SessionCanceledFollowUp } from './services/session-canceled-follow-up';
+import { SessionRetimedFollowUp } from './services/session-retimed-follow-up';
 import { SessionParticipants } from './services/session-participants';
 import { TrialsService } from './services/trials.service';
 import { WaitlistService } from './services/waitlist.service';
@@ -134,6 +135,7 @@ const providers: Provider[] = [
   FamilyCalendarService,
   SessionParticipants,
   SessionCanceledFollowUp,
+  SessionRetimedFollowUp,
   // SPK-AT-009: communications addresses session change notices to the sessions' participants.
   { provide: SESSION_AUDIENCE_IMPL, useExisting: SessionParticipants },
   { provide: ENROLLMENT_PORT, useExisting: EnrollmentsService },
@@ -224,6 +226,7 @@ export class EnrollmentModule implements OnModuleInit {
     private readonly bookingsG: BookingsService,
     private readonly youthProgression: YouthProgressionService,
     private readonly sessionCanceled: SessionCanceledFollowUp,
+    private readonly sessionRetimed: SessionRetimedFollowUp,
   ) {}
 
   onModuleInit(): void {
@@ -509,6 +512,17 @@ export class EnrollmentModule implements OnModuleInit {
       'enrollment.follow_session_canceled',
       (event, ctx) =>
         runWithTransaction(ctx.trx, () => this.sessionCanceled.onSessionCanceled(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
+    // R2-JOURNEYS-03 (SPK-AT-009, SPK-COMMS-005): a session moved with its scheduling event moves
+    // its live bookings' copy of the times, read from the session as it is now.
+    this.registry.on<EventPayload<typeof CatalogEvents.sessionRetimed>>(
+      CatalogEvents.sessionRetimed.type,
+      'enrollment.follow_session_retimed',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, async () => {
+          await this.sessionRetimed.onSessionRetimed(ctx.trx, event);
+        }),
       { failureOwner: 'program_manager' },
     );
     // SPK-YOUTH-004: an unused makeup lapses at its expiry.

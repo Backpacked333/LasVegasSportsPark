@@ -4,7 +4,11 @@ import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
-import { CatalogEvents, createOfferingSessionFixture } from '../../catalog';
+import {
+  CatalogEvents,
+  createOfferingSessionFixture,
+  SESSION_CANCELED_EVENT_REASON,
+} from '../../catalog';
 import { CapacityService } from '../services/capacity.service';
 import { EXPIRE_PACKAGES_JOB } from '../services/enrollment-jobs';
 import { MakeupsService } from '../services/makeups.service';
@@ -163,12 +167,19 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
     // Saturday morning: inside the customer's notice window, the facility cancels the session.
     t.clock.set(new Date(Date.parse('2026-11-21T17:00:00Z') - 3 * HOUR));
     try {
-      await cancelSession(saturday, 'Pitch flooded');
+      await cancelSession(saturday, 'Pitch flooded; Coach Lee suspended');
       expect(await bookingRow(near.body.id as string)).toEqual({
         status: 'canceled',
         credit_disposition: 'retained_pending_policy',
-        cancel_reason: 'Pitch flooded',
+        cancel_reason: SESSION_CANCELED_EVENT_REASON,
       });
+      // §4.14: the catalog's staff-only reason never reaches the family's booking view.
+      const familyView = await t.http
+        .get(`/v1/session-bookings/${near.body.id as string}`)
+        .set(member.header);
+      expect(familyView.status).toBe(200);
+      expect(familyView.body.cancelReason).toBe(SESSION_CANCELED_EVENT_REASON);
+      expect(JSON.stringify(familyView.body)).not.toContain('Coach Lee');
       // The credit is not silently kept: one owned decision names the redemption to reverse.
       const redemption = await t.db
         .selectFrom('package_redemptions')
@@ -237,7 +248,7 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
       expect(await bookingRow(far.body.id as string)).toEqual({
         status: 'canceled',
         credit_disposition: 'returned',
-        cancel_reason: 'Tournament moved',
+        cancel_reason: SESSION_CANCELED_EVENT_REASON,
       });
       expect(await raisedFor(far.body.id as string)).toEqual([]);
       expect(await redeemedCount(entitlementId)).toBe(0);
@@ -728,7 +739,7 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
       expect(await bookingRow(facilityCanceled.body.id as string)).toEqual({
         status: 'canceled',
         credit_disposition: 'retained_entitlement_ended',
-        cancel_reason: 'Floodlights failed',
+        cancel_reason: SESSION_CANCELED_EVENT_REASON,
       });
       expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 2 });
       // The loss is raised for a decision, without pointing staff at a reversal that cannot happen.

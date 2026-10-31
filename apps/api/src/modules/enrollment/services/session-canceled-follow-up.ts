@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { DomainEvent, EventPayload } from '@sportspark/contracts';
 import type { Trx } from '../../../kernel';
-import type { CatalogEvents } from '../../catalog';
+import { SESSION_CANCELED_EVENT_REASON, type CatalogEvents } from '../../catalog';
 import { CapacityService } from './capacity.service';
 import { SessionBookingsService } from './session-bookings.service';
 import { WaitlistService } from './waitlist.service';
@@ -21,7 +21,8 @@ type SessionCanceled = EventPayload<typeof CatalogEvents.sessionCanceled>;
  *    offer generation lock them), so no hold, booking or offer takes a seat again;
  * 3. its live waitlist entries leave the queue with reason `session_canceled` (an open offer is
  *    declined) and each family is told;
- * 4. its live bookings are canceled with cause `session_canceled`: the customer notice window does
+ * 4. its live bookings are canceled with cause `session_canceled` and the catalog's customer-safe
+ *    reason (never the staff-only one, §4.14): the customer notice window does
  *    not apply, a makeup redemption is reversed, and a package credit or membership session that
  *    no approved policy returns raises one owned exception per booking (POL-007, POL-041; whether
  *    a makeup is issued for the lost session stays DEC-003).
@@ -56,11 +57,14 @@ export class SessionCanceledFollowUp {
       sessionId,
       correlationId,
     );
+    // §4.14: the catalog's reason is staff-only (it can name a coach or a child), and a
+    // booking's cancelReason is shown to the family (GET /v1/me/session-bookings), so the
+    // booking records the catalog's customer-safe text instead.
     await this.bookings.cancelForCanceledSession(
       trx,
       organizationId,
       sessionId,
-      reason,
+      SESSION_CANCELED_EVENT_REASON,
       correlationId,
     );
   }
