@@ -50,6 +50,7 @@ import { CompetitionEvents } from '../competition.events';
 import { loadRuleSetRow, loadSeasonRow, teamNamesOf, type Reader } from '../competition.queries';
 import {
   criteriaOf,
+  fixtureTitle,
   organizationOf,
   ruleSetContentOf,
   type SeasonRow,
@@ -690,7 +691,11 @@ export class FixtureGenerationService {
               kind: 'create' as const,
               proposed: {
                 kind: 'game' as const,
-                title: `${names.get(g.homeEntryId) ?? 'Home'} v ${names.get(g.awayEntryId as string) ?? 'Away'}`,
+                // R2-TENANCY-INPUT-02: bounded to scheduling's title limit.
+                title: fixtureTitle(
+                  names.get(g.homeEntryId) ?? 'Home',
+                  names.get(g.awayEntryId as string) ?? 'Away',
+                ),
                 format,
                 scheduledStart: g.scheduledStart as string,
                 scheduledEnd: g.scheduledEnd as string,

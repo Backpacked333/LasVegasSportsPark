@@ -592,4 +592,34 @@ describe('fixtures and availability (§4.4 Matches, SPK-FIX-005, SPK-CAP-003, §
     const summary = await dispatcher.runOnce(200);
     expect(summary.dead).toBe(0);
   });
+
+  it('R2-TENANCY-INPUT-02: two 200-character team names give a fixture event title within the scheduling title limit (the notice titles communications builds from it are not covered here)', async () => {
+    const longPitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch long names',
+    });
+    const home = await teamOf('H'.repeat(200));
+    const away = await teamOf('A'.repeat(200));
+    const res = await post('/fixtures', leagueManager, {
+      seasonId: season.seasonId,
+      homeEntryId: home.teamEntryId,
+      awayEntryId: away.teamEntryId,
+      round: 9,
+      schedule: {
+        facilityId: t.facilityId,
+        resourceIds: [longPitch.pitchId],
+        scheduledStart: at('2027-03-27', '18:00'),
+        scheduledEnd: at('2027-03-27', '19:00'),
+      },
+    });
+    expect(res.status).toBe(201);
+    const event = await t.db
+      .selectFrom('events')
+      .select('title')
+      .where('id', '=', res.body.fixture.schedulingEventId)
+      .executeTakeFirstOrThrow();
+    expect(event.title.length).toBeLessThanOrEqual(200);
+    expect(event.title).toMatch(/^H+… v A+…$/);
+  });
 });

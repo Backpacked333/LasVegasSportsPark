@@ -1,8 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   DomainError,
   errors,
+  formatMoney,
+  money,
   newId,
+  type ActionId,
   type ApproveTeamEntryInput,
   type AvailabilitySummary,
   type CreateTeamEntryInput,
@@ -33,6 +36,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
   OperationsService,
   Outbox,
   UnitOfWork,
@@ -43,6 +47,11 @@ import {
   type Trx,
 } from '../../../kernel';
 import { PeopleService } from '../../identity';
+import {
+  FINANCIAL_CONDITIONS_PORT,
+  type FinancialConditionsPort,
+  type TeamEntryFinancialStatus,
+} from '../competition-matches.ports';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
 import { WORKSPACE_UPCOMING_FIXTURES } from '../competition.policy';
@@ -74,11 +83,27 @@ import {
   type RosterFacts,
 } from '../competition.shared';
 import { TeamEntryMachine } from '../competition.state-machines';
-import type { PersonEntryMembership, TeamEntryQueryPort, TeamEntrySummary } from '../ports';
+import type {
+  PersonEntryMembership,
+  RecordFinancialStatusRefInput,
+  TeamEntryQueryPort,
+  TeamEntrySummary,
+} from '../ports';
 import { EligibilityService } from './eligibility.service';
 import { TeamAuthority } from './team-authority.service';
 
 const CAPACITY_CONSTRAINT = 'team_entries_division_capacity';
+
+/**
+ * R2-JOURNEYS-05 (SPK-CAP-002, SPK-PAY-004): the amounts, count and due date of an entry's open
+ * balance are shown only to a viewer finance lets read the team obligation. Finance owns that rule:
+ * `finance.read_obligation` for a team obligation, which names no debtor person, so self and
+ * guardian authority never apply; that leaves the captain (team role `captain`) and the staff who
+ * read financial records (never coaches or officials). Competition asks the kernel by the action's
+ * id because finance depends on competition, not the reverse; in an application without finance
+ * the action is unknown, the decision denies, and nobody sees amounts.
+ */
+export const READ_TEAM_OBLIGATION_ACTION: ActionId = 'finance.read_obligation';
 
 export interface EntryViewer {
   /** Staff in scope, or a captain/co-captain: may see pending invitations and requests. */
@@ -126,9 +151,10 @@ function rosterOpen(context: EntryContext): boolean {
 
 /**
  * Season team entries (SPK-COMP-004, SPK-CAP-001/005, SPK-AT-002/003). An entry is one team's
- * participation in one season. Creating or renewing never charges: finance reacts to the event
- * and later records `financialStatusRef`. Approval, financial status, roster completion and
- * eligibility stay distinct fields; roster completion is derived on every read.
+ * participation in one season. Creating or renewing never charges: finance creates the entry's
+ * obligation and records it through `recordFinancialStatusRef`; the workspace reads the
+ * obligation state from finance (R2-JOURNEYS-05). Approval, financial status, roster completion
+ * and eligibility stay distinct fields; roster completion is derived on every read.
  */
 @Injectable()
 export class TeamEntriesService implements TeamEntryQueryPort {
@@ -143,7 +169,11 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     private readonly people: PeopleService,
     private readonly eligibility: EligibilityService,
     private readonly teamAuthority: TeamAuthority,
+    @Inject(FINANCIAL_CONDITIONS_PORT) private readonly finance: FinancialConditionsPort,
+    private readonly facilities: FacilityDirectory,
   ) {}
+
+  private readonly logger = new Logger(TeamEntriesService.name);
 
   // -------------------------------------------------------------------------------------------
   // Create or renew (SPK-CAP-001, SPK-CAP-005)
@@ -779,15 +809,15 @@ export class TeamEntriesService implements TeamEntryQueryPort {
           context.entry.status === 'applied' ? 'Approve the entry.' : 'Create a new entry.',
       });
     }
-    if (context.entry.financial_status_ref === null) {
-      issues.push({
-        code: 'financial_status_unknown',
-        severity: 'unknown',
-        message: 'No financial obligation has been recorded for this entry yet.',
-        responsibleRole: 'finance_operator',
-        requiredAction: 'Finance records the entry obligation.',
-      });
-    }
+    // R2-JOURNEYS-05 (SPK-COMP-004): the financial status comes from finance's obligations for the
+    // entry, not from whether a reference was recorded; its details only for a viewer who may read
+    // the team obligation (SPK-CAP-002).
+    const financialIssue = financialIssueOf(
+      context.entry.financial_status_ref,
+      await this.financialStatusOf(organizationId, id),
+      await this.financialAudienceOf(principal, context),
+    );
+    if (financialIssue) issues.push(financialIssue);
     if (counts.limited < rules.rosterMin) {
       issues.push({
         code: 'roster_below_minimum',
@@ -869,6 +899,61 @@ export class TeamEntriesService implements TeamEntryQueryPort {
           (viewerRoles.includes('co_captain') && rules.roster.coCaptainMayActAsCaptain === true),
         availableActions: await this.availableActions(principal, context),
       },
+    };
+  }
+
+  /**
+   * R2-JOURNEYS-05: the entry's financial status from finance (`FINANCIAL_CONDITIONS_PORT`). A
+   * finance implementation that does not answer it, or that fails, is reported as `unknown`, never
+   * as clear (as a readiness check that throws is reported, SPK-READY-002).
+   */
+  private async financialStatusOf(
+    organizationId: string,
+    teamEntryId: string,
+  ): Promise<TeamEntryFinancialStatus> {
+    const ask = this.finance.entryFinancialStatus;
+    if (!ask) {
+      return {
+        status: 'unknown',
+        explanation: 'finance does not report team entry obligations to competition yet',
+      };
+    }
+    try {
+      return await ask(organizationId, teamEntryId);
+    } catch (error) {
+      this.logger.warn(
+        `entry financial status failed for team entry ${teamEntryId}: ${(error as Error).message}`,
+      );
+      return { status: 'unknown', explanation: 'the finance check failed' };
+    }
+  }
+
+  /**
+   * R2-JOURNEYS-05 (SPK-CAP-002): how much of the financial status the viewer sees. Amounts and
+   * the due date follow finance's read rule for the team obligation (`READ_TEAM_OBLIGATION_ACTION`),
+   * not the workspace's: a rostered member, a guardian of a child player or a coach opens the
+   * workspace but not the obligation. The due date is shown in the time zone of the division's
+   * facility (SPK-SCHED-008).
+   */
+  private async financialAudienceOf(
+    principal: Principal,
+    context: EntryContext,
+  ): Promise<FinancialIssueAudience> {
+    const organizationId = context.entry.organization_id;
+    const decision = await this.authorization.decide(principal, READ_TEAM_OBLIGATION_ACTION, {
+      type: 'obligation',
+      organizationId,
+      teamEntryId: context.entry.id,
+      protected: true,
+    });
+    const facilityId = context.division?.facility_id ?? null;
+    const facility = facilityId
+      ? (await this.facilities.describe(organizationId, [facilityId], this.db)).get(facilityId)
+      : undefined;
+    return {
+      readsObligation: decision.allowed,
+      staff: isStaffLike(principal),
+      timezone: facility?.timezone ?? null,
     };
   }
 
@@ -1107,16 +1192,12 @@ export class TeamEntriesService implements TeamEntryQueryPort {
   }
 
   // -------------------------------------------------------------------------------------------
-  // Finance hook: the obligation reference is recorded by finance (SPK-COMP-004 "financial status").
+  // Finance hook (TeamEntryQueryPort): finance records the obligation reference in its own
+  // transaction (SPK-COMP-004 "financial status", R2-JOURNEYS-05).
   // -------------------------------------------------------------------------------------------
-  async recordFinancialStatusRef(
-    trx: Trx,
-    principal: Principal,
-    teamEntryId: string,
-    financialStatusRef: string,
-    correlationId: string | null,
-  ): Promise<void> {
-    const organizationId = organizationOf(principal);
+  async recordFinancialStatusRef(trx: Trx, input: RecordFinancialStatusRefInput): Promise<void> {
+    const { organizationId, teamEntryId, correlationId } = input;
+    const financialStatusRef = input.obligationId;
     const entry = await trx
       .selectFrom('team_entries')
       .select(['id', 'revision', 'financial_status_ref'])
@@ -1135,14 +1216,14 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       .execute();
     await this.audit.record(trx, {
       organizationId,
-      actor: principal,
+      actor: input.actor,
       action: 'competition.record_financial_status',
       targetType: 'team_entry',
       targetId: teamEntryId,
       beforeRevision: entry.revision,
       afterRevision: entry.revision + 1,
       correlationId,
-      details: { financialStatusRef },
+      details: { financialStatusRef, previousFinancialStatusRef: entry.financial_status_ref },
     });
   }
 
@@ -1315,6 +1396,111 @@ export function teammateView(member: RosterMember, viewerPersonId: string | null
     eligibility:
       viewerPersonId !== null && member.personId === viewerPersonId ? member.eligibility : null,
   };
+}
+
+/** Who reads the workspace's financial issue, and how much of it (R2-JOURNEYS-05). */
+export interface FinancialIssueAudience {
+  /** Finance lets the viewer read the team obligation: the count, amounts and due date are shown. */
+  readsObligation: boolean;
+  /** Staff: finance's explanation of an unknown status (an implementation detail) is shown. */
+  staff: boolean;
+  /** The facility time zone the due date is shown in; null when the entry has no facility. */
+  timezone: string | null;
+}
+
+type WorkspaceIssue = TeamEntryWorkspace['readiness']['issues'][number];
+
+/** An amount for people (SPK-PAY-001: minor units and currency, formatted by the Money helpers). */
+function moneyText(amountMinor: number, currency: string): string {
+  try {
+    return formatMoney(money(amountMinor, currency));
+  } catch {
+    return `${amountMinor} ${currency} (minor units)`;
+  }
+}
+
+/** An instant as a facility-local date and time with the zone named (SPK-SCHED-008). */
+function localDateTime(iso: string, timezone: string | null): string {
+  const instant = new Date(iso);
+  if (!timezone) return `${instant.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  const text = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(instant);
+  return `${text} (${timezone})`;
+}
+
+/**
+ * R2-JOURNEYS-05 (SPK-COMP-004, SPK-CAP-002, SPK-PAY-004): the workspace issue for the entry's
+ * financial status, or null when finance reports every obligation settled. An open balance is a
+ * warning, not a block: whether it affects play awaits the approved participation policy
+ * (POL-017, DEC-056), which the message does not claim either way.
+ *
+ * The count, amounts and due date go only to a viewer who may read the team obligation
+ * (`audience.readsObligation`); every other workspace viewer (a rostered member, a guardian, a
+ * coach) gets the code, severity and owner with a message that names no amount, date or record.
+ * Finance's explanation of an unknown status is shown to staff only.
+ */
+export function financialIssueOf(
+  financialStatusRef: string | null,
+  financial: TeamEntryFinancialStatus,
+  audience: FinancialIssueAudience,
+): WorkspaceIssue | null {
+  if (financial.status === 'clear') return null;
+  if (financial.status === 'outstanding') {
+    if (!audience.readsObligation) {
+      return {
+        code: 'team_obligation_outstanding',
+        severity: 'warning',
+        message: 'The team has an open balance. The captain can see the amount and the due date.',
+        responsibleRole: 'captain',
+        requiredAction: 'The captain collects the remaining contributions or pays the balance.',
+      };
+    }
+    const count = financial.openObligations;
+    const amounts = financial.outstanding
+      .map((o) => moneyText(o.amountMinor, o.currency))
+      .join(' and ');
+    const due = financial.nextDueAt
+      ? `; the next payment is due ${localDateTime(financial.nextDueAt, audience.timezone)}`
+      : '';
+    return {
+      code: 'team_obligation_outstanding',
+      severity: 'warning',
+      message: `${count} open team obligation${count === 1 ? '' : 's'} with ${amounts} outstanding${due}.`,
+      responsibleRole: 'captain',
+      requiredAction: 'Collect the remaining contributions or pay the balance.',
+    };
+  }
+  const unknownIssue = (message: string, requiredAction: string): WorkspaceIssue => ({
+    code: 'financial_status_unknown',
+    severity: 'unknown',
+    message,
+    responsibleRole: 'finance_operator',
+    requiredAction,
+  });
+  if (!audience.readsObligation) {
+    return unknownIssue(
+      "The team's financial status is not confirmed yet.",
+      'Finance confirms the entry obligation.',
+    );
+  }
+  if (financial.status === 'none') {
+    return unknownIssue(
+      financialStatusRef
+        ? 'The obligation recorded for this entry was canceled; no other obligation is recorded.'
+        : 'No financial obligation has been recorded for this entry yet.',
+      'Finance records the entry obligation.',
+    );
+  }
+  const base = financialStatusRef
+    ? 'An obligation is recorded for this entry, but finance could not confirm whether it is settled'
+    : 'No financial obligation is recorded for this entry, and finance could not confirm its obligations';
+  return unknownIssue(
+    audience.staff ? `${base} (${financial.explanation}).` : `${base}.`,
+    'Finance confirms the entry obligation.',
+  );
 }
 
 export function indicatorOf(

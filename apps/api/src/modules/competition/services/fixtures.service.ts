@@ -68,6 +68,7 @@ import {
 import {
   criteriaOf,
   emptySummary,
+  fixtureTitle,
   isStaffLike,
   organizationOf,
   toAvailabilityResponse,
@@ -1075,7 +1076,8 @@ export class FixturesService implements FixturePort {
     const away = fixture.away_entry_id
       ? (names.find((n) => n.id === fixture.away_entry_id)?.name ?? 'Away')
       : 'bye';
-    return `${home} v ${away}`;
+    // R2-TENANCY-INPUT-02: bounded to scheduling's title limit (two names of up to 200 each).
+    return fixtureTitle(home, away);
   }
 
   private async formatOf(organizationId: string, fixture: FixtureRow): Promise<string | null> {

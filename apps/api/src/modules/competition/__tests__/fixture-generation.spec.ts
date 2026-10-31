@@ -679,4 +679,50 @@ describe('fixture generation (SPK-FIX-001..005, SPK-AT-010, SPK-AT-011)', () => 
       expect(new Set(pairings).size).toBe(6);
     }
   });
+
+  it('R2-TENANCY-INPUT-02 / SPK-COMMS-005: proposed games between teams with 200-character names carry titles within the scheduling title limit', async () => {
+    const longPitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch long names',
+    });
+    const division = await createDivisionFixture(t, {
+      seasonId: season.seasonId,
+      name: 'Division long names',
+    });
+    for (const letter of ['H', 'A']) {
+      const captain = await adultCustomer(t);
+      await createTeamEntryFixture(t, {
+        seasonId: season.seasonId,
+        captainPersonId: captain.personId,
+        teamName: letter.repeat(200),
+        divisionId: division,
+      });
+    }
+    const spec = await post(
+      `/divisions/${division}/fixture-specifications`,
+      leagueManager,
+      specification({
+        name: 'Long names',
+        gamesPerTeam: 1,
+        opponentFrequency: 1,
+        blackouts: [],
+        fairnessPreferences: [],
+        requiredResourceIds: [longPitch.pitchId],
+      }),
+    );
+    expect(spec.status).toBe(201);
+    const run = await post(`/fixture-specifications/${spec.body.id}/generate`, leagueManager, {
+      searchSettings: { maxCandidates: 2, timeLimitMs: 5000, seed: 1 },
+    });
+    expect(run.status).toBe(201);
+    expect(run.body.scheduleDraftId).toEqual(expect.any(String));
+    const draft = await t.app
+      .get(ScheduleDraftsService)
+      .get(staffPrincipal(t.organizationId, ['scheduler']), run.body.scheduleDraftId);
+    expect(draft.changes).toHaveLength(1);
+    const title = draft.changes[0]?.proposed?.title ?? '';
+    expect(title.length).toBeLessThanOrEqual(200);
+    expect(title).toMatch(/^[HA]+… v [HA]+…$/);
+  });
 });

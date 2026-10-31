@@ -37,6 +37,20 @@ export interface PersonEntryMembership {
   roles: TeamRoleValue[];
 }
 
+/** R2-JOURNEYS-05: finance names the obligation it recorded with the entry as debtor. */
+export interface RecordFinancialStatusRefInput {
+  organizationId: string;
+  teamEntryId: string;
+  obligationId: string;
+  /** The finance actor whose command created the obligation (audited). */
+  actor: Principal;
+  correlationId: string | null;
+}
+
+/**
+ * Team entry reads, plus the one write finance makes here: `recordFinancialStatusRef`, called
+ * inside finance's transaction when it creates an obligation whose debtor is a team entry.
+ */
 export interface TeamEntryQueryPort {
   findTeamEntry(
     organizationId: string,
@@ -75,6 +89,14 @@ export interface TeamEntryQueryPort {
     at: Date,
     trx?: Trx,
   ): Promise<Array<{ personId: string; role: TeamRoleValue }>>;
+  /**
+   * R2-JOURNEYS-05 (SPK-COMP-004): records `obligationId` as the entry's `financialStatusRef`
+   * (the latest obligation finance recorded for it), in the caller's transaction, with audit and a
+   * revision bump; a repeat with the same obligation changes nothing. NOT_FOUND for an entry
+   * outside the organization. The entry's financial status itself is read from finance through
+   * `FINANCIAL_CONDITIONS_PORT.entryFinancialStatus`, never from this reference alone.
+   */
+  recordFinancialStatusRef(trx: Trx, input: RecordFinancialStatusRefInput): Promise<void>;
 }
 export const TEAM_ENTRY_QUERY_PORT = Symbol('TEAM_ENTRY_QUERY_PORT');
 
