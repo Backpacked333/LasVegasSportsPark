@@ -21,13 +21,23 @@
  *   payment is never mistaken for a failure or a success and is never paid twice.
  * - People are found by name or contact (`GET /v1/people`, names only) or entered by reference.
  * - The intents offered for a line are the offering's (`GET /v1/offerings/{id}/registration-
- *   options`, ENR-05) with the participant's read-only eligibility before anything is added.
+ *   options`, ENR-05) with the participant's read-only eligibility before anything is added. An
+ *   intent whose capability switch is off (CAPABILITIES-07, DEC-016) is never offered: the API
+ *   lists it under `unavailableIntents` with its reason, shown as "turned off" with its decisions,
+ *   and while the options are not read the permission view (`GET /v1/me/permissions`) keeps a
+ *   switched-off intent out of the choices. The API still refuses the line (CAPABILITY_DISABLED).
  * - Offline: commands are disabled and what was typed is kept.
  */
-import type { Schema } from '@sportspark/api-client';
+import {
+  CAPABILITY_PRESENTATION,
+  turnedOffLabel,
+  type CapabilityId,
+  type Schema,
+} from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useOperation } from '../../api/useOperation';
@@ -77,6 +87,21 @@ type Checkout = Schema<'Checkout'>;
 type Intent = Schema<'RegistrationIntent'>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The capability switch behind each Package G intent (DEC-016; the API's INTENT_CAPABILITIES). */
+const INTENT_CAPABILITY: Partial<Record<Intent, CapabilityId>> = {
+  membership: 'memberships',
+  package_purchase: 'session_packages',
+  rental_request: 'rentals',
+  party_request: 'parties',
+  pickup: 'pickup_sessions',
+};
+
+/** "Membership (when applicable): Memberships turned off (DEC-016, DEC-072)". */
+function turnedOffIntent(intent: Intent, capability: CapabilityId): string {
+  const presentation = CAPABILITY_PRESENTATION[capability];
+  return `${REGISTRATION_INTENT[intent]}: ${turnedOffLabel(presentation.label)} (${presentation.decisions.join(', ')})`;
+}
 const BASKET_KEY = ['api', '/baskets/{id}'] as const;
 /** Basket states in which pricing, payment or its outcome is shown. */
 const PRICED_STATUSES: readonly Basket['status'][] = [
@@ -243,11 +268,48 @@ function AddLine({ basket }: { basket: Basket }) {
     },
     enabled: offeringId !== '',
   });
+  const permissions = usePermissions();
   const available = options.data?.availableIntents;
-  const intentChoices = (available ?? (Object.keys(REGISTRATION_INTENT) as Intent[])).map(
-    (value) => ({ value, label: REGISTRATION_INTENT[value] }),
+  // CAPABILITIES-07: the API's reason for each intent it takes but cannot use now; while the
+  // options are not read, the permission view keeps a switched-off intent out of the choices.
+  const switchedOff = new Map<Intent, CapabilityId>(
+    (options.data?.unavailableIntents ?? []).map((u) => [u.intent, u.capability]),
   );
-  const notAccepted = intent !== '' && available !== undefined && !available.includes(intent);
+  for (const value of Object.keys(REGISTRATION_INTENT) as Intent[]) {
+    const capability = INTENT_CAPABILITY[value];
+    if (capability && permissions.isCapabilityEnabled(capability) === false) {
+      switchedOff.set(value, capability);
+    }
+  }
+  const intentChoices = (available ?? (Object.keys(REGISTRATION_INTENT) as Intent[]))
+    .filter((value) => !switchedOff.has(value))
+    .map((value) => ({ value, label: REGISTRATION_INTENT[value] }));
+  // What this offering takes but cannot be added now: the API's list, and any intent it still
+  // listed as available whose switch the permission view reports off since.
+  const offeredOff: Array<[Intent, CapabilityId]> = options.data
+    ? [
+        // An API build from before CAPABILITIES-07 sends no list.
+        ...(options.data.unavailableIntents ?? []).map((u): [Intent, CapabilityId] => [
+          u.intent,
+          u.capability,
+        ]),
+        ...(available ?? []).flatMap((value): Array<[Intent, CapabilityId]> => {
+          const capability = switchedOff.get(value);
+          return capability ? [[value, capability]] : [];
+        }),
+      ]
+    : [];
+  const chosenOff = intent !== '' ? switchedOff.get(intent) : undefined;
+  const notAccepted =
+    intent !== '' &&
+    chosenOff === undefined &&
+    available !== undefined &&
+    !available.includes(intent);
+  const intentError = chosenOff
+    ? `${turnedOffIntent(intent as Intent, chosenOff)}: it cannot be added now.`
+    : notAccepted
+      ? 'This offering does not accept this intent.'
+      : null;
   const preview =
     intent && participantId
       ? options.data?.participants
@@ -265,7 +327,7 @@ function AddLine({ basket }: { basket: Basket }) {
           errors.participantPersonId = 'Enter the participant’s person reference.';
         if (!offeringId) errors.offeringId = 'Choose an offering.';
         if (!intent) errors.intent = 'Choose the registration intent.';
-        else if (notAccepted) errors.intent = 'This offering does not accept this intent.';
+        else if (intentError) errors.intent = intentError;
         setLocal(errors);
         if (Object.keys(errors).length > 0 || !intent) return;
         add
@@ -302,11 +364,7 @@ function AddLine({ basket }: { basket: Basket }) {
           placeholder="Choose an intent"
           onChange={(v) => setIntent(v as Intent | '')}
           options={intentChoices}
-          error={
-            local.intent ??
-            server.intent ??
-            (notAccepted ? 'This offering does not accept this intent.' : null)
-          }
+          error={local.intent ?? server.intent ?? intentError}
         />
       </div>
       <OfferingPicker label="Offering" value={offeringId} onChange={setOfferingId} />
@@ -319,7 +377,15 @@ function AddLine({ basket }: { basket: Basket }) {
       ) : null}
       {available ? (
         <p className="caption">
-          This offering accepts: {available.map((i) => REGISTRATION_INTENT[i]).join(', ')}.
+          {available.length > 0
+            ? `This offering accepts: ${available.map((i) => REGISTRATION_INTENT[i]).join(', ')}.`
+            : 'This offering takes no intent that can be added now.'}
+        </p>
+      ) : null}
+      {offeredOff.length > 0 ? (
+        <p className="caption" data-testid="intents-turned-off">
+          Turned off, not offered:{' '}
+          {offeredOff.map(([value, capability]) => turnedOffIntent(value, capability)).join('; ')}.
         </p>
       ) : null}
       {preview ? (

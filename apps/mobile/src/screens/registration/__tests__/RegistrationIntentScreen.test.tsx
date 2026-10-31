@@ -202,6 +202,42 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     expect(screen.queryByRole('button', { name: 'Add to your basket' })).toBeNull();
   });
 
+  it('CAPABILITIES-07: an intent the API reports unavailable reads turned off, even before the permission view catches up', async () => {
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': {
+          status: 200,
+          body: offering({ kind: 'membership', name: 'Family membership' }),
+        },
+        'GET /offerings/{id}/registration-options': {
+          status: 200,
+          body: registrationOptions({
+            availableIntents: [],
+            unavailableIntents: [
+              {
+                intent: 'membership',
+                code: 'CAPABILITY_DISABLED',
+                capability: 'memberships',
+                applicabilityReferences: ['DEC-016', 'DEC-072'],
+              },
+            ],
+            participants: [],
+          }),
+        },
+        // A permission view read before the switch went off.
+        'GET /me/permissions': mePermissions({ enabled: ['memberships'] }),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const membership = await screen.findByRole('radio', {
+      name: /^Membership\. Join this membership\. Memberships turned off \(DEC-016, DEC-072\)\.$/,
+    });
+    expect(membership).toBeDisabled();
+    expect(screen.queryByText('This activity cannot be registered for in the app.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add to your basket' })).toBeNull();
+    expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
+  });
+
   it('DEC-016: a basket line refused with CAPABILITY_DISABLED shows the turned-off state', async () => {
     const app = createRegistrationTestApp({
       routes: routes({

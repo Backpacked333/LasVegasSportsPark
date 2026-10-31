@@ -15062,7 +15062,66 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** A membership's suspensions with the id and revision ending one needs (staff who may suspend it; GAPS-TRIAGE-02) */
+        get: {
+            parameters: {
+                query?: {
+                    cursor?: string;
+                    limit?: number;
+                    status?: "active" | "ended";
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["MembershipSuspension"][];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
         put?: never;
         /** Suspend a membership for a period (ENR-12) */
         post: {
@@ -57071,6 +57130,7 @@ export type components = {
             }[];
             /** Format: uuid */
             seasonId: string | null;
+            unavailableIntents: components["schemas"]["UnavailableRegistrationIntent"][];
         };
         RejectFeeRequest: {
             expectedRevision?: number;
@@ -58990,6 +59050,13 @@ export type components = {
         };
         /** @enum {string} */
         TrialParticipationStatus: "scheduled" | "attended" | "no_show" | "canceled" | "converted";
+        UnavailableRegistrationIntent: {
+            applicabilityReferences: string[];
+            capability: components["schemas"]["CapabilityId"];
+            /** @enum {string} */
+            code: "CAPABILITY_DISABLED";
+            intent: components["schemas"]["RegistrationIntent"];
+        };
         UncoveredAssignmentNotice: {
             /** Format: uuid */
             exceptionId: string;

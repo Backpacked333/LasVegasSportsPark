@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   SessionBookingMachine,
   errors,
   newId,
@@ -89,12 +90,61 @@ export interface CreateBookingInTrx {
 }
 
 /**
+ * GAPS-TRIAGE-01 (§6.7): the decisions a payment path for a single session of this kind waits for.
+ * Pickup payment rules are POL-045 under DEC-082 (SPK-PLACE-004) and trial rules DEC-003
+ * (SPK-YOUTH-003). A makeup seat is never money (SPK-YOUTH-004: it is redeemed from its
+ * entitlement), and a session booked with a package credit or membership is paid by it, so neither
+ * names a pickup or trial decision.
+ */
+export function sessionPaymentDecisions(kind: SessionBookingKind): string[] {
+  if (kind === 'pickup') return ['POL-045', 'DEC-082'];
+  if (kind === 'trial') return ['DEC-003'];
+  return [];
+}
+
+/** What the family can do instead, per booking kind (plain operational copy). */
+const SESSION_PAYMENT_REMEDY: Record<SessionBookingKind, string> = {
+  pickup: 'book a session that owes nothing, or one a package credit or membership covers',
+  trial: 'choose a trial that owes nothing',
+  makeup:
+    'redeem the makeup entitlement for the session (POST /v1/makeup-entitlements/{id}/redeem)',
+  session: 'book the session with a package credit or membership that covers it',
+};
+
+/**
+ * GAPS-TRIAGE-01 (SPK-PLACE-004 payment rules, SPK-YOUTH-003, SPK-PAY-001/002, §6.7): the refusal
+ * of a session booking that would owe money. No payment path exists for a single session: the
+ * finance checkout pays held basket lines that each carry an enrollment, and a pickup or trial seat
+ * is never an enrollment (SPK-PLACE-004, SPK-YOUTH-003). The rules such a path would implement are
+ * pending (`sessionPaymentDecisions`), so the booking is refused before any seat is held, any offer
+ * consumed or any record written, instead of answering 201 for a booking nobody can pay that then
+ * expires.
+ */
+export function sessionPaymentUnavailable(
+  kind: SessionBookingKind,
+  price: PriceSnapshot | null,
+): DomainError {
+  return errors.resourceConflict(
+    `This ${kind === 'trial' ? 'trial' : 'session'} has a price, and a single session cannot be paid for yet: ${SESSION_PAYMENT_REMEDY[kind]}.`,
+    {
+      code: 'SESSION_PAYMENT_UNAVAILABLE',
+      kind,
+      amountMinor: price?.basePriceMinor ?? null,
+      currency: price?.currency ?? null,
+      pendingDecisions: sessionPaymentDecisions(kind),
+    },
+  );
+}
+
+/**
  * Session bookings (§4.4 SessionBooking, SessionBookingMachine §4.6, SPK-PLACE-004 pickup,
  * SPK-YOUTH-003 trial seats, SPK-YOUTH-004 makeup seats). Every booking takes a seat in the
  * session's own capacity pools (and its staffing pool, SPK-YOUTH-002) through a server-owned hold.
- * A booking that owes nothing is confirmed at once; a priced one stays pending until finance
- * confirms it after payment facts. Nothing here touches a roster: pickup attendance never creates
- * league membership (SPK-PLACE-004).
+ * A booking that owes nothing (base price, approved fees and taxes), or that a package credit, a
+ * membership or a makeup entitlement pays for, is confirmed at once. A booking that would owe
+ * money is refused with 409 RESOURCE_CONFLICT `SESSION_PAYMENT_UNAVAILABLE` (see
+ * `sessionPaymentUnavailable`): there is no payment step for a single session yet. Nothing here
+ * touches a roster: pickup attendance never creates league membership (SPK-PLACE-004).
  */
 @Injectable()
 export class SessionBookingsService {
@@ -282,8 +332,32 @@ export class SessionBookingsService {
   }
 
   /**
-   * Shared booking body: takes (or adopts) the seat in every pool of the session, writes the
-   * booking, and confirms it at once when nothing is owed.
+   * GAPS-TRIAGE-01: the price a new booking of the offering would carry, refusing one that would
+   * owe money (`SESSION_PAYMENT_UNAVAILABLE`). Pickup and trial waitlists call it before an entry
+   * joins or an offer is made or accepted, so nobody waits for, or is offered, a seat that cannot be
+   * booked (offer generation retires such waiters with a notice; see `WaitlistService`).
+   */
+  async assertSessionPayable(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+    kind: SessionBookingKind,
+  ): Promise<PriceSnapshot | null> {
+    const price = await this.evaluator.priceSnapshot(
+      trx,
+      organizationId,
+      offeringId,
+      this.clock.now(),
+    );
+    // SPK-PAY-001/002: approved non-inclusive fees and taxes are owed too (a fee-only booking owes).
+    if (!owesNothingFor(price, 1)) throw sessionPaymentUnavailable(kind, price);
+    return price;
+  }
+
+  /**
+   * Shared booking body: refuses a booking that would owe money (GAPS-TRIAGE-01) before anything
+   * is held, takes (or adopts) the seat in every pool of the session, writes the booking and
+   * confirms it at once (nothing is owed).
    */
   async createInTrx(
     trx: Trx,
@@ -296,10 +370,12 @@ export class SessionBookingsService {
     const expiresAt = minutesFrom(now, policy.holdMinutes);
     const price: PriceSnapshot | null = input.free
       ? null
-      : await this.evaluator.priceSnapshot(trx, organizationId, input.snapshot.offering.id, now);
-    // SPK-PAY-001/002: approved non-inclusive fees and taxes are owed too; a fee-only booking stays
-    // pending (its hold expires unless finance confirms it), never auto-confirmed.
-    const owesNothing = input.free === true || owesNothingFor(price, 1);
+      : await this.assertSessionPayable(
+          trx,
+          organizationId,
+          input.snapshot.offering.id,
+          input.kind,
+        );
 
     let holds: HoldRow[] = [];
     if (input.existingHoldIds && input.existingHoldIds.length > 0) {
@@ -397,7 +473,8 @@ export class SessionBookingsService {
             this.evaluator.policyReferences(input.snapshot, input.evaluation.approvalPolicy),
           ),
           eligibility_result: json(input.evaluation.result),
-          expires_at: owesNothing ? null : expiresAt,
+          // Nothing is owed, so the booking is confirmed below and its seat holds never lapse.
+          expires_at: null,
           confirmed_at: null,
           canceled_at: null,
           cancel_reason: null,
@@ -445,31 +522,29 @@ export class SessionBookingsService {
         sessionId: input.session.id,
         participantPersonId: input.person.id,
         kind: input.kind,
-        status: owesNothing ? 'confirmed' : 'pending',
+        status: 'confirmed',
       },
     });
-    if (owesNothing) {
-      // Nothing is owed: the seat is committed now (SessionBookingMachine pending → confirmed).
-      for (const hold of holds) {
-        await this.capacity.commitHold(
-          trx,
-          organizationId,
-          hold.id,
-          { sessionBookingId: id },
-          input.correlationId,
-        );
-      }
-      await trx
-        .updateTable('session_bookings')
-        .set({
-          status: SessionBookingMachine.next('pending', 'confirm'),
-          confirmed_at: now,
-          revision: 2,
-        })
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', id)
-        .execute();
+    // Nothing is owed: the seat is committed now (SessionBookingMachine pending → confirmed).
+    for (const hold of holds) {
+      await this.capacity.commitHold(
+        trx,
+        organizationId,
+        hold.id,
+        { sessionBookingId: id },
+        input.correlationId,
+      );
     }
+    await trx
+      .updateTable('session_bookings')
+      .set({
+        status: SessionBookingMachine.next('pending', 'confirm'),
+        confirmed_at: now,
+        revision: 2,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .execute();
     const row = await this.load(trx, organizationId, id);
     if (!row) throw errors.internal('session booking vanished');
     return row;
@@ -567,12 +642,16 @@ export class SessionBookingsService {
         ? null
         : await this.evaluator.priceSnapshot(trx, organizationId, row.offering_id);
       if (!owesNothingFor(price, 1) || !owesNothingFor(current, 1)) {
+        // GAPS-TRIAGE-01: no checkout takes a session booking (a priced one is refused when it is
+        // made); a pending one recorded earlier owes money nobody can take, so it is cancelled or
+        // left to expire with its hold.
         throw errors.resourceConflict(
-          'This booking owes a payment; confirm it through the checkout.',
+          'This booking owes a payment, and a single session cannot be paid for yet; cancel it or let its hold expire.',
           {
             code: 'PAYMENT_REQUIRED',
             amountMinor: (current ?? price)?.basePriceMinor ?? null,
             currency: (current ?? price)?.currency ?? null,
+            pendingDecisions: sessionPaymentDecisions(row.kind),
           },
         );
       }

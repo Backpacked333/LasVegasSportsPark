@@ -5,6 +5,7 @@ import {
   type Basket,
   type CreateMembershipSuspensionInput,
   type EndMembershipSuspensionInput,
+  type ListMembershipSuspensionsQuery,
   type ListMyMembershipsQuery,
   type Membership,
   type MembershipSuspension,
@@ -845,7 +846,11 @@ export class MembershipsService {
    * notice's source id is stable (`renewal:<enrollmentId>`), so a replay composes nothing new.
    * Otherwise it records when the membership is next worth checking (`renewal_notice_due_at`):
    * the instant the lead is reached, the term end when the definition asks for no notice (never
-   * due), or a day later while the definition cannot be read or a renewal is pending.
+   * due), or a day later while the definition cannot be read, a renewal is pending or the
+   * `memberships` switch is off. CAPABILITIES-06 (DEC-016, DEC-072): renewing is a new commitment
+   * behind that switch, so while it is off no notice invites a renewal the API would refuse, and
+   * nothing is stamped: the one notice owed is still composed once the switch is back on
+   * (`resumeRenewalNotices` makes it due at once).
    * Returns `sent`, `deferred` (the due instant was recorded) or `skipped` (nothing to do).
    */
   async renewalNoticeIfDue(
@@ -899,6 +904,10 @@ export class MembershipsService {
       .executeTakeFirst();
     // A renewal is under way; if it is released or cancelled the notice is still due.
     if (renewal || pendingLine) return defer(recheck);
+    // CAPABILITIES-06: no renewal can be bought while the switch is off; the notice waits for it.
+    if (!(await this.capabilities.isEnabled(organizationId, 'memberships', trx))) {
+      return defer(recheck);
+    }
     const zone = await this.zoneOf(organizationId, snapshot.offering.facilityId, trx);
     const system = enrollmentSystem(organizationId, 'enrollment.membership_lifecycle');
     await this.notifications.composeAndQueueIn(trx, system, {
@@ -930,6 +939,73 @@ export class MembershipsService {
       details: { noticeLeadDays: lead, termEndsAt: endsAt.toISOString() },
     });
     return 'sent';
+  }
+
+  /**
+   * CAPABILITIES-06: follow-up of `core.capability_changed` when `memberships` is enabled. The
+   * renewal notices deferred while it was off become due now (`renewal_notice_due_at` cleared), so
+   * the next lifecycle run composes each one still owed instead of waiting out the day's recheck.
+   * Only memberships that never had their notice are touched; replay-safe.
+   */
+  async resumeRenewalNotices(trx: Trx, organizationId: string): Promise<number> {
+    const now = this.clock.now();
+    const result = await trx
+      .updateTable('enrollments')
+      .set({ renewal_notice_due_at: null })
+      .where('organization_id', '=', organizationId)
+      .where('intent', '=', 'membership')
+      .where('status', '=', 'confirmed')
+      .where('renewal_notice_at', 'is', null)
+      .where('membership_ends_at', '>', now)
+      .where('renewal_notice_due_at', 'is not', null)
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // GET /enrollments/{id}/membership-suspensions (staff; GAPS-TRIAGE-02)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * GAPS-TRIAGE-02 (§4.9, SPK-COND-001): a membership's suspensions, newest first, with the id and
+   * revision `POST /membership-suspensions/{id}/end` needs, so staff can end one recorded in an
+   * earlier request (an open-ended suspension never ends by itself). Authorized exactly like the
+   * suspension commands (`enrollment.manage_membership_suspension` at the offering's facility,
+   * protected): a caller who may not suspend this membership learns nothing (NOT_FOUND, §4.10).
+   * Never capability-gated (DEC-016: reads continue).
+   */
+  async listSuspensions(
+    principal: Principal,
+    enrollmentId: string,
+    query: ListMembershipSuspensionsQuery,
+  ): Promise<Page<MembershipSuspension>> {
+    const organizationId = organizationOf(principal);
+    const membership = await this.enrollments.load(this.db, organizationId, enrollmentId);
+    if (!membership || membership.intent !== 'membership') {
+      throw errors.protectedNotFound('membership');
+    }
+    await this.authorization.require(principal, EnrollmentActions.manageMembershipSuspension, {
+      type: 'enrollment',
+      id: enrollmentId,
+      organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, membership.offering_id),
+      subjectPersonIds: [membership.participant_person_id],
+      protected: true,
+    });
+    const cursor = decodeCreatedCursor(query.cursor);
+    let q = this.db
+      .selectFrom('membership_suspensions')
+      .selectAll()
+      .select(cursorAt('membership_suspensions').as('cursor_at'))
+      .where('organization_id', '=', organizationId)
+      .where('enrollment_id', '=', enrollmentId)
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
+    if (query.status) q = q.where('status', '=', query.status);
+    if (cursor) q = q.where(beforeCursor('membership_suspensions', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
+    return { items: page.rows.map((row) => this.toSuspension(row)), nextCursor: page.nextCursor };
   }
 
   // -------------------------------------------------------------------------------------------

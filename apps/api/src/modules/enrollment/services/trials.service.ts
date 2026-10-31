@@ -23,6 +23,7 @@ import {
   AuditWriter,
   AuthorizationService,
   CLOCK,
+  CapabilityService,
   DATABASE,
   Outbox,
   UnitOfWork,
@@ -31,7 +32,11 @@ import {
 } from '../../../kernel';
 import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
-import { SESSION_INTENT_COMMANDS } from '../enrollment.policy';
+import {
+  BOOKING_INTENTS,
+  INTENT_CAPABILITIES,
+  SESSION_INTENT_COMMANDS,
+} from '../enrollment.policy';
 import {
   actorSnapshot,
   isStaffLike,
@@ -85,6 +90,7 @@ export class TrialsService {
     private readonly enrollments: EnrollmentsService,
     private readonly sessions: CatalogSessions,
     private readonly scope: EnrollmentFacilityScope,
+    private readonly capabilities: CapabilityService,
   ) {}
 
   async load(
@@ -135,6 +141,10 @@ export class TrialsService {
         session: session ?? undefined,
       });
       this.bookings.assertBookable(evaluation.result, person.id);
+      // GAPS-TRIAGE-01 (SPK-YOUTH-003, DEC-003): a trial that would owe money is refused, with or
+      // without a session: no payment step exists for it, so a priced trial is neither booked to
+      // expire unpaid nor recorded as if it were free.
+      await this.bookings.assertSessionPayable(trx, organizationId, snapshot.offering.id, 'trial');
       const id = newId();
       // §4.7 (1), SPK-REG-009: a customer books the trial as its own payer; staff may name one.
       const payerPersonId =
@@ -397,11 +407,24 @@ export class TrialsService {
           },
         );
       }
+      // SPK-YOUTH-003, CAPABILITIES-04: a trial converts into participation (term, season, camp
+      // and the other basket intents). A session intent has its own command; a rental or party
+      // exists only with its reservation (SPK-COND-003, POST /v1/bookings); a membership or
+      // session package needs its capability switch now (DEC-016, DEC-072, DEC-074), before any
+      // application or basket is written.
       if (SESSION_INTENT_COMMANDS[input.intent]) {
         throw errors.validation('A trial converts into term, season or camp participation.', {
           path: 'intent',
         });
       }
+      if (BOOKING_INTENTS.includes(input.intent)) {
+        throw errors.validation(
+          'A rental or party is requested with its space, equipment and staff: POST /v1/bookings.',
+          { code: 'BOOKING_REQUIRED', path: 'intent' },
+        );
+      }
+      const capability = INTENT_CAPABILITIES[input.intent];
+      if (capability) await this.capabilities.require(organizationId, capability, trx);
       const person = await this.evaluator.participant(
         trx,
         organizationId,

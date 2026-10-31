@@ -6,6 +6,7 @@ import { createOfferingSessionFixture, createPolicyVersionFixture } from '../../
 import { EntryModule } from '../../entry';
 import { EnrollmentModule } from '../enrollment.module';
 import { EnrollmentJobs, MEMBERSHIP_LIFECYCLE_JOB } from '../services/enrollment-jobs';
+import { createEnrollmentFixture } from '../testing/enrollment-fixtures';
 import { adultOffering, membershipOffering } from './package-g-support';
 import { withStage3Doubles } from './stage3-doubles';
 import {
@@ -356,6 +357,79 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
     expect((await book(member, week1[0]!, enrollmentId)).status).toBe(201);
   });
 
+  it("GAPS-TRIAGE-02 / §4.9: staff read a membership's suspensions with ids and revisions, so one recorded earlier can be ended", async () => {
+    const member = await adult(t);
+    const { enrollmentId } = await join(member, includedWeekly(3));
+    // An open-ended suspension never ends by itself.
+    const created = await post(
+      t,
+      `/v1/enrollments/${enrollmentId}/membership-suspensions`,
+      frontDesk.header,
+      { from: '2026-11-16T00:00:00Z', reason: 'injury' },
+    );
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect((await book(member, week1[0]!, enrollmentId)).body.details?.code).toBe(
+      'MEMBERSHIP_SUSPENDED',
+    );
+    // Another staff member, in a later request, finds it without the create response.
+    const manager = await staff(t, ['program_manager']);
+    const read = (actor: Actor, query = '') =>
+      t.http
+        .get(`/v1/enrollments/${enrollmentId}/membership-suspensions${query}`)
+        .set(actor.header);
+    const listed = await read(manager);
+    expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+    expect(listed.body).toEqual({
+      items: [
+        expect.objectContaining({
+          id: created.body.id,
+          enrollmentId,
+          status: 'active',
+          until: null,
+          reason: 'injury',
+          revision: 1,
+        }),
+      ],
+      nextCursor: null,
+    });
+    const [suspension] = listed.body.items as Array<{ id: string; revision: number }>;
+    const ended = await post(
+      t,
+      `/v1/membership-suspensions/${suspension!.id}/end`,
+      manager.header,
+      { reason: 'recovered', expectedRevision: suspension!.revision },
+    );
+    expect(ended.status, JSON.stringify(ended.body)).toBe(200);
+    expect((await read(manager, '?status=active')).body.items).toEqual([]);
+    expect((await read(frontDesk, '?status=ended')).body.items).toEqual([
+      expect.objectContaining({ id: suspension!.id, status: 'ended', revision: 2 }),
+    ]);
+    expect((await book(member, week1[0]!, enrollmentId)).status).toBe(201);
+    // Read even while memberships is off (reads continue, DEC-016).
+    await t.disableCapability('memberships');
+    try {
+      expect((await read(frontDesk)).status).toBe(200);
+    } finally {
+      await t.enableCapability('memberships');
+    }
+    // Whoever may not suspend it learns nothing (§4.10): the member, another adult, a coach, and
+    // an enrollment that is not a membership.
+    for (const actor of [member, await adult(t), await staff(t, ['coach'])]) {
+      expect((await read(actor)).status).toBe(404);
+    }
+    const notMembership = await createEnrollmentFixture(t, {
+      offeringId: target.offeringId,
+      participantPersonId: member.personId,
+    });
+    expect(
+      (
+        await t.http
+          .get(`/v1/enrollments/${notMembership}/membership-suspensions`)
+          .set(frontDesk.header)
+      ).status,
+    ).toBe(404);
+  });
+
   it('SPK-COND-001, POL-038: member-only eligibility needs a confirmed, unsuspended membership covering the date', async () => {
     const member = await adult(t);
     const { membership } = await join(member, includedWeekly(1));
@@ -458,6 +532,65 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
     } finally {
       t.clock.set(new Date(CLOCK_START));
     }
+  });
+
+  it('CAPABILITIES-06 / DEC-072: no renewal notice is sent while memberships is off; the one notice owed is sent once it is back on', async () => {
+    const member = await adult(t);
+    const expiring = await join(
+      member,
+      {
+        attendance: { mode: 'none' },
+        term: { kind: 'offering_dates' },
+        renewal: { noticeLeadDays: 30 },
+      },
+      { startsOn: '2026-10-01', endsOn: '2026-11-21' },
+    );
+    const admin = await staff(t, ['system_administrator']);
+    const setSwitch = async (event: 'enable' | 'disable') => {
+      const res = await post(t, `/v1/admin/capabilities/memberships/${event}`, admin.header, {
+        decisionReference: 'DEC-072',
+        reason: `memberships ${event}d for the test`,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      await drain(t);
+    };
+    const notices = () =>
+      t.db
+        .selectFrom('notifications')
+        .select(['id', 'kind'])
+        .where('kind', '=', 'renewal_opportunity')
+        .where('subject_id', '=', expiring.enrollmentId)
+        .execute();
+    const stamps = () =>
+      t.db
+        .selectFrom('enrollments')
+        .select(['renewal_notice_at', 'renewal_notice_due_at'])
+        .where('id', '=', expiring.enrollmentId)
+        .executeTakeFirstOrThrow();
+    const stamp = async () => (await stamps()).renewal_notice_at;
+    // The job body itself (the runner's lease is shared with the other tests of this file).
+    const jobs = t.app.get(EnrollmentJobs);
+    const lifecycle = () => jobs.membershipLifecycle({ now: t.clock.now(), batchSize: 500 });
+    await setSwitch('disable');
+    try {
+      // The notice is due (the term ends within the lead), but renewing would be refused: nothing
+      // is composed and nothing is stamped.
+      await lifecycle();
+      await lifecycle();
+      expect(await notices()).toEqual([]);
+      // Evaluated and deferred (rechecked later), never stamped as sent.
+      expect(await stamps()).toMatchObject({
+        renewal_notice_at: null,
+        renewal_notice_due_at: expect.any(Date),
+      });
+    } finally {
+      await setSwitch('enable');
+    }
+    // Back on: the next run composes the one notice still owed, at once, and only once.
+    await lifecycle();
+    await lifecycle();
+    expect(await notices()).toHaveLength(1);
+    expect(await stamp()).not.toBeNull();
   });
 
   it('SPK-COND-001: a from_confirmation term runs its stated length from confirmation', async () => {

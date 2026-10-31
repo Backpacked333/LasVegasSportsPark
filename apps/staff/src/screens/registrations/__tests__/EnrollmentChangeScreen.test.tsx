@@ -57,6 +57,7 @@ function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHan
     'GET /enrollments/{id}/cancellation-preview': ok(cancellationPreview()),
     'GET /programs': ok({ items: [program()], nextCursor: null }),
     'GET /programs/{id}/offerings': ok({ items: OFFERINGS, nextCursor: null }),
+    'GET /enrollments/{id}/membership-suspensions': ok({ items: [], nextCursor: null }),
     ...extra,
   };
 }
@@ -470,9 +471,8 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
     // DEC-016, DEC-072: the switch is off by default; suspensions stay available.
     expect(await p.findByText('Memberships turned off')).toBeInTheDocument();
     expect(p.getByText(/never turned off/)).toBeInTheDocument();
-    expect(
-      p.getByText(/no read of a\s+membership’s suspensions|no read of a membership's suspensions/),
-    ).toBeInTheDocument();
+    // GAPS-TRIAGE-02: earlier suspensions are read from the API (none yet).
+    expect(await p.findByText('No suspensions')).toBeInTheDocument();
     const from = p.getByLabelText(/^Suspended from \(facility time, America\/Los_Angeles\)/);
     await user.click(p.getByRole('button', { name: 'Suspend the membership' }));
     expect(p.getByText('Enter when the suspension starts.')).toBeInTheDocument();
@@ -480,11 +480,13 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
     await user.type(from, '2026-11-02T00:00');
     await user.type(p.getByLabelText(/^Reason for the suspension/), 'Injury');
     await user.click(p.getByRole('button', { name: 'Suspend the membership' }));
-    const made = await p.findByRole('list', { name: 'Suspensions recorded here' });
+    const made = await p.findByRole('list', { name: 'Suspensions of this membership' });
     expect(within(made).getByText('Suspension active')).toBeInTheDocument();
     // SPK-SCHED-008: midnight in Los Angeles on 2 November is 08:00 UTC (PST, UTC-8).
     expect(
-      app.fake.requests.find((r) => r.route === '/enrollments/{id}/membership-suspensions')?.body,
+      app.fake.requests.find(
+        (r) => r.method === 'POST' && r.route === '/enrollments/{id}/membership-suspensions',
+      )?.body,
     ).toEqual({ from: '2026-11-02T08:00:00.000Z', reason: 'Injury' });
     await user.click(within(made).getByRole('button', { name: /^End the suspension from/ }));
     await user.type(within(made).getByLabelText(/^Reason for ending/), 'Recovered');
@@ -494,6 +496,47 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
     expect(end?.params).toEqual({ id: SUSPENSION_ID });
     expect(end?.body).toEqual({ reason: 'Recovered', expectedRevision: 1 });
     expect(end?.headers['idempotency-key']).toMatch(/^key-/);
+  });
+
+  it('GAPS-TRIAGE-02 / §4.9: a suspension recorded earlier is listed with its revision and can be ended', async () => {
+    const user = userEvent.setup();
+    const earlier = membershipSuspension({ reason: 'Injury in October', revision: 3 });
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}': ok(
+          enrollment({ intent: 'membership', offering: enrollmentOffering('membership') }),
+        ),
+        'GET /enrollments/{id}/membership-suspensions': ok({ items: [earlier], nextCursor: null }),
+        'POST /membership-suspensions/{id}/end': ok(
+          membershipSuspension({
+            reason: 'Injury in October',
+            status: 'ended',
+            endedAt: NOW,
+            endedReason: 'Recovered',
+            revision: 4,
+          }),
+        ),
+      }),
+    });
+    render(app.at(PATH));
+    const panel = (await screen.findByRole('heading', { name: 'Membership suspensions' })).closest(
+      'section',
+    ) as HTMLElement;
+    const p = within(panel);
+    const listed = await p.findByRole('list', { name: 'Suspensions of this membership' });
+    expect(within(listed).getByText(/Injury in October/)).toBeInTheDocument();
+    expect(within(listed).getByText(/until ended/)).toBeInTheDocument();
+    expect(
+      app.fake.requests.find(
+        (r) => r.method === 'GET' && r.route === '/enrollments/{id}/membership-suspensions',
+      )?.params,
+    ).toEqual({ id: ENROLLMENT_ID });
+    await user.click(within(listed).getByRole('button', { name: /^End the suspension from/ }));
+    await user.type(within(listed).getByLabelText(/^Reason for ending/), 'Recovered');
+    await user.click(within(listed).getByRole('button', { name: 'End the suspension' }));
+    expect(await within(listed).findByText('Suspension ended')).toBeInTheDocument();
+    const end = app.fake.requests.find((r) => r.route === '/membership-suspensions/{id}/end');
+    expect(end?.body).toEqual({ reason: 'Recovered', expectedRevision: 3 });
   });
 
   it('ENR-12: an overlapping suspension is refused with its code', async () => {

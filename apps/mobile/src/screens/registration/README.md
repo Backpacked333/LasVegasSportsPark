@@ -27,7 +27,7 @@ re-export the `*Route` component of the screen.
 | SCR-C-13 Required forms and acknowledgments    | `/registration/forms?basketId=` or `?waitlistEntryId=`        | `GET /acknowledgments`, `GET /policy-versions/{id}`, `POST /acknowledgments`                                                                                                                                                                                                                                                                                      | **Verified**                                                                                                                                                                            | `__tests__/RequiredFormsScreen.test.tsx`                                           |
 | SCR-C-14 Checkout and payment                  | `/registration/checkout/[quoteId]`                            | `POST /baskets/{id}/hold`, `POST /registration-checkouts`, `GET /me/registration-checkouts`                                                                                                                                                                                                                                                                       | **Verified** with the development fake provider; in-app payment **Pending decision** DEC-019                                                                                            | `__tests__/CheckoutScreen*.test.tsx`                                               |
 | SCR-C-15 Checkout outcome                      | `/registration/outcome/[checkoutId]`                          | `GET /registration-checkouts/{id}`, `GET /operations/{id}`, `GET /enrollments/{id}`, `GET /placement-requests/{id}`, `POST /registration-checkouts/{id}/payments`                                                                                                                                                                                                 | **Verified**; provider customer action **Pending decision** DEC-019                                                                                                                     | `__tests__/CheckoutOutcomeScreen.test.tsx`                                         |
-| SCR-C-16 Waitlist status and offer             | `/registration/waitlist/[entryId]`, `/registration/waitlists` | `GET /me/waitlist-entries` (paged), `GET /waitlist-entries/{id}`, `GET /offerings/{id}` (facility zone), accept, decline, withdraw                                                                                                                                                                                                                                | **Verified**; offer duration and priority are the API's (POL-006, DEC-006); offer notices arrive in the inbox (SCR-C-06)                                                                | `__tests__/WaitlistScreen.test.tsx`                                                |
+| SCR-C-16 Waitlist status and offer             | `/registration/waitlist/[entryId]`, `/registration/waitlists` | `GET /me/waitlist-entries` (paged), `GET /waitlist-entries/{id}`, `GET /offerings/{id}` (facility zone), accept, decline, withdraw                                                                                                                                                                                                                                | **Verified**; offer duration and priority are the API's (POL-006, DEC-006); notices in the inbox (SCR-C-06); a Package G offer is not accepted while off                                | `__tests__/WaitlistScreen.test.tsx`                                                |
 
 `__tests__/registration-routes.test.tsx` renders the real Expo Router tree and checks that every
 route above resolves to its screen.
@@ -35,7 +35,9 @@ route above resolves to its screen.
 ## Behaviour asserted by the tests (Verified)
 
 - **Intents are the API's** (SPK-REG-001, ENR-05): the chooser offers exactly
-  `GET /v1/offerings/{id}/registration-options` `availableIntents`; there is no table of intents
+  `GET /v1/offerings/{id}/registration-options` `availableIntents`, and lists the API's
+  `unavailableIntents` (a capability switch that is off, CAPABILITIES-07) as turned off whatever
+  the permission view says; there is no table of intents
   per offering kind in the app. Basket intents (individual league, team entry, youth, membership,
   session package) add basket lines; rentals and parties hand over to the Package G booking route
   `/bookings/new/{offeringId}` (`features/package-g/routes.ts`; not built here) and never send a
@@ -151,8 +153,10 @@ route above resolves to its screen.
 ## Not built here
 
 - A single session that owes a payment (a priced trial session, a priced pickup session without a
-  package or membership credit): the API leaves such a booking pending until the front desk takes
-  the payment and has no customer command to pay for one (reported), so the app does not start it.
+  package or membership credit): no payment path exists for one, in the app or at the front desk,
+  and the API refuses such a booking with `SESSION_PAYMENT_UNAVAILABLE` before anything is held
+  (GAPS-TRIAGE-01; payment rules **Pending decision** POL-045 / DEC-082, trials DEC-003), so the
+  app does not start it.
   Makeups are booked from SCR-C-35.
 - Signing an offering's required forms from a trial or pickup booking: the forms screen works from
   a basket or a waitlist entry; a booking the API refuses with MISSING_ACKNOWLEDGMENT shows the

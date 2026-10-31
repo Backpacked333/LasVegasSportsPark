@@ -141,7 +141,11 @@ expiresAt`): expires an active hold once due, gives the place back, emits
   `enrollment.capacity_released`, then expires the basket (only while `held`; a checkout keeps its
   pending enrollments for finance), the waitlist offer or the pending session booking.
 - `enrollment.offer_waitlist` on `enrollment.capacity_released`: offers free places by priority,
-  each offer holding every pool its participant needs until it expires.
+  each offer holding every pool its participant needs until it expires. A queue whose capability
+  switch is off is held as it is; an entry no offer could ever be accepted for (a rental or party
+  intent, a makeup intent, or a session seat that owes money) is `removed` with reason
+  `booking_required`, `makeup_redemption_required` or `session_payment_unavailable` and is never
+  offered (CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01).
 - `enrollment.retire_redundant_waitlist_entries` on `enrollment.enrollment_confirmed`,
   `enrollment.enrollment_transferred` (the new enrollment), and `enrollment.session_booked` /
   `enrollment.session_booking_changed` when confirmed: the participant's live entries for what
@@ -150,9 +154,18 @@ expiresAt`): expires an active hold once due, gives the place back, emits
   next waiter), and offer generation runs again for a free place (SPK-REG-008). Offer generation
   itself also retires such an entry and passes over one whose own registration is still pending.
 - `enrollment.expire_makeup` on `enrollment.makeup_expiry_due`.
+- `enrollment.notify_waitlist_retired` on `enrollment.waitlist_left`: for an entry offer generation
+  removed with one of the three reasons above, composes a `registration_outcome` notice saying why
+  the family no longer waits and what to do instead; withdrawals, staff removals and
+  `equivalent_entitlement` send nothing.
 - `enrollment.sync_capacity` on `catalog.offering_updated`: commercial pools follow catalog limits;
   staffing pools keep their staff count (SPK-YOUTH-002); a limit below commitments raises an
   operational exception.
+- `enrollment.resume_after_capability_enabled` on `core.capability_changed` (enabled only;
+  CAPABILITIES-03, CAPABILITIES-06): the free places of the queues offer generation held while the
+  switch was off are offered again (`enrollment.capacity_released`, cause `capability_enabled`),
+  and for `memberships` the renewal notices still owed become due at once
+  (`renewal_notice_due_at` cleared). Disabling needs no follow-up: every gate reads the switch.
 
 All are idempotent under replay.
 
@@ -254,14 +267,47 @@ Payloads carry identifiers only (§4.14).
   interruption leaves neither a roster row the pool does not count nor an operation `running`
   (§4.7 invariants 3 and 12; **Verified**, `__tests__/placement-atomic.spec.ts`). Release is one
   transaction in the same way.
-- **Pickup (SPK-PLACE-004):** session pools, entry requirements (eligibility and forms), payment
-  (pending until finance confirms; free bookings confirm at once, and a booking with an approved
-  fee or tax is not free), waitlist and cancellation; no roster or enrollment is ever created.
+- **Pickup (SPK-PLACE-004):** session pools, entry requirements (eligibility and forms), waitlist
+  and cancellation; no roster or enrollment is ever created. Payment: a booking that owes nothing
+  (base price, approved fees and taxes) or that a package credit, a membership or a makeup pays
+  for is confirmed at once. A booking that would owe money (a fee-only one included) is refused
+  with 409 RESOURCE_CONFLICT `details.code SESSION_PAYMENT_UNAVAILABLE` (`kind`, `amountMinor`,
+  `currency`, `pendingDecisions`: `POL-045`, `DEC-082` for pickup, `DEC-003` for a trial) before any
+  seat is held or record written, by `POST /v1/session-bookings` and
+  `POST /v1/trial-participations` (with or without a session): no payment path exists for a single
+  session (GAPS-TRIAGE-01; see Known gaps). A pickup or trial waitlist follows the same rule: the
+  join is refused; once the seat became priced after the waiters joined (a later price rule), the
+  staff offer answers the same 409, an offer made before cannot be accepted (409; it stays
+  `offered` with its seat held until it is declined or expires), and offer generation makes no
+  offer but removes each waiting entry with reason `session_payment_unavailable` and a
+  `registration_outcome` notice (it may join again once the seat owes nothing).
+  `POST /session-bookings/{id}/confirm` still refuses a pending booking recorded earlier that owes
+  money (`PAYMENT_REQUIRED`, with the same per-kind `pendingDecisions`); it is cancelled or expires
+  with its hold. **Verified**, `__tests__/youth.spec.ts` ("GAPS-TRIAGE-01 / SPK-PLACE-004: …",
+  "GAPS-TRIAGE-01 / SPK-PAY-002: …", "GAPS-TRIAGE-01 / SPK-REG-008: a pickup queue whose seat
+  became priced …", "GAPS-TRIAGE-01 / SPK-YOUTH-003: …").
 - **Waitlists (SPK-REG-008):** an entry whose participant now holds what the queue waits for
   leaves it (see `enrollment.retire_redundant_waitlist_entries`), so places are offered only to
   people who can accept them. **Verified**, `__tests__/waitlist-capacity-integrity.spec.ts`.
+  Nobody waits for what a queue can never give: a makeup seat is taken by redeeming the makeup
+  entitlement (`POST /v1/makeup-entitlements/{id}/redeem`, SPK-YOUTH-004), and a waitlist entry
+  carries no entitlement, so joining with intent `makeup` answers 400 `VALIDATION_FAILED`
+  `details.code MAKEUP_REDEMPTION_REQUIRED` (with that `command`), never the pickup decisions or
+  the parent term's price; a `rental_request` or `party_request` entry answers
+  `BOOKING_REQUIRED` (SPK-COND-003). An entry of either kind recorded earlier is refused by the
+  staff offer and acceptance (400, the same codes) and removed by offer generation with reason
+  `makeup_redemption_required` or `booking_required` and a notice, never offered. **Verified**,
+  `youth.spec.ts` ("SPK-YOUTH-004 / GAPS-TRIAGE-01: a makeup seat is redeemed, never waited for …"),
+  `package-g-foundation.spec.ts` ("CAPABILITIES-04 / SPK-COND-003: nobody waits for a bare rental
+  or party …").
 - **Trials (SPK-AT-019):** a trial is its own record with a trial booking; conversion opens a
-  follow-up basket (nothing held, charged or enrolled) that reuses permitted information; the paid
+  follow-up basket (nothing held, charged or enrolled) that reuses permitted information. A trial
+  converts into participation (term, season, camp and the other basket intents): a session intent
+  has its own command, a `rental_request` or `party_request` answers 400 `BOOKING_REQUIRED` (a
+  rental or party exists only with its reservation, SPK-COND-003), and a membership or session
+  package needs its switch (403 `CAPABILITY_DISABLED`), all before any application or basket is
+  written (CAPABILITIES-04; **Verified**, `youth.spec.ts` "CAPABILITIES-04 / SPK-COND-003: …"). A
+  priced trial is refused (`SESSION_PAYMENT_UNAVAILABLE`, pending DEC-003). The paid
   enrollment links back and marks the trial `converted`, keeping its attendance outcome
   (`attendedAt`, or `noShowAt`, migration 0502). Attendance and no-show are observations: they are
   refused before the trial session starts (400 `VALIDATION_FAILED`, `details.code
@@ -301,7 +347,12 @@ PostgreSQL) unless marked **proposed** or **pending**.
   queue only (`NOT_NEXT_IN_QUEUE` names who is), `CAPACITY_UNAVAILABLE` without a free place;
   the same offer payload as the generator.
 - `GET /v1/offerings/{id}/registration-options?participantPersonIds=`: the intents an offering
-  takes and a read-only evaluation per participant (customers: public offerings only).
+  takes and a read-only evaluation per participant (customers: public offerings only). An intent
+  whose capability switch is off (INTENT_CAPABILITIES, `pickup` → `pickup_sessions` included) is
+  not in `availableIntents` but in `unavailableIntents` with `code: CAPABILITY_DISABLED`, its
+  capability and applicability decisions, and no participant eligibility is evaluated for it
+  (CAPABILITIES-07; **Verified**, `registration-commands.spec.ts` "CAPABILITIES-07 / DEC-016: …";
+  the staff Assisted registration screen and the mobile intent chooser follow it).
 - The finance checkout operation is recorded as `last_operation_id` on the basket and its pending
   enrollments (SPK-UX-001).
 
@@ -318,30 +369,47 @@ PostgreSQL) unless marked **proposed** or **pending**.
   `enrollment.placement_interrupted` is raised.
 - Notices composed by enrollment in the handler transaction with the event id as `sourceEventId`
   (IF-22; one per event, replays compose nothing): `waitlist_offer` (expiry in the facility's local
-  time), `placement` (team name), `registration_outcome`.
+  time), `placement` (team name), `registration_outcome` (an application decided, or a waitlist
+  entry retired because it could never be accepted).
 
 ### Package G behind capability switches (ENR-10 to ENR-14)
 
 Each capability is off by default per organization and changed only by an administrator with
 audit (K-12). Whether the complex uses it is **pending** (DEC-016 and the decision named below).
 A disabled capability refuses new commitments with 403 `ACCESS_DENIED`, `details.code`
-`CAPABILITY_DISABLED`; reads, cancellations, reversals, suspensions, expiry jobs, staffing
-follow-ups and payment outcomes never check it. Policy values (prices, expiry, credit return,
+`CAPABILITY_DISABLED`; reads, cancellations, declines, reversals, suspensions, expiry jobs, staffing
+follow-ups and payment outcomes never check it. Every path that opens or holds a Package G line or
+booking checks it (CAPABILITIES-03, CAPABILITIES-04): `POST /baskets/{id}/lines`, hold, complete
+and checkout; `openForLine` and `holdOpenedBasket` for every caller (waitlist acceptance, trial
+conversion, `POST /v1/bookings`; `openForLine` also refuses a session intent and a bare
+`rental_request`/`party_request` line, `BOOKING_REQUIRED`, unless the booking command opens it);
+joining a waitlist, a staff offer (`POST /waitlist-entries/{id}/offer`) and accepting an offer
+(refused, the offer stays open with its place until it is declined or expires); trial
+conversion. Offer generation makes no offer for a queue whose switch is off (nobody loses their
+place to an offer they could not accept) and offers the free places once it is enabled again
+(`enrollment.resume_after_capability_enabled`); a rental or party entry, whose acceptance could
+only open a bare line, is removed then instead of offered (`booking_required`, above). A renewal notice waits while `memberships` is off,
+unstamped, and is sent once the switch is back on (CAPABILITIES-06). **Verified**, journey
+`apps/api/src/__tests__/journeys/capabilities-03-waitlist-gates.spec.ts` and
+`package-g-foundation.spec.ts` ("CAPABILITIES-03 / DEC-072: …", "CAPABILITIES-03 /
+CAPABILITIES-04: every caller of openForLine and holdOpenedBasket gets the line checks"),
+`memberships.spec.ts` ("CAPABILITIES-06 / DEC-072: …"). Policy values (prices, expiry, credit return,
 benefits, terms, deposits) are configuration in the catalog; nothing here supplies a default.
 
-| Capability          | Decision                            | Gated here                                                                               | Migration        | Tests                                                       |
-| ------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------- |
-| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`)                                       | —                | `package-g-foundation.spec.ts`                              |
-| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal                                           | 0505, 0507, 0513 | `package-g-foundation.spec.ts`, `memberships.spec.ts`       |
-| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`)                              | 0505, 0506       | `package-g-foundation.spec.ts`, `session-packages.spec.ts`  |
-| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                             | 0508, 0512, 0514 | `bookings.spec.ts`                                          |
-| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                              | 0508, 0512, 0514 | `bookings.spec.ts` (party case needs CAT-02's `party` kind) |
-| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing | 0509–0511, 0515  | `youth-progression.spec.ts`                                 |
+| Capability          | Decision                            | Gated here                                                                                                      | Migration        | Tests                                                                    |
+| ------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------ |
+| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`); joining, offers and acceptance of a pickup waitlist         | —                | `package-g-foundation.spec.ts`, journey `capabilities-03-waitlist-gates` |
+| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal and its notice, a membership waitlist, trial conversion into one | 0505, 0507, 0513 | `package-g-foundation.spec.ts`, `memberships.spec.ts`                    |
+| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`), a package waitlist, trial conversion into one      | 0505, 0506       | `package-g-foundation.spec.ts`, `session-packages.spec.ts`               |
+| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                                                    | 0508, 0512, 0514 | `bookings.spec.ts`                                                       |
+| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                                                     | 0508, 0512, 0514 | `bookings.spec.ts` (party case needs CAT-02's `party` kind)              |
+| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing                        | 0509–0511, 0515  | `youth-progression.spec.ts`                                              |
 
 Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
 `startCheckout`) re-checks every live line's capability before any payment attempt ("DEC-016:
 checkout of a held package line after session_packages was disabled is refused before any payment
-attempt"). A plain `rental_request` or `party_request` line is refused with `BOOKING_REQUIRED`;
+attempt"), and so do `openForLine` and `holdOpenedBasket` for the commands that open a basket
+themselves. A plain `rental_request` or `party_request` line is refused with `BOOKING_REQUIRED`;
 membership and package lines are one entitlement (`QUANTITY_ONE`; migration 0505 check). The
 module-local lifecycles are in `enrollment.state-machines.ts` (DEC-093 **proposed**), each
 mirrored by a database transition guard.
@@ -371,10 +439,14 @@ mirrored by a database transition guard.
   booking (verified with the entry module). Member-only eligibility (`membershipRequired` in the
   eligibility policy) is the known reason `MEMBERSHIP_REQUIRED`. Suspensions
   (`POST /v1/enrollments/{id}/membership-suspensions`, `/membership-suspensions/{id}/end`; active
-  periods never overlap: exclusion constraint), renewal (`POST /v1/enrollments/{id}/renew` adds a
+  periods never overlap: exclusion constraint; staff who may suspend the membership list its
+  suspensions, newest first with id and revision, `GET /v1/enrollments/{id}/membership-suspensions`
+  `?status=&cursor=`, protected NOT_FOUND to anyone else, never gated: GAPS-TRIAGE-02, **Verified**
+  `memberships.spec.ts` "GAPS-TRIAGE-02 / §4.9: …"), renewal (`POST /v1/enrollments/{id}/renew` adds a
   linked membership line; nothing is charged until checkout), job `enrollment.membership_lifecycle`
   (completes ended terms, ends elapsed suspensions, one `renewal_opportunity` notice when the
-  definition sets `renewal.noticeLeadDays`; a membership not due yet records when it becomes due,
+  definition sets `renewal.noticeLeadDays` and `memberships` is on (while it is off the notice is
+  deferred, never stamped, CAPABILITIES-06); a membership not due yet records when it becomes due,
   `renewal_notice_due_at` (0513), and is not re-read before then, so memberships that are never
   due cannot keep a due one out of the batch; a lead changed on the definition later applies from
   that recorded instant), `GET /v1/me/memberships`.
@@ -444,9 +516,14 @@ mirrored by a database transition guard.
   recommendation carries no staff content. A shared recommendation's content is fixed and a
   withdrawn one never changes (`progression_recommendations_content_fixed`, 0511). **Verified**,
   `__tests__/youth-progression.spec.ts`.
-  `GET /v1/participants/{personId}/assessments` is the staff view: a program manager sees the
-  offerings in their facility scope and gets an empty page when nothing is visible, whatever exists
-  at other facilities; a coach sees offerings they are accepted on, and NOT_FOUND otherwise (§4.10).
+  `GET /v1/participants/{personId}/assessments` is the staff view, decided from the caller's own
+  scope and never from which assessment rows exist (GAPS-TRIAGE-04, §4.10): a program manager sees
+  the offerings in their facility scope and always gets a page (empty when nothing is visible,
+  whatever exists at other facilities); a coach accepted on an offering the participant is or was
+  enrolled in (an enrollment once confirmed) gets a page of that offering's rows (others' submitted
+  and later rows, their own drafts), empty before the first assessment; any other caller, and a
+  coach asking about another offering, gets NOT_FOUND, as for a person who does not exist.
+  **Verified**, `youth-progression.spec.ts` "GAPS-TRIAGE-04 / §4.10: …".
   A recommendation stores the read-only eligibility of the recommended offering and never holds
   capacity.
 
@@ -519,9 +596,24 @@ bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
   (discounts, fees): **pending DEC-009**.
 - A `register` grant revoked while a basket is already held (the hold window) is not re-checked
   when finance starts the checkout; finance's own `pay` check over each participant applies there.
-- A session booking whose hold expired is expired by the timer even while a checkout is running
-  (baskets keep their pending enrollments for finance instead); a late booking payment is
-  compensated by finance.
+- **No payment path for a single session (GAPS-TRIAGE-01).** The finance checkout pays held basket
+  lines that each carry an enrollment; a pickup, trial or makeup seat is never an enrollment
+  (SPK-PLACE-004, SPK-YOUTH-003) and no checkout, order line or finalizer step takes a session
+  booking. A booking that would owe money is therefore refused up front
+  (`SESSION_PAYMENT_UNAVAILABLE`) instead of being held pending and left to expire unpaid. The
+  rules a payment path would implement are **pending decisions**: pickup payment rules POL-045
+  (applicability DEC-082) and trial rules DEC-003. Building it is a finance and enrollment change
+  (a session-booking checkout target or basket line, an order line naming the booking, the
+  finalizer confirming it through `EnrollmentPort.confirmSessionBooking`, compensation of a late
+  payment); none of it exists. Free bookings, and bookings a package credit, a membership or a
+  makeup redemption pays for, are unaffected. Waiting entries of a session queue whose seat became
+  priced are removed when a place frees (offer generation), not when the price rule is created,
+  and are not restored if the price returns to free (the family joins again).
+- **No makeup waitlist (SPK-YOUTH-004).** A makeup seat is only redeemed, so a family whose
+  eligible replacement session is full cannot wait for it (`MAKEUP_REDEMPTION_REQUIRED`). A
+  makeup waitlist would need an entry bound to the entitlement it redeems (and a rule for which
+  one, and for an entitlement that expires or is used while the entry waits); that is
+  **proposed**, not built, and the makeup rules are **pending DEC-003**.
 - `GET /v1/applications`, `/enrollments`, `/placement-requests` and every `/me/*` list are cursor
   pages; waitlist, session-booking and makeup lists still return one page.
 

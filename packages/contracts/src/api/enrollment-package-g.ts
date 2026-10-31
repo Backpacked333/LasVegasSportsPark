@@ -156,6 +156,12 @@ export const ListMyMembershipsQuery = PageRequestSchema.extend({
 });
 export type ListMyMembershipsQuery = z.infer<typeof ListMyMembershipsQuery>;
 
+/** GAPS-TRIAGE-02: a membership's suspensions for staff, newest first (keyset page). */
+export const ListMembershipSuspensionsQuery = PageRequestSchema.extend({
+  status: z.enum(['active', 'ended']).optional(),
+});
+export type ListMembershipSuspensionsQuery = z.infer<typeof ListMembershipSuspensionsQuery>;
+
 export const CreateMembershipSuspensionBody = withCommandMeta({
   from: Instant,
   until: Instant.optional(),
@@ -647,6 +653,12 @@ command(
   'Suspend a membership for a period (ENR-12)',
   CreateMembershipSuspensionBody,
   MembershipSuspensionSchema,
+);
+query(
+  '/enrollments/{id}/membership-suspensions',
+  "A membership's suspensions with the id and revision ending one needs (staff who may suspend it; GAPS-TRIAGE-02)",
+  ListMembershipSuspensionsQuery,
+  pageSchema(MembershipSuspensionSchema),
 );
 command(
   'post',

@@ -312,6 +312,7 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
         'GET /offerings/{id}/registration-options': ok({
           offeringId: OFFERING_ID,
           availableIntents: ['youth', 'trial'],
+          unavailableIntents: [],
           seasonId: null,
           participants: [
             {
@@ -350,6 +351,63 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
     expect(
       app.fake.requests.find((r) => r.route === '/offerings/{id}/registration-options')?.query,
     ).toEqual({ participantPersonIds: PERSON_ID });
+  });
+
+  it('CAPABILITIES-07 / DEC-016: an intent whose switch is off is not offered; the turned-off reason is shown and a stale choice is refused before sending', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}/registration-options': ok({
+          offeringId: OFFERING_ID,
+          availableIntents: [],
+          unavailableIntents: [
+            {
+              intent: 'membership',
+              code: 'CAPABILITY_DISABLED',
+              capability: 'memberships',
+              applicabilityReferences: ['DEC-016', 'DEC-072'],
+            },
+          ],
+          seasonId: null,
+          participants: [{ personId: PERSON_ID, intents: [] }],
+        }),
+      }),
+    });
+    render(app.at(`/registrations/assisted/${BASKET_ID}`));
+    const form = await screen.findByRole('form', { name: 'Add a participant and offering' });
+    const f = within(form);
+    // Before an offering is chosen the choices come from the permission view: every switch is off
+    // by default, so no Package G intent is offered.
+    const before = within(f.getByLabelText(/^Registration intent/))
+      .getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(before).not.toContain('Membership (when applicable)');
+    expect(before).not.toContain('Pickup');
+    expect(before).toContain('Youth enrollment');
+    await user.type(f.getByLabelText(/^Participant/), PERSON_ID);
+    await waitFor(() =>
+      expect(f.getByRole('option', { name: 'Spring academy' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(f.getByLabelText('Offering: program'), PROGRAM_ID);
+    await waitFor(() =>
+      expect(f.getByRole('option', { name: /Spring academy U10/ })).toBeInTheDocument(),
+    );
+    await user.selectOptions(f.getByLabelText('Offering: offering'), OFFERING_ID);
+    expect(
+      await f.findByText(/This offering takes no intent that can be added now/),
+    ).toBeInTheDocument();
+    expect(f.getByTestId('intents-turned-off')).toHaveTextContent(
+      'Turned off, not offered: Membership (when applicable): Memberships turned off (DEC-016, DEC-072).',
+    );
+    const intents = within(f.getByLabelText(/^Registration intent/))
+      .getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(intents).toEqual(['Choose an intent']);
+    expect(f.queryByRole('group', { name: 'Eligibility before adding (read only)' })).toBeNull();
+    await user.click(f.getByRole('button', { name: 'Add to basket' }));
+    expect(
+      app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/baskets/{id}/lines'),
+    ).toEqual([]);
   });
 
   it('ID-03: finds the household adult by name (names only) and fills the reference', async () => {

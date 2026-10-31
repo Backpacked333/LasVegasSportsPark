@@ -1137,10 +1137,18 @@ export class YouthProgressionService {
   }
 
   /**
-   * GET /participants/{personId}/assessments (staff view): program managers see the assessments of
-   * offerings in their facility scope; a coach sees those of offerings they hold an accepted or
-   * completed assignment on (others' submitted and later rows, their own drafts); anyone else
-   * learns nothing.
+   * GET /participants/{personId}/assessments (staff view; GAPS-TRIAGE-04, §4.10). Which rows a
+   * caller sees, and whether they get a page at all, follow from their own scope only, never from
+   * rows outside it:
+   * - a program manager sees the assessments of offerings in their facility scope, and always gets
+   *   a page: empty when nothing is visible, whatever exists at other facilities;
+   * - a coach sees those of offerings they hold an accepted or completed assignment on (IF-34) in
+   *   which the participant is or was enrolled (an enrollment once confirmed): others' submitted
+   *   and later rows, and their own drafts. Such a coach gets a page, empty before the first
+   *   assessment; with `offeringId`, only that offering counts;
+   * - anyone else (another coach, a coach of offerings the participant never took part in, a
+   *   customer) gets NOT_FOUND, the same answer as for a person who does not exist.
+   * Authority never comes from which assessment rows exist (another author's draft included).
    */
   async participantAssessments(
     principal: Principal,
@@ -1157,17 +1165,22 @@ export class YouthProgressionService {
     ) {
       throw errors.protectedNotFound('participant');
     }
-    const candidates = await this.db
-      .selectFrom('assessments')
+    // The offerings the participant takes or took part in; assessments exist only for those
+    // (authoring requires a confirmed or completed enrollment), so no assessment row is consulted.
+    let participated = this.db
+      .selectFrom('enrollments')
       .select('offering_id')
       .distinct()
       .where('organization_id', '=', organizationId)
       .where('participant_person_id', '=', personId)
-      .execute();
+      .where('confirmed_at', 'is not', null);
+    if (query.offeringId) participated = participated.where('offering_id', '=', query.offeringId);
+    const offerings = (await participated.orderBy('offering_id').execute()).map(
+      (r) => r.offering_id,
+    );
     const managed: string[] = [];
     const coached: string[] = [];
-    for (const { offering_id: offeringId } of candidates) {
-      if (query.offeringId && query.offeringId !== offeringId) continue;
+    for (const offeringId of offerings) {
       const facilityId = await this.scope.facilityOf(organizationId, offeringId);
       if (await this.isProgramManagerAt(principal, organizationId, facilityId)) {
         managed.push(offeringId);
@@ -1184,9 +1197,9 @@ export class YouthProgressionService {
       }
     }
     if (managed.length === 0 && coached.length === 0) {
-      // §4.10: the answer never depends on rows outside the caller's scope. A program manager
-      // gets an empty page whether the person has no assessments at all or only at another
-      // facility's offerings; a coach with nothing visible gets NOT_FOUND in both cases.
+      // §4.10: a program manager gets the same empty page whether the person has no assessments,
+      // has them only at another facility, or does not exist; a coach with no offering of this
+      // participant gets NOT_FOUND in every one of those cases.
       if (principal.staffRoles.includes('program_manager')) {
         return { items: [], nextCursor: null };
       }
