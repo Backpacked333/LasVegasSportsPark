@@ -1,6 +1,6 @@
 import { newId, type CapabilityId, type StaffRole } from '@sportspark/contracts';
 import { expect } from 'vitest';
-import { Inbox, OutboxDispatcher } from '../../kernel';
+import { Inbox } from '../../kernel';
 import { DOMAIN_MODULES } from '../../modules';
 import {
   authHeaderForPerson,
@@ -9,7 +9,13 @@ import {
   createRelationshipFixture,
   createStaffMemberFixture,
 } from '../../modules/identity';
-import { createTestApp, type TestApp, type TestAppOptions } from '../../testing';
+import {
+  createTestApp,
+  type DrainOptions,
+  drainOutboxChecked,
+  type TestApp,
+  type TestAppOptions,
+} from '../../testing';
 
 /**
  * Shared helpers for the cross-module journeys (not a spec file). Every journey boots the assembled
@@ -119,12 +125,9 @@ export async function ok<T = Record<string, unknown>>(
 }
 
 /** Runs the outbox until nothing more is due (timers that are due, and their follow-ups). */
-export async function drain(t: TestApp): Promise<void> {
-  const dispatcher = t.app.get(OutboxDispatcher);
-  for (let i = 0; i < 40; i += 1) {
-    const summary = await dispatcher.runOnce(200);
-    if (summary.claimed === 0) return;
-  }
+/** Runs the outbox until nothing more is due; a failed delivery fails the drain (R2-TESTS-01). */
+export function drain(t: TestApp, options: DrainOptions = {}): Promise<void> {
+  return drainOutboxChecked(t, { rounds: 40, batchSize: 200, ...options });
 }
 
 /** Applies recorded provider events, then their durable follow-ups. */

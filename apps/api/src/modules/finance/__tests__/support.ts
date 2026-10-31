@@ -7,8 +7,14 @@ import {
 } from '@sportspark/contracts';
 import { pgErrorCode } from '@sportspark/db';
 import type { TestingModuleBuilder } from '@nestjs/testing';
-import { Inbox, OutboxDispatcher } from '../../../kernel';
-import { createTestApp, type TestApp, type TestAppOptions } from '../../../testing';
+import { Inbox } from '../../../kernel';
+import {
+  createTestApp,
+  type DrainOptions,
+  drainOutboxChecked,
+  type TestApp,
+  type TestAppOptions,
+} from '../../../testing';
 import {
   createAcknowledgmentFixture,
   createOfferingFixture,
@@ -198,12 +204,9 @@ export async function quoteFor(
 }
 
 /** Runs the outbox until nothing more is due (timers that are due, and their follow-ups). */
-export async function drain(t: TestApp): Promise<void> {
-  const dispatcher = t.app.get(OutboxDispatcher);
-  for (let i = 0; i < 25; i += 1) {
-    const summary = await dispatcher.runOnce(200);
-    if (summary.claimed === 0) return;
-  }
+/** Runs the outbox until nothing more is due; a failed delivery fails the drain (R2-TESTS-01). */
+export function drain(t: TestApp, options: DrainOptions = {}): Promise<void> {
+  return drainOutboxChecked(t, { rounds: 25, batchSize: 200, ...options });
 }
 
 /** Applies recorded provider events, then their durable follow-ups. */

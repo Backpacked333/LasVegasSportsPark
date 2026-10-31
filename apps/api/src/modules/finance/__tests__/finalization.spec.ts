@@ -110,7 +110,7 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
     });
     const enrollmentId = checkout.enrollmentIds[0] as string;
     const entriesBefore = await t.db.selectFrom('journal_entries').select('id').execute();
-    await drain(t); // handler attempt fails; the event is retried with backoff
+    await drain(t, { allowFailures: true }); // handler attempt fails; the event is retried with backoff
     expect(
       (await t.http.get(`/v1/registration-checkouts/${checkout.id}`).set(parent.header)).body
         .status,
@@ -247,6 +247,53 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
       .executeTakeFirstOrThrow();
     expect(enrollment.status).toBe('canceled');
     await drain(t);
+    // R2-JOURNEYS-04 (SPK-AT-023, SPK-COMMS-002): the payer was told the registration could not
+    // be completed and what happens to the money, then that the credit was added, once each
+    const notices = await t.db
+      .selectFrom('notifications')
+      .select(['kind', 'title', 'body', 'protected'])
+      .where('subject_type', '=', 'order')
+      .where('subject_id', '=', checkout.orderId as string)
+      .orderBy('created_at')
+      .orderBy('id')
+      .execute();
+    expect(notices).toEqual([
+      {
+        kind: 'payment_attention',
+        title: 'Your registration could not be completed',
+        body: 'Your payment of $45.00 was received, but the registration could not be completed. Our staff will contact you about the payment.',
+        protected: true,
+      },
+      {
+        kind: 'payment_attention',
+        title: 'A credit was added',
+        body: 'A credit of $45.00 for the registration that could not be completed has been added to your account.',
+        protected: true,
+      },
+    ]);
+    const inbox = await t.http.get('/v1/me/inbox').set(parent.header);
+    expect(inbox.status).toBe(200);
+    expect(inbox.body.items.map((i: { title: string }) => i.title)).toEqual(
+      expect.arrayContaining(['Your registration could not be completed', 'A credit was added']),
+    );
+    // a replayed delivery composes nothing new
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', locked_until: null, dispatched_at: null })
+      .where('event_type', 'in', [
+        'finance.checkout_recovery_required',
+        'finance.checkout_compensated',
+      ])
+      .where('aggregate_id', '=', checkout.id as string)
+      .execute();
+    await drain(t);
+    const again = await t.db
+      .selectFrom('notifications')
+      .select('id')
+      .where('subject_type', '=', 'order')
+      .where('subject_id', '=', checkout.orderId as string)
+      .execute();
+    expect(again).toHaveLength(2);
   });
 
   it('SPK-PAY-009 / §4.11 step 10: staff credit compensation gives back the credit applied at checkout beside a credit for the card part', async () => {

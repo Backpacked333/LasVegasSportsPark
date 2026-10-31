@@ -29,13 +29,12 @@
  *   resends the same request under the same key; IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may
  *   already have been done" with "Reload", after which a pass it made is listed under "Other active
  *   passes". Never "Something went wrong" for a request that may have gone through.
- * - The reference is a one-time secret (SPK-ENTRY-002, §4.14), so a replay of an issue must not
- *   carry it: the API is to answer IDEMPOTENCY_SECRET_WITHHELD (`details.resourceId`). The screen
- *   reads that as "Pass issued, but its reference cannot be shown again": the passes are read
- *   again, the pass it made is listed under "Other active passes" to withdraw, and getting a pass
- *   again is a new request. The API does not withhold it yet (`POST /v1/passes` stores and replays
- *   the whole answer; reported for the entry module); a replay that does carry the reference is
- *   saved like any issued pass.
+ * - The reference is a one-time secret (SPK-ENTRY-002, §4.14), so a replay of an issue does not
+ *   carry it: `POST /v1/passes` withholds it from the stored answer and a same-key replay answers
+ *   IDEMPOTENCY_SECRET_WITHHELD with `details.resourceId` = the pass id (entry module,
+ *   R2-TENANCY-INPUT-01). The screen reads that as "Pass issued, but its reference cannot be shown
+ *   again": the passes are read again, the pass it made is listed under "Other active passes" to
+ *   withdraw, and getting a pass again is a new request.
  * - The replace flow's withdrawal of the previous pass decides with the same predicates: an answer
  *   lost after it committed (IDEMPOTENCY_OUTCOME_UNAVAILABLE) reads "This may already have been
  *   done" with "Reload", never "still active"; the pending withdrawal is kept until
@@ -234,6 +233,7 @@ function PassContent() {
     let issued;
     try {
       // One intent: a retry after a timeout reuses the key, so the API answers for the same pass
+      // (without its reference: IDEMPOTENCY_SECRET_WITHHELD, handled by `issueWithheld` above)
       issued = await issue.submit({ body: { holder: { kind: 'person', personId } } });
     } catch {
       return; // shown from issue.error; the stored pass (if any) is untouched

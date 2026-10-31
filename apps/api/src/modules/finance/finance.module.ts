@@ -45,8 +45,10 @@ import {
 } from './controllers/accounts.controller';
 import { PaymentWebhooksController, PaymentsController } from './controllers/payments.controller';
 import {
+  CheckoutCompensated,
   CheckoutExpiryDue,
   CheckoutPaymentReceived,
+  CheckoutRecoveryRequired,
   ContributionRequested,
   InstallmentFailed,
   InstallmentNotice,
@@ -401,6 +403,22 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
       'finance.notify_contribution_requested',
       (event, ctx) =>
         runWithTransaction(ctx.trx, () => this.notices.contributionRequested(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    // R2-JOURNEYS-04 (SPK-AT-023, SPK-COMMS-002): the payer of a checkout that could not finish is
+    // told what happens to the money, and again when the refund is made or the credit added.
+    this.registry.on<EventPayload<typeof CheckoutRecoveryRequired>>(
+      CheckoutRecoveryRequired.type,
+      'finance.notify_checkout_recovery',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.checkoutRecoveryRequired(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    this.registry.on<EventPayload<typeof CheckoutCompensated>>(
+      CheckoutCompensated.type,
+      'finance.notify_checkout_compensated',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.checkoutCompensated(ctx.trx, event)),
       { failureOwner: 'finance_operator' },
     );
     this.registry.on<EventPayload<typeof PaymentFailed>>(

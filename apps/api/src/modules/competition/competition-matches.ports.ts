@@ -104,9 +104,10 @@ export interface FinancialConditionsPort {
    * R2-JOURNEYS-05: the entry's financial status, reported as a readiness issue of the team entry
    * workspace (`GET /v1/team-entries/{id}`), with amounts and the due date only for a viewer who may
    * read the team obligation (`finance.read_obligation`). The staff entry list
-   * (`GET /v1/team-entries`) does not carry it, and the staff dashboard's entry review does not
-   * show it yet (pending with R2-JOURNEYS-05). Optional while the finance implementation does not
-   * answer it: competition then reports the status as `unknown`, never as clear.
+   * (`GET /v1/team-entries`) does not carry it; the staff dashboard's entry review reads it from
+   * the workspace of each entry. Finance implements it (`ParticipationStandingService`); without an
+   * implementation (competition-only tests) competition reports the status as `unknown`, never as
+   * clear.
    */
   entryFinancialStatus?(
     organizationId: string,

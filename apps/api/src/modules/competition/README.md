@@ -595,6 +595,6 @@ built, waiting on a decision or another module.
   finance's `entryFinancialStatus` answers from the entry's obligations, so the workspace shows
   `team_obligation_outstanding` until the contributions settle the obligation and no financial
   issue after (`finance/__tests__/obligations.spec.ts` "R2-JOURNEYS-05 / SPK-COMP-004 /
-  SPK-CAP-002"). **Pending** (staff dashboard): the
-  entry review screen shows `financialStatusRef` as a neutral reference badge from the entry list,
-  which carries no status; it should show the workspace's financial issue instead.
+  SPK-CAP-002"). The staff dashboard's entry review
+  (SCR-S-16) shows the workspace's financial issue (open balance, not confirmed, or settled), never
+  the bare reference (`apps/staff/src/screens/teams/__tests__/TeamEntryReviewScreen.test.tsx`).

@@ -211,7 +211,7 @@ describe('temporary access after follow-up changes (SPK-STAFF-004, §4.14, §4.7
         scheduledEnd: at('2027-02-21', '12:00'),
         expectedRevision: practice.revision,
       });
-      await drainOutbox(t); // the first move's follow-up fails
+      await drainOutbox(t, { allowFailures: true }); // the first move's follow-up fails
       await events.moveEvent(system, practice.id, {
         scheduledStart: at('2027-02-21', '15:00'),
         scheduledEnd: at('2027-02-21', '16:00'),

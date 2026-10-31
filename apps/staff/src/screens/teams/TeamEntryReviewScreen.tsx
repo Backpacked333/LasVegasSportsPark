@@ -4,8 +4,11 @@
  * SPK-REG-007, SPK-CAP-005, SPK-AT-003, SPK-UX-008). The four facets are shown side by side and
  * never merged: "approved" never means paid or roster-complete. Approve (optionally placing the
  * entry in a division) and decline need `expectedRevision`; a decline needs a reason, checked here
- * before sending (validation failure) and again by the API. The finance module sets the financial
- * reference; the dashboard shows it and never infers a payment state from it.
+ * before sending (validation failure) and again by the API. The financial facet is finance's answer
+ * as the entry workspace (`GET /v1/team-entries/{id}`) reports it in `readiness.issues`
+ * (R2-JOURNEYS-05): an open balance (`team_obligation_outstanding`), a status finance cannot confirm
+ * (`financial_status_unknown`), or settled when neither is present. The bare obligation reference
+ * is never shown as if it were a status.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -26,6 +29,47 @@ import { StatusBadge } from '../../ui/StatusBadge';
 type TeamEntry = Schema<'TeamEntry'>;
 type Division = Schema<'Division'>;
 type EntryStatus = Schema<'TeamEntryStatus'>;
+type ReadinessIssue = Schema<'ReadinessIssue'>;
+
+/** The readiness issues that carry the entry's financial status (R2-JOURNEYS-05, SPK-COMP-004). */
+const FINANCIAL_ISSUES: Record<string, 'warning' | 'pending'> = {
+  team_obligation_outstanding: 'warning',
+  financial_status_unknown: 'pending',
+};
+
+/**
+ * R2-JOURNEYS-05 (SPK-COMP-004, SPK-CAP-002): the entry's financial status from finance, read from
+ * the entry workspace; staff who read financial records get the amounts and the due date in the
+ * message, other staff the same status without them (the API decides).
+ */
+function FinancialFacet({ entryId }: { entryId: string }) {
+  const workspace = useApiQuery({ path: '/team-entries/{id}', request: { path: { id: entryId } } });
+  if (workspace.isPending)
+    return <StatusBadge tone="pending" label="Checking the financial status" />;
+  if (workspace.isError || !workspace.data) {
+    return <StatusBadge tone="neutral" label="Financial status could not be read" />;
+  }
+  const issue: ReadinessIssue | undefined = workspace.data.readiness.issues.find(
+    (i) => i.code in FINANCIAL_ISSUES,
+  );
+  if (!issue) return <StatusBadge tone="success" label="Settled" />;
+  return (
+    <>
+      <StatusBadge
+        tone={FINANCIAL_ISSUES[issue.code] ?? 'pending'}
+        label={
+          issue.code === 'team_obligation_outstanding'
+            ? 'Open team balance'
+            : 'Financial status not confirmed'
+        }
+      />{' '}
+      <span className="caption">
+        {issue.message} Resolved by: {issue.responsibleRole}. Required action:{' '}
+        {issue.requiredAction}
+      </span>
+    </>
+  );
+}
 
 const ENTRY_KEYS = keys('/team-entries', '/team-entries/{id}', '/divisions');
 
@@ -213,14 +257,7 @@ function EntryRow({ entry, divisions }: { entry: TeamEntry; divisions: readonly 
           <div>
             <dt>Financial status</dt>
             <dd>
-              {entry.financialStatusRef ? (
-                <StatusBadge
-                  tone="info"
-                  label={`Obligation ${shortRef(entry.financialStatusRef)}`}
-                />
-              ) : (
-                <StatusBadge tone="pending" label="No obligation recorded by finance yet" />
-              )}
+              <FinancialFacet entryId={entry.id} />
             </dd>
           </div>
           <div>

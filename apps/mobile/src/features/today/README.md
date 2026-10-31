@@ -73,10 +73,9 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   answer lost after it committed reads "This may already have been done", never "still active",
   and the list showing the pass revoked settles it). Offline: the last known state with its age and
   "may refuse it if it was revoked". The reference is never sent anywhere and is a one-time secret
-  (§4.14): a replayed issue is to be answered IDEMPOTENCY_SECRET_WITHHELD, read "Pass issued, but
-  its reference cannot be shown again" with the pass listed to withdraw. The API does not withhold
-  it yet (it replays the stored answer; reported for the entry module), and a replay that carries
-  the reference is saved like any issue.
+  (§4.14): a replayed issue is answered IDEMPOTENCY_SECRET_WITHHELD (`POST /v1/passes` withholds
+  the reference from its stored answer, entry R2-TENANCY-INPUT-01), read "Pass issued, but its
+  reference cannot be shown again" with the pass listed to withdraw.
 - **No definite answer (§4.9, SPK-UX-008).** A pass issue or withdrawal, an acknowledgement, an
   RSVP or a support request whose answer is lost (`mayHaveTakenEffect`: no response after sending,
   a 5xx) reads "No answer yet: this may already have been recorded", never "Something went wrong",

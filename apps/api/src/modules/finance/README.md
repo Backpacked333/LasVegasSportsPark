@@ -398,9 +398,15 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
   (SPK-UX-001). Verified at the port boundary; the enrollment side (ENR-06) is merged separately.
 - Finance notices through communications' `NotificationsService.composeAndQueueIn` in the
   handler's transaction: contribution requested (to the requested player), payment failed (to the
-  payer; not for POS or installment attempts), installment failed and installment due. Each is
-  keyed by its source event, so a replay queues nothing new. Kind `payment_attention`; the wording
-  is not a policy value (communication policy DEC-012 **Pending decision**).
+  payer; not for POS or installment attempts), installment failed and installment due, and (stage
+  6, R2-JOURNEYS-04, SPK-AT-023) a checkout that could not finish after payment
+  (`finance.notify_checkout_recovery` on `finance.checkout_recovery_required`: what happens to the
+  money, a refund, a credit or staff contact) and its compensation
+  (`finance.notify_checkout_compensated` on `finance.checkout_compensated`: the refund made or the
+  credit added, with the amount; `__tests__/finalization.spec.ts` "§4.11 step 10: staff may
+  compensate an unfulfillable checkout with a credit instead"). Each is keyed by its source event,
+  so a replay queues nothing new. Kind `payment_attention`; the wording is not a policy value
+  (communication policy DEC-012 **Pending decision**).
 
 ### Point of sale (FIN-06) — verified, behind capability `point_of_sale`
 
