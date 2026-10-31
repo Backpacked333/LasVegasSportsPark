@@ -202,20 +202,32 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   withdrawal sent while the grant is in flight waits for the acceptance's row lock and then ends
   the access. **Verified** (`__tests__/access-follow-ups.spec.ts`,
   `__tests__/access-fees-workspace.spec.ts`).
-- **Qualification lapses after acceptance** (SPK-STAFF-001): revoking a qualification, or editing
-  a requirement's qualifications, raises `workforce.unqualified_assignment` (severity high, owner
-  `league_manager` for fixtures and `scheduler` otherwise, deadline = start, one per assignment)
-  for every accepted, unfinished assignment whose assignee no longer holds the requirement's
-  qualifications. Nothing is withdrawn automatically: an operator decides (POL-033 pending).
-  Evidence recorded for a merged person counts for the survivor (WRK-05), so revoking it raises the
-  survivor's assignments too (`__tests__/person-merge.spec.ts`). A revocation and an acceptance
-  that overlap are serialized on the person: the revocation takes the party lock of everyone the
-  evidence resolves to before it writes, and every assignability check (`assertAssignable`:
-  propose, offer, accept, replace) takes the assignee's party lock before it reads
-  qualifications. The acceptance either reads the revocation and is refused, or commits first and
-  is raised. **Verified** under PostgreSQL concurrency and PGlite
-  (`__tests__/qualification-readiness.spec.ts`, R2-RACES-02). Requirement edits are serialized by
-  the requirement's lock instead.
+- **Qualification lapses after acceptance** (SPK-STAFF-001): revoking a qualification, creating a
+  requirement (`POST /assignment-requirements` or `declareRequirements`) or editing its
+  qualifications or required count raises `workforce.unqualified_assignment` (severity high,
+  owner `league_manager` for fixtures and `scheduler` otherwise, deadline = start, one per
+  assignment) for every accepted, unfinished assignment in a required slot whose assignee does not
+  hold the requirement's qualifications. Nothing is withdrawn automatically: an operator decides
+  (POL-033 pending). Evidence recorded for a merged person counts for the survivor (WRK-05), so
+  revoking it raises the survivor's assignments too (`__tests__/person-merge.spec.ts`).
+  Overlapping commands (R2-RACES-02):
+  - A revocation and an acceptance are serialized on the person: the revocation takes the party
+    lock of everyone the evidence resolves to before it writes, and every assignability check
+    (`assertAssignable`: propose, offer, accept, replace) takes the assignee's party lock before it
+    reads qualifications. The acceptance either reads the revocation and is refused, or commits
+    first and is raised.
+  - A revocation and a requirement edit or creation are serialized on the requirement, not the
+    person (requirement commands take no party lock): the revocation's flagging takes the shared
+    key lock and the row share lock of every requirement the person's accepted assignments name
+    (`services/requirement-locks.ts`), an edit holds the row `FOR UPDATE`, and a creation holds the
+    key exclusively from before its insert. Whichever commits second reads the other and raises.
+  - An acceptance and a requirement creation are serialized on the same key: every assignment
+    command takes it shared first, so the acceptance either reads the new requirement and is
+    refused, or commits first and is raised by the creation.
+
+  **Verified** under PostgreSQL concurrency and PGlite, each pair in both orders
+  (`__tests__/qualification-readiness.spec.ts`).
+
 - **Fees** (SPK-STAFF-006, §1.7): the computed amount comes from the rate basis (per assignment,
   hourly with half-up rounding, flat) next to the submitted amount; approval records the approver;
   every adjustment appends a history row; export batches are immutable records handed to payment
@@ -320,8 +332,8 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
   escalation, `GET /assignment-requirements` and so support's Today feed (which reads
   `RequirementsService.list`). A PATCH of a retired requirement answers `INVALID_TRANSITION`;
   proposing, offering, accepting or replacing on one answers `RESOURCE_CONFLICT`
-  (`requirement_retired`). Every assignment command takes the requirement's share lock before the
-  assignment's row lock, the order a retirement takes them in. Tests:
+  (`requirement_retired`). Every assignment command takes the requirement's shared key lock and
+  row share lock before the assignment's row lock, the order a retirement takes them in. Tests:
   `__tests__/booking-staffing.spec.ts` (including an acceptance racing a retirement, run under
   PostgreSQL as well).
 - **WRK-03 offering-level check** (SPK-UX-007, SPK-YOUTH-005, IF-34): `isAcceptedOnOffering` is

@@ -56,12 +56,23 @@ export interface CommitmentQuery {
  * first (SPK-STAFF-003, SPK-SCHED-004; no single constraint spans the two modules' tables).
  */
 /**
- * The person's scheduling party lock (`lockParty`, the key scheduling's commands take too). Every
- * workforce command that reads or changes what makes a person assignable takes it before it reads:
- * the assignability checks (qualifications, availability, commitments) and a qualification
- * revocation (SPK-STAFF-001, SPK-STAFF-003, SPK-READY-004). Commands for one person are therefore
- * serialized, and the second one reads what the first one committed. Re-entrant within a
- * transaction (an advisory transaction lock stacks).
+ * The person's scheduling party lock (`lockParty`, the key scheduling's commands take too), taken
+ * before the reads it guards by exactly these workforce commands (SPK-STAFF-001, SPK-STAFF-003,
+ * SPK-READY-004):
+ *
+ * - `AssignmentsService.assertAssignable` (propose, offer, accept, and the replacement's new
+ *   assignee), before the qualification, availability and commitment reads;
+ * - `CommitmentChecker.conflicts` unless called with `lock: false` (so also the retime of an
+ *   accepted assignment when its target moves; the replacement candidates' explanation is
+ *   read-only and passes false);
+ * - a qualification revocation (`QualificationsService.decide`), for everyone the evidence
+ *   resolves to (WRK-05), before it writes.
+ *
+ * Commands for one person among these are serialized, and the second one reads what the first one
+ * committed. Requirement edits and creations do NOT take it: they are serialized with revocations
+ * and assignment commands through the requirement's own locks (`requirement-locks.ts`), which a
+ * revocation takes after this one. Re-entrant within a transaction (an advisory transaction lock
+ * stacks).
  */
 export function lockPerson(trx: Trx, organizationId: string, personId: string): Promise<void> {
   return lockParty(trx, organizationId, 'person', personId);
