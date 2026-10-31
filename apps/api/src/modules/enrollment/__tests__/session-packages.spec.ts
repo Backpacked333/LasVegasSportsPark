@@ -1,8 +1,14 @@
 import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { runWithTransaction } from '../../../kernel';
 import type { TestApp } from '../../../testing';
-import { createOfferingSessionFixture } from '../../catalog';
+import {
+  OFFERING_LOOKUP_PORT,
+  createOfferingSessionFixture,
+  type OfferingLookupPort,
+} from '../../catalog';
+import { PackageEntitlementsService } from '../services/package-entitlements.service';
 import { EXPIRE_PACKAGES_JOB } from '../services/enrollment-jobs';
 import { adultOffering, cancellationPolicy, packageOffering } from './package-g-support';
 import {
@@ -530,6 +536,82 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
       ),
     ).toBe('23514');
     expect(await counted()).toEqual(revoked);
+  });
+
+  it('R2-RACES-03 / SPK-COND-002: a purchase canceled while its credits are being issued ends with its package revoked (PGlite and TEST_DATABASE_URL)', async () => {
+    const buyer = await adult(t);
+    const pack = await packageOffering(t, {
+      credits: 2,
+      appliesTo: { offeringIds: [target.offeringId] },
+    });
+    await acknowledge(t, pack, buyer.personId, buyer.personId);
+    const basket = await basketWith(t, buyer, [
+      {
+        participantPersonId: buyer.personId,
+        offeringId: pack.offeringId,
+        intent: 'package_purchase',
+      },
+    ]);
+    expect((await post(t, `/v1/baskets/${basket.id}/hold`, buyer.header, {})).status).toBe(200);
+    const done = await post(t, `/v1/baskets/${basket.id}/complete`, buyer.header, {});
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const enrollmentId = done.body.lines[0].enrollmentId as string;
+    // The issue handler is in flight (it has read the purchase and is reading the catalog) when
+    // the desk cancels the purchase and the revoke handler runs. Under TEST_DATABASE_URL the two
+    // really overlap; under PGlite they run one after the other.
+    const port = t.app.get<OfferingLookupPort>(OFFERING_LOOKUP_PORT);
+    const original = port.getOffering.bind(port);
+    let reached!: () => void;
+    const atIssue = new Promise<void>((resolve) => (reached = resolve));
+    let paused = false;
+    const spy = vi.spyOn(port, 'getOffering').mockImplementation(async (...args) => {
+      if (!paused) {
+        paused = true;
+        reached();
+        if (t.database.concurrent) await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return original(...args);
+    });
+    try {
+      const revision = (
+        await t.db
+          .selectFrom('enrollments')
+          .select('revision')
+          .where('id', '=', enrollmentId)
+          .executeTakeFirstOrThrow()
+      ).revision;
+      const issuing = t.db
+        .transaction()
+        .execute((trx) =>
+          runWithTransaction(trx, () =>
+            t.app
+              .get(PackageEntitlementsService)
+              .issueForEnrollment(trx, t.organizationId, enrollmentId, null),
+          ),
+        );
+      const canceling = (async () => {
+        await atIssue;
+        const canceled = await post(t, `/v1/enrollments/${enrollmentId}/cancel`, frontDesk.header, {
+          reason: 'refunded at the desk',
+          expectedRevision: revision,
+        });
+        expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+        await drain(t);
+      })();
+      await Promise.all([issuing, canceling]);
+    } finally {
+      spy.mockRestore();
+    }
+    await drain(t);
+    const rows = await t.db
+      .selectFrom('package_entitlements')
+      .select(['status', 'revoked_reason'])
+      .where('enrollment_id', '=', enrollmentId)
+      .execute();
+    // Either the issue saw the cancellation and issued nothing, or the revoke saw the issue.
+    expect(
+      rows.every((r) => r.status === 'revoked' && r.revoked_reason === 'purchase_canceled'),
+    ).toBe(true);
   });
 
   it('POL-039: a package expires exactly as its definition chose, through the expiry job', async () => {

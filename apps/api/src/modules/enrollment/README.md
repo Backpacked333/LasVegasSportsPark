@@ -16,8 +16,8 @@ Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 
 SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
 **Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
-`0500` to `0516`; `0503` came from the review stage, `0510` to `0515` from the stage-5 review,
-`0516` from the stage-6 review)
+`0500` to `0517`; `0503` came from the review stage, `0510` to `0515` from the stage-5 review,
+`0516` and `0517` from the stage-6 review)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
@@ -333,8 +333,13 @@ Payloads carry identifiers only (§4.14).
   enrollment links back and marks the trial `converted`, keeping its attendance outcome
   (`attendedAt`, or `noShowAt`, migration 0502). Attendance and no-show are observations: they are
   refused before the trial session starts (400 `VALIDATION_FAILED`, `details.code
-trial_not_started`); cancellation stays allowed. **Verified**, `__tests__/youth.spec.ts` and,
-  paid through finance, `apps/api/src/__tests__/journeys/spk-at-019.spec.ts`.
+trial_not_started`); cancellation stays allowed. A trial converted before its session keeps
+  taking its outcome afterwards (R2-JOURNEYS-07): attendance or a no-show is recorded once on the
+  `converted` trial (only the fact is written; the paid entitlement stays linked), and cancelling
+  it before the session ends only its trial seat; an outcome already recorded, or a seat already
+  given up, answers 409 `INVALID_TRANSITION`. **Verified**, `__tests__/youth.spec.ts` and,
+  paid through finance, `apps/api/src/__tests__/journeys/spk-at-019.spec.ts` (which converts
+  after attendance; the early-conversion case is verified in `youth.spec.ts` "R2-JOURNEYS-07").
 
 ## Stage 3 (ENR-01 to ENR-14)
 
@@ -418,14 +423,14 @@ CAPABILITIES-04: every caller of openForLine and holdOpenedBasket gets the line 
 `memberships.spec.ts` ("CAPABILITIES-06 / DEC-072: …"). Policy values (prices, expiry, credit return,
 benefits, terms, deposits) are configuration in the catalog; nothing here supplies a default.
 
-| Capability          | Decision                            | Gated here                                                                                                      | Migration        | Tests                                                                    |
-| ------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`); joining, offers and acceptance of a pickup waitlist         | —                | `package-g-foundation.spec.ts`, journey `capabilities-03-waitlist-gates` |
-| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal and its notice, a membership waitlist, trial conversion into one | 0505, 0507, 0513 | `package-g-foundation.spec.ts`, `memberships.spec.ts`                    |
-| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`), a package waitlist, trial conversion into one      | 0505, 0506       | `package-g-foundation.spec.ts`, `session-packages.spec.ts`               |
-| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                                                    | 0508, 0512, 0514 | `bookings.spec.ts`                                                       |
-| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                                                     | 0508, 0512, 0514 | `bookings.spec.ts` (party case needs CAT-02's `party` kind)              |
-| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing                        | 0509–0511, 0515  | `youth-progression.spec.ts`                                              |
+| Capability          | Decision                            | Gated here                                                                                                      | Migration             | Tests                                                                    |
+| ------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------ |
+| `pickup_sessions`   | DEC-016, DEC-082                    | a new pickup booking (`POST /v1/session-bookings`); joining, offers and acceptance of a pickup waitlist         | —                     | `package-g-foundation.spec.ts`, journey `capabilities-03-waitlist-gates` |
+| `memberships`       | DEC-016, DEC-072                    | membership lines, membership bookings, renewal and its notice, a membership waitlist, trial conversion into one | 0505, 0507, 0513      | `package-g-foundation.spec.ts`, `memberships.spec.ts`                    |
+| `session_packages`  | DEC-016, DEC-074                    | package purchase lines, redemption (`packageEntitlementId`), a package waitlist, trial conversion into one      | 0505, 0506, 0516      | `package-g-foundation.spec.ts`, `session-packages.spec.ts`               |
+| `rentals`           | DEC-016, DEC-076                    | `POST /v1/bookings` and approval of a rental                                                                    | 0508, 0512, 0514      | `bookings.spec.ts`                                                       |
+| `parties`           | DEC-016, DEC-077                    | `POST /v1/bookings` and approval of a party                                                                     | 0508, 0512, 0514      | `bookings.spec.ts` (party case needs CAT-02's `party` kind)              |
+| `youth_progression` | DEC-016 (DEC-003, DEC-054, DEC-055) | template drafting/approval, assessment authoring/review, recommendation drafting/sharing                        | 0509–0511, 0515, 0517 | `youth-progression.spec.ts`                                              |
 
 Every basket entry point finance calls (`hold`, `complete`, `assertPaymentPermitted`,
 `startCheckout`) re-checks every live line's capability before any payment attempt ("DEC-016:
@@ -437,6 +442,9 @@ module-local lifecycles are in `enrollment.state-machines.ts` (DEC-093 **propose
 mirrored by a database transition guard.
 
 - **Session packages (ENR-11, SPK-COND-002, SPK-AT-020).** A confirmed `package_purchase` issues
+  (reading the purchase `FOR UPDATE`, so a cancellation that overlaps the issue waits for it and
+  the revoke handler then finds the entitlement: R2-RACES-03, **Verified** `session-packages.spec.ts`
+  "R2-RACES-03 …", PGlite and `TEST_DATABASE_URL`)
   one `package_entitlements` row with the definition's credits and expiry (`none`,
   `days_after_issue`, `fixed_date` → the next local midnight after it); an unreadable scope issues
   nothing and raises `enrollment.package_scope_invalid`. `POST /v1/session-bookings` with
@@ -551,7 +559,9 @@ mirrored by a database transition guard.
   feedback that no published family correction replaces, and shared recommendations,
   never staff or review notes; one `youth_feedback` notice per published assessment or shared
   recommendation carries no staff content. A shared recommendation's content is fixed and a
-  withdrawn one never changes (`progression_recommendations_content_fixed`, 0511). **Verified**,
+  withdrawn one never changes (`progression_recommendations_content_fixed`, 0511), and neither
+  is ever deleted: trigger `progression_recommendations_no_delete` refuses deleting any row past
+  `draft` (0517, R2-SCHEMA-01; a draft was never shown to the family). **Verified**,
   `__tests__/youth-progression.spec.ts`.
   `GET /v1/participants/{personId}/assessments` is the staff view, decided from the caller's own
   scope and never from which assessment rows exist (GAPS-TRIAGE-04, §4.10): a program manager sees

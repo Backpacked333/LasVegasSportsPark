@@ -872,6 +872,53 @@ describe('youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006)', () => {
     expect(fixed.body.scaleValue).toBe(2);
   });
 
+  it('R2-SCHEMA-01 / §4.7 invariant 9 / SPK-YOUTH-006: the database refuses deleting a shared or withdrawn recommendation; a draft may still be deleted', async () => {
+    const recommend = async () => {
+      const created = await post(t, '/v1/progression-recommendations', coach.header, {
+        participantPersonId: kid,
+        fromOfferingId: setup.offeringId,
+        recommendedProgramId: programId,
+        suitability: 'Ready for the next group.',
+      });
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      return created.body as { id: string; revision: number };
+    };
+    const remove = (id: string) =>
+      rejectsWith(t.db.deleteFrom('progression_recommendations').where('id', '=', id).execute());
+    const still = (id: string) =>
+      t.db
+        .selectFrom('progression_recommendations')
+        .select('status')
+        .where('id', '=', id)
+        .executeTakeFirst();
+
+    const sharedOne = await recommend();
+    const shared = await post(
+      t,
+      `/v1/progression-recommendations/${sharedOne.id}/share`,
+      coach.header,
+      { expectedRevision: sharedOne.revision },
+    );
+    expect(shared.status).toBe(200);
+    expect(await remove(sharedOne.id)).toBe('23001');
+    expect(await still(sharedOne.id)).toEqual({ status: 'shared' });
+
+    const withdrawn = await post(
+      t,
+      `/v1/progression-recommendations/${sharedOne.id}/withdraw`,
+      coach.header,
+      { reason: 'Superseded', expectedRevision: shared.body.revision },
+    );
+    expect(withdrawn.status, JSON.stringify(withdrawn.body)).toBe(200);
+    expect(await remove(sharedOne.id)).toBe('23001');
+    expect(await still(sharedOne.id)).toEqual({ status: 'withdrawn' });
+
+    // A draft was never shown to the family: it can still be deleted.
+    const draftOne = await recommend();
+    await t.db.deleteFrom('progression_recommendations').where('id', '=', draftOne.id).execute();
+    expect(await still(draftOne.id)).toBeUndefined();
+  });
+
   it('SPK-YOUTH-005: only staff of the offering author assessments', async () => {
     const outsiderCoach = await staff(t, ['coach']);
     const refused = await post(t, '/v1/assessments', outsiderCoach.header, {

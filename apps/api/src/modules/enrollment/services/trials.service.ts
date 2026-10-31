@@ -56,14 +56,19 @@ import { EnrollmentFacilityScope } from './facility-scope';
 
 export type TrialRow = Selectable<TrialParticipationsTable>;
 
-/** Trial outcomes and the states they may follow (trial participation lifecycle). */
+/**
+ * Trial outcomes and the states they may follow (trial participation lifecycle). A trial converted
+ * before its session (R2-JOURNEYS-07) keeps status `converted` and still takes its outcome as a
+ * fact: attendance or a no-show once the session has started, or the cancellation of its trial
+ * seat (see `recordOutcome`), as long as no outcome was recorded yet.
+ */
 const TRIAL_OUTCOMES: Record<
   RecordTrialOutcomeInput['outcome'],
   readonly TrialParticipationStatus[]
 > = {
-  attended: ['scheduled'],
-  no_show: ['scheduled'],
-  canceled: ['scheduled'],
+  attended: ['scheduled', 'converted'],
+  no_show: ['scheduled', 'converted'],
+  canceled: ['scheduled', 'converted'],
 };
 
 /**
@@ -288,7 +293,23 @@ export class TrialsService {
         throw errors.accessDenied('Only staff record trial attendance.');
       }
       assertExpectedRevision(input.expectedRevision, row.revision);
-      if (!TRIAL_OUTCOMES[input.outcome].includes(row.status)) {
+      // R2-JOURNEYS-07 (SPK-AT-019 separate trial history, SPK-YOUTH-003): conversion is its own
+      // fact; it does not end the trial's history. A trial converted before its session records
+      // its outcome later without leaving `converted`, once: an attendance fact already recorded
+      // (before or after the conversion) is never overwritten.
+      const converted = row.status === 'converted';
+      const booking =
+        converted && row.session_booking_id
+          ? await this.bookings.load(trx, organizationId, row.session_booking_id, true)
+          : undefined;
+      const seatLive =
+        !!booking && (booking.status === 'pending' || booking.status === 'confirmed');
+      if (
+        !TRIAL_OUTCOMES[input.outcome].includes(row.status) ||
+        (converted && (row.attended_at !== null || row.no_show_at !== null)) ||
+        (converted && input.outcome === 'canceled' && !seatLive) ||
+        (converted && input.outcome !== 'canceled' && booking?.status === 'canceled')
+      ) {
         throw errors.invalidTransition('TrialParticipation', row.status, input.outcome);
       }
       if (
@@ -316,17 +337,28 @@ export class TrialsService {
           );
         }
       }
+      // A converted trial keeps `converted` (its paid entitlement stays linked): attendance or a
+      // no-show is written as its fact only, and a cancellation ends only its trial seat (above);
+      // the database checks hold either way (0500 converted/canceled facts, 0502 one outcome).
       await trx
         .updateTable('trial_participations')
-        .set({
-          status: input.outcome,
-          attended_at: input.outcome === 'attended' ? now : null,
-          // SPK-AT-019: the no-show is its own fact, so conversion (status `converted`) keeps it.
-          no_show_at: input.outcome === 'no_show' ? now : null,
-          canceled_at: input.outcome === 'canceled' ? now : null,
-          cancel_reason: input.outcome === 'canceled' ? (input.reason ?? 'canceled') : null,
-          revision: row.revision + 1,
-        })
+        .set(
+          converted
+            ? {
+                attended_at: input.outcome === 'attended' ? now : null,
+                no_show_at: input.outcome === 'no_show' ? now : null,
+                revision: row.revision + 1,
+              }
+            : {
+                status: input.outcome,
+                attended_at: input.outcome === 'attended' ? now : null,
+                // SPK-AT-019: the no-show is its own fact, so conversion (status `converted`) keeps it.
+                no_show_at: input.outcome === 'no_show' ? now : null,
+                canceled_at: input.outcome === 'canceled' ? now : null,
+                cancel_reason: input.outcome === 'canceled' ? (input.reason ?? 'canceled') : null,
+                revision: row.revision + 1,
+              },
+        )
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
         .where('revision', '=', row.revision)
@@ -341,7 +373,7 @@ export class TrialsService {
         afterRevision: row.revision + 1,
         reason: input.reason ?? null,
         correlationId,
-        details: { outcome: input.outcome },
+        details: { outcome: input.outcome, afterConversion: converted },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.trialChanged, {
         organizationId,
@@ -351,8 +383,8 @@ export class TrialsService {
         payload: {
           organizationId,
           trialParticipationId: id,
-          status: input.outcome,
-          convertedEnrollmentId: null,
+          status: converted ? row.status : input.outcome,
+          convertedEnrollmentId: row.converted_enrollment_id,
           convertedBasketId: row.converted_basket_id,
         },
       });

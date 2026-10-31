@@ -217,6 +217,11 @@ export class PackageEntitlementsService {
    * Issues the credits of a confirmed package purchase once (unique per enrollment, so a replay
    * is a no-op). A definition whose scope cannot be read issues nothing and raises an owned
    * exception: nothing is guessed (POL-039).
+   *
+   * R2-RACES-03 (SPK-COND-002, §4.12 correct under concurrent delivery): the purchase is read FOR
+   * UPDATE, as `MembershipsService.startForEnrollment` does, so a cancellation of it waits for the
+   * issue to commit (or the issue sees it canceled and issues nothing); the revoke handler that
+   * follows the cancellation then always finds the entitlement it must revoke.
    */
   async issueForEnrollment(
     trx: Trx,
@@ -229,6 +234,7 @@ export class PackageEntitlementsService {
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('id', '=', enrollmentId)
+      .forUpdate()
       .executeTakeFirst();
     if (!enrollment || enrollment.intent !== 'package_purchase') return null;
     if (enrollment.status !== 'confirmed') return null;
