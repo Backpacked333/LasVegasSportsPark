@@ -62,6 +62,7 @@ import { MembershipSuspensionMachine } from '../enrollment.state-machines';
 import {
   addWholeDays,
   benefitPeriodKey,
+  lastIncludedInstant,
   localDayStart,
   localMidnightAfter,
   stableId,
@@ -1036,9 +1037,13 @@ export class MembershipsService {
       audience: { subjectPersonIds: [row.participant_person_id] },
       protected: true,
       title: 'Membership renewal',
+      // R3-TIME-MONEY-05 (SPK-SCHED-008, SPK-COMMS-002): the term's end is exclusive, so the
+      // notice names its last included local day, never the day after it.
       body: `The membership ${snapshot.offering.name} ends on ${
         zone
-          ? new Intl.DateTimeFormat('en-US', { timeZone: zone, dateStyle: 'medium' }).format(endsAt)
+          ? new Intl.DateTimeFormat('en-US', { timeZone: zone, dateStyle: 'medium' }).format(
+              lastIncludedInstant(endsAt),
+            )
           : endsAt.toISOString()
       }. It can be renewed in the app.`,
       sourceEventId: stableId(`renewal:${row.id}`),

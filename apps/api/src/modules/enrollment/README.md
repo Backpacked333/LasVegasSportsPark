@@ -570,7 +570,10 @@ mirrored by a database transition guard.
   deferred, never stamped, CAPABILITIES-06); a membership not due yet records when it becomes due,
   `renewal_notice_due_at` (0513), and is not re-read before then, so memberships that are never
   due cannot keep a due one out of the batch; a lead changed on the definition later applies from
-  that recorded instant), `GET /v1/me/memberships`.
+  that recorded instant; the notice names the term's last included local day, since a term's end
+  is exclusive (an `offering_dates` term ending Dec 31 ends at the local midnight after it and is
+  announced as "ends on Dec 31", as the customer app shows it: R3-TIME-MONEY-05, SPK-SCHED-008,
+  **Verified** `memberships.spec.ts` "… R3-TIME-MONEY-05 …"), `GET /v1/me/memberships`.
 - **Rentals and parties (ENR-13, SPK-COND-003).** `POST /v1/bookings` validates the offering's
   approved booking terms (`BOOKING_TERMS_REQUIRED`), its resources (exact count from the allowed
   set), guests (party) and equipment (`EQUIPMENT_UNAVAILABLE` through `ASSET_DIRECTORY_PORT`).
